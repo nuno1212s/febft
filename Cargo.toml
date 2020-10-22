@@ -1,0 +1,7 @@
+[package]
+name = "ditto"
+version = "0.1.0"
+authors = ["Tiago Carvalho <up201605259@fc.up.pt>"]
+edition = "2018"
+
+[dependencies]
