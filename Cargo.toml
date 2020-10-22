@@ -4,4 +4,8 @@ version = "0.1.0"
 authors = ["Tiago Carvalho <up201605259@fc.up.pt>"]
 edition = "2018"
 
+[features]
+tokio_tcp_rustls = ["tokio"]
+
 [dependencies]
+tokio = { version = "0.3.1", optional = true }
