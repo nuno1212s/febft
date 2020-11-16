@@ -1,13 +1,14 @@
-// contains all the backends for Node communication
-mod backend;
+mod socket;
 
 use super::context::Context;
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct NodeId(u32);
 
-#[cfg(feature = "tokio_tcp_rustls")]
-pub struct Node(backend::tokio_tcp_rustls::Node);
+
+pub struct Node {
+    inner: NodeBackend,
+}
 
 // Add more backends:
 // ==================
@@ -16,10 +17,10 @@ pub struct Node(backend::tokio_tcp_rustls::Node);
 //
 // ...
 
-impl Node {
-    pub fn id(&self) -> NodeId {
-        self.0.id()
-    }
-
-    //pub async fn send(&self, ctx: &Context, 
-}
+//impl Node {
+//    pub fn id(&self) -> NodeId {
+//        self.0.id()
+//    }
+//
+//    pub async fn send(&self, ctx: &Context, 
+//}
