@@ -5,7 +5,10 @@ authors = ["Tiago Carvalho <up201605259@fc.up.pt>"]
 edition = "2018"
 
 [features]
-tokio_tcp_rustls = ["tokio"]
+default = ["tokio_tcp"]
+tokio_tcp = ["tokio", "tokio-util"]
 
 [dependencies]
-tokio = { version = "0.3.1", optional = true }
+futures = "0.3"
+tokio = { version = "0.3", features = ["full"], optional = true }
+tokio-util = { version = "0.5", features = ["compat"], optional = true }
