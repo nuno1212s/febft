@@ -1,4 +1,5 @@
 mod socket;
+mod serialize;
 
 //use super::context::Context;
 
