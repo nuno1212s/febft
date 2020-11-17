@@ -5,10 +5,13 @@ authors = ["Tiago Carvalho <up201605259@fc.up.pt>"]
 edition = "2018"
 
 [features]
-default = ["socket_tokio_tcp"]
+default = ["socket_tokio_tcp", "serialize_capnp"]
 socket_tokio_tcp = ["tokio", "tokio-util"]
+serialize_capnp = ["capnp", "capnp-futures"]
 
 [dependencies]
 futures = "0.3"
 tokio = { version = "0.3", features = ["full"], optional = true }
 tokio-util = { version = "0.5", features = ["compat"], optional = true }
+capnp = { version = "0.13", optional = true }
+capnp-futures = { version = "0.13", optional = true }
