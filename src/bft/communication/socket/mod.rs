@@ -19,13 +19,17 @@ pub struct Socket {
 }
 
 pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
-    #[cfg(feature = "tokio_tcp")]
-    tokio_tcp::bind(addr).await
+    {
+        #[cfg(feature = "tokio_tcp")]
+        tokio_tcp::bind(addr).await
+    }.map(|inner| Listener { inner })
 }
 
 pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
-    #[cfg(feature = "tokio_tcp")]
-    tokio_tcp::connect(addr).await
+    {
+        #[cfg(feature = "tokio_tcp")]
+        tokio_tcp::connect(addr).await
+    }.map(|inner| Socket { inner })
 }
 
 impl Listener {
