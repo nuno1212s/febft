@@ -1,6 +1,6 @@
 mod socket;
-//mod serialize;
-//pub mod message;
+pub mod serialize;
+pub mod message;
 
 //use super::context::Context;
 
