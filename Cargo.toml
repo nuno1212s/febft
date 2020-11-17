@@ -5,8 +5,8 @@ authors = ["Tiago Carvalho <up201605259@fc.up.pt>"]
 edition = "2018"
 
 [features]
-default = ["tokio_tcp"]
-tokio_tcp = ["tokio", "tokio-util"]
+default = ["socket_tokio_tcp"]
+socket_tokio_tcp = ["tokio", "tokio-util"]
 
 [dependencies]
 futures = "0.3"

@@ -1,4 +1,4 @@
-#[cfg(feature = "tokio_tcp")]
+#[cfg(feature = "socket_tokio_tcp")]
 mod tokio_tcp;
 
 use std::io;
@@ -9,25 +9,25 @@ use std::task::{Poll, Context};
 use futures::io::{AsyncRead, AsyncWrite};
 
 pub struct Listener {
-    #[cfg(feature = "tokio_tcp")]
+    #[cfg(feature = "socket_tokio_tcp")]
     inner: tokio_tcp::Listener,
 }
 
 pub struct Socket {
-    #[cfg(feature = "tokio_tcp")]
+    #[cfg(feature = "socket_tokio_tcp")]
     inner: tokio_tcp::Socket,
 }
 
 pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
     {
-        #[cfg(feature = "tokio_tcp")]
+        #[cfg(feature = "socket_tokio_tcp")]
         tokio_tcp::bind(addr).await
     }.map(|inner| Listener { inner })
 }
 
 pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
     {
-        #[cfg(feature = "tokio_tcp")]
+        #[cfg(feature = "socket_tokio_tcp")]
         tokio_tcp::connect(addr).await
     }.map(|inner| Socket { inner })
 }
