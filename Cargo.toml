@@ -10,7 +10,7 @@ socket_tokio_tcp = ["tokio", "tokio-util"]
 serialize_capnp = ["capnpc", "capnp", "capnp-futures"]
 
 [build-dependencies]
-capnpc = { version = "0.13", optional = "true" }
+capnpc = { version = "0.13", optional = true }
 
 [dependencies]
 futures = "0.3"
