@@ -1,3 +1,7 @@
+#[cfg(feature = "expose_impl")]
+pub mod bft;
+
+#[cfg(not(feature = "expose_impl"))]
 mod bft;
 
 // let library users have access to our result type
