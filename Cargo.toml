@@ -5,9 +5,10 @@ authors = ["Tiago Carvalho <up201605259@fc.up.pt>"]
 edition = "2018"
 
 [features]
-default = ["socket_tokio_tcp", "serialize_capnp"]
+default = ["async_runtime_tokio", "socket_tokio_tcp", "serialize_capnp"]
 socket_tokio_tcp = ["tokio", "tokio-util"]
 serialize_capnp = ["capnpc", "capnp", "capnp-futures"]
+async_runtime_tokio = ["tokio"]
 expose_impl = []
 
 [build-dependencies]
