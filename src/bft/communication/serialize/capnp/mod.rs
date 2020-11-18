@@ -35,5 +35,6 @@ pub async fn deserialize_from_replica(s: &mut Socket) -> io::Result<ReplicaMessa
 }
 
 mod message {
+    #![allow(unused)]
     include!(concat!(env!("OUT_DIR"), "/src/bft/communication/serialize/capnp/message_capnp.rs"));
 }
