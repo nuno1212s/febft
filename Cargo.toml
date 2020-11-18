@@ -7,7 +7,10 @@ edition = "2018"
 [features]
 default = ["socket_tokio_tcp", "serialize_capnp"]
 socket_tokio_tcp = ["tokio", "tokio-util"]
-serialize_capnp = ["capnp", "capnp-futures"]
+serialize_capnp = ["capnpc", "capnp", "capnp-futures"]
+
+[build-dependencies]
+capnpc = { version = "0.13", optional = "true" }
 
 [dependencies]
 futures = "0.3"
