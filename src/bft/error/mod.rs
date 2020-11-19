@@ -19,7 +19,7 @@ pub struct Error {
 }
 
 #[derive(Debug)]
-pub enum ErrorInner {
+enum ErrorInner {
     Simple(ErrorKind),
     Wrapped(ErrorKind, Box<dyn error::Error + Send + Sync>),
 }
