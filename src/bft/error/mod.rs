@@ -52,6 +52,17 @@ impl Error {
     }
 }
 
+impl fmt::Display for Error {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.inner {
+            ErrorInner::Simple(k) => write!(fmt, "{:?}", k),
+            ErrorInner::Wrapped(k, e) => write!(fmt, "{:?}: {}", k, e),
+        }
+    }
+}
+
+impl error::Error for Error {}
+
 pub use error_kind::ErrorKind;
 
 mod error_kind {
