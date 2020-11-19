@@ -4,20 +4,20 @@ use std::result;
 
 pub trait ResultExt {
     type T;
-    type E: Into<Box<dyn error::Error + Send + Sync>>;
+    type E: error::Error + Send + Sync;
 
     fn wrap_as(self, kind: ErrorKind, msg: &str) -> Result<Self::T>;
 }
 
 impl<T, E> ResultExt for result::Result<T, E>
 where
-    E: Into<Box<dyn error::Error + Send + Sync>>,
+    E: error::Error + Send + Sync,
 {
     type T = T;
     type E = E;
 
     fn wrap_as(self, kind: ErrorKind, msg: &str) -> Result<Self::T> {
-        self.map_err(|e| Error::wrapped(kind, format!("{}: {}", msg, e.into())))
+        self.map_err(|e| Error::wrapped(kind, format!("{}: {}", msg, e)))
     }
 }
 
