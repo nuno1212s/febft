@@ -25,6 +25,27 @@ pub fn init(num_threads: usize) -> Result<()> {
     })
 }
 
+pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    match RUNTIME.get() {
+        Some(ref rt) => {
+            let inner = rt.spawn(future);
+            JoinHandle { inner }
+        },
+        None => panic!("Async runtime wasn't initialized"),
+    }
+}
+
+pub fn block_on<F: Future>(future: F) -> F::Output {
+    match RUNTIME.get() {
+        Some(ref rt) => rt.block_on(future),
+        None => panic!("Async runtime wasn't initialized"),
+    }
+}
+
 impl<T> Future for JoinHandle<T> {
     type Output = Result<T>;
 
