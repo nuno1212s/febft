@@ -83,6 +83,7 @@ fn generate_error_kinds() {
 
     writeln!(&mut buf, r#"/// Includes a list of all the library software components.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[non_exhaustive]
 pub enum ErrorKind {{"#).unwrap();
     generate(&mut path_buf, &mut name_buf, &mut buf);
     writeln!(&mut buf, "}}").unwrap();
