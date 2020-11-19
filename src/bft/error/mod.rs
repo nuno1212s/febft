@@ -3,8 +3,7 @@ use std::error;
 use std::result;
 
 /// Wrapper Result for the Rust standard library Result type.
-// TODO: create an actual error type to use instead of ()
-pub type Result<T> = result::Result<T, ()>;
+pub type Result<T> = result::Result<T, Error>;
 
 /// The error type used throughout this crate.
 pub struct Error {
@@ -20,6 +19,23 @@ enum ErrorInner {
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&self.inner, f)
+    }
+}
+
+impl Error {
+    pub fn kind(&self) -> ErrorKind {
+        match &self.inner {
+            ErrorInner::Simple(k) => *k,
+            ErrorInner::Wrapped(k, _) => *k,
+        }
+    }
+
+    pub fn swap_kind(self, k: ErrorKind) -> Self {
+        let inner = match self.inner {
+            ErrorInner::Simple(_) => ErrorInner::Simple(k),
+            ErrorInner::Wrapped(_, e) => ErrorInner::Wrapped(k, e),
+        };
+        Error { inner }
     }
 }
 
