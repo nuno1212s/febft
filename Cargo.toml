@@ -12,6 +12,7 @@ async_runtime_tokio = ["tokio"]
 expose_impl = []
 
 [build-dependencies]
+itertools = "0.9"
 capnpc = { version = "0.13", optional = true }
 
 [dependencies]
