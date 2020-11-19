@@ -4,15 +4,21 @@ use std::fmt;
 use std::error;
 use std::result;
 
-pub trait ResultExt {
+pub trait ResultWrappedExt {
     type T;
 
     fn wrapped_msg(self, kind: ErrorKind, msg: &str) -> Result<Self::T>;
     fn wrapped(self, kind: ErrorKind) -> Result<Self::T>;
-    fn simple(self, kind: ErrorKind) -> Result<Self::T>;
 }
 
-impl<T, E> ResultExt for result::Result<T, E>
+pub trait ResultSimpleExt {
+    type T;
+
+    fn simple(self, kind: ErrorKind) -> Result<Self::T>;
+    fn simple_msg(self, kind: ErrorKind, msg: &str) -> Result<Self::T>;
+}
+
+impl<T, E> ResultWrappedExt for result::Result<T, E>
 where
     E: Into<Box<dyn error::Error + Send + Sync>>,
 {
@@ -25,9 +31,17 @@ where
     fn wrapped_msg(self, kind: ErrorKind, msg: &str) -> Result<Self::T> {
         self.map_err(|e| Error::wrapped(kind, format!("{}: {}", msg, e.into())))
     }
+}
+
+impl<T, E> ResultSimpleExt for result::Result<T, E> {
+    type T = T;
 
     fn simple(self, kind: ErrorKind) -> Result<Self::T> {
         self.map_err(|_| Error::simple(kind))
+    }
+
+    fn simple_msg(self, kind: ErrorKind, msg: &str) -> Result<Self::T> {
+        self.map_err(|_| Error::wrapped(kind, msg))
     }
 }
 
