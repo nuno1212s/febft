@@ -23,6 +23,19 @@ impl fmt::Debug for Error {
 }
 
 impl Error {
+    pub fn simple(kind: ErrorKind) -> Self {
+        let inner = ErrorInner::Simple(kind);
+        Error { inner }
+    }
+
+    pub fn wrapped<E>(kind: ErrorKind, e: E) -> Self
+    where
+        E: Into<Box<dyn error::Error + Send + Sync>>,
+    {
+        let inner = ErrorInner::Wrapped(kind, e.into());
+        Error { inner }
+    }
+
     pub fn kind(&self) -> ErrorKind {
         match &self.inner {
             ErrorInner::Simple(k) => *k,
