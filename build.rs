@@ -28,6 +28,10 @@ fn generate_message_from_capnp() {
 }
 
 fn generate_error_kinds() {
+    // this function recursively outputs directory names
+    // under src/bft/ into the ERROR_KIND_DST file,
+    // erasing underscores, and setting title case for
+    // words between them
     fn generate(mut pbuf: &mut PathBuf, mut name_buf: &mut Vec<String>, mut buf: &mut BufWriter<fs::File>) {
         let dir_ents = fs::read_dir(&mut pbuf).unwrap();
 
@@ -38,16 +42,17 @@ fn generate_error_kinds() {
                 .map(|(t, name)| if t.is_dir() { Some(name) } else { None })
                 .nth(0)
                 .unwrap_or(None);
-            let orig_dir_name = match dir_name {
+            let dir_name = match dir_name {
                 Some(n) => n,
                 _ => continue,
             };
-            let dir_name = orig_dir_name
-                .as_os_str()
+            let kind_name = dir_name
                 .to_str()
                 .unwrap()
                 .split('_')
                 .flat_map(|part| {
+                    // this ugly code sets a word contained
+                    // in a string into title case
                     let (first, rest) = part.split_at(1);
                     first
                         .chars()
@@ -55,9 +60,15 @@ fn generate_error_kinds() {
                         .chain(rest.chars())
                 })
                 .join("");
-            name_buf.push(dir_name);
+
+            // update buffers with the newly fetched dir name
+            name_buf.push(kind_name);
+            pbuf.push(dir_name);
+
+            // output the generated kind name
             writeln!(buf, "    {},", name_buf.join("")).unwrap();
-            pbuf.push(orig_dir_name);
+
+            // recursively generate names for other directories
             generate(&mut pbuf, &mut name_buf, &mut buf);
         }
 
