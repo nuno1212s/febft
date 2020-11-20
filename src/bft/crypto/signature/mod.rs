@@ -15,7 +15,7 @@ pub struct Signature {
 }
 
 impl KeyPair {
-    fn from_bytes(raw_bytes: &[u8]) -> Result<Self> {
+    pub fn from_bytes(raw_bytes: &[u8]) -> Result<Self> {
         let inner = {
             #[cfg(feature = "crypto_signature_ring_ed25519")]
             ring_ed25519::KeyPair::from_bytes(raw_bytes)?
@@ -23,12 +23,12 @@ impl KeyPair {
         Ok(KeyPair { inner })
     }
 
-    fn sign(&self, message: &[u8]) -> Result<Signature> {
+    pub fn sign(&self, message: &[u8]) -> Result<Signature> {
         let inner = self.inner.sign(message)?;
         Ok(Signature { inner })
     }
 
-    fn verify(&self, message: &[u8], signature: &Signature) -> Result<()> {
+    pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<()> {
         self.inner.verify(message, &signature.inner)
     }
 }
