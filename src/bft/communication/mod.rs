@@ -23,3 +23,10 @@ pub struct NodeId(u32);
 //
 //    pub async fn send(&self, ctx: &Context, 
 //}
+
+#[cfg(feature = "expose_impl")]
+pub mod bench {
+    pub fn layered_bench() {
+        unimplemented!();
+    }
+}
