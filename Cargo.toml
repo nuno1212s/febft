@@ -5,11 +5,21 @@ authors = ["Tiago Carvalho <up201605259@fc.up.pt>"]
 edition = "2018"
 
 [features]
-default = ["async_runtime_tokio", "socket_tokio_tcp", "serialize_capnp", "crypto_signature_ring_ed25519"]
+# choose one of each prefixes: async, threadpool, socket, serialize, crypto_signature
+# this decopulation of the abstraction from the backend allows experimenting with
+# different libraries, to probe which one has better performance for our use case
+default = [
+    "async_runtime_tokio",
+    "threadpool_crossbeam",
+    "socket_tokio_tcp",
+    "serialize_capnp",
+    "crypto_signature_ring_ed25519"
+]
 socket_tokio_tcp = ["tokio", "tokio-util"]
 serialize_capnp = ["capnpc", "capnp", "capnp-futures"]
 async_runtime_tokio = ["tokio"]
 crypto_signature_ring_ed25519 = ["ring"]
+threadpool_crossbeam = ["threadpool-crossbeam-channel"]
 expose_impl = []
 
 [build-dependencies]
@@ -24,3 +34,4 @@ tokio-util = { version = "0.5", features = ["compat"], optional = true }
 capnp = { version = "0.13", optional = true }
 capnp-futures = { version = "0.13", optional = true }
 ring = { version = "0.16", optional = true }
+threadpool-crossbeam-channel = { version = "1.8", optional = true }
