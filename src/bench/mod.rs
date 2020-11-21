@@ -1,4 +1,7 @@
+use std::sync::atomic::AtomicU64;
+
 //use futures::
+
 use crate::bft::async_runtime as runtime;
 use crate::bft::threadpool;
 //use crate::bft::socket
@@ -36,6 +39,8 @@ async fn layered_bench_server() {
     let pool = threadpool::Builder::new()
         .num_threads(pool_threads)
         .build();
+
+    let io_throughput = AtomicU64::new(0);
 
     runtime::spawn(async move {
         unimplemented!();
