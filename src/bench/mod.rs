@@ -16,10 +16,13 @@ use crate::bft::communication::socket::{
     Listener,
     Socket,
 };
+use crate::bft::communication::message::ReplicaMessage;
+use crate::bft::crypto::signature::{Signature, KeyPair};
 
 pub struct Shared {
     io: AtomicU64,
     sigs: AtomicU64,
+    keypair: KeyPair,
     pool: threadpool::ThreadPool,
 }
 
@@ -69,8 +72,14 @@ async fn layered_bench_server(message_len: usize, addr: &str) {
         .num_threads(pool_threads)
         .build();
 
+    let keypair = {
+        let buf = [0; 32];
+        KeyPair::from_bytes(&buf[..]).unwrap()
+    };
+
     let shared = Arc::new(Shared {
         pool,
+        keypair,
         io: AtomicU64::new(0),
         sigs: AtomicU64::new(0),
     });
@@ -116,6 +125,12 @@ async fn layered_bench_server(message_len: usize, addr: &str) {
 }
 
 async fn handle_one_request(message_len: usize, mut s: Socket, shared: Arc<Shared>) {
-    let msg = deserialize_from_replica(&mut s).await.unwrap();
+    let ReplicaMessage::Dummy(dummy) = deserialize_from_replica(&mut s).await.unwrap();
     shared.io.fetch_add(1, Ordering::Release);
+    shared.pool.clone().execute(move || {
+        let msg = &dummy[..message_len];
+        let sig = Signature::from_bytes(&dummy[message_len..]).unwrap();
+        shared.keypair.verify(msg, &sig).unwrap();
+        shared.sigs.fetch_add(1, Ordering::Release);
+    });
 }
