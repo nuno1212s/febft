@@ -5,12 +5,16 @@ use std::sync::Arc;
 
 use futures_timer::Delay;
 
-use crate::bft::socket::{self, Listener, Socket};
 use crate::bft::async_runtime as runtime;
 use crate::bft::threadpool;
-use crate::bft::serialize::{
+use crate::bft::communication::serialize::{
     serialize_to_replica,
     deserialize_from_replica,
+};
+use crate::bft::communication::socket::{
+    self,
+    Listener,
+    Socket,
 };
 
 pub struct Shared {
@@ -30,23 +34,28 @@ pub fn layered_bench(side: Side, addr: &str) {
         .parse()
         .unwrap();
 
+    let message_len: usize = std::env::var("MESSAGE_LEN")
+        .unwrap()
+        .parse()
+        .unwrap();
+
     // start async runtime
     runtime::init(async_threads).unwrap();
 
     match side {
-        Side::Client => runtime::block_on(layered_bench_client(addr)),
-        Side::Server => runtime::block_on(layered_bench_server(addr)),
+        Side::Client => runtime::block_on(layered_bench_client(message_len, addr)),
+        Side::Server => runtime::block_on(layered_bench_server(message_len, addr)),
     }
 }
 
-async fn layered_bench_client(_addr: &str) {
+async fn layered_bench_client(message_len: usize, _addr: &str) {
     let message_len: usize = std::env::var("MESSAGE_LEN")
         .unwrap()
         .parse()
         .unwrap();
 }
 
-async fn layered_bench_server(addr: &str) {
+async fn layered_bench_server(message_len: usize, addr: &str) {
     let addr: SocketAddr = addr
         .parse()
         .unwrap();
@@ -77,17 +86,17 @@ async fn layered_bench_server(addr: &str) {
         {
             let s = listener.accept().await.unwrap();
             let shared = Arc::clone(&shared);
-            handle_one_request(s, shared).await;
+            handle_one_request(message_len, s, shared).await;
         }
         signal.send(()).unwrap();
 
         loop {
-            let s = match s.accept().await {
+            let s = match listener.accept().await {
                 Ok(s) => s,
                 _ => return,
             };
             let shared = Arc::clone(&shared);
-            handle_one_request(s, shared).await;
+            handle_one_request(message_len, s, shared).await;
         }
     });
 
@@ -99,14 +108,14 @@ async fn layered_bench_server(addr: &str) {
     delay.await;
 
     // show results
-    let io_throughput = (shared.io.load(Ordering::Acquire) as f64) / 5.0;
-    let sig_throughput = (shared.sigs.load(Ordering::Acquire) as f64) / 5.0;
+    let io_throughput = shared.io.load(Ordering::Acquire);
+    let sig_throughput = shared.sigs.load(Ordering::Acquire);
 
-    println!("IO throughput        => {} ops per second", io_throughput);
-    println!("Signature throughput => {} ops per second", sig_throughput);
+    println!("IO throughput        => {} ops per second", (io_throughput as f64) / 5.0);
+    println!("Signature throughput => {} ops per second", (sig_throughput as f64) / 5.0);
 }
 
-async fn handle_one_request(mut s: Socket, shared: Arc<Shared>) {
+async fn handle_one_request(message_len: usize, mut s: Socket, shared: Arc<Shared>) {
     let msg = deserialize_from_replica(&mut s).await.unwrap();
     shared.io.fetch_add(1, Ordering::Release);
 }
