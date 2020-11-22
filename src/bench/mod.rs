@@ -4,6 +4,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use futures_timer::Delay;
+use futures::channel::mpsc;
+use futures::sink::SinkExt;
+use futures::stream::StreamExt;
 
 use crate::bft::async_runtime as runtime;
 use crate::bft::threadpool;
@@ -51,11 +54,69 @@ pub fn layered_bench(side: Side, addr: &str) {
     }
 }
 
-async fn layered_bench_client(message_len: usize, _addr: &str) {
+async fn layered_bench_client(message_len: usize, addr: &str) {
+    let addr: SocketAddr = addr
+        .parse()
+        .unwrap();
+
     let message_len: usize = std::env::var("MESSAGE_LEN")
         .unwrap()
         .parse()
         .unwrap();
+
+    let pool_threads: usize = std::env::var("POOL_THREADS")
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    let pool = threadpool::Builder::new()
+        .num_threads(pool_threads)
+        .build();
+
+    let (mut sem_tx, mut sem_rx) = mpsc::channel(128);
+    let (mut message_handler, mut new_message) = mpsc::unbounded();
+
+    // fill sem
+    for _ in 0..128 {
+        sem_tx.send(()).await.unwrap();
+    }
+
+    // message producer -- produces as fast as the
+    // bound in the sem channel
+    runtime::spawn(async move {
+        let keypair = Arc::new({
+            let buf = [0; 32];
+            KeyPair::from_bytes(&buf[..]).unwrap()
+        });
+        loop {
+            sem_rx.next().await.unwrap();
+            // spawn batches of tasks
+            for _ in 0..pool_threads {
+                let keypair = Arc::clone(&keypair);
+                let mut sem_tx = sem_tx.clone();
+                let (rsp_tx, rsp_rx) = oneshot::channel();
+                pool.execute(move || {
+                    let mut msg = vec![0; message_len];
+                    let sig = keypair.sign(&msg).unwrap();
+                    msg.extend_from_slice(sig.as_ref());
+                    rsp_tx.send(ReplicaMessage::Dummy(msg)).unwrap();
+                    runtime::block_on(async move {
+                        sem_tx.send(()).await.unwrap();
+                    });
+                });
+                let dummy = rsp_rx.await.unwrap();
+                message_handler.send(dummy).await.unwrap();
+            }
+        }
+    });
+
+    // client spawner
+    while let Ok(mut s) = socket::connect(addr).await {
+        let dummy = new_message.next().await.unwrap();
+        runtime::spawn(async move {
+            serialize_to_replica(&mut s, dummy).await.unwrap();
+        });
+    }
 }
 
 async fn layered_bench_server(message_len: usize, addr: &str) {
@@ -102,7 +163,7 @@ async fn layered_bench_server(message_len: usize, addr: &str) {
         loop {
             let s = match listener.accept().await {
                 Ok(s) => s,
-                _ => return,
+                _ => continue,
             };
             let shared = Arc::clone(&shared);
             handle_one_request(message_len, s, shared).await;
