@@ -54,7 +54,7 @@ impl Signature {
             value: [0; MAX_LEN],
             len: raw_bytes.len(),
         };
-        (&mut sig.value).copy_from_slice(raw_bytes);
+        (&mut sig.value[..raw_bytes.len()]).copy_from_slice(raw_bytes);
         Ok(sig)
     }
 }
