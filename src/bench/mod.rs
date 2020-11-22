@@ -110,10 +110,20 @@ async fn layered_bench_client(message_len: usize, addr: &str) {
         }
     });
 
+    #[cfg(feature = "serialize_capnp")]
+    let set = runtime::LocalSet::new();
+
     // client spawner
     while let Ok(mut s) = socket::connect(addr).await {
         let dummy = new_message.next().await.unwrap();
+
+        #[cfg(not(feature = "serialize_capnp"))]
         runtime::spawn(async move {
+            serialize_to_replica(&mut s, dummy).await.unwrap();
+        });
+
+        #[cfg(feature = "serialize_capnp")]
+        set.spawn_local(async move {
             serialize_to_replica(&mut s, dummy).await.unwrap();
         });
     }
