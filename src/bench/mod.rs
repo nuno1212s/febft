@@ -7,6 +7,7 @@ use futures_timer::Delay;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
+use async_semaphore::Semaphore;
 
 use crate::bft::async_runtime as runtime;
 use crate::bft::threadpool;
@@ -16,7 +17,6 @@ use crate::bft::communication::serialize::{
 };
 use crate::bft::communication::socket::{
     self,
-    Listener,
     Socket,
 };
 use crate::bft::communication::message::ReplicaMessage;
@@ -49,18 +49,13 @@ pub fn layered_bench(side: Side, addr: &str) {
     runtime::init(async_threads).unwrap();
 
     match side {
-        Side::Client => runtime::block_on(layered_bench_client(message_len, addr)),
+        Side::Client => runtime::block_on(layered_bench_client(async_threads, message_len, addr)),
         Side::Server => runtime::block_on(layered_bench_server(message_len, addr)),
     }
 }
 
-async fn layered_bench_client(message_len: usize, addr: &str) {
+async fn layered_bench_client(async_threads: usize, message_len: usize, addr: &str) {
     let addr: SocketAddr = addr
-        .parse()
-        .unwrap();
-
-    let message_len: usize = std::env::var("MESSAGE_LEN")
-        .unwrap()
         .parse()
         .unwrap();
 
@@ -73,13 +68,8 @@ async fn layered_bench_client(message_len: usize, addr: &str) {
         .num_threads(pool_threads)
         .build();
 
-    let (mut sem_tx, mut sem_rx) = mpsc::channel(128);
+    let sem = Arc::new(Semaphore::new(128));
     let (mut message_handler, mut new_message) = mpsc::unbounded();
-
-    // fill sem
-    for _ in 0..128 {
-        sem_tx.send(()).await.unwrap();
-    }
 
     // message producer -- produces as fast as the
     // bound in the sem channel
@@ -89,29 +79,25 @@ async fn layered_bench_client(message_len: usize, addr: &str) {
             KeyPair::from_bytes(&buf[..]).unwrap()
         });
         loop {
-            sem_rx.next().await.unwrap();
-            // spawn batches of tasks
-            for _ in 0..pool_threads {
-                let keypair = Arc::clone(&keypair);
-                let mut sem_tx = sem_tx.clone();
-                let (rsp_tx, rsp_rx) = oneshot::channel();
-                pool.execute(move || {
-                    let mut msg = vec![0; message_len];
-                    let sig = keypair.sign(&msg).unwrap();
-                    msg.extend_from_slice(sig.as_ref());
-                    rsp_tx.send(ReplicaMessage::Dummy(msg)).unwrap();
-                    runtime::block_on(async move {
-                        sem_tx.send(()).await.unwrap();
-                    });
-                });
-                let dummy = rsp_rx.await.unwrap();
-                message_handler.send(dummy).await.unwrap();
-            }
+            let sem_guard = Semaphore::acquire_arc(&sem).await;
+            let keypair = Arc::clone(&keypair);
+            let (rsp_tx, rsp_rx) = oneshot::channel();
+            pool.execute(move || {
+                let _sem_guard = sem_guard;
+                let mut msg = vec![0; message_len];
+                let sig = keypair.sign(&msg).unwrap();
+                msg.extend_from_slice(sig.as_ref());
+                rsp_tx.send(ReplicaMessage::Dummy(msg)).unwrap();
+            });
+            let dummy = rsp_rx.await.unwrap();
+            message_handler.send(dummy).await.unwrap();
         }
     });
 
     #[cfg(feature = "serialize_capnp")]
-    let set = runtime::LocalSet::new();
+    let (mut spawned_tasks, set) = {
+        (0_usize, runtime::LocalSet::new())
+    };
 
     // client spawner
     while let Ok(mut s) = socket::connect(addr).await {
@@ -123,9 +109,16 @@ async fn layered_bench_client(message_len: usize, addr: &str) {
         });
 
         #[cfg(feature = "serialize_capnp")]
-        set.spawn_local(async move {
-            serialize_to_replica(&mut s, dummy).await.unwrap();
-        });
+        {
+            set.spawn_local(async move {
+                serialize_to_replica(&mut s, dummy).await.unwrap();
+            });
+            spawned_tasks = spawned_tasks.wrapping_add(1);
+            if spawned_tasks % async_threads == 0 {
+                let delay = Delay::new(Duration::from_nanos(20));
+                set.run_until(delay).await;
+            }
+        }
     }
 }
 
