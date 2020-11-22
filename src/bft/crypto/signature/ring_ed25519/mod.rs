@@ -50,12 +50,10 @@ impl Signature {
             return Err("Signature is too long")
                 .wrapped(ErrorKind::CryptoSignatureRingEd25519);
         }
-        let mut sig = Signature {
-            value: [0; MAX_LEN],
-            len: raw_bytes.len(),
-        };
-        (&mut sig.value[..raw_bytes.len()]).copy_from_slice(raw_bytes);
-        Ok(sig)
+        let mut value = [0; MAX_LEN];
+        let len = raw_bytes.len();
+        (&mut value[..len]).copy_from_slice(raw_bytes);
+        Ok(Signature { value, len })
     }
 }
 
