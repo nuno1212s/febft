@@ -181,8 +181,8 @@ async fn layered_bench_server(message_len: usize, addr: &str) {
     delay.await;
 
     // show results
-    let io_throughput = shared.io.load(Ordering::Acquire);
-    let sig_throughput = shared.sigs.load(Ordering::Acquire);
+    let io_throughput = shared.io.load(Ordering::Relaxed);
+    let sig_throughput = shared.sigs.load(Ordering::Relaxed);
 
     println!("IO throughput        => {} ops per second", (io_throughput as f64) / 5.0);
     println!("Signature throughput => {} ops per second", (sig_throughput as f64) / 5.0);
@@ -190,11 +190,11 @@ async fn layered_bench_server(message_len: usize, addr: &str) {
 
 async fn handle_one_request(message_len: usize, mut s: Socket, shared: Arc<Shared>) {
     let ReplicaMessage::Dummy(dummy) = deserialize_from_replica(&mut s).await.unwrap();
-    shared.io.fetch_add(1, Ordering::Release);
+    shared.io.fetch_add(1, Ordering::Relaxed);
     shared.pool.clone().execute(move || {
         let msg = &dummy[..message_len];
         let sig = Signature::from_bytes(&dummy[message_len..]).unwrap();
         shared.keypair.verify(msg, &sig).unwrap();
-        shared.sigs.fetch_add(1, Ordering::Release);
+        shared.sigs.fetch_add(1, Ordering::Relaxed);
     });
 }
