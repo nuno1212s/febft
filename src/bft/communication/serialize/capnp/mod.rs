@@ -1,12 +1,12 @@
-use std::io;
 use std::default::Default;
 
 use capnp::message::HeapAllocator;
 
+use crate::bft::error::*;
 use crate::bft::communication::socket::Socket;
 use crate::bft::communication::message::{ReplicaMessage, ClientMessage};
 
-pub async fn serialize_to_replica(s: &mut Socket, m: ReplicaMessage) -> io::Result<()> {
+pub async fn serialize_to_replica(s: &mut Socket, m: ReplicaMessage) -> Result<()> {
     let mut root = capnp::message::Builder::new(HeapAllocator::new());
     let mut message_builder: message::replica_message::Builder = root.init_root();
     match m {
@@ -14,23 +14,23 @@ pub async fn serialize_to_replica(s: &mut Socket, m: ReplicaMessage) -> io::Resu
     };
     capnp_futures::serialize::write_message(s, root)
         .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to serialize using capnp: {}", e)))
+        .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to serialize using capnp")
 }
 
-pub async fn deserialize_from_replica(s: &mut Socket) -> io::Result<ReplicaMessage> {
+pub async fn deserialize_from_replica(s: &mut Socket) -> Result<ReplicaMessage> {
     let root = capnp_futures::serialize::read_message(s, Default::default())
         .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to deserialize using capnp: {}", e)))?;
+        .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to deserialize using capnp")?;
 
     match root {
         Some(root) => {
             let message_reader: message::replica_message::Reader = root.get_root()
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to get root: {}", e)))?;
+                .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to get message root")?;
             let dummy = message_reader.get_dummy()
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to get dummy: {}", e)))?;
+                .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to get dummy")?;
             Ok(ReplicaMessage::Dummy(dummy.into()))
         },
-        None => Err(io::Error::new(io::ErrorKind::Other, "No message read from socket.")),
+        None => Err("No message read from socket").wrapped(ErrorKind::CommunicationSerializeCapnp),
     }
 }
 
