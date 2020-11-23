@@ -1,6 +1,6 @@
 use ring::{signature as rsig, signature::KeyPair as RKeyPair};
 
-use crate::bft::error::prelude::*;
+use crate::bft::error::*;
 
 pub struct KeyPair {
     sk: rsig::Ed25519KeyPair,

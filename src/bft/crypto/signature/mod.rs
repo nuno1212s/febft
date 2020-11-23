@@ -1,4 +1,4 @@
-use crate::bft::error::prelude::*;
+use crate::bft::error::*;
 
 #[cfg(feature = "crypto_signature_ring_ed25519")]
 mod ring_ed25519;

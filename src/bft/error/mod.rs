@@ -1,5 +1,3 @@
-pub mod prelude;
-
 use std::fmt;
 use std::error;
 use std::result;
