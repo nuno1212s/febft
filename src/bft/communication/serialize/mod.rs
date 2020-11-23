@@ -1,24 +1,45 @@
 #[cfg(feature = "serialize_capnp")]
 mod capnp;
 
-use futures::io::AsyncWriteExt;
+use futures::io::{AsyncRead, AsyncWrite};
 
 use crate::bft::error::*;
-use crate::bft::communication::socket::Socket;
 use crate::bft::communication::message::{ReplicaMessage, ClientMessage};
 
-pub async fn serialize_to_replica(s: &mut Socket, m: ReplicaMessage) -> Result<()> {
-    let () = {
-        #[cfg(feature = "serialize_capnp")]
-        capnp::serialize_to_replica(s, m).await?
-    };
-    s.flush()
-        .await
-        .wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to flush socket")?;
-    Ok(())
+pub struct Serializer<W> {
+    #[cfg(feature = "serialize_capnp")]
+    inner: capnp::Serializer<W>,
 }
 
-pub async fn deserialize_from_replica(s: &mut Socket) -> Result<ReplicaMessage> {
+pub struct Deserializer<R> {
     #[cfg(feature = "serialize_capnp")]
-    capnp::deserialize_from_replica(s).await
+    inner: capnp::Deserializer<R>,
+}
+
+impl<W: Unpin + AsyncWrite> Serializer<W> {
+    pub fn new(writer: W) -> Self {
+        let inner = {
+            #[cfg(feature = "serialize_capnp")]
+            capnp::Serializer::new(writer)
+        };
+        Serializer { inner }
+    }
+
+    pub async fn to_replica(&mut self, m: ReplicaMessage) -> Result<()> {
+        self.inner.to_replica(m).await
+    }
+}
+
+impl<R: Unpin + AsyncRead> Deserializer<R> {
+    pub fn new(reader: R) -> Self {
+        let inner = {
+            #[cfg(feature = "serialize_capnp")]
+            capnp::Deserializer::new(reader)
+        };
+        Deserializer { inner }
+    }
+
+    pub async fn from_replica(&mut self) -> Result<ReplicaMessage> {
+        self.inner.from_replica().await
+    }
 }
