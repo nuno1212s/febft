@@ -12,8 +12,8 @@ use async_semaphore::Semaphore;
 use crate::bft::async_runtime as runtime;
 use crate::bft::threadpool;
 use crate::bft::communication::serialize::{
-    serialize_to_replica,
-    deserialize_from_replica,
+    Serializer,
+    Deserializer,
 };
 use crate::bft::communication::socket::{
     self,
@@ -100,18 +100,20 @@ async fn layered_bench_client(async_threads: usize, message_len: usize, addr: &s
     };
 
     // client spawner
-    while let Ok(mut s) = socket::connect(addr).await {
+    while let Ok(s) = socket::connect(addr).await {
         let dummy = new_message.next().await.unwrap();
 
         #[cfg(not(feature = "serialize_capnp"))]
         runtime::spawn(async move {
-            serialize_to_replica(&mut s, dummy).await.unwrap();
+            let mut serializer = Serializer::new(s);
+            serializer.to_replica(dummy).await.unwrap();
         });
 
         #[cfg(feature = "serialize_capnp")]
         {
             set.spawn_local(async move {
-                serialize_to_replica(&mut s, dummy).await.unwrap();
+                let mut serializer = Serializer::new(s);
+                serializer.to_replica(dummy).await.unwrap();
             });
             spawned_tasks = spawned_tasks.wrapping_add(1);
             if spawned_tasks % async_threads == 0 {
@@ -188,8 +190,9 @@ async fn layered_bench_server(message_len: usize, addr: &str) {
     println!("Signature throughput => {} ops per second", (sig_throughput as f64) / 5.0);
 }
 
-async fn handle_one_request(message_len: usize, mut s: Socket, shared: Arc<Shared>) {
-    let ReplicaMessage::Dummy(dummy) = deserialize_from_replica(&mut s).await.unwrap();
+async fn handle_one_request(message_len: usize, s: Socket, shared: Arc<Shared>) {
+    let mut deserializer = Deserializer::new(s);
+    let ReplicaMessage::Dummy(dummy) = deserializer.from_replica().await.unwrap();
     shared.io.fetch_add(1, Ordering::Relaxed);
     shared.pool.clone().execute(move || {
         let msg = &dummy[..message_len];
