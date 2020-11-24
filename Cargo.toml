@@ -12,11 +12,11 @@ default = [
     "async_runtime_tokio",
     "threadpool_crossbeam",
     "socket_tokio_tcp",
-    "serialize_capnp",
+    "serialize_serde_cbor",
     "crypto_signature_ring_ed25519"
 ]
 socket_tokio_tcp = ["tokio", "tokio-util"]
-serialize_capnp = ["capnpc", "capnp", "capnp-futures"]
+serialize_capnp = ["capnp", "capnp-futures"]
 serialize_serde = ["serde", "futures_codec"]
 serialize_serde_cbor = ["serialize_serde"]
 async_runtime_tokio = ["tokio"]
@@ -27,7 +27,7 @@ expose_impl = []
 
 [build-dependencies]
 itertools = "0.9"
-capnpc = { version = "0.13", optional = true }
+capnpc = "0.13"
 
 [dependencies]
 futures = "0.3"
