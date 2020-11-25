@@ -24,10 +24,19 @@ pub struct LocalSet {
 
 pub fn init(num_threads: usize) -> Result<()> {
     #[cfg(feature = "async_runtime_tokio")]
-    tokio::init(num_threads).and_then(|rt| {
-        RUNTIME.set(rt)
-            .simple_msg(ErrorKind::AsyncRuntime, "Failed to set global runtime instance")
-    })
+    {
+        tokio::init(num_threads).and_then(|rt| {
+            RUNTIME.set(rt)
+                .simple_msg(ErrorKind::AsyncRuntime, "Failed to set global runtime instance")
+        })
+    }
+    #[cfg(feature = "async_runtime_async_std")]
+    {
+        async_std::init(num_threads).and_then(|rt| {
+            RUNTIME.set(rt)
+                .simple_msg(ErrorKind::AsyncRuntime, "Failed to set global runtime instance")
+        })
+    }
 }
 
 pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
@@ -65,7 +74,10 @@ impl LocalSet {
     pub fn new() -> Self {
         let inner = {
             #[cfg(feature = "async_runtime_tokio")]
-            tokio::LocalSet::new()
+            { tokio::LocalSet::new() }
+
+            #[cfg(feature = "async_runtime_async_std")]
+            { async_std::LocalSet::new() }
         };
         LocalSet { inner }
     }
