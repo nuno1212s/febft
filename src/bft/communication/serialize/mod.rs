@@ -15,6 +15,9 @@ pub struct Serializer<W> {
 
     #[cfg(feature = "serialize_serde_cbor")]
     inner: serde::cbor::Serializer<W>,
+
+    #[cfg(feature = "serialize_serde_bincode")]
+    inner: serde::bincode::Serializer<W>,
 }
 
 pub struct Deserializer<R> {
@@ -23,6 +26,9 @@ pub struct Deserializer<R> {
 
     #[cfg(feature = "serialize_serde_cbor")]
     inner: serde::cbor::Deserializer<R>,
+
+    #[cfg(feature = "serialize_serde_bincode")]
+    inner: serde::bincode::Deserializer<R>,
 }
 
 impl<W: Unpin + AsyncWrite> Serializer<W> {
@@ -33,6 +39,9 @@ impl<W: Unpin + AsyncWrite> Serializer<W> {
 
             #[cfg(feature = "serialize_serde_cbor")]
             { serde::cbor::new_serializer(writer) }
+
+            #[cfg(feature = "serialize_serde_bincode")]
+            { serde::bincode::new_serializer(writer) }
         };
         Serializer { inner }
     }
@@ -50,6 +59,9 @@ impl<R: Unpin + AsyncRead> Deserializer<R> {
 
             #[cfg(feature = "serialize_serde_cbor")]
             { serde::cbor::new_deserializer(reader) }
+
+            #[cfg(feature = "serialize_serde_bincode")]
+            { serde::bincode::new_deserializer(reader) }
         };
         Deserializer { inner }
     }

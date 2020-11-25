@@ -1,4 +1,8 @@
+#[cfg(feature = "serialize_serde_cbor")]
 pub mod cbor;
+
+#[cfg(feature = "serialize_serde_bincode")]
+pub mod bincode;
 
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;

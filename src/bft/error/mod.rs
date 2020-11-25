@@ -1,3 +1,4 @@
+use std::io;
 use std::fmt;
 use std::error;
 use std::result;
@@ -99,6 +100,12 @@ impl fmt::Display for Error {
             ErrorInner::Simple(k) => write!(fmt, "{:?}", k),
             ErrorInner::Wrapped(k, e) => write!(fmt, "{:?}: {}", k, e),
         }
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(e: io::Error) -> Self {
+        Error::wrapped(ErrorKind::Error, e)
     }
 }
 
