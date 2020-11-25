@@ -16,11 +16,13 @@ default = [
     "crypto_signature_ring_ed25519"
 ]
 socket_tokio_tcp = ["tokio", "tokio-util"]
+socket_async_std_tcp = ["async-std"]
 serialize_capnp = ["capnp", "capnp-futures"]
 serialize_serde = ["serde", "futures_codec"]
 serialize_serde_cbor = ["serialize_serde"]
 serialize_serde_bincode = ["serialize_serde", "bincode"]
 async_runtime_tokio = ["tokio"]
+async_runtime_async_std = ["async-std"]
 crypto_signature_ring_ed25519 = ["ring"]
 threadpool_crossbeam = ["threadpool-crossbeam-channel"]
 bench = ["expose_impl", "oneshot", "futures-timer", "async-semaphore"]
@@ -33,6 +35,7 @@ capnpc = "0.13"
 [dependencies]
 futures = "0.3"
 once_cell = "1.5"
+async-std = { version = "1.7", optional = true }
 tokio = { version = "0.3", features = ["full"], optional = true }
 tokio-util = { version = "0.5", features = ["compat"], optional = true }
 capnp = { version = "0.13", optional = true }
