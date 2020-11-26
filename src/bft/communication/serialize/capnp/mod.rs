@@ -20,19 +20,13 @@ pub fn serialize_to_replica<B: BufMut>(buf: B, m: ReplicaMessage) -> Result<B> {
 }
 
 pub fn deserialize_from_replica<B: Buf>(buf: B) -> Result<ReplicaMessage> {
-    let root = capnp_futures::serialize::read_message(buf.reader(), Default::default())
+    let root = capnp::serialize::read_message(buf.reader(), Default::default())
         .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to deserialize using capnp")?;
-
-    match root {
-        Some(root) => {
-            let message_reader: message::replica_message::Reader = root.get_root()
-                .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to get message root")?;
-            let dummy = message_reader.get_dummy()
-                .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to get dummy")?;
-            Ok(ReplicaMessage::Dummy(dummy.into()))
-        },
-        None => Err("No message read from socket").wrapped(ErrorKind::CommunicationSerializeCapnp),
-    }
+    let message_reader: message::replica_message::Reader = root.get_root()
+        .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to get message root")?;
+    let dummy = message_reader.get_dummy()
+        .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to get dummy")?;
+    Ok(ReplicaMessage::Dummy(dummy.into()))
 }
 
 mod message {
