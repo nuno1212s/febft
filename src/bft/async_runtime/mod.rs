@@ -1,6 +1,9 @@
 #[cfg(feature = "async_runtime_tokio")]
 mod tokio;
 
+#[cfg(feature = "async_runtime_async_std")]
+mod async_std;
+
 use std::pin::Pin;
 use std::future::Future;
 use std::task::{Context, Poll};
@@ -12,9 +15,15 @@ use crate::bft::error::*;
 #[cfg(feature = "async_runtime_tokio")]
 static RUNTIME: OnceCell<tokio::Runtime> = OnceCell::new();
 
+#[cfg(feature = "async_runtime_async_std")]
+static RUNTIME: OnceCell<async_std::Runtime> = OnceCell::new();
+
 pub struct JoinHandle<T> {
     #[cfg(feature = "async_runtime_tokio")]
     inner: tokio::JoinHandle<T>,
+
+    #[cfg(feature = "async_runtime_async_std")]
+    inner: async_std::JoinHandle<T>,
 }
 
 pub fn init(num_threads: usize) -> Result<()> {

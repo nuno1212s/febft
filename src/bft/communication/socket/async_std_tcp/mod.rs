@@ -1,60 +1,28 @@
-#[cfg(feature = "socket_tokio_tcp")]
-mod tokio_tcp;
-
-#[cfg(feature = "socket_async_std_tcp")]
-mod async_std_tcp;
-
 use std::io;
 use std::pin::Pin;
 use std::net::SocketAddr;
 use std::task::{Poll, Context};
 
 use futures::io::{AsyncRead, AsyncWrite};
-
-use crate::bft::error::*;
+use ::async_std::net::{TcpListener, TcpStream};
 
 pub struct Listener {
-    #[cfg(feature = "socket_tokio_tcp")]
-    inner: tokio_tcp::Listener,
-
-    #[cfg(feature = "socket_async_std_tcp")]
-    inner: async_std_tcp::Listener,
+    inner: TcpListener,
 }
 
 pub struct Socket {
-    #[cfg(feature = "socket_tokio_tcp")]
-    inner: tokio_tcp::Socket,
-
-    #[cfg(feature = "socket_async_std_tcp")]
-    inner: async_std_tcp::Socket,
+    inner: TcpStream,
 }
 
 pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
-    {
-        #[cfg(feature = "socket_tokio_tcp")]
-        { tokio_tcp::bind(addr).await }
-
-        #[cfg(feature = "socket_async_std_tcp")]
-        { async_std_tcp::bind(addr).await }
-    }.map(|inner| Listener { inner })
+    let inner = TcpListener::bind(addr.into()).await?;
+    Ok(Listener { inner })
 }
 
 pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
-    {
-        #[cfg(feature = "socket_tokio_tcp")]
-        { tokio_tcp::connect(addr).await }
-
-        #[cfg(feature = "socket_async_std_tcp")]
-        { async_std_tcp::connect(addr).await }
-    }.map(|inner| Socket { inner })
-}
-
-impl Listener {
-    pub async fn accept(&self) -> io::Result<Socket> {
-        self.inner.accept()
-            .await
-            .map(|inner| Socket { inner })
-    }
+    TcpStream::connect(addr.into())
+        .await
+        .map(|inner| Socket { inner })
 }
 
 impl AsyncRead for Socket {
@@ -92,5 +60,14 @@ impl AsyncWrite for Socket {
     ) -> Poll<io::Result<()>>
     {
         Pin::new(&mut self.inner).poll_close(cx)
+    }
+}
+
+impl Listener {
+    pub async fn accept(&self) -> io::Result<Socket> {
+        self.inner
+            .accept()
+            .await
+            .map(|(inner, _)| Socket { inner })
     }
 }
