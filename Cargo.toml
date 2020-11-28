@@ -12,7 +12,7 @@ default = [
     "async_runtime_tokio",
     "threadpool_crossbeam",
     "socket_tokio_tcp",
-    "serialize_serde_messagepack",
+    "serialize_capnp",
     "crypto_signature_ring_ed25519"
 ]
 socket_tokio_tcp = ["tokio", "tokio-util"]
