@@ -20,6 +20,7 @@ socket_async_std_tcp = ["async-std"]
 serialize_capnp = ["capnp"]
 serialize_serde = ["serde"]
 serialize_serde_bincode = ["serialize_serde", "bincode"]
+serialize_serde_messagepack = ["serialize_serde", "rmp-serde"]
 async_runtime_tokio = ["tokio"]
 async_runtime_async_std = ["async-std"]
 crypto_signature_ring_ed25519 = ["ring"]
@@ -48,3 +49,4 @@ async-semaphore = { version = "1.2", optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 bincode = { version = "1.3", optional = true }
 cthpool = { git = "https://github.com/sug0/cthpool", optional = true }
+rmp-serde = { version = "0.14", optional = true }
