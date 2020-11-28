@@ -1,22 +1,34 @@
 #[cfg(feature = "threadpool_crossbeam")]
 mod crossbeam;
 
+#[cfg(feature = "threadpool_cthpool")]
+mod cthpool;
+
 #[derive(Clone)]
 pub struct ThreadPool {
     #[cfg(feature = "threadpool_crossbeam")]
     inner: crossbeam::ThreadPool,
+
+    #[cfg(feature = "threadpool_cthpool")]
+    inner: cthpool::ThreadPool,
 }
 
 pub struct Builder {
     #[cfg(feature = "threadpool_crossbeam")]
     inner: crossbeam::Builder,
+
+    #[cfg(feature = "threadpool_cthpool")]
+    inner: cthpool::Builder,
 }
 
 impl Builder {
     pub fn new() -> Builder {
         let inner = {
             #[cfg(feature = "threadpool_crossbeam")]
-            crossbeam::Builder::new()
+            { crossbeam::Builder::new() }
+
+            #[cfg(feature = "threadpool_cthpool")]
+            { cthpool::Builder::new() }
         };
         Builder { inner }
     }
