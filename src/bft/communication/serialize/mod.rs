@@ -15,12 +15,15 @@ pub fn serialize_to_replica<B: BufMut>(buf: B, m: ReplicaMessage) -> Result<B> {
 
     #[cfg(feature = "serialize_serde_bincode")]
     { serde::bincode::serialize_to_replica(buf, m) }
+
+    #[cfg(feature = "serialize_serde_messagepack")]
+    { serde::messagepack::serialize_to_replica(buf, m) }
 }
 
 pub fn deserialize_from_replica<B: Buf>(buf: B) -> Result<ReplicaMessage> {
     #[cfg(feature = "serialize_capnp")]
     { capnp::deserialize_from_replica(buf) }
 
-    #[cfg(feature = "serialize_serde_bincode")]
-    { serde::bincode::deserialize_from_replica(buf) }
+    #[cfg(feature = "serialize_serde_messagepack")]
+    { serde::messagepack::deserialize_from_replica(buf) }
 }
