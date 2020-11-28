@@ -18,6 +18,9 @@ pub fn serialize_to_replica<B: BufMut>(buf: B, m: ReplicaMessage) -> Result<B> {
 
     #[cfg(feature = "serialize_serde_messagepack")]
     { serde::messagepack::serialize_to_replica(buf, m) }
+
+    #[cfg(feature = "serialize_serde_cbor")]
+    { serde::cbor::serialize_to_replica(buf, m) }
 }
 
 pub fn deserialize_from_replica<B: Buf>(buf: B) -> Result<ReplicaMessage> {
@@ -29,4 +32,7 @@ pub fn deserialize_from_replica<B: Buf>(buf: B) -> Result<ReplicaMessage> {
 
     #[cfg(feature = "serialize_serde_messagepack")]
     { serde::messagepack::deserialize_from_replica(buf) }
+
+    #[cfg(feature = "serialize_serde_cbor")]
+    { serde::cbor::deserialize_from_replica(buf) }
 }
