@@ -24,6 +24,9 @@ pub fn deserialize_from_replica<B: Buf>(buf: B) -> Result<ReplicaMessage> {
     #[cfg(feature = "serialize_capnp")]
     { capnp::deserialize_from_replica(buf) }
 
+    #[cfg(feature = "serialize_serde_bincode")]
+    { serde::bincode::deserialize_from_replica(buf) }
+
     #[cfg(feature = "serialize_serde_messagepack")]
     { serde::messagepack::deserialize_from_replica(buf) }
 }
