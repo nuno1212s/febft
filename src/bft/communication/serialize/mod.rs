@@ -4,57 +4,23 @@ mod capnp;
 #[cfg(feature = "serialize_serde")]
 mod serde;
 
-use futures::io::{AsyncRead, AsyncWrite};
+use bytes::{Buf, BufMut};
 
 use crate::bft::error::*;
 use crate::bft::communication::message::{ReplicaMessage, ClientMessage};
 
-pub struct Serializer<W> {
+pub fn serialize_to_replica<B: BufMut>(buf: B, m: ReplicaMessage) -> Result<B> {
     #[cfg(feature = "serialize_capnp")]
-    inner: capnp::Serializer<W>,
+    { capnp::serialize_to_replica(buf, m) }
 
-    #[cfg(feature = "serialize_serde_cbor")]
-    inner: serde::cbor::Serializer<W>,
+    #[cfg(feature = "serialize_serde_bincode")]
+    { serde::bincode::serialize_to_replica(buf, m) }
 }
 
-pub struct Deserializer<R> {
+pub fn deserialize_from_replica<B: Buf>(buf: B) -> Result<ReplicaMessage> {
     #[cfg(feature = "serialize_capnp")]
-    inner: capnp::Deserializer<R>,
+    { capnp::deserialize_from_replica(buf) }
 
-    #[cfg(feature = "serialize_serde_cbor")]
-    inner: serde::cbor::Deserializer<R>,
-}
-
-impl<W: Unpin + AsyncWrite> Serializer<W> {
-    pub fn new(writer: W) -> Self {
-        let inner = {
-            #[cfg(feature = "serialize_capnp")]
-            { capnp::Serializer::new(writer) }
-
-            #[cfg(feature = "serialize_serde_cbor")]
-            { serde::cbor::new_serializer(writer) }
-        };
-        Serializer { inner }
-    }
-
-    pub async fn to_replica(&mut self, m: ReplicaMessage) -> Result<()> {
-        self.inner.to_replica(m).await
-    }
-}
-
-impl<R: Unpin + AsyncRead> Deserializer<R> {
-    pub fn new(reader: R) -> Self {
-        let inner = {
-            #[cfg(feature = "serialize_capnp")]
-            { capnp::Deserializer::new(reader) }
-
-            #[cfg(feature = "serialize_serde_cbor")]
-            { serde::cbor::new_deserializer(reader) }
-        };
-        Deserializer { inner }
-    }
-
-    pub async fn from_replica(&mut self) -> Result<ReplicaMessage> {
-        self.inner.from_replica().await
-    }
+    #[cfg(feature = "serialize_serde_bincode")]
+    { serde::bincode::deserialize_from_replica(buf) }
 }
