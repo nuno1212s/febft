@@ -52,12 +52,12 @@ pub fn layered_bench(side: Side, addr: &str) {
     runtime::init(async_threads).unwrap();
 
     match side {
-        Side::Client => runtime::block_on(layered_bench_client(async_threads, message_len, addr)),
+        Side::Client => runtime::block_on(layered_bench_client(message_len, addr)),
         Side::Server => runtime::block_on(layered_bench_server(message_len, addr)),
     }
 }
 
-async fn layered_bench_client(async_threads: usize, message_len: usize, addr: &str) {
+async fn layered_bench_client(message_len: usize, addr: &str) {
     let addr: SocketAddr = addr
         .parse()
         .unwrap();

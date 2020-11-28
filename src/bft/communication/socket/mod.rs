@@ -11,8 +11,6 @@ use std::task::{Poll, Context};
 
 use futures::io::{AsyncRead, AsyncWrite};
 
-use crate::bft::error::*;
-
 pub struct Listener {
     #[cfg(feature = "socket_tokio_tcp")]
     inner: tokio_tcp::Listener,
