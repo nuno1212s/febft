@@ -8,7 +8,6 @@ use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use futures::io::{AsyncReadExt, AsyncWriteExt};
-use async_semaphore::Semaphore;
 use bytes::{Buf, BufMut};
 
 use crate::bft::async_runtime as runtime;
@@ -38,6 +37,11 @@ pub enum Side {
 }
 
 pub fn layered_bench(side: Side, addr: &str) {
+    let conns: usize = std::env::var("NUM_CONNS")
+        .unwrap()
+        .parse()
+        .unwrap();
+
     let async_threads: usize = std::env::var("ASYNC_THREADS")
         .unwrap()
         .parse()
@@ -52,12 +56,12 @@ pub fn layered_bench(side: Side, addr: &str) {
     runtime::init(async_threads).unwrap();
 
     match side {
-        Side::Client => runtime::block_on(layered_bench_client(message_len, addr)),
-        Side::Server => runtime::block_on(layered_bench_server(message_len, addr)),
+        Side::Client => runtime::block_on(layered_bench_client(conns, message_len, addr)),
+        Side::Server => runtime::block_on(layered_bench_server(conns, message_len, addr)),
     }
 }
 
-async fn layered_bench_client(message_len: usize, addr: &str) {
+async fn layered_bench_client(conns: usize, message_len: usize, addr: &str) {
     let addr: SocketAddr = addr
         .parse()
         .unwrap();
@@ -71,53 +75,63 @@ async fn layered_bench_client(message_len: usize, addr: &str) {
         .num_threads(pool_threads)
         .build();
 
-    let sem = Arc::new(Semaphore::new(128));
-    let (mut message_handler, mut new_message) = mpsc::unbounded();
+    // establish connections
+    for _ in 0..conns {
+        let s = socket::connect(addr).await.unwrap();
+        runtime::spawn(perform_requests(message_len, s, pool.clone()));
+    }
 
-    // message producer -- produces as fast as the
-    // bound in the sem channel
-    let rt_pool = pool.clone();
-    runtime::spawn(async move {
-        let keypair = Arc::new({
-            let buf = [0; 32];
-            KeyPair::from_bytes(&buf[..]).unwrap()
-        });
-        loop {
-            let sem_guard = Semaphore::acquire_arc(&sem).await;
-            let keypair = Arc::clone(&keypair);
-            let (rsp_tx, rsp_rx) = oneshot::channel();
-            rt_pool.clone().execute(move || {
-                let _sem_guard = sem_guard;
-                let mut msg = vec![0; message_len];
-                let sig = keypair.sign(&msg).unwrap();
-                msg.extend_from_slice(sig.as_ref());
-                rsp_tx.send(ReplicaMessage::Dummy(msg)).unwrap();
-            });
-            let dummy = rsp_rx.await.unwrap();
-            message_handler.send(dummy).await.unwrap();
-        }
+    // wait *for a long time*
+    // an hour, for instance
+    let delay = Delay::new(Duration::from_secs(1 * 60 * 60));
+    delay.await;
+}
+
+async fn perform_requests(
+    message_len: usize,
+    mut s: Socket,
+    pool: threadpool::ThreadPool,
+) {
+    let keypair = Arc::new({
+        let buf = [0; 32];
+        KeyPair::from_bytes(&buf[..]).unwrap()
     });
-
-    // client spawner
-    while let Ok(mut s) = socket::connect(addr).await {
-        let dummy = new_message.next().await.unwrap();
-        let pool = pool.clone();
-        runtime::spawn(async move {
-            let (rsp_tx, rsp_rx) = oneshot::channel();
-            pool.execute(move || {
-                let mut size = [0; 8];
-                let serialized = serialize_to_replica(Vec::new(), dummy).unwrap();
-                (&mut size[..]).put_u64(serialized.len() as u64);
-                rsp_tx.send((size, serialized)).unwrap();
-            });
-            let (size, serialized) = rsp_rx.await.unwrap();
-            s.write_all(&size[..]).await.unwrap();
-            s.write_all(&serialized).await.unwrap();
+    loop {
+        // generate new dummy message
+        let keypair = Arc::clone(&keypair);
+        let (rsp_tx, rsp_rx) = oneshot::channel();
+        pool.clone().execute(move || {
+            let mut msg = vec![0; message_len];
+            let sig = keypair.sign(&msg).unwrap();
+            msg.extend_from_slice(sig.as_ref());
+            rsp_tx.send(ReplicaMessage::Dummy(msg)).unwrap();
         });
+        let dummy = rsp_rx.await.unwrap();
+
+        // perform the request
+        perform_one_request(message_len, &mut s, pool.clone(), dummy).await;
     }
 }
 
-async fn layered_bench_server(message_len: usize, addr: &str) {
+async fn perform_one_request(
+    message_len: usize,
+    s: &mut Socket,
+    pool: threadpool::ThreadPool,
+    dummy: ReplicaMessage,
+) {
+    let (rsp_tx, rsp_rx) = oneshot::channel();
+    pool.execute(move || {
+        let mut size = [0; 8];
+        let serialized = serialize_to_replica(Vec::new(), dummy).unwrap();
+        (&mut size[..]).put_u64(serialized.len() as u64);
+        rsp_tx.send((size, serialized)).unwrap();
+    });
+    let (size, serialized) = rsp_rx.await.unwrap();
+    s.write_all(&size[..]).await.unwrap();
+    s.write_all(&serialized).await.unwrap();
+}
+
+async fn layered_bench_server(conns: usize, message_len: usize, addr: &str) {
     let addr: SocketAddr = addr
         .parse()
         .unwrap();
@@ -144,32 +158,26 @@ async fn layered_bench_server(message_len: usize, addr: &str) {
         sigs: AtomicU64::new(0),
     });
 
-    let (signal, ready) = oneshot::channel();
     let shared_clone = Arc::clone(&shared);
-
-    runtime::spawn(async move {
+    let ready = runtime::spawn(async move {
         let shared = shared_clone;
         let listener = socket::bind(addr).await.unwrap();
 
-        // synchronization phase
-        {
-            let s = listener.accept().await.unwrap();
+        // establish connections (synchronize)
+        for _ in 0..conns {
+            let mut s = listener.accept().await.unwrap();
             let shared = Arc::clone(&shared);
-            handle_one_request(message_len, s, shared).await;
-        }
-        signal.send(()).unwrap();
-
-        loop {
-            let s = match listener.accept().await {
-                Ok(s) => s,
-                _ => continue,
-            };
-            let shared = Arc::clone(&shared);
-            handle_one_request(message_len, s, shared).await;
+            runtime::spawn(async move {
+                loop {
+                    let shared = Arc::clone(&shared);
+                    handle_one_request(message_len, &mut s, shared).await;
+                }
+            });
         }
     });
 
-    // wait for first request to start benchmark
+    // wait for connections to be established
+    // to start the benchmark
     ready.await.unwrap();
 
     // let benchmark run for 5 seconds
@@ -186,7 +194,7 @@ async fn layered_bench_server(message_len: usize, addr: &str) {
     println!("Signature throughput   => {} ops per second", (sig_throughput as f64) / 5.0);
 }
 
-async fn handle_one_request(message_len: usize, mut s: Socket, shared: Arc<Shared>) {
+async fn handle_one_request(message_len: usize, s: &mut Socket, shared: Arc<Shared>) {
     let buf = {
         let mut buf = [0; 8];
         s.read_exact(&mut buf[..]).await.unwrap();
