@@ -100,7 +100,7 @@ async fn perform_requests(
         // generate new dummy message
         let keypair = Arc::clone(&keypair);
         let (rsp_tx, rsp_rx) = oneshot::channel();
-        pool.clone().execute(move || {
+        pool.execute(move || {
             let mut msg = vec![0; message_len];
             let sig = keypair.sign(&msg).unwrap();
             msg.extend_from_slice(sig.as_ref());
