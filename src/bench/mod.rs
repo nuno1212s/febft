@@ -23,7 +23,7 @@ use crate::bft::communication::socket::{
 use crate::bft::communication::message::ReplicaMessage;
 use crate::bft::crypto::signature::{Signature, KeyPair};
 
-pub struct Shared {
+struct Shared {
     io: AtomicU64,
     des: AtomicU64,
     sigs: AtomicU64,
