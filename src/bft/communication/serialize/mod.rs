@@ -7,7 +7,7 @@ mod serde;
 use bytes::{Buf, BufMut};
 
 use crate::bft::error::*;
-use crate::bft::communication::message::{ReplicaMessage, ClientMessage};
+use crate::bft::communication::message::ReplicaMessage;
 
 pub fn serialize_to_replica<B: BufMut>(buf: B, m: ReplicaMessage) -> Result<B> {
     #[cfg(feature = "serialize_capnp")]

@@ -1,9 +1,8 @@
 use std::mem::MaybeUninit;
-use std::default::Default;
 
 // consider only major version changes, since
 // our range of values is limited to 256
-const CURRENT_VERSION: u8 = 0;
+pub(crate) const CURRENT_VERSION: u8 = 0;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
@@ -24,26 +23,26 @@ pub enum ClientMessagePayload {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct Header {
     // should be the string `BFT`
-    magic: [u8; 3],
+    pub(crate) magic: [u8; 3],
     // version number for the protocol
-    version: u8,
+    pub(crate) version: u8,
     // reserved bytes, should be left alone
     // for now
-    _reserved: MaybeUninit<[u32; 7]>,
+    pub(crate) _reserved: MaybeUninit<[u32; 7]>,
 }
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct ReplicaMessage {
-    header: Header,
-    payload: ReplicaMessagePayload,
+    pub(crate) header: Header,
+    pub(crate) payload: ReplicaMessagePayload,
 }
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct ClientMessage {
-    header: Header,
-    payload: ClientMessagePayload,
+    pub(crate) header: Header,
+    pub(crate) payload: ClientMessagePayload,
 }
 
 impl Header {
@@ -53,16 +52,6 @@ impl Header {
 
     pub fn version(&self) -> u8 {
         self.version
-    }
-}
-
-impl Default for Header {
-    fn default() -> Self {
-        Header {
-            magic: *b"BFT",
-            version: CURRENT_VERSION,
-            _reserved: MaybeUninit::uninit(),
-        }
     }
 }
 
