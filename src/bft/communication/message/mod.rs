@@ -76,7 +76,7 @@ macro_rules! impl_message {
                 &self.payload
             }
 
-            pub fn into(self) -> (Header, $payload) {
+            pub fn into_inner(self) -> (Header, $payload) {
                 (self.header, self.payload)
             }
         }

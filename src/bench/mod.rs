@@ -208,7 +208,7 @@ async fn handle_one_request(message_len: usize, s: &mut Socket, shared: Arc<Shar
     shared.pool.clone().execute(move || {
         let (_, ReplicaMessagePayload::Dummy(dummy)) = deserialize_from_replica(&*buf)
             .unwrap()
-            .into();
+            .into_inner();
         shared.des.fetch_add(1, Ordering::Relaxed);
 
         shared.pool.clone().execute(move || {
