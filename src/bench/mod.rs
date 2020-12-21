@@ -4,9 +4,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use futures_timer::Delay;
-use futures::channel::mpsc;
-use futures::sink::SinkExt;
-use futures::stream::StreamExt;
 use futures::io::{AsyncReadExt, AsyncWriteExt};
 use bytes::{Buf, BufMut};
 
@@ -20,8 +17,8 @@ use crate::bft::communication::socket::{
     self,
     Socket,
 };
-use crate::bft::communication::message::ReplicaMessage;
 use crate::bft::crypto::signature::{Signature, KeyPair};
+use crate::bft::communication::message::{ReplicaMessage, ReplicaMessagePayload};
 
 struct Shared {
     io: AtomicU64,
@@ -104,17 +101,18 @@ async fn perform_requests(
             let mut msg = vec![0; message_len];
             let sig = keypair.sign(&msg).unwrap();
             msg.extend_from_slice(sig.as_ref());
-            rsp_tx.send(ReplicaMessage::Dummy(msg)).unwrap();
+            let msg = ReplicaMessagePayload::Dummy(msg);
+            let msg = ReplicaMessage::new(msg);
+            rsp_tx.send(msg).unwrap();
         });
         let dummy = rsp_rx.await.unwrap();
 
         // perform the request
-        perform_one_request(message_len, &mut s, pool.clone(), dummy).await;
+        perform_one_request(&mut s, pool.clone(), dummy).await;
     }
 }
 
 async fn perform_one_request(
-    message_len: usize,
     s: &mut Socket,
     pool: threadpool::ThreadPool,
     dummy: ReplicaMessage,
@@ -208,7 +206,9 @@ async fn handle_one_request(message_len: usize, s: &mut Socket, shared: Arc<Shar
     shared.io.fetch_add(1, Ordering::Relaxed);
 
     shared.pool.clone().execute(move || {
-        let ReplicaMessage::Dummy(dummy) = deserialize_from_replica(&*buf).unwrap();
+        let (_, ReplicaMessagePayload::Dummy(dummy)) = deserialize_from_replica(&*buf)
+            .unwrap()
+            .into();
         shared.des.fetch_add(1, Ordering::Relaxed);
 
         shared.pool.clone().execute(move || {

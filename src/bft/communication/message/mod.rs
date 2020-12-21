@@ -58,12 +58,26 @@ impl Header {
 macro_rules! impl_message {
     ($name:ident, $payload:ident) => {
         impl $name {
+            // TODO: add header elements, like source, destiny, etc
+            pub fn new(payload: $payload) -> $name {
+                let header = Header {
+                    magic: *b"BFT",
+                    version: CURRENT_VERSION,
+                    _reserved: MaybeUninit::uninit(),
+                };
+                $name { header, payload }
+            }
+
             pub fn header(&self) -> &Header {
                 &self.header
             }
 
             pub fn payload(&self) -> &$payload {
                 &self.payload
+            }
+
+            pub fn into(self) -> (Header, $payload) {
+                (self.header, self.payload)
             }
         }
     }
