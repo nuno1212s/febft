@@ -16,12 +16,25 @@ use crate::bft::communication::Socket;
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct NodeId(u32);
 
+//pub struct Node {
+//    id: NodeId,
+//    message_bus: MessageBus,
+//}
+
+// if a socket times out on a send,
+// maybe try to reestablish conn?
 pub struct MessageBus {
-    message_bus: Receiver<SystemMessage>,
+    // NodeId failed, try to reestablish conn?
+    error_bus: Receiver<NodeId>,
+    peer_bus: Receiver<SystemMessage>,
     notifier_consensus: Sender<ConsensusMessage>,
 }
 
-impl Node {
-    fn subscribe(&self, notifier: Notifier);
-    fn queue_send<M: Serialize>(&self, message: M);
+impl MessageBus {
+    fn next_message(&self) -> Result<SystemMessage>;
 }
+
+//impl Node {
+//    fn subscribe(&self, notifier: Notifier);
+//    fn queue_send<M: Serialize>(&self, message: M);
+//}
