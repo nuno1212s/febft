@@ -26,7 +26,7 @@ pub struct NodeId(u32);
 pub struct MessageBus {
     // NodeId failed, try to reestablish conn?
     error_bus: Receiver<NodeId>,
-    peer_bus: Receiver<SystemMessage>,
+    message_bus: Receiver<SystemMessage>,
     notifier_consensus: Sender<ConsensusMessage>,
 }
 
