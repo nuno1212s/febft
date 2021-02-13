@@ -26,9 +26,13 @@ pub struct Header {
     pub(crate) magic: [u8; 3],
     // version number for the protocol
     pub(crate) version: u8,
+    // origin node id
+    pub(crate) from: u32,
+    // destiny node id
+    pub(crate) to: u32,
     // reserved bytes, should be left alone
     // for now
-    pub(crate) _reserved: MaybeUninit<[u32; 7]>,
+    pub(crate) _reserved: MaybeUninit<[u32; 5]>,
 }
 
 #[derive(Debug, Clone)]
