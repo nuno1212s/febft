@@ -10,11 +10,25 @@ pub mod message;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
-//use crate::bft::communication::socket::Socket;
+use std::sync::Arc;
+use std::net::SocketAddr;
+use std::collections::HashMap;
+
+use futures::lock::Mutex;
+
+use crate::bft::communication::socket::Socket;
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[repr(transparent)]
 pub struct NodeId(u32);
+
+impl From<u32> for NodeId {
+    #[inline]
+    fn from(id: u32) -> NodeId {
+        NodeId(id)
+    }
+}
 
 impl From<NodeId> for usize {
     #[inline]
@@ -23,7 +37,11 @@ impl From<NodeId> for usize {
     }
 }
 
-//pub struct Node;
+pub struct Node {
+    id: NodeId,
+    peer_addrs: Vec<SocketAddr>,
+    others_tx: HashMap<NodeId, Arc<Mutex<Socket>>>,
+}
 
 // Add more backends:
 // ==================
