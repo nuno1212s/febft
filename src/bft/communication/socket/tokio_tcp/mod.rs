@@ -7,7 +7,7 @@ use tokio::net::{TcpStream, TcpListener};
 use futures::io::{AsyncRead, AsyncWrite};
 use tokio_util::compat::{
     Compat,
-    Tokio02AsyncReadCompatExt,
+    TokioAsyncReadCompatExt,
 };
 
 pub struct Socket {

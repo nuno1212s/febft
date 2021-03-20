@@ -40,8 +40,8 @@ futures = "0.3"
 once_cell = "1.5"
 bytes = "0.6"
 async-std = { version = "1.7", optional = true }
-tokio = { version = "0.3", features = ["full"], optional = true }
-tokio-util = { version = "0.5", features = ["compat"], optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+tokio-util = { version = "0.6", features = ["compat"], optional = true }
 capnp = { version = "0.13", optional = true }
 ring = { version = "0.16", optional = true }
 threadpool-crossbeam-channel = { version = "1.8", optional = true }
