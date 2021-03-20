@@ -9,14 +9,6 @@ use bytes::{Buf, BufMut};
 use crate::bft::error::*;
 use crate::bft::communication::message::ReplicaMessage;
 
-pub trait Serialize {
-    fn serialize<B: BufMut>(&self, buf: B) -> Result<B>;
-}
-
-pub trait Deserialize {
-    fn deserialize<B: Buf>(buf: B) -> Result<Self>;
-}
-
 pub fn serialize_to_replica<B: BufMut>(buf: B, m: ReplicaMessage) -> Result<B> {
     #[cfg(feature = "serialize_capnp")]
     { capnp::serialize_to_replica(buf, m) }
