@@ -7,10 +7,21 @@ pub mod socket;
 pub mod serialize;
 pub mod message;
 
-//use super::context::Context;
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
+
+//use crate::bft::communication::socket::Socket;
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct NodeId(u32);
+
+impl From<NodeId> for usize {
+    #[inline]
+    fn from(id: NodeId) -> usize {
+        id.0 as usize
+    }
+}
 
 //pub struct Node;
 
