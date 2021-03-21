@@ -1,85 +1,78 @@
 use std::mem::MaybeUninit;
 
-// consider only major version changes, since
-// our range of values is limited to 256
-pub(crate) const CURRENT_VERSION: u8 = 0;
-
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-pub enum ReplicaMessagePayload {
-    Dummy(Vec<u8>),
-}
+use crate::bft::communication::socket::Socket;
+use crate::bft::communication::NodeId;
+use crate::bft::error::*;
 
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-pub enum ClientMessagePayload {
-    Dummy(Vec<u8>),
-}
+pub(crate) const CURRENT_VERSION: u32 = 0;
 
+/// A header that is sent before a message in transit in the wire,
+/// therefore a fixed amount of `std::mem::size_of::<Header>()` bytes
+/// are read before a message is read. Contains the protocol version,
+/// message length, as well as other metadata.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct Header {
-    // should be the string `BFT`
-    pub(crate) magic: [u8; 3],
-    // version number for the protocol
-    pub(crate) version: u8,
-    // reserved bytes, should be left alone
-    // for now
-    pub(crate) _reserved: MaybeUninit<[u32; 7]>,
+    // the protocol version.
+    pub(crate) version: u32,
+    // origin of the message
+    pub(crate) from: NodeId,
+    // destiny of the message
+    pub(crate) to: NodeId,
+    // length of the payload
+    pub(crate) length: u64,
+    // sign(hash(version + from + to + length + serialize(payload)))
+    pub(crate) signature: (),
 }
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-pub struct ReplicaMessage {
+pub struct Message {
     pub(crate) header: Header,
-    pub(crate) payload: ReplicaMessagePayload,
+    pub(crate) payload: MessagePayload,
 }
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-pub struct ClientMessage {
-    pub(crate) header: Header,
-    pub(crate) payload: ClientMessagePayload,
+pub enum MessagePayload {
+    System(SystemMessage),
+    ConnectedTx(NodeId, Socket),
+    ConnectedRx(NodeId, Socket),
+    Error(Error),
 }
 
 impl Header {
     pub(crate) fn is_valid(&self) -> bool {
-        self.version == CURRENT_VERSION && &self.magic == b"BFT"
+        self.version == CURRENT_VERSION
     }
 
-    pub fn version(&self) -> u8 {
+    pub fn version(&self) -> u32 {
         self.version
     }
 }
 
-macro_rules! impl_message {
-    ($name:ident, $payload:ident) => {
-        impl $name {
-            // TODO: add header elements, like source, destiny, etc
-            pub fn new(payload: $payload) -> $name {
-                let header = Header {
-                    magic: *b"BFT",
-                    version: CURRENT_VERSION,
-                    _reserved: MaybeUninit::uninit(),
-                };
-                $name { header, payload }
-            }
+impl Message {
+    // TODO: add header elements, like source, destiny, etc
+    pub fn new(payload: MessagePayload) -> Message {
+        let header = Header {
+            version: CURRENT_VERSION,
+        };
+        Message { header, payload }
+    }
 
-            pub fn header(&self) -> &Header {
-                &self.header
-            }
+    pub fn header(&self) -> &Header {
+        &self.header
+    }
 
-            pub fn payload(&self) -> &$payload {
-                &self.payload
-            }
+    pub fn payload(&self) -> &$payload {
+        &self.payload
+    }
 
-            pub fn into_inner(self) -> (Header, $payload) {
-                (self.header, self.payload)
-            }
-        }
+    pub fn into_inner(self) -> (Header, $payload) {
+        (self.header, self.payload)
     }
 }
 
