@@ -20,7 +20,6 @@ pub(crate) const CURRENT_VERSION: u32 = 0;
 //       ring uses variable signature length, maybe add another
 //       container type of e.g. 1024 bits
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct Header {
     // the protocol version.
     pub(crate) version: u32,
@@ -37,19 +36,24 @@ pub struct Header {
 /// A message to be sent over the wire. The payload should be a serialized
 /// `SystemMessage`, for correctness.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct WireMessage<'a> {
     pub(crate) header: Header,
     pub(crate) payload: &'a [u8],
 }
 
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Debug)]
 pub enum Message {
     System(SystemMessage),
     ConnectedTx(NodeId, Socket),
     ConnectedRx(NodeId, Socket),
     Error(Error),
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+pub enum SystemMessage {
+    DUMMY,
+    // ...
 }
 
 impl Header {
