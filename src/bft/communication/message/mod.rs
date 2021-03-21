@@ -13,6 +13,12 @@ pub(crate) const CURRENT_VERSION: u32 = 0;
 /// therefore a fixed amount of `std::mem::size_of::<Header>()` bytes
 /// are read before a message is read. Contains the protocol version,
 /// message length, as well as other metadata.
+// TODO: https://doc.rust-lang.org/reference/conditional-compilation.html#target_endian
+//       conditionally compile on big endian systems,
+//       always serialize in little endian format;
+//       make sure the signature length has a fixed size!
+//       ring uses variable signature length, maybe add another
+//       container type of e.g. 1024 bits
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct Header {
@@ -55,7 +61,7 @@ impl Header {
 impl<'a> WireMessage<'a> {
     /// Constructs a new message to be sent over the wire.
     pub fn new(from: NodeId, to: NodeId, payload: &'a [u8], signature: ()) -> Self {
-        // TODO: sign the message
+        // TODO: provide an actual signature instead of a dummy value
         let header = Header {
             version: CURRENT_VERSION,
             length: payload.len() as u64,
