@@ -29,7 +29,7 @@ pub struct Header {
 }
 
 /// A message to be sent over the wire. The payload should be a serialized
-/// SystemMessage, for correctness.
+/// `SystemMessage`, for correctness.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct WireMessage<'a> {
