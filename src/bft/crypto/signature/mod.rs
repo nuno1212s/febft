@@ -18,7 +18,7 @@ impl KeyPair {
     pub fn from_bytes(raw_bytes: &[u8]) -> Result<Self> {
         let inner = {
             #[cfg(feature = "crypto_signature_ring_ed25519")]
-            ring_ed25519::KeyPair::from_bytes(raw_bytes)?
+            { ring_ed25519::KeyPair::from_bytes(raw_bytes)? }
         };
         Ok(KeyPair { inner })
     }
@@ -37,7 +37,7 @@ impl Signature {
     pub fn from_bytes(raw_bytes: &[u8]) -> Result<Self> {
         let inner = {
             #[cfg(feature = "crypto_signature_ring_ed25519")]
-            ring_ed25519::Signature::from_bytes(raw_bytes)?
+            { ring_ed25519::Signature::from_bytes(raw_bytes)? }
         };
         Ok(Signature { inner })
     }
