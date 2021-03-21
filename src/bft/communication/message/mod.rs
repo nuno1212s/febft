@@ -30,14 +30,14 @@ pub struct Header {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-pub struct Message {
+pub struct WireMessage<'a> {
     pub(crate) header: Header,
-    pub(crate) payload: MessagePayload,
+    pub(crate) payload: &'a [u8],
 }
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-pub enum MessagePayload {
+pub enum Message {
     System(SystemMessage),
     ConnectedTx(NodeId, Socket),
     ConnectedRx(NodeId, Socket),
@@ -45,36 +45,39 @@ pub enum MessagePayload {
 }
 
 impl Header {
-    pub(crate) fn is_valid(&self) -> bool {
-        self.version == CURRENT_VERSION
-    }
-
     pub fn version(&self) -> u32 {
         self.version
     }
 }
 
-impl Message {
-    // TODO: add header elements, like source, destiny, etc
-    pub fn new(payload: MessagePayload) -> Message {
+impl<'a> WireMessage<'a> {
+    /// Constructs a new message to be sent over the wire.
+    pub fn new(from: NodeId, to: NodeId, payload: &'a [u8], signature: ()) -> Self {
+        // TODO: sign the message
         let header = Header {
             version: CURRENT_VERSION,
+            length: payload.len() as u64,
+            signature,
+            from,
+            to,
         };
-        Message { header, payload }
+        Self { header, payload }
+    }
+
+    pub fn into_inner(self) -> (Header, &'a [u8]) {
+        (self.header, self.payload)
     }
 
     pub fn header(&self) -> &Header {
         &self.header
     }
 
-    pub fn payload(&self) -> &$payload {
+    pub fn payload(&self) -> &'a [u8] {
         &self.payload
     }
 
-    pub fn into_inner(self) -> (Header, $payload) {
-        (self.header, self.payload)
+    pub fn is_valid(&self) -> bool {
+        // TODO: verify signature, etc
+        self.header.version == CURRENT_VERSION
     }
 }
-
-impl_message!{ClientMessage, ClientMessagePayload}
-impl_message!{ReplicaMessage, ReplicaMessagePayload}
