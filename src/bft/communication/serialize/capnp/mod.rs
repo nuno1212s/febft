@@ -25,7 +25,7 @@ const MAGIC_VERSION: MagicVersion = MagicVersion {
     version: CURRENT_VERSION,
 };
 
-pub fn serialize_to_replica<B: BufMut>(buf: B, m: ReplicaMessage) -> Result<B> {
+pub fn serialize_message<B: BufMut>(buf: B, m: ReplicaMessage) -> Result<B> {
     let mut root = capnp::message::Builder::new(HeapAllocator::new());
     let mut message_builder: message_capnp::replica_message::Builder = root.init_root();
     let mut header = message_builder.reborrow().init_header();
@@ -46,7 +46,7 @@ pub fn serialize_to_replica<B: BufMut>(buf: B, m: ReplicaMessage) -> Result<B> {
         .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to serialize using capnp")
 }
 
-pub fn deserialize_from_replica<B: Buf>(buf: B) -> Result<ReplicaMessage> {
+pub fn deserialize_message<B: Buf>(buf: B) -> Result<ReplicaMessage> {
     let root = capnp::serialize::read_message(buf.reader(), Default::default())
         .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to deserialize using capnp")?;
     let message_reader: message_capnp::replica_message::Reader = root.get_root()
