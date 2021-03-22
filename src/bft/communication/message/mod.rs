@@ -88,6 +88,7 @@ impl<'a> WireMessage<'a> {
                 .copy_from_slice(sig.as_ref());
             s.assume_init()
         };
+        let (from, to): (u32, u32) = (from.into(), to.into());
         let header = Header {
             version: CURRENT_VERSION,
             length: payload.len() as u64,
