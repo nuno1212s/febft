@@ -19,7 +19,7 @@ use crate::bft::communication::message::SystemMessage;
 
 #[cfg(feature = "serialize_capnp")]
 pub fn serialize_message<O, B: BufMut>(buf: B, m: SystemMessage<O>) -> Result<B> {
-    capnp::serialize_to_replica(buf, m)
+    capnp::serialize_message(buf, m)
 }
 
 #[cfg(feature = "serialize_serde")]
@@ -29,18 +29,18 @@ where
     B: BufMut,
 {
     #[cfg(feature = "serialize_serde_bincode")]
-    { serde::bincode::serialize_to_replica(buf, m) }
+    { serde::bincode::serialize_message(buf, m) }
 
     #[cfg(feature = "serialize_serde_messagepack")]
-    { serde::messagepack::serialize_to_replica(buf, m) }
+    { serde::messagepack::serialize_message(buf, m) }
 
     #[cfg(feature = "serialize_serde_cbor")]
-    { serde::cbor::serialize_to_replica(buf, m) }
+    { serde::cbor::serialize_message(buf, m) }
 }
 
 #[cfg(feature = "serialize_capnp")]
 pub fn deserialize_message<O, B: Buf>(buf: B) -> Result<SystemMessage<O>> {
-    capnp::deserialize_from_replica(buf)
+    capnp::deserialize_message(buf)
 }
 
 #[cfg(feature = "serialize_serde")]
@@ -50,11 +50,11 @@ where
     B: Buf,
 {
     #[cfg(feature = "serialize_serde_bincode")]
-    { serde::bincode::deserialize_from_replica(buf) }
+    { serde::bincode::deserialize_message(buf) }
 
     #[cfg(feature = "serialize_serde_messagepack")]
-    { serde::messagepack::deserialize_from_replica(buf) }
+    { serde::messagepack::deserialize_message(buf) }
 
     #[cfg(feature = "serialize_serde_cbor")]
-    { serde::cbor::deserialize_from_replica(buf) }
+    { serde::cbor::deserialize_message(buf) }
 }
