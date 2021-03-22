@@ -3,11 +3,15 @@ use std::mem::MaybeUninit;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
+use crate::bft::crypto::signature::Signature;
 use crate::bft::communication::socket::Socket;
 use crate::bft::communication::NodeId;
 use crate::bft::error::*;
 
 pub(crate) const CURRENT_VERSION: u32 = 0;
+
+/// The size of the `Header` in bytes.
+pub const HEADER_LENGTH: usize = std::mem::size_of::<Header>();
 
 /// A header that is sent before a message in transit in the wire,
 /// therefore a fixed amount of `std::mem::size_of::<Header>()` bytes
@@ -20,17 +24,18 @@ pub(crate) const CURRENT_VERSION: u32 = 0;
 //       ring uses variable signature length, maybe add another
 //       container type of e.g. 1024 bits
 #[derive(Debug, Clone)]
+#[repr(C)]
 pub struct Header {
     // the protocol version.
     pub(crate) version: u32,
     // origin of the message
-    pub(crate) from: NodeId,
+    pub(crate) from: u32,
     // destiny of the message
-    pub(crate) to: NodeId,
+    pub(crate) to: u32,
     // length of the payload
     pub(crate) length: u64,
     // sign(hash(version + from + to + length + serialize(payload)))
-    pub(crate) signature: (),
+    pub(crate) signature: [u8; Signature::LENGTH],
 }
 
 /// A message to be sent over the wire. The payload should be a serialized
@@ -57,6 +62,17 @@ pub enum SystemMessage {
 }
 
 impl Header {
+    pub fn serialize(mut self) -> [u8; HEADER_LENGTH] {
+        #[cfg(target_endian = "big")]
+        {
+            self.version = self.version.to_le();
+            self.from = self.from.to_le();
+            self.to = self.to.to_le();
+            self.length = self.length.to_le();
+        }
+        unsafe { std::mem::transmute(self) }
+    }
+
     pub fn version(&self) -> u32 {
         self.version
     }
@@ -64,8 +80,14 @@ impl Header {
 
 impl<'a> WireMessage<'a> {
     /// Constructs a new message to be sent over the wire.
-    pub fn new(from: NodeId, to: NodeId, payload: &'a [u8], signature: ()) -> Self {
-        // TODO: provide an actual signature instead of a dummy value
+    pub fn new(from: NodeId, to: NodeId, payload: &'a [u8], sig: Signature) -> Self {
+        let signature = unsafe {
+            let mut s: MaybeUninit<[u8; Signature::LENGTH]> =
+                MaybeUninit::uninit();
+            (*s.as_mut_ptr())
+                .copy_from_slice(sig.as_ref());
+            s.assume_init()
+        };
         let header = Header {
             version: CURRENT_VERSION,
             length: payload.len() as u64,
