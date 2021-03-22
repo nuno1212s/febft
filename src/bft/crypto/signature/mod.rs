@@ -34,6 +34,9 @@ impl KeyPair {
 }
 
 impl Signature {
+    #[cfg(feature = "crypto_signature_ring_ed25519")]
+    pub const LENGTH: usize = ring_ed25519::KeyPair::LENGTH;
+
     pub fn from_bytes(raw_bytes: &[u8]) -> Result<Self> {
         let inner = {
             #[cfg(feature = "crypto_signature_ring_ed25519")]

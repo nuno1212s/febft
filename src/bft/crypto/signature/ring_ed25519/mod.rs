@@ -45,6 +45,8 @@ impl KeyPair {
 }
 
 impl Signature {
+    pub const LENGTH: usize = 64;
+
     pub fn from_bytes(raw_bytes: &[u8]) -> Result<Self> {
         if raw_bytes.len() > MAX_LEN {
             return Err("Signature is too long")
