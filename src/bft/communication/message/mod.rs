@@ -23,7 +23,7 @@ pub const HEADER_LENGTH: usize = std::mem::size_of::<Header>();
 //       make sure the signature length has a fixed size!
 //       ring uses variable signature length, maybe add another
 //       container type of e.g. 1024 bits
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct Header {
     // the protocol version.
@@ -40,25 +40,42 @@ pub struct Header {
 
 /// A message to be sent over the wire. The payload should be a serialized
 /// `SystemMessage`, for correctness.
-#[derive(Debug, Clone)]
 pub struct WireMessage<'a> {
     pub(crate) header: Header,
     pub(crate) payload: &'a [u8],
 }
 
-#[derive(Debug)]
-pub enum Message {
-    System(SystemMessage),
+pub enum Message<O> {
+    System(SystemMessage<O>),
     ConnectedTx(NodeId, Socket),
     ConnectedRx(NodeId, Socket),
     Error(Error),
 }
 
-#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-pub enum SystemMessage {
-    DUMMY,
-    // ...
+pub enum SystemMessage<O> {
+    Request(RequestMessage<O>),
+    Consensus(ConsensusMessage),
+}
+
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+pub struct RequestMessage<O> {
+    id: NodeId,
+    operation: O,
+}
+
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+pub struct ConsensusMessage {
+    seq: i32,
+    from: NodeId,
+    kind: ConsensusMessageKind,
+}
+
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+pub enum ConsensusMessageKind {
+    PrePrepare((/* hash digest type here */)),
+    Prepare,
+    Commit,
 }
 
 impl Header {
