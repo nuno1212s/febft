@@ -1,2 +1,6 @@
+# ignore cargo stuff
 /target
-Cargo.lock
+/Cargo.lock
+
+# ignore vim :mksession
+/session.vim
