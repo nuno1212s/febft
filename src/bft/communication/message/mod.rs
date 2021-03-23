@@ -8,15 +8,17 @@ use crate::bft::communication::socket::Socket;
 use crate::bft::communication::NodeId;
 use crate::bft::error::*;
 
-pub(crate) const CURRENT_VERSION: u32 = 0;
+/// The current version of the wire protocol.
+pub const CURRENT_VERSION: u32 = 0;
 
 /// The size of the `Header` in bytes.
 pub const HEADER_LENGTH: usize = std::mem::size_of::<Header>();
 
-/// A header that is sent before a message in transit in the wire,
-/// therefore a fixed amount of `HEADER_LENGTH` bytes are read before
-/// a message is read. Contains the protocol version, message length,
-/// as well as other metadata.
+/// A header that is sent before a message in transit in the wire.
+///
+/// A fixed amount of `HEADER_LENGTH` bytes are read before
+/// a message is read. Contains the protocol version, message
+/// length, as well as other metadata.
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct Header {
