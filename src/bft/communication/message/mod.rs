@@ -8,15 +8,9 @@ use crate::bft::communication::socket::Socket;
 use crate::bft::communication::NodeId;
 use crate::bft::error::*;
 
-/// The current version of the wire protocol.
-pub const CURRENT_VERSION: u32 = 0;
-
-/// The size of the `Header` in bytes.
-pub const HEADER_LENGTH: usize = std::mem::size_of::<Header>();
-
 /// A header that is sent before a message in transit in the wire.
 ///
-/// A fixed amount of `HEADER_LENGTH` bytes are read before
+/// A fixed amount of `Header::LENGTH` bytes are read before
 /// a message is read. Contains the protocol version, message
 /// length, as well as other metadata.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -76,6 +70,9 @@ pub enum ConsensusMessageKind {
 }
 
 impl Header {
+    /// The size of the memory representation of the `Header` in bytes.
+    pub const LENGTH: usize = std::mem::size_of::<Self>();
+
     unsafe fn serialize_into_unchecked(self, buf: &mut [u8]) {
         #[cfg(target_endian = "big")]
         {
@@ -84,12 +81,13 @@ impl Header {
             self.to = self.to.to_le();
             self.length = self.length.to_le();
         }
-        let hdr: [u8; HEADER_LENGTH] = std::mem::transmute(self);
-        (&mut buf[..HEADER_LENGTH]).copy_from_slice(&hdr[..]);
+        let hdr: [u8; Self::LENGTH] = std::mem::transmute(self);
+        (&mut buf[..Self::LENGTH]).copy_from_slice(&hdr[..]);
     }
 
+    /// Serialize a `Header` into a byte buffer of appropriate size.
     pub fn serialize_into(self, buf: &mut [u8]) -> Result<()> {
-        if buf.len() < HEADER_LENGTH {
+        if buf.len() < Self::LENGTH {
             return Err("Buffer is too short to serialize into")
                 .wrapped(ErrorKind::CommunicationMessage);
         }
@@ -97,11 +95,11 @@ impl Header {
     }
 
     unsafe fn deserialize_from_unchecked(buf: &[u8]) -> Self {
-        let mut hdr: [u8; HEADER_LENGTH] = {
+        let mut hdr: [u8; Self::LENGTH] = {
             let hdr = MaybeUninit::uninit();
             hdr.assume_init()
         };
-        (&mut hdr[..]).copy_from_slice(&buf[..HEADER_LENGTH]);
+        (&mut hdr[..]).copy_from_slice(&buf[..Self::LENGTH]);
         #[cfg(target_endian = "big")]
         {
             hdr.version = hdr.version.to_be();
@@ -112,8 +110,9 @@ impl Header {
         std::mem::transmute(hdr)
     }
 
+    /// Deserialize a `Header` from a byte buffer of appropriate size.
     pub fn deserialize_from(buf: &[u8]) -> Result<Self> {
-        if buf.len() < HEADER_LENGTH {
+        if buf.len() < Self::LENGTH {
             return Err("Buffer is too short to deserialize from")
                 .wrapped(ErrorKind::CommunicationMessage);
         }
@@ -126,6 +125,9 @@ impl Header {
 }
 
 impl<'a> WireMessage<'a> {
+    /// The current version of the wire protocol.
+    pub const CURRENT_VERSION: u32 = 0;
+
     /// Constructs a new message to be sent over the wire.
     pub fn new(from: NodeId, to: NodeId, payload: &'a [u8], sig: Signature) -> Self {
         let signature = unsafe {
@@ -137,7 +139,7 @@ impl<'a> WireMessage<'a> {
         };
         let (from, to): (u32, u32) = (from.into(), to.into());
         let header = Header {
-            version: CURRENT_VERSION,
+            version: Self::CURRENT_VERSION,
             length: payload.len() as u64,
             signature,
             from,
@@ -160,13 +162,13 @@ impl<'a> WireMessage<'a> {
 
     pub fn is_valid(&self) -> bool {
         // TODO: verify signature, etc
-        self.header.version == CURRENT_VERSION
+        self.header.version == Self::CURRENT_VERSION
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::bft::communication::message::{WireMessage, Header, HEADER_LENGTH};
+    use crate::bft::communication::message::{WireMessage, Header};
     use crate::bft::crypto::signature::Signature;
     use crate::bft::communication::NodeId;
 
@@ -180,7 +182,7 @@ mod tests {
             b"I am a cool payload!",
             signature,
         ).into_inner();
-        let mut buf = [0; HEADER_LENGTH];
+        let mut buf = [0; Header::LENGTH];
         old_header.serialize_into(&mut buf[..])
             .expect("Serialize failed");
         let new_header = Header::deserialize_from(&buf[..])
