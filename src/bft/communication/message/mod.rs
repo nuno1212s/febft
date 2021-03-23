@@ -36,6 +36,7 @@ pub struct Header {
 
 /// A message to be sent over the wire. The payload should be a serialized
 /// `SystemMessage`, for correctness.
+#[derive(Debug)]
 pub struct WireMessage<'a> {
     pub(crate) header: Header,
     pub(crate) payload: &'a [u8],
@@ -95,7 +96,7 @@ impl Header {
         Ok(unsafe { self.serialize_into_unchecked(buf) })
     }
 
-    unsafe fn deserialize_from_unchecked(self, buf: &[u8]) -> Self {
+    unsafe fn deserialize_from_unchecked(buf: &[u8]) -> Self {
         let mut hdr: [u8; HEADER_LENGTH] = {
             let hdr = MaybeUninit::uninit();
             hdr.assume_init()
@@ -111,12 +112,12 @@ impl Header {
         std::mem::transmute(hdr)
     }
 
-    pub fn deserialize_from(self, buf: &[u8]) -> Result<Self> {
+    pub fn deserialize_from(buf: &[u8]) -> Result<Self> {
         if buf.len() < HEADER_LENGTH {
             return Err("Buffer is too short to deserialize from")
                 .wrapped(ErrorKind::CommunicationMessage);
         }
-        Ok(unsafe { self.deserialize_from_unchecked(buf) })
+        Ok(unsafe { Self::deserialize_from_unchecked(buf) })
     }
 
     pub fn version(&self) -> u32 {
