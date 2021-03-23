@@ -1,17 +1,37 @@
 use std::default::Default;
 
-use capnp::serialize;
-use capnp::message::HeapAllocator;
 use bytes::{Buf, BufMut};
+use capnp::serialize;
+use capnp::message::{
+    Reader,
+    Builder,
+    Allocator,
+    HeapAllocator,
+    ReaderSegments,
+};
 
 use crate::bft::error::*;
+use crate::bft::communication::message::SystemMessage;
 
-pub trait FromCapnp {
-    fn from_capnp(reader: &capnp::message::Reader) -> Result<SystemMessage<O>>;
+// FIXME: maybe use `capnp::message::ScratchSpaceHeapAllocator` instead of
+// `capnp::message::HeapAllocator`; this requires some wrapper type for
+// allocating messages, which is slightly annoying, but ultimately better
+// for performance reasons
+//
+// e.g. `Serializer::new(scratch).serialize(...)`
+//
+// each task would have its own `Serializer` instance
+
+pub trait FromCapnp: Sized {
+    fn from_capnp<S>(reader: &Reader<S>) -> Result<SystemMessage<Self>>
+    where
+        S: ReaderSegments;
 }
 
-pub trait ToCapnp {
-    fn to_capnp(m: SystemMessage<Self>, root: &mut capnp::message::Builder) -> Result<()>;
+pub trait ToCapnp: Sized {
+    fn to_capnp<A>(m: SystemMessage<Self>, root: &mut Builder<A>) -> Result<()>
+    where
+        A: Allocator;
 }
 
 pub fn serialize_message<O: ToCapnp, B: BufMut>(buf: B, m: SystemMessage<O>) -> Result<B> {
