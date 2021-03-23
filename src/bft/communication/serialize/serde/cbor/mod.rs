@@ -15,9 +15,9 @@ where
         .wrapped(ErrorKind::CommunicationSerializeSerdeCbor)
 }
 
-pub fn deserialize_message<'de, O, B>(buf: B) -> Result<SystemMessage<O>>
+pub fn deserialize_message<O, B>(buf: B) -> Result<SystemMessage<O>>
 where
-    O: Deserialize<'de>,
+    O: for<'de> Deserialize<'de>,
     B: Buf,
 {
     let mut r = buf.reader();

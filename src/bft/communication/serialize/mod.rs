@@ -42,9 +42,9 @@ pub fn deserialize_message<O: FromCapnp, B: Buf>(buf: B) -> Result<SystemMessage
 }
 
 #[cfg(feature = "serialize_serde")]
-pub fn deserialize_message<'de, O, B>(buf: B) -> Result<SystemMessage<O>>
+pub fn deserialize_message<O, B>(buf: B) -> Result<SystemMessage<O>>
 where
-    O: Deserialize<'de>,
+    O: for<'de> Deserialize<'de>,
     B: Buf,
 {
     #[cfg(feature = "serialize_serde_bincode")]
