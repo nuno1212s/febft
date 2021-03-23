@@ -1,8 +1,3 @@
-// TODO: create a trait for capnp serialization
-// * serialize takes (SystemMessage, capnp::message::Builder) and returns ()
-// * deserialize takes (capnp::message::Builder) and returns SystemMessage
-// * no reads or writes performed by the trait
-
 #[cfg(feature = "serialize_capnp")]
 mod capnp;
 
@@ -18,7 +13,10 @@ use crate::bft::error::*;
 use crate::bft::communication::message::SystemMessage;
 
 #[cfg(feature = "serialize_capnp")]
-pub fn serialize_message<O, B: BufMut>(buf: B, m: SystemMessage<O>) -> Result<B> {
+use capnp::{ToCapnp, FromCapnp};
+
+#[cfg(feature = "serialize_capnp")]
+pub fn serialize_message<O: ToCapnp, B: BufMut>(buf: B, m: SystemMessage<O>) -> Result<B> {
     capnp::serialize_message(buf, m)
 }
 
@@ -39,7 +37,7 @@ where
 }
 
 #[cfg(feature = "serialize_capnp")]
-pub fn deserialize_message<O, B: Buf>(buf: B) -> Result<SystemMessage<O>> {
+pub fn deserialize_message<O: FromCapnp, B: Buf>(buf: B) -> Result<SystemMessage<O>> {
     capnp::deserialize_message(buf)
 }
 
