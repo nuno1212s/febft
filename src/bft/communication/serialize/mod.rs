@@ -13,7 +13,7 @@ use crate::bft::error::*;
 use crate::bft::communication::message::SystemMessage;
 
 #[cfg(feature = "serialize_capnp")]
-use self::capnp::{ToCapnp, FromCapnp};
+pub use self::capnp::{ToCapnp, FromCapnp};
 
 #[cfg(feature = "serialize_capnp")]
 pub fn serialize_message<O: ToCapnp, B: BufMut>(buf: B, m: SystemMessage<O>) -> Result<B> {
