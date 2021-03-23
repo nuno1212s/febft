@@ -69,6 +69,8 @@ pub enum ConsensusMessageKind {
     Commit,
 }
 
+// FIXME: perhaps use references for serializing and deserializing,
+// to save a stack allocation? probably overkill
 impl Header {
     /// The size of the memory representation of the `Header` in bytes.
     pub const LENGTH: usize = std::mem::size_of::<Self>();
