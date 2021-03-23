@@ -4,28 +4,28 @@ use std::io::{Write, BufWriter};
 
 use itertools::Itertools;
 
-const MESSAGE_CAPNP_SRC: &str = "src/bft/communication/serialize/capnp/message.capnp";
+//const MESSAGE_CAPNP_SRC: &str = "src/bft/communication/serialize/capnp/message.capnp";
 const ERROR_KIND_DST: &str = "error_kind.rs";
 
 fn main() {
     generate_error_kinds();
-    generate_message_from_capnp();
+    //generate_message_from_capnp();
 }
 
-fn generate_message_from_capnp() {
-    // check if we need to compile capnp
-    match std::env::var("CARGO_FEATURE_SERIALIZE_CAPNP") {
-        Ok(_) => (),
-        _ => return,
-    };
-
-    // recompile capnp message into rust when the source changes
-    println!("cargo:rerun-if-changed={}", MESSAGE_CAPNP_SRC);
-    capnpc::CompilerCommand::new()
-        .file(MESSAGE_CAPNP_SRC)
-        .run()
-        .unwrap();
-}
+//fn generate_message_from_capnp() {
+//    // check if we need to compile capnp
+//    match std::env::var("CARGO_FEATURE_SERIALIZE_CAPNP") {
+//        Ok(_) => (),
+//        _ => return,
+//    };
+//
+//    // recompile capnp message into rust when the source changes
+//    println!("cargo:rerun-if-changed={}", MESSAGE_CAPNP_SRC);
+//    capnpc::CompilerCommand::new()
+//        .file(MESSAGE_CAPNP_SRC)
+//        .run()
+//        .unwrap();
+//}
 
 fn generate_error_kinds() {
     // this function recursively outputs directory names
