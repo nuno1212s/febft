@@ -111,7 +111,7 @@ impl Header {
 
     pub fn deserialize_from(self, buf: &[u8]) -> Result<Self> {
         if buf.len() < HEADER_LENGTH {
-            return Err("Buffer is too short to serialize into")
+            return Err("Buffer is too short to deserialize from")
                 .wrapped(ErrorKind::CommunicationMessage);
         }
         Ok(unsafe { self.deserialize_from_unchecked(buf) })
