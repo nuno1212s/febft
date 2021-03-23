@@ -5,7 +5,7 @@ mod capnp;
 mod serde;
 
 #[cfg(feature = "serialize_serde")]
-use serde::{Serialize, Deserialize};
+use ::serde::{Serialize, Deserialize};
 
 use bytes::{Buf, BufMut};
 
