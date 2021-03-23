@@ -79,7 +79,7 @@ pub enum ConsensusMessageKind {
 }
 
 impl Header {
-    pub fn serialize(mut self) -> [u8; HEADER_LENGTH] {
+    fn serialize_into_unchecked(self, buf: &mut [u8]) {
         #[cfg(target_endian = "big")]
         {
             self.version = self.version.to_le();
@@ -87,7 +87,18 @@ impl Header {
             self.to = self.to.to_le();
             self.length = self.length.to_le();
         }
-        unsafe { std::mem::transmute(self) }
+        let hdr: [u8; HEADER_LENGTH] = unsafe {
+            std::mem::transmute(self)
+        };
+        buf.copy_from_slice(&hdr[..]);
+    }
+
+    pub fn serialize_into(self, buf: &mut [u8]) -> Result<()> {
+        if buf.len() < HEADER_LENGTH {
+            return Err("Buffer is too short to serialize into")
+                .wrapped(ErrorKind::CommunicationMessage);
+        }
+        Ok(self.serialize_into_unchecked(buf))
     }
 
     pub fn version(&self) -> u32 {
