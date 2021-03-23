@@ -14,9 +14,9 @@ pub(crate) const CURRENT_VERSION: u32 = 0;
 pub const HEADER_LENGTH: usize = std::mem::size_of::<Header>();
 
 /// A header that is sent before a message in transit in the wire,
-/// therefore a fixed amount of `std::mem::size_of::<Header>()` bytes
-/// are read before a message is read. Contains the protocol version,
-/// message length, as well as other metadata.
+/// therefore a fixed amount of `HEADER_LENGTH` bytes are read before
+/// a message is read. Contains the protocol version, message length,
+/// as well as other metadata.
 // TODO: https://doc.rust-lang.org/reference/conditional-compilation.html#target_endian
 //       conditionally compile on big endian systems,
 //       always serialize in little endian format;
