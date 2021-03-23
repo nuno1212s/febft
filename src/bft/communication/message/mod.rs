@@ -17,12 +17,6 @@ pub const HEADER_LENGTH: usize = std::mem::size_of::<Header>();
 /// therefore a fixed amount of `HEADER_LENGTH` bytes are read before
 /// a message is read. Contains the protocol version, message length,
 /// as well as other metadata.
-// TODO: https://doc.rust-lang.org/reference/conditional-compilation.html#target_endian
-//       conditionally compile on big endian systems,
-//       always serialize in little endian format;
-//       make sure the signature length has a fixed size!
-//       ring uses variable signature length, maybe add another
-//       container type of e.g. 1024 bits
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct Header {
@@ -79,7 +73,7 @@ pub enum ConsensusMessageKind {
 }
 
 impl Header {
-    fn serialize_into_unchecked(self, buf: &mut [u8]) {
+    unsafe fn serialize_into_unchecked(self, buf: &mut [u8]) {
         #[cfg(target_endian = "big")]
         {
             self.version = self.version.to_le();
@@ -87,10 +81,8 @@ impl Header {
             self.to = self.to.to_le();
             self.length = self.length.to_le();
         }
-        let hdr: [u8; HEADER_LENGTH] = unsafe {
-            std::mem::transmute(self)
-        };
-        buf.copy_from_slice(&hdr[..]);
+        let hdr: [u8; HEADER_LENGTH] = std::mem::transmute(self);
+        (&mut buf[..HEADER_LENGTH]).copy_from_slice(&hdr[..]);
     }
 
     pub fn serialize_into(self, buf: &mut [u8]) -> Result<()> {
@@ -98,7 +90,31 @@ impl Header {
             return Err("Buffer is too short to serialize into")
                 .wrapped(ErrorKind::CommunicationMessage);
         }
-        Ok(self.serialize_into_unchecked(buf))
+        Ok(unsafe { self.serialize_into_unchecked(buf) })
+    }
+
+    unsafe fn deserialize_from_unchecked(self, buf: &[u8]) -> Self {
+        let mut hdr: [u8; HEADER_LENGTH] = {
+            let hdr = MaybeUninit::uninit();
+            hdr.assume_init()
+        };
+        (&mut hdr[..]).copy_from_slice(&buf[..HEADER_LENGTH]);
+        #[cfg(target_endian = "big")]
+        {
+            hdr.version = hdr.version.to_be();
+            hdr.from = hdr.from.to_be();
+            hdr.to = hdr.to.to_le();
+            hdr.length = hdr.length.to_be();
+        }
+        std::mem::transmute(hdr)
+    }
+
+    pub fn deserialize_from(self, buf: &[u8]) -> Result<Self> {
+        if buf.len() < HEADER_LENGTH {
+            return Err("Buffer is too short to serialize into")
+                .wrapped(ErrorKind::CommunicationMessage);
+        }
+        Ok(unsafe { self.deserialize_from_unchecked(buf) })
     }
 
     pub fn version(&self) -> u32 {
