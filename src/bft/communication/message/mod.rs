@@ -19,7 +19,7 @@ pub const HEADER_LENGTH: usize = std::mem::size_of::<Header>();
 /// A fixed amount of `HEADER_LENGTH` bytes are read before
 /// a message is read. Contains the protocol version, message
 /// length, as well as other metadata.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(C)]
 pub struct Header {
     // the protocol version.
@@ -161,5 +161,30 @@ impl<'a> WireMessage<'a> {
     pub fn is_valid(&self) -> bool {
         // TODO: verify signature, etc
         self.header.version == CURRENT_VERSION
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::bft::communication::message::{WireMessage, Header, HEADER_LENGTH};
+    use crate::bft::crypto::signature::Signature;
+    use crate::bft::communication::NodeId;
+
+    #[test]
+    fn test_header_serialize() {
+        let signature = Signature::from_bytes(&[0; Signature::LENGTH][..])
+            .expect("Invalid signature length");
+        let (old_header, _) = WireMessage::new(
+            NodeId::from(0),
+            NodeId::from(3),
+            b"I am a cool payload!",
+            signature,
+        ).into_inner();
+        let mut buf = [0; HEADER_LENGTH];
+        old_header.serialize_into(&mut buf[..])
+            .expect("Serialize failed");
+        let new_header = Header::deserialize_from(&buf[..])
+            .expect("Deserialize failed");
+        assert_eq!(old_header, new_header);
     }
 }
