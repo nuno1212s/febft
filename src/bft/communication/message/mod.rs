@@ -1,3 +1,6 @@
+//! This module contains types associated with messages traded
+//! between the system processes.
+
 use std::mem::MaybeUninit;
 
 #[cfg(feature = "serialize_serde")]
@@ -39,9 +42,15 @@ pub struct WireMessage<'a> {
 /// The `Message` type encompasses all the messages traded between different
 /// asynchronous tasks in the system.
 pub enum Message<O> {
+    /// Client requests and process sub-protocol messages.
     System(SystemMessage<O>),
+    /// A client with id `NodeId` has finished connecting to the socket `Socket`.
+    /// This socket should only perform write operations.
     ConnectedTx(NodeId, Socket),
+    /// A client with id `NodeId` has finished connecting to the socket `Socket`.
+    /// This socket should only perform read operations.
     ConnectedRx(NodeId, Socket),
+    /// Errors reported by asynchronous tasks.
     Error(Error),
 }
 
