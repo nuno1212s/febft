@@ -36,6 +36,8 @@ pub struct WireMessage<'a> {
     pub(crate) payload: &'a [u8],
 }
 
+/// The `Message` type encompasses all the messages traded between different
+/// asynchronous tasks in the system.
 pub enum Message<O> {
     System(SystemMessage<O>),
     ConnectedTx(NodeId, Socket),
@@ -43,18 +45,31 @@ pub enum Message<O> {
     Error(Error),
 }
 
+/// A `SystemMessage` corresponds to a message regarding one of the SMR
+/// sub-protocols.
+///
+/// This can be either a `Request` from a client, a `Consensus` message,
+/// or even `ViewChange` messages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub enum SystemMessage<O> {
     Request(RequestMessage<O>),
     Consensus(ConsensusMessage),
 }
 
+/// Represents a request from a client.
+///
+/// The `O` type argument symbolizes the client operation to be performed
+/// over the replicated state.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct RequestMessage<O> {
     id: NodeId,
     operation: O,
 }
 
+/// Represents a message from the consensus sub-protocol.
+///
+/// Different types of consensus messages are represented in the `ConsensusMessageKind`
+/// type.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct ConsensusMessage {
     seq: i32,
@@ -62,6 +77,7 @@ pub struct ConsensusMessage {
     kind: ConsensusMessageKind,
 }
 
+/// Represents one of many different consensus stages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub enum ConsensusMessageKind {
     PrePrepare((/* hash digest type here */)),
@@ -150,18 +166,24 @@ impl<'a> WireMessage<'a> {
         Self { header, payload }
     }
 
+    /// Retrieve the inner `Header` and payload byte buffer stored
+    /// inside the `WireMessage`.
     pub fn into_inner(self) -> (Header, &'a [u8]) {
         (self.header, self.payload)
     }
 
+    /// Returns a reference to the `Header` of the `WireMessage`.
     pub fn header(&self) -> &Header {
         &self.header
     }
 
+    /// Returns a reference to the payload bytes of the `WireMessage`.
     pub fn payload(&self) -> &'a [u8] {
         &self.payload
     }
 
+    /// Checks for the correctness of the `WireMessage`. This implies
+    /// checking signatures and other metadata.
     pub fn is_valid(&self) -> bool {
         // TODO: verify signature, etc
         self.header.version == Self::CURRENT_VERSION
