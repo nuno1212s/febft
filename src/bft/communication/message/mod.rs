@@ -41,6 +41,15 @@ pub struct WireMessage<'a> {
 
 /// The `Message` type encompasses all the messages traded between different
 /// asynchronous tasks in the system.
+///
+// TODO: include `Header` in `System`, or perhaps repeat some
+// information in the payload, such as signatures, from, to, ...
+// this is necessary for the receiving node to perform protocol
+// specific actions, such as who voted for a prepare in the consensus
+// layer
+//
+// pub struct ReceivedWireMessage { header, system_message } ???
+//
 pub enum Message<O> {
     /// Client requests and process sub-protocol messages.
     System(SystemMessage<O>),
@@ -51,7 +60,7 @@ pub enum Message<O> {
     /// This socket should only perform read operations.
     ConnectedRx(NodeId, Socket),
     /// Errors reported by asynchronous tasks.
-    Error(Error),
+    Error(NodeId, Error),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
@@ -71,7 +80,6 @@ pub enum SystemMessage<O> {
 /// over the replicated state.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct RequestMessage<O> {
-    id: NodeId,
     operation: O,
 }
 
@@ -82,7 +90,6 @@ pub struct RequestMessage<O> {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct ConsensusMessage {
     seq: i32,
-    from: NodeId,
     kind: ConsensusMessageKind,
 }
 
