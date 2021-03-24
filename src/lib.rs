@@ -32,4 +32,4 @@ mod bft;
 #[cfg(feature = "bench")]
 pub mod bench;
 
-pub use bft::error;
+// TODO: re-export some stuff
