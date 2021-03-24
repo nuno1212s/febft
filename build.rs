@@ -92,7 +92,8 @@ fn generate_error_kinds() {
     };
     let mut name_buf = Vec::new();
 
-    writeln!(&mut buf, r#"/// Includes a list of all the library software components.
+    writeln!(&mut buf, r#"/// Includes a list of all the errors reported by this
+/// crate's modules. Generated automatically with `build.rs`.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
 pub enum ErrorKind {{"#).unwrap();

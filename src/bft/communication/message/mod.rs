@@ -89,7 +89,7 @@ pub struct ConsensusMessage {
 /// Represents one of many different consensus stages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub enum ConsensusMessageKind {
-    PrePrepare((/* hash digest type here */)),
+    PrePrepare((/* TODO: hash digest type here */)),
     Prepare,
     Commit,
 }
@@ -146,6 +146,8 @@ impl Header {
         Ok(unsafe { Self::deserialize_from_unchecked(buf) })
     }
 
+    /// Reports the current version of the wire protocol,
+    /// i.e. `WireMessage::CURRENT_VERSION`.
     pub fn version(&self) -> u32 {
         self.version
     }
