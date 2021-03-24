@@ -22,12 +22,14 @@ use crate::bft::communication::message::SystemMessage;
 //
 // each task would have its own `Serializer` instance
 
+/// Deserialize a wire message from a Cap'n'Proto segment reader.
 pub trait FromCapnp: Sized {
     fn from_capnp<S>(reader: &Reader<S>) -> Result<SystemMessage<Self>>
     where
         S: ReaderSegments;
 }
 
+/// Serialize a wire message using a Cap'n'Proto segment builder.
 pub trait ToCapnp: Sized {
     fn to_capnp<A>(m: SystemMessage<Self>, root: &mut Builder<A>) -> Result<()>
     where
