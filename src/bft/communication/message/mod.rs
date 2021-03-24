@@ -60,7 +60,7 @@ pub enum Message<O> {
     /// This socket should only perform read operations.
     ConnectedRx(NodeId, Socket),
     /// Errors reported by asynchronous tasks.
-    Error(NodeId, Error),
+    Error(NodeId /* FIXME: Option<NodeId> ? */, Error),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
