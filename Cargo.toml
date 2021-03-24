@@ -1,8 +1,14 @@
 [package]
 name = "febft"
 version = "0.1.0"
+description = "A BFT SMR library in Rust!"
 authors = ["Tiago Carvalho <up201605259@fc.up.pt>"]
 edition = "2018"
+license = "MIT"
+homepage = "https://github.com/febft/febft"
+repository = "https://github.com/febft/febft"
+documentation = "https://docs.rs/febft"
+readme = "README.md"
 
 [features]
 # choose one of each prefixes: async, threadpool, socket, serialize, crypto_signature
