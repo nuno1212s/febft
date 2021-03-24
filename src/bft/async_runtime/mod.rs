@@ -1,3 +1,5 @@
+//! Abstractions over different async runtimes in the Rust ecosystem.
+
 #[cfg(feature = "async_runtime_tokio")]
 mod tokio;
 

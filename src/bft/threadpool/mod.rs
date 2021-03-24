@@ -1,3 +1,5 @@
+//! A thread pool abstraction over a range of other crates. 
+
 #[cfg(feature = "threadpool_crossbeam")]
 mod crossbeam;
 
