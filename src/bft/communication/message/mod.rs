@@ -6,6 +6,7 @@ use std::mem::MaybeUninit;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
+use crate::bft::crypto::hash::Digest;
 use crate::bft::crypto::signature::Signature;
 use crate::bft::communication::socket::Socket;
 use crate::bft::communication::NodeId;
@@ -96,7 +97,7 @@ pub struct ConsensusMessage {
 /// Represents one of many different consensus stages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub enum ConsensusMessageKind {
-    PrePrepare((/* TODO: hash digest type here */)),
+    PrePrepare(Digest),
     Prepare,
     Commit,
 }

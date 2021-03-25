@@ -16,6 +16,8 @@
 //!     + E.g. `serialize_serde_messagepack`.
 //! - The crypto library used to perform public key crypto operations:
 //!     + E.g. `crypto_signature_ring_ed25519`.
+//! - The crypto library used to calculate hash digests of messages:
+//!     + E.g. `crypto_hash_ring_sha2`.
 //!
 //! However, for convenience, some sane default feature flags are already
 //! configured, which should perform well under any environment. Mind you,
