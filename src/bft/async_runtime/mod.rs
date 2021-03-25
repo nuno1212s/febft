@@ -20,6 +20,11 @@ static RUNTIME: OnceCell<tokio::Runtime> = OnceCell::new();
 #[cfg(feature = "async_runtime_async_std")]
 static RUNTIME: OnceCell<async_std::Runtime> = OnceCell::new();
 
+/// A `JoinHandle` represents a future that can be awaited on.
+///
+/// It resolves to a value of `T` when the future completes,
+/// i.e. when the underlying async task associated with the
+/// `JoinHandle` completes.
 pub struct JoinHandle<T> {
     #[cfg(feature = "async_runtime_tokio")]
     inner: tokio::JoinHandle<T>,
@@ -28,6 +33,9 @@ pub struct JoinHandle<T> {
     inner: async_std::JoinHandle<T>,
 }
 
+/// This function initializes the async runtime.
+///
+/// It should be called once before the core protocol starts executing.
 pub fn init(num_threads: usize) -> Result<()> {
     #[cfg(feature = "async_runtime_tokio")]
     {
@@ -45,6 +53,10 @@ pub fn init(num_threads: usize) -> Result<()> {
     }
 }
 
+/// Spawns a new task `F` into the async runtime's thread pool.
+///
+/// A handle to the future `JoinHandle` is returned, which can be
+/// awaited on, to resolve the value returned by `F`.
 pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
@@ -59,6 +71,7 @@ where
     }
 }
 
+/// Blocks on a future `F` until it completes.
 pub fn block_on<F: Future>(future: F) -> F::Output {
     match RUNTIME.get() {
         Some(ref rt) => rt.block_on(future),
