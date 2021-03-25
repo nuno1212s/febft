@@ -31,6 +31,9 @@ impl KeyPair {
     }
 
     /// Performs a cryptographic signature of an arbitrary message.
+    ///
+    /// The hash of the message is calculated by `sign()`, so the users
+    /// don't need to perform this step themselves.
     pub fn sign(&self, message: &[u8]) -> Result<Signature> {
         let inner = self.inner.sign(message)?;
         Ok(Signature { inner })
