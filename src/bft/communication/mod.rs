@@ -1,3 +1,5 @@
+//! Communication primitives for `febft`, such as wire message formats.
+
 #[cfg(not(feature = "expose_impl"))]
 mod socket;
 
@@ -18,6 +20,7 @@ use futures::lock::Mutex;
 
 use crate::bft::communication::socket::Socket;
 
+/// A `NodeId` represents the id of a process in the BFT system.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[repr(transparent)]
@@ -44,6 +47,8 @@ impl From<NodeId> for u32 {
     }
 }
 
+/// A `Node` contains handles to other processes in the system, and is
+/// the core component used in the wire communication between processes.
 pub struct Node {
     id: NodeId,
     peer_addrs: Vec<SocketAddr>,

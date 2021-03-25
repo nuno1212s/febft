@@ -1,3 +1,5 @@
+//! Abstractions over different socket types of crates in the Rust ecosystem.
+
 #[cfg(feature = "socket_tokio_tcp")]
 mod tokio_tcp;
 
@@ -11,6 +13,8 @@ use std::task::{Poll, Context};
 
 use futures::io::{AsyncRead, AsyncWrite};
 
+/// A `Listener` represents a socket listening on new communications
+/// initiated by peer nodes in the BFT system.
 pub struct Listener {
     #[cfg(feature = "socket_tokio_tcp")]
     inner: tokio_tcp::Listener,
@@ -19,6 +23,8 @@ pub struct Listener {
     inner: async_std_tcp::Listener,
 }
 
+/// A `Socket` represents a connection between two peer processes
+/// in the BFT system.
 pub struct Socket {
     #[cfg(feature = "socket_tokio_tcp")]
     inner: tokio_tcp::Socket,
@@ -27,6 +33,7 @@ pub struct Socket {
     inner: async_std_tcp::Socket,
 }
 
+/// Creates a new `Listener` socket, bound to the address `addr`.
 pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
     {
         #[cfg(feature = "socket_tokio_tcp")]
@@ -37,6 +44,7 @@ pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
     }.map(|inner| Listener { inner })
 }
 
+/// Connects to the remote node pointed to by the address `addr`.
 pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
     {
         #[cfg(feature = "socket_tokio_tcp")]
