@@ -8,17 +8,8 @@ pub struct KeyPair {
 }
 
 #[derive(Copy, Clone)]
-pub struct Signature {
-    value: [u8; MAX_LEN],
-    len: usize,
-}
-
-// copied from ring's source
-const ELEM_MAX_BITS: usize = 384;
-const ELEM_MAX_BYTES: usize = (ELEM_MAX_BITS + 7) / 8;
-const SCALAR_MAX_BYTES: usize = ELEM_MAX_BYTES;
-const MAX_LEN: usize = 1/*tag:SEQUENCE*/ + 2/*len*/ +
-    (2 * (1/*tag:INTEGER*/ + 1/*len*/ + 1/*zero*/ + SCALAR_MAX_BYTES));
+#[repr(transparent)]
+pub struct Signature([u8; Signature::LENGTH]);
 
 impl KeyPair {
     pub fn from_bytes(seed_bytes: &[u8]) -> Result<Self> {
@@ -30,12 +21,8 @@ impl KeyPair {
     }
 
     pub fn sign(&self, message: &[u8]) -> Result<Signature> {
-        Ok(unsafe {
-            // safety: safe, because I copied the type from the
-            // source code of ring, so they should have identical
-            // memory representations
-            std::mem::transmute(self.sk.sign(message))
-        })
+        let signature = self.sk.sign(message);
+        Ok(Signature::from_bytes_unchecked(signature.as_ref()))
     }
 
     pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<()> {
@@ -48,19 +35,22 @@ impl Signature {
     pub const LENGTH: usize = 64;
 
     pub fn from_bytes(raw_bytes: &[u8]) -> Result<Self> {
-        if raw_bytes.len() > MAX_LEN {
-            return Err("Signature is too long")
+        if raw_bytes.len() != Self::LENGTH {
+            return Err("Signature has an invalid length")
                 .wrapped(ErrorKind::CryptoSignatureRingEd25519);
         }
-        let mut value = [0; MAX_LEN];
-        let len = raw_bytes.len();
-        (&mut value[..len]).copy_from_slice(raw_bytes);
-        Ok(Signature { value, len })
+        Ok(Self::from_bytes_unchecked(raw_bytes))
+    }
+
+    fn from_bytes_unchecked(raw_bytes: &[u8]) -> Self {
+        let mut inner = [0; Self::LENGTH];
+        inner.copy_from_slice(raw_bytes);
+        Signature(inner)
     }
 }
 
 impl AsRef<[u8]> for Signature {
     fn as_ref(&self) -> &[u8] {
-        &self.value[..self.len]
+        &self.0
     }
 }
