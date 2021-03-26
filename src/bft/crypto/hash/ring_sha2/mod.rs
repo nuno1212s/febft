@@ -1,9 +1,12 @@
 use ring::digest::{
     self,
-    Digest,
     SHA512,
     SHA512_OUTPUT_LEN,
 };
+
+use crate::bft::error::*;
+
+pub struct Context;
 
 #[derive(Copy, Clone)]
 #[repr(transparent)]
@@ -24,5 +27,11 @@ impl Digest {
         let mut inner = [0; Self::LENGTH];
         inner.copy_from_slice(&raw_bytes[..Self::LENGTH]);
         Self(inner)
+    }
+}
+
+impl AsRef<[u8]> for Digest {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
