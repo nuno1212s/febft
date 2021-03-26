@@ -167,13 +167,7 @@ impl<'a> WireMessage<'a> {
 
     /// Constructs a new message to be sent over the wire.
     pub fn new(from: NodeId, to: NodeId, payload: &'a [u8], sig: Signature) -> Self {
-        let signature = unsafe {
-            let mut s: MaybeUninit<[u8; Signature::LENGTH]> =
-                MaybeUninit::uninit();
-            (*s.as_mut_ptr())
-                .copy_from_slice(sig.as_ref());
-            s.assume_init()
-        };
+        let signature = unsafe { std::mem::transmute(sig) };
         let (from, to): (u32, u32) = (from.into(), to.into());
         let header = Header {
             version: Self::CURRENT_VERSION,
