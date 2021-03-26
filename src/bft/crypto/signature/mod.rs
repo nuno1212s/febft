@@ -49,8 +49,6 @@ impl KeyPair {
 
 impl Signature {
     /// Length in bytes required to represent a `Signature` in memory.
-    ///
-    /// Note: doesn't imply `Signature::LENGTH == std::mem::size_of::<Signature>`.
     #[cfg(feature = "crypto_signature_ring_ed25519")]
     pub const LENGTH: usize = ring_ed25519::Signature::LENGTH;
 
@@ -67,5 +65,22 @@ impl Signature {
 impl AsRef<[u8]> for Signature {
     fn as_ref(&self) -> &[u8] {
         self.inner.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KeyPair;
+
+    #[test]
+    fn test_signature() {
+        #[cfg(feature = "crypto_signature_ring_ed25519")]
+        let k = KeyPair::from_bytes(&[0; 32][..])
+            .expect("Invalid key bytes");
+        let message = b"test message";
+        let signature = k.sign(message)
+            .expect("Signature failed");
+        k.verify(message, &signature)
+            .expect("Verify failed");
     }
 }
