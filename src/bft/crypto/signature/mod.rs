@@ -71,13 +71,18 @@ impl AsRef<[u8]> for Signature {
 
 #[cfg(test)]
 mod tests {
-    use super::KeyPair;
+    use super::{Signature, KeyPair};
 
     #[test]
-    fn test_signature() {
+    fn test_length() {
+        assert_eq!(Signature::LENGTH, std::mem::size_of::<Signature>());
+    }
+
+    #[test]
+    fn test_sign_verify() {
         #[cfg(feature = "crypto_signature_ring_ed25519")]
-        let k = KeyPair::from_bytes(&[0; 32][..])
-            .expect("Invalid key bytes");
+        let k = KeyPair::from_bytes(&[0; 32][..]).expect("Invalid key bytes");
+
         let message = b"test message";
         let signature = k.sign(message)
             .expect("Signature failed");
