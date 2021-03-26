@@ -5,7 +5,7 @@ mod ring_sha2;
 
 /// The type `Context` represents an on-going hash digest calculation.
 pub struct Context {
-    #[feature = "crypto_hash_ring_sha2"]
+    #[cfg(feature = "crypto_hash_ring_sha2")]
     inner: ring_sha2::Context,
 }
 
@@ -13,7 +13,7 @@ pub struct Context {
 #[derive(Copy, Clone)]
 #[repr(transparent)]
 pub struct Digest {
-    #[feature = "crypto_hash_ring_sha2"]
+    #[cfg(feature = "crypto_hash_ring_sha2")]
     inner: ring_sha2::Digest,
 }
 
