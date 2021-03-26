@@ -35,7 +35,7 @@ impl Signature {
     pub const LENGTH: usize = 64;
 
     pub fn from_bytes(raw_bytes: &[u8]) -> Result<Self> {
-        if raw_bytes.len() != Self::LENGTH {
+        if raw_bytes.len() < Self::LENGTH {
             return Err("Signature has an invalid length")
                 .wrapped(ErrorKind::CryptoSignatureRingEd25519);
         }
@@ -44,8 +44,8 @@ impl Signature {
 
     fn from_bytes_unchecked(raw_bytes: &[u8]) -> Self {
         let mut inner = [0; Self::LENGTH];
-        inner.copy_from_slice(raw_bytes);
-        Signature(inner)
+        inner.copy_from_slice(&raw_bytes[..Self::LENGTH]);
+        Self(inner)
     }
 }
 
