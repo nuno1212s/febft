@@ -50,8 +50,10 @@ impl KeyPair {
 
 impl Signature {
     /// Length in bytes required to represent a `Signature` in memory.
-    #[cfg(feature = "crypto_signature_ring_ed25519")]
-    pub const LENGTH: usize = ring_ed25519::Signature::LENGTH;
+    pub const LENGTH: usize = {
+        #[cfg(feature = "crypto_signature_ring_ed25519")]
+        { ring_ed25519::Signature::LENGTH }
+    };
 
     /// Constructs a `Signature` from a byte buffer of appropriate size.
     pub fn from_bytes(raw_bytes: &[u8]) -> Result<Self> {
