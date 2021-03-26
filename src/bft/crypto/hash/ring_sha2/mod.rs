@@ -1,7 +1,7 @@
 use ring::digest::{
     self,
-    SHA512,
-    SHA512_OUTPUT_LEN,
+    SHA256,
+    SHA256_OUTPUT_LEN,
 };
 
 use crate::bft::error::*;
@@ -13,7 +13,7 @@ pub struct Context;
 pub struct Digest([u8; Digest::LENGTH]);
 
 impl Digest {
-    pub const LENGTH: usize = SHA512_OUTPUT_LEN;
+    pub const LENGTH: usize = SHA256_OUTPUT_LEN;
 
     pub fn from_bytes(raw_bytes: &[u8]) -> Result<Self> {
         if raw_bytes.len() < Self::LENGTH {
