@@ -19,20 +19,27 @@ default = [
     "threadpool_crossbeam",
     "socket_tokio_tcp",
     "serialize_capnp",
-    "crypto_signature_ring_ed25519"
+    "crypto_signature_ring_ed25519",
+    "crypto_hash_ring_sha2"
 ]
 socket_tokio_tcp = ["tokio", "tokio-util"]
 socket_async_std_tcp = ["async-std"]
+
 serialize_capnp = ["capnp"]
 serialize_serde = ["serde"]
 serialize_serde_cbor = ["serialize_serde", "serde_cbor"]
 serialize_serde_bincode = ["serialize_serde", "bincode"]
 serialize_serde_messagepack = ["serialize_serde", "rmp-serde"]
+
 async_runtime_tokio = ["tokio"]
 async_runtime_async_std = ["async-std"]
+
 crypto_signature_ring_ed25519 = ["ring"]
+crypto_hash_ring_sha2 = ["ring"]
+
 threadpool_crossbeam = ["threadpool-crossbeam-channel"]
 threadpool_cthpool = ["cthpool"]
+
 #bench = ["expose_impl", "oneshot", "futures-timer", "async-semaphore"]
 bench = ["expose_impl", "oneshot", "futures-timer"]
 expose_impl = []
