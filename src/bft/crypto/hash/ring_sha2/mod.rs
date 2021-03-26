@@ -53,3 +53,20 @@ impl AsRef<[u8]> for Digest {
         &self.0
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::Context;
+
+    #[test]
+    fn test_digest() {
+        let mut ctx = Context::new();
+        ctx.update(b"cool\n");
+        let h = ctx.finish();
+        assert_eq!(
+            h.as_ref(),
+            b"'\xc1l\xe7\xe3\x86\x1d\xa04\xaf\x1b\xb3V\xd6\xa4\xf3\x8c\xb8O\xa6]Q\xfab\xf6\x97'\x14;Lk`",
+        );
+    }
+}
