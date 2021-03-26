@@ -53,7 +53,7 @@ pub struct WireMessage<'a> {
 //
 pub enum Message<O> {
     /// Client requests and process sub-protocol messages.
-    System(SystemMessage<O>),
+    System(Header, SystemMessage<O>),
     /// A client with id `NodeId` has finished connecting to the socket `Socket`.
     /// This socket should only perform write operations.
     ConnectedTx(NodeId, Socket),
