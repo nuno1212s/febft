@@ -15,6 +15,7 @@ pub struct KeyPair {
 /// A `Signature` is the result of using `KeyPair::sign`. Represents
 /// a digital signature with a private key.
 #[derive(Copy, Clone)]
+#[repr(transparent)]
 pub struct Signature {
     #[cfg(feature = "crypto_signature_ring_ed25519")]
     inner: ring_ed25519::Signature,
