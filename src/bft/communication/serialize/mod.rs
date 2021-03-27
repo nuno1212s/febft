@@ -21,7 +21,7 @@ mod serde;
 #[cfg(feature = "serialize_serde")]
 use ::serde::{Serialize, Deserialize};
 
-use bytes::{Buf, BufMut};
+use std::io::{Read, Write};
 
 use crate::bft::error::*;
 use crate::bft::communication::message::SystemMessage;
@@ -29,52 +29,52 @@ use crate::bft::communication::message::SystemMessage;
 #[cfg(feature = "serialize_capnp")]
 pub use self::capnp::{ToCapnp, FromCapnp};
 
-/// Serialize a wire message into the buffer `B`.
+/// Serialize a wire message into the writer `W`.
 ///
 /// Once the operation is finished, the buffer is returned.
 #[cfg(feature = "serialize_capnp")]
-pub fn serialize_message<O: ToCapnp, B: BufMut>(buf: B, m: SystemMessage<O>) -> Result<B> {
-    capnp::serialize_message(buf, m)
+pub fn serialize_message<O: ToCapnp, W: Write>(w: W, m: SystemMessage<O>) -> Result<W> {
+    capnp::serialize_message(w, m)
 }
 
-/// Serialize a wire message into the buffer `B`.
+/// Serialize a wire message into the write `W`.
 ///
 /// Once the operation is finished, the buffer is returned.
 #[cfg(feature = "serialize_serde")]
-pub fn serialize_message<O, B>(buf: B, m: SystemMessage<O>) -> Result<B>
+pub fn serialize_message<O, W>(w: W, m: SystemMessage<O>) -> Result<W>
 where
     O: Serialize,
-    B: BufMut,
+    W: Write,
 {
     #[cfg(feature = "serialize_serde_bincode")]
-    { serde::bincode::serialize_message(buf, m) }
+    { serde::bincode::serialize_message(w, m) }
 
     #[cfg(feature = "serialize_serde_messagepack")]
-    { serde::messagepack::serialize_message(buf, m) }
+    { serde::messagepack::serialize_message(w, m) }
 
     #[cfg(feature = "serialize_serde_cbor")]
-    { serde::cbor::serialize_message(buf, m) }
+    { serde::cbor::serialize_message(w, m) }
 }
 
-/// Deserialize a wire message from a buffer `B`.
+/// Deserialize a wire message from a read `B`.
 #[cfg(feature = "serialize_capnp")]
-pub fn deserialize_message<O: FromCapnp, B: Buf>(buf: B) -> Result<SystemMessage<O>> {
-    capnp::deserialize_message(buf)
+pub fn deserialize_message<O: FromCapnp, R: Read>(r: R) -> Result<SystemMessage<O>> {
+    capnp::deserialize_message(r)
 }
 
-/// Deserialize a wire message from a buffer `B`.
+/// Deserialize a wire message from a reader `R`.
 #[cfg(feature = "serialize_serde")]
-pub fn deserialize_message<O, B>(buf: B) -> Result<SystemMessage<O>>
+pub fn deserialize_message<O, R>(r: R) -> Result<SystemMessage<O>>
 where
     O: for<'de> Deserialize<'de>,
-    B: Buf,
+    R: Read,
 {
     #[cfg(feature = "serialize_serde_bincode")]
-    { serde::bincode::deserialize_message(buf) }
+    { serde::bincode::deserialize_message(r) }
 
     #[cfg(feature = "serialize_serde_messagepack")]
-    { serde::messagepack::deserialize_message(buf) }
+    { serde::messagepack::deserialize_message(r) }
 
     #[cfg(feature = "serialize_serde_cbor")]
-    { serde::cbor::deserialize_message(buf) }
+    { serde::cbor::deserialize_message(r) }
 }

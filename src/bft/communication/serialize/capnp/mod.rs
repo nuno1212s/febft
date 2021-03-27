@@ -1,6 +1,6 @@
 use std::default::Default;
+use std::io::{Read, Write};
 
-use bytes::{Buf, BufMut};
 use capnp::serialize;
 use capnp::message::{
     Reader,
@@ -36,17 +36,16 @@ pub trait ToCapnp: Sized {
         A: Allocator;
 }
 
-pub fn serialize_message<O: ToCapnp, B: BufMut>(buf: B, m: SystemMessage<O>) -> Result<B> {
+pub fn serialize_message<O: ToCapnp, W: Write>(mut w: W, m: SystemMessage<O>) -> Result<W> {
     let mut root = capnp::message::Builder::new(HeapAllocator::new());
     O::to_capnp(m, &mut root)?;
-    let mut writer = buf.writer();
-    serialize::write_message(&mut writer, &root)
-        .map(|()| writer.into_inner())
+    serialize::write_message(&mut w, &root)
+        .map(|_| w)
         .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to serialize using capnp")
 }
 
-pub fn deserialize_message<O: FromCapnp, B: Buf>(buf: B) -> Result<SystemMessage<O>> {
-    let reader = serialize::read_message(buf.reader(), Default::default())
+pub fn deserialize_message<O: FromCapnp, R: Read>(r: R) -> Result<SystemMessage<O>> {
+    let reader = serialize::read_message(r, Default::default())
         .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to deserialize using capnp")?;
     O::from_capnp(&reader)
 }
