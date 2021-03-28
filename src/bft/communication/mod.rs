@@ -8,6 +8,7 @@ pub mod socket;
 
 pub mod serialize;
 pub mod message;
+pub mod channel;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
