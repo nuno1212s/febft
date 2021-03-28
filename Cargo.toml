@@ -11,9 +11,7 @@ documentation = "https://docs.rs/febft"
 readme = "README.md"
 
 [features]
-# choose one of each prefixes: async, threadpool, socket, serialize, crypto_signature
-# this decopulation of the abstraction from the backend allows experimenting with
-# different libraries, to probe which one has better performance for our use case
+# Consult the crate documentation for more details on the features.
 default = [
     "async_runtime_tokio",
     "threadpool_crossbeam",
@@ -22,6 +20,7 @@ default = [
     "crypto_signature_ring_ed25519",
     "crypto_hash_ring_sha2"
 ]
+
 socket_tokio_tcp = ["tokio", "tokio-util"]
 socket_async_std_tcp = ["async-std"]
 
@@ -41,7 +40,6 @@ threadpool_crossbeam = ["threadpool-crossbeam-channel"]
 threadpool_cthpool = ["cthpool"]
 
 #bench = ["expose_impl", "oneshot", "futures-timer", "async-semaphore"]
-bench = ["expose_impl", "oneshot", "futures-timer"]
 expose_impl = []
 
 [build-dependencies]
@@ -58,8 +56,8 @@ tokio-util = { version = "0.6", features = ["compat"], optional = true }
 capnp = { version = "0.14", optional = true }
 ring = { version = "0.16", optional = true }
 threadpool-crossbeam-channel = { version = "1", optional = true }
-oneshot = { version = "0.1", optional = true }
-futures-timer = { version = "3.0", optional = true }
+#oneshot = { version = "0.1", optional = true }
+#futures-timer = { version = "3.0", optional = true }
 #async-semaphore = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 bincode = { version = "1", optional = true }
