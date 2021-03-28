@@ -94,7 +94,7 @@ impl<O> MessageChannelTx<O> {
         poll_fn(|cx| match tx.poll_ready(cx) {
             Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
             Poll::Ready(Err(e)) if e.is_full() => Poll::Pending,
-            Poll::Ready(e) => Poll::Ready(e.simple(ErrorKind::CommunicationChannel)),
+            Poll::Ready(_) => Poll::Ready(Err(Error::simple(ErrorKind::CommunicationChannel))),
             Poll::Pending => Poll::Pending,
         }).await
     }
