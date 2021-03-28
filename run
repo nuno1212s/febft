@@ -1,0 +1,18 @@
+#!/bin/sh
+
+cargo_do() {
+    export RUSTFLAGS="-C target-cpu=native"
+    exec cargo +nightly $1 --features expose_impl
+}
+
+case $1 in
+    clean)
+        rm -rf target/
+        ;;
+    build|test|bench|doc)
+        cargo_do $1
+        ;;
+    *)
+        echo Usage: $0 "<test|bench|doc|clean>"
+        exit 1
+esac
