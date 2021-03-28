@@ -19,7 +19,6 @@ use crate::bft::communication::message::{
 /// Represents the sending half of a `Message` channel.
 ///
 /// The handle can be cloned as many times as needed for cheap.
-#[derive(Clone)]
 pub struct MessageChannelTx<O> {
     other: mpsc::Sender<Message<O>>,
     requests: mpsc::Sender<(Header, RequestMessage<O>)>,
@@ -50,6 +49,16 @@ pub fn new<O>(bound: usize) -> (MessageChannelTx<O>, MessageChannelRx<O>) {
         other: o_rx,
     };
     (tx, rx)
+}
+
+impl<O> Clone for MessageChannelTx<O> {
+    fn clone(&self) -> Self {
+        Self {
+            consensus: self.consensus.clone(),
+            requests: self.requests.clone(),
+            other: self.other.clone(),
+        }
+    }
 }
 
 impl<O> MessageChannelTx<O> {
