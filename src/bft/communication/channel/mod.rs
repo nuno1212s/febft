@@ -67,23 +67,13 @@ impl<O> MessageChannelTx<O> {
             Message::System(header, message) => {
                 match message {
                     SystemMessage::Request(message) => {
-                        poll_fn(|cx| match self.requests.poll_ready(cx) {
-                            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
-                            Poll::Ready(Err(e)) if e.is_full() => Poll::Pending,
-                            Poll::Ready(e) => Poll::Ready(e.simple(ErrorKind::CommunicationChannel)),
-                            Poll::Pending => Poll::Pending,
-                        }).await?;
+                        Self::ready(&mut self.requests).await?;
                         self.requests
                             .try_send((header, message))
                             .simple(ErrorKind::CommunicationChannel)
                     },
                     SystemMessage::Consensus(message) => {
-                        poll_fn(|cx| match self.consensus.poll_ready(cx) {
-                            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
-                            Poll::Ready(Err(e)) if e.is_full() => Poll::Pending,
-                            Poll::Ready(e) => Poll::Ready(e.simple(ErrorKind::CommunicationChannel)),
-                            Poll::Pending => Poll::Pending,
-                        }).await?;
+                        Self::ready(&mut self.consensus).await?;
                         self.consensus
                             .try_send((header, message))
                             .simple(ErrorKind::CommunicationChannel)
@@ -91,17 +81,22 @@ impl<O> MessageChannelTx<O> {
                 }
             },
             _ => {
-                poll_fn(|cx| match self.other.poll_ready(cx) {
-                    Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
-                    Poll::Ready(Err(e)) if e.is_full() => Poll::Pending,
-                    Poll::Ready(e) => Poll::Ready(e.simple(ErrorKind::CommunicationChannel)),
-                    Poll::Pending => Poll::Pending,
-                }).await?;
+                Self::ready(&mut self.other).await?;
                 self.other
                     .try_send(message)
                     .simple(ErrorKind::CommunicationChannel)
             },
         }
+    }
+
+    #[inline]
+    async fn ready<M>(tx: &mut mpsc::Sender<M>) -> Result<()> {
+        poll_fn(|cx| match tx.poll_ready(cx) {
+            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(e)) if e.is_full() => Poll::Pending,
+            Poll::Ready(e) => Poll::Ready(e.simple(ErrorKind::CommunicationChannel)),
+            Poll::Pending => Poll::Pending,
+        }).await
     }
 }
 
