@@ -54,14 +54,15 @@ impl<O> Log<O> {
 pub struct Logger<O> {
     // handle used to receive messages to be logged
     my_rx: ChannelRx<(Header, SystemMessage)>,
-    // handle to the master channel used by the `System`
+    // handle to the master channel used by the `System`;
+    // signals checkpoint messages
     system_tx: MessageChannelTx<O>,
     // the message log itself
     log: Log<O>,
 }
 
-impl Logger {
-    pub fn new(tx: MessageChannelTx) -> Self {
+impl<O> Logger<O> {
+    pub fn new(tx: MessageChannelTx<O>) -> Self {
         unimplemented!()
     }
 }
