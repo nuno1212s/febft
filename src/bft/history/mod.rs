@@ -6,7 +6,10 @@ use futures::channel::mpsc;
 use futures::stream::StreamExt;
 
 use crate::bft::error::*;
-use crate::bft::communication::channel::MessageChannelTx;
+use crate::bft::communication::channel::{
+    ChannelRx,
+    MessageChannelTx,
+};
 use crate::bft::communication::message::{
     Header,
     SystemMessage,
@@ -53,7 +56,7 @@ impl<O> Log<O> {
 /// Represents an async message logging task.
 pub struct Logger<O> {
     // handle used to receive messages to be logged
-    my_rx: ChannelRx<(Header, SystemMessage)>,
+    my_rx: ChannelRx<(Header, SystemMessage<O>)>,
     // handle to the master channel used by the `System`;
     // signals checkpoint messages
     system_tx: MessageChannelTx<O>,
