@@ -4,6 +4,11 @@ use crate::bft::error::*;
 
 pub struct KeyPair {
     sk: rsig::Ed25519KeyPair,
+    pk: PublicKey,
+}
+
+#[derive(Copy, Clone)]
+pub struct PublicKey {
     pk: rsig::UnparsedPublicKey<<rsig::Ed25519KeyPair as RKeyPair>::PublicKey>,
 }
 
@@ -16,13 +21,28 @@ impl KeyPair {
         let sk = rsig::Ed25519KeyPair::from_seed_unchecked(seed_bytes)
             .simple_msg(ErrorKind::CryptoSignatureRingEd25519, "Invalid seed for ed25519 key")?;
         let pk = sk.public_key().clone();
-        let pk = rsig::UnparsedPublicKey::new(&rsig::ED25519, pk);
+        let pk = PublicKey::from_bytes_unchecked(pk);
         Ok(KeyPair { pk, sk })
+    }
+
+    pub fn public_key(&self) -> &PublicKey {
+        &self.pk
     }
 
     pub fn sign(&self, message: &[u8]) -> Result<Signature> {
         let signature = self.sk.sign(message);
         Ok(Signature::from_bytes_unchecked(signature.as_ref()))
+    }
+}
+
+impl PublicKey {
+    pub fn from_bytes<B: AsRef<[u8]>>(raw_bytes: B) -> Result<Self> {
+        Ok(Self::from_bytes_unchecked(raw_bytes))
+    }
+
+    fn from_bytes_unchecked<B: AsRef<[u8]>>(raw_bytes: B) -> Result<Self> {
+        let pk = rsig::UnparsedPublicKey::new(&rsig::ED25519, raw_bytes);
+        PublicKey { pk }
     }
 
     pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<()> {

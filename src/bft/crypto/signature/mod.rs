@@ -12,6 +12,13 @@ pub struct KeyPair {
     inner: ring_ed25519::KeyPair,
 }
 
+/// The public component of a `KeyPair`.
+#[derive(Copy, Clone)]
+pub struct PublicKey {
+    #[cfg(feature = "crypto_signature_ring_ed25519")]
+    inner: ring_ed25519::PublicKey,
+}
+
 /// A `Signature` is the result of using `KeyPair::sign`. Represents
 /// a digital signature with a private key.
 #[derive(Copy, Clone)]
@@ -31,6 +38,13 @@ impl KeyPair {
         Ok(KeyPair { inner })
     }
 
+    /// Returns a reference to the public component of this `KeyPair`.
+    ///
+    /// The returned key can be cloned, since it implements `Clone`.
+    pub fn public_key(&self) -> &PublicKey {
+        self.inner.public_key()
+    }
+
     /// Performs a cryptographic signature of an arbitrary message.
     ///
     /// The hash of the message is calculated by `sign()`, so the users
@@ -40,7 +54,23 @@ impl KeyPair {
         Ok(Signature { inner })
     }
 
+}
+
+impl PublicKey {
+    /// Constructs a `PublicKey` from a byte buffer of appropriate size.
+    ///
+    /// The buffer should be an owned type, such as a `Vec<u8>` or an
+    /// array of bytes.
+    pub fn from_bytes<B: AsRef<[u8]>>(raw_bytes: &[u8]) -> Result<Self> {
+        let inner = {
+            #[cfg(feature = "crypto_signature_ring_ed25519")]
+            { ring_ed25519::PublicKey::from_bytes(raw_bytes)? }
+        };
+        Ok(PublicKey { inner })
+    }
+
     /// Verifies if a signature is valid, i.e. if this `KeyPair` performed it.
+    ///
     /// Forged signatures can be verified successfully, so a good public key
     /// crypto algorithm and key size should be picked.
     pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<()> {

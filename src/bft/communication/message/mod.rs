@@ -97,8 +97,14 @@ pub struct ConsensusMessage {
 /// Represents one of many different consensus stages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub enum ConsensusMessageKind {
+    /// Pre-prepare a request, according to the BFT protocol.
+    /// The `Digest` represens the hash of the
+    /// serialized request payload.
     PrePrepare(Digest),
+    /// Prepare a request.
     Prepare,
+    /// Commit a request, signaling the system is almost ready
+    /// to execute it.
     Commit,
 }
 
