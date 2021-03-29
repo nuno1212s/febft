@@ -104,19 +104,19 @@ pub enum ConsensusMessageKind {
 
 impl<O> RequestMessage<O> {
     /// Returns a reference to the operation of type `O`.
-    fn operation(&self) -> &O {
+    pub fn operation(&self) -> &O {
         &self.operation
     }
 }
 
 impl ConsensusMessage {
     /// Returns the sequence number of this consensus message.
-    fn sequence_number(&self) -> i32 {
+    pub fn sequence_number(&self) -> i32 {
         self.seq
     }
 
     /// Returns a reference to the consensus message kind.
-    fn kind(&self) -> &ConsensusMessageKind {
+    pub fn kind(&self) -> &ConsensusMessageKind {
         &self.kind
     }
 }
