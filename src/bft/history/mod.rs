@@ -6,8 +6,11 @@ use futures::channel::mpsc;
 use futures::stream::StreamExt;
 
 use crate::bft::error::*;
+use crate::bft::async_runtime as rt;
 use crate::bft::communication::channel::{
+    self,
     ChannelRx,
+    ChannelTx,
     MessageChannelTx,
 };
 use crate::bft::communication::message::{
@@ -15,6 +18,8 @@ use crate::bft::communication::message::{
     SystemMessage,
     ConsensusMessageKind,
 };
+
+const CHAN_BOUND: usize = 128;
 
 struct StoredMessage<O> {
     header: Header,
@@ -53,6 +58,25 @@ impl<O> Log<O> {
     }
 }
 
+/// Represents a handle to the logger.
+pub struct LoggerHandle<O> {
+    my_tx: ChannelTx<(Header, SystemMessage<O>)>,
+}
+
+impl<O> LoggerHandle<O> {
+    /// Adds a new `message` and its respective `header` to the log.
+    pub async fn insert(&mut self, header: Header, message: SystemMessage<O>) -> Result<()> {
+        self.my_tx.send((header, message)).await;
+    }
+}
+
+impl<O> Clone for LoggerHandle<O> {
+    fn clone(&self) -> Self {
+        let my_tx = self.my_tx.clone();
+        Self { my_tx }
+    }
+}
+
 /// Represents an async message logging task.
 pub struct Logger<O> {
     // handle used to receive messages to be logged
@@ -65,7 +89,20 @@ pub struct Logger<O> {
 }
 
 impl<O> Logger<O> {
-    pub fn new(tx: MessageChannelTx<O>) -> Self {
-        unimplemented!()
+    /// Spawns a new logging task into the async runtime.
+    ///
+    /// A handle to the master message channel, `system_tx`, should be provided.
+    pub fn new(system_tx: MessageChannelTx<O>) -> LoggerHandle<O> {
+        let log = Log::new();
+        let (my_tx, my_rx) = channel::new_bounded(CHAN_BOUND);
+        let logger = Logger {
+            my_rx,
+            system_tx,
+            log,
+        };
+        rt::spawn(async move {
+            // do stuff with logger
+        });
+        LoggerHandle { my_tx }
     }
 }
