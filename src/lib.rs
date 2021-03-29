@@ -31,7 +31,4 @@ pub mod bft;
 #[cfg(not(feature = "expose_impl"))]
 mod bft;
 
-#[cfg(feature = "bench")]
-pub mod bench;
-
 // TODO: re-export some stuff
