@@ -16,28 +16,84 @@ use crate::bft::communication::message::{
     ConsensusMessage,
 };
 
+/// General purpose channel's sending half.
+pub struct ChannelTx<T> {
+    inner: mpsc::Sender<T>,
+}
+
+/// General purpose channel's receiving half.
+pub struct ChannelRx<T> {
+    inner: mpsc::Receiver<T>,
+}
+
+impl<T> Clone for ChannelTx<T> {
+    fn clone(&self) -> Self {
+        let inner = self.inner.clone();
+        Self { inner }
+    }
+}
+
+/// Creates a new general purpose channel that can queue up to
+/// `bound` messages from different async senders.
+pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
+    let (tx, rx) = mpsc::channel(bound);
+    let tx = ChannelTx { inner: tx };
+    let rx = ChannelRx { inner: rx };
+    (tx, rx)
+}
+
+impl<T> ChannelTx<T> {
+    #[inline]
+    pub async fn send(&mut self, message: T) -> Result<()> {
+        self.ready().await?;
+        self.inner
+            .try_send(message)
+            .simple(ErrorKind::CommunicationChannel)
+    }
+
+    #[inline]
+    async fn ready(&mut self) -> Result<()> {
+        poll_fn(|cx| match self.poll_ready(cx) {
+            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(e)) if e.is_full() => Poll::Pending,
+            Poll::Ready(_) => Poll::Ready(Err(Error::simple(ErrorKind::CommunicationChannel))),
+            Poll::Pending => Poll::Pending,
+        }).await
+    }
+}
+
+impl<T> ChannelRx<T> {
+    #[inline]
+    pub async fn recv(&mut self) -> Result<T> {
+        self.other
+            .next()
+            .await
+            .ok_or(Error::simple(ErrorKind::CommunicationChannel))
+    }
+}
+
 /// Represents the sending half of a `Message` channel.
 ///
 /// The handle can be cloned as many times as needed for cheap.
 pub struct MessageChannelTx<O> {
-    other: mpsc::Sender<Message<O>>,
-    requests: mpsc::Sender<(Header, RequestMessage<O>)>,
-    consensus: mpsc::Sender<(Header, ConsensusMessage)>,
+    other: ChannelTx<Message<O>>,
+    requests: ChannelTx<(Header, RequestMessage<O>)>,
+    consensus: ChannelTx<(Header, ConsensusMessage)>,
 }
 
 /// Represents the receiving half of a `Message` channel.
 pub struct MessageChannelRx<O> {
-    other: mpsc::Receiver<Message<O>>,
-    requests: mpsc::Receiver<(Header, RequestMessage<O>)>,
-    consensus: mpsc::Receiver<(Header, ConsensusMessage)>,
+    other: ChannelRx<Message<O>>,
+    requests: ChannelRx<(Header, RequestMessage<O>)>,
+    consensus: ChannelRx<(Header, ConsensusMessage)>,
 }
 
 /// Creates a new channel that can queue up to `bound` messages
 /// from different async senders.
-pub fn new<O>(bound: usize) -> (MessageChannelTx<O>, MessageChannelRx<O>) {
-    let (c_tx, c_rx) = mpsc::channel(bound);
-    let (r_tx, r_rx) = mpsc::channel(bound);
-    let (o_tx, o_rx) = mpsc::channel(bound);
+pub fn new_message_channel<O>(bound: usize) -> (MessageChannelTx<O>, MessageChannelRx<O>) {
+    let (c_tx, c_rx) = new_bounded(bound);
+    let (r_tx, r_rx) = new_bounded(bound);
+    let (o_tx, o_rx) = new_bounded(bound);
     let tx = MessageChannelTx {
         consensus: c_tx,
         requests: r_tx,
@@ -67,55 +123,33 @@ impl<O> MessageChannelTx<O> {
             Message::System(header, message) => {
                 match message {
                     SystemMessage::Request(message) => {
-                        Self::ready(&mut self.requests).await?;
-                        self.requests
-                            .try_send((header, message))
-                            .simple(ErrorKind::CommunicationChannel)
+                        self.requests.send((header, message)).await
                     },
                     SystemMessage::Consensus(message) => {
-                        Self::ready(&mut self.consensus).await?;
-                        self.consensus
-                            .try_send((header, message))
-                            .simple(ErrorKind::CommunicationChannel)
+                        self.consensus.send((header, message)).await
                     },
                 }
             },
             _ => {
-                Self::ready(&mut self.other).await?;
-                self.other
-                    .try_send(message)
-                    .simple(ErrorKind::CommunicationChannel)
+                self.other.send(message).await
             },
         }
-    }
-
-    #[inline]
-    async fn ready<M>(tx: &mut mpsc::Sender<M>) -> Result<()> {
-        poll_fn(|cx| match tx.poll_ready(cx) {
-            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(e)) if e.is_full() => Poll::Pending,
-            Poll::Ready(_) => Poll::Ready(Err(Error::simple(ErrorKind::CommunicationChannel))),
-            Poll::Pending => Poll::Pending,
-        }).await
     }
 }
 
 impl<O> MessageChannelRx<O> {
     pub async fn recv(&mut self) -> Result<Message<O>> {
         let message = select! {
-            opt = self.consensus.next() => {
-                let (h, c) = opt
-                    .ok_or(Error::simple(ErrorKind::CommunicationChannel))?;
+            result = self.consensus.recv() => {
+                let (h, c) = result?;
                 Message::System(h, SystemMessage::Consensus(c))
             },
-            opt = self.requests.next() => {
-                let (h, r) = opt
-                    .ok_or(Error::simple(ErrorKind::CommunicationChannel))?;
+            result = self.requests.recv() => {
+                let (h, r) = result?;
                 Message::System(h, SystemMessage::Request(r))
             },
-            opt = self.other.next() => {
-                let message = opt
-                    .ok_or(Error::simple(ErrorKind::CommunicationChannel))?;
+            result = self.other.recv() => {
+                let message = result?;
                 message
             },
         };
