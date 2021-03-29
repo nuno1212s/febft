@@ -43,7 +43,9 @@ pub struct Log<O> {
     // others: ...
 }
 
-// TODO: garbage collect the log
+// TODO:
+// - garbage collect the log
+// - save the log to persistent storage
 impl<O> Log<O> {
     /// Creates a new message log.
     pub fn new() -> Self {
