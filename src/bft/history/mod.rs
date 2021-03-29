@@ -21,6 +21,15 @@ use crate::bft::communication::message::{
 
 const CHAN_BOUND: usize = 128;
 
+/// Information reported after a logging operation.
+pub enum Info {
+    /// Nothing to report.
+    Nil,
+    /// The log is full. We are ready to perform a
+    /// garbage collection operation.
+    Full,
+}
+
 struct StoredMessage<O> {
     header: Header,
     message: SystemMessage<O>,
@@ -46,7 +55,7 @@ impl<O> Log<O> {
     }
 
     /// Adds a new `message` and its respective `header` to the log.
-    pub fn insert(&mut self, header: Header, message: SystemMessage<O>) {
+    pub fn insert(&mut self, header: Header, message: SystemMessage<O>) -> Info {
         let message = StoredMessage { header, message };
         if let SystemMessage::Consensus(ref m) = &message.message {
             match m.kind {
@@ -55,6 +64,7 @@ impl<O> Log<O> {
                 ConsensusMessageKind::Commit => self.commits.push_back(message),
             }
         }
+        Info::Nil
     }
 }
 
