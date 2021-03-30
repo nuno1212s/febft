@@ -19,6 +19,12 @@ pub struct PublicKey {
     inner: ring_ed25519::PublicKey,
 }
 
+/// Reference to the public component of a `KeyPair`.
+pub struct PublicKeyRef<'a> {
+    #[cfg(feature = "crypto_signature_ring_ed25519")]
+    inner: &'a ring_ed25519::PublicKey,
+}
+
 /// A `Signature` is the result of using `KeyPair::sign`. Represents
 /// a digital signature with a private key.
 #[derive(Copy, Clone)]
@@ -41,8 +47,9 @@ impl KeyPair {
     /// Returns a reference to the public component of this `KeyPair`.
     ///
     /// The returned key can be cloned, since it implements `Clone`.
-    pub fn public_key(&self) -> &PublicKey {
-        self.inner.public_key()
+    pub fn public_key<'a>(&'a self) -> PublicKeyRef<'a> {
+        let inner = self.inner.public_key();
+        PublicKeyRef { inner }
     }
 
     /// Performs a cryptographic signature of an arbitrary message.
@@ -54,6 +61,20 @@ impl KeyPair {
         Ok(Signature { inner })
     }
 
+}
+
+impl<'a> From<PublicKeyRef<'a>> for PublicKey {
+    fn from(pk: PublicKeyRef<'a>) -> PublicKey {
+        let inner = pk.inner.clone();
+        PublicKey { inner }
+    }
+}
+
+impl<'a> PublicKeyRef<'a> {
+    /// Check the `verify` documentation for `PublicKey`.
+    pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<()> {
+        self.inner.verify(message, &signature.inner)
+    }
 }
 
 impl PublicKey {
