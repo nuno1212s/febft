@@ -46,7 +46,8 @@ impl KeyPair {
 
     /// Returns a reference to the public component of this `KeyPair`.
     ///
-    /// The returned key can be cloned, since it implements `Clone`.
+    /// The returned key can be cloned into an owned type with `into()`,
+    /// yielding a `PublicKey`.
     pub fn public_key<'a>(&'a self) -> PublicKeyRef<'a> {
         let inner = self.inner.public_key();
         PublicKeyRef { inner }
