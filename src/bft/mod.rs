@@ -9,3 +9,14 @@ pub mod threadpool;
 pub mod history;
 pub mod crypto;
 pub mod error;
+
+use error::*;
+
+/// Initializes global data.
+///
+/// Should always be called before other methods, otherwise runtime
+/// panics may ensue.
+pub fn init() -> Result<()> {
+    async_runtime::init()?;
+    Ok(())
+}
