@@ -1,4 +1,8 @@
-use ring::{signature as rsig, signature::KeyPair as RKeyPair};
+use ring::{
+    signature as rsig,
+    signature::KeyPair as RKeyPair,
+    signature::ED25519_PUBLIC_KEY_LEN,
+};
 
 use crate::bft::error::*;
 
@@ -7,9 +11,11 @@ pub struct KeyPair {
     pk: PublicKey,
 }
 
+type RPubKey = <rsig::Ed25519KeyPair as RKeyPair>::PublicKey;
+
 #[derive(Copy, Clone)]
 pub struct PublicKey {
-    pk: rsig::UnparsedPublicKey<<rsig::Ed25519KeyPair as RKeyPair>::PublicKey>,
+    pk: rsig::UnparsedPublicKey<RPubKey>,
 }
 
 #[derive(Copy, Clone)]
@@ -21,7 +27,7 @@ impl KeyPair {
         let sk = rsig::Ed25519KeyPair::from_seed_unchecked(seed_bytes)
             .simple_msg(ErrorKind::CryptoSignatureRingEd25519, "Invalid seed for ed25519 key")?;
         let pk = sk.public_key().clone();
-        let pk = PublicKey::from_bytes_unchecked(pk);
+        let pk = PublicKey::from_bytes_unchecked(pk.as_ref());
         Ok(KeyPair { pk, sk })
     }
 
@@ -36,12 +42,23 @@ impl KeyPair {
 }
 
 impl PublicKey {
-    pub fn from_bytes<B: AsRef<[u8]>>(raw_bytes: B) -> Result<Self> {
+    pub fn from_bytes(raw_bytes: &[u8]) -> Result<Self> {
+        if raw_bytes.len() < ED25519_PUBLIC_KEY_LEN {
+            return Err("Public key has an invalid length")
+                .wrapped(ErrorKind::CryptoSignatureRingEd25519);
+        }
         Ok(Self::from_bytes_unchecked(raw_bytes))
     }
 
-    fn from_bytes_unchecked<B: AsRef<[u8]>>(raw_bytes: B) -> Result<Self> {
-        let pk = rsig::UnparsedPublicKey::new(&rsig::ED25519, raw_bytes);
+    fn from_bytes_unchecked(raw_bytes: &[u8]) -> Self {
+        let mut buf = [0; ED25519_PUBLIC_KEY_LEN];
+        buf.copy_from_slice(&raw_bytes[..ED25519_PUBLIC_KEY_LEN]);
+        let pk: RPubKey = unsafe {
+            // safety remarks: ring represents `RPubKey` as:
+            // pub struct PublicKey([u8; ED25519_PUBLIC_KEY_LEN])
+            std::mem::transmute(buf)
+        };
+        let pk = rsig::UnparsedPublicKey::new(&rsig::ED25519, pk);
         PublicKey { pk }
     }
 
