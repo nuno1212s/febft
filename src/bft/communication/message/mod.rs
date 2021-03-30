@@ -109,6 +109,11 @@ pub enum ConsensusMessageKind {
 }
 
 impl<O> RequestMessage<O> {
+    /// Creates a new `RequestMessage`.
+    pub fn new(operation: O) -> Self {
+        Self { operation }
+    }
+
     /// Returns a reference to the operation of type `O`.
     pub fn operation(&self) -> &O {
         &self.operation
@@ -116,6 +121,12 @@ impl<O> RequestMessage<O> {
 }
 
 impl ConsensusMessage {
+    /// Creates a new `ConsensusMessage` with sequence number `seq`,
+    /// and of the kind `kind`.
+    pub fn new(seq: i32, kind: ConsensusMessageKind) -> Self {
+        Self { seq, kind }
+    }
+
     /// Returns the sequence number of this consensus message.
     pub fn sequence_number(&self) -> i32 {
         self.seq
