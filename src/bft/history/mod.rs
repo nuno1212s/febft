@@ -30,6 +30,10 @@ pub enum Info {
     Full,
 }
 
+enum LogOperation<O> {
+    Insert(Header, SystemMessage<O>),
+}
+
 struct StoredMessage<O> {
     header: Header,
     message: SystemMessage<O>,
@@ -78,7 +82,7 @@ pub struct LoggerHandle<O> {
 impl<O> LoggerHandle<O> {
     /// Adds a new `message` and its respective `header` to the log.
     pub async fn insert(&mut self, header: Header, message: SystemMessage<O>) -> Result<()> {
-        self.my_tx.send((header, message)).await;
+        self.my_tx.send(LogOperation::Insert(header, message)).await;
     }
 }
 
@@ -92,7 +96,7 @@ impl<O> Clone for LoggerHandle<O> {
 /// Represents an async message logging task.
 pub struct Logger<O> {
     // handle used to receive messages to be logged
-    my_rx: ChannelRx<(Header, SystemMessage<O>)>,
+    my_rx: ChannelRx<LogOperation<O>>,
     // handle to the master channel used by the `System`;
     // signals checkpoint messages
     system_tx: MessageChannelTx<O>,
@@ -107,13 +111,20 @@ impl<O> Logger<O> {
     pub fn new(system_tx: MessageChannelTx<O>) -> LoggerHandle<O> {
         let log = Log::new();
         let (my_tx, my_rx) = channel::new_bounded(CHAN_BOUND);
-        let logger = Logger {
+        let mut logger = Logger {
             my_rx,
             system_tx,
             log,
         };
         rt::spawn(async move {
-            // do stuff with logger
+            loop {
+                // TODO: add other log operations, namely garbage collection
+                match logger.my_rx.recv() {
+                    LogOperation::Insert(header, message) => {
+                        logger.log.insert(header, message);
+                    },
+                }
+            }
         });
         LoggerHandle { my_tx }
     }
