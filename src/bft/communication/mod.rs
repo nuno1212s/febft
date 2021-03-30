@@ -19,7 +19,12 @@ use std::collections::HashMap;
 
 use futures::lock::Mutex;
 
+use crate::bft::error::*;
 use crate::bft::communication::socket::Socket;
+use crate::bft::communication::channel::{
+    MessageChannelTx,
+    MessageChannelRx,
+};
 
 /// A `NodeId` represents the id of a process in the BFT system.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
@@ -50,23 +55,20 @@ impl From<NodeId> for u32 {
 
 /// A `Node` contains handles to other processes in the system, and is
 /// the core component used in the wire communication between processes.
-pub struct Node {
+pub struct Node<O> {
     id: NodeId,
     peer_addrs: Vec<SocketAddr>,
     others_tx: HashMap<NodeId, Arc<Mutex<Socket>>>,
+    my_tx: MessageChannelTx<O>,
+    my_rx: MessageChannelTx<O>,
 }
 
-// Add more backends:
-// ==================
-// #[cfg(feature = "foo_bar_backend")]
-// pub struct Node(...);
-//
-// ...
+pub struct NodeConfig;
 
-//impl Node {
-//    pub fn id(&self) -> NodeId {
-//        self.0.id()
-//    }
-//
-//    pub async fn send(&self, ctx: &Context, 
-//}
+impl<O> Node<O> {
+    /// Bootstrap a `Node`, i.e. create connections between itself and its
+    /// peer nodes.
+    pub fn bootstrap(c: NodeConfig) -> Result<Self> {
+        unimplemented!()
+    }
+}
