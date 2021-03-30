@@ -2,9 +2,6 @@
 
 use std::collections::VecDeque;
 
-use futures::channel::mpsc;
-use futures::stream::StreamExt;
-
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::channel::{
