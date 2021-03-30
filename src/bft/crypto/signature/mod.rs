@@ -79,9 +79,6 @@ impl<'a> PublicKeyRef<'a> {
 
 impl PublicKey {
     /// Constructs a `PublicKey` from a byte buffer of appropriate size.
-    ///
-    /// The buffer should be an owned type, such as a `Vec<u8>` or an
-    /// array of bytes.
     pub fn from_bytes(raw_bytes: &[u8]) -> Result<Self> {
         let inner = {
             #[cfg(feature = "crypto_signature_ring_ed25519")]
