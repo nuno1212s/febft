@@ -10,7 +10,11 @@ pub mod history;
 pub mod crypto;
 pub mod error;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use error::*;
+
+static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Configure the init process of the library.
 pub struct InitConfig {
@@ -23,6 +27,10 @@ pub struct InitConfig {
 /// Should always be called before other methods, otherwise runtime
 /// panics may ensue.
 pub fn init(c: InitConfig) -> Result<()> {
+    if INITIALIZED.load(Ordering::Acquire) {
+        return Ok(());
+    }
     async_runtime::init(c.async_threads)?;
+    INITIALIZED.store(true, Ordering::Release);
     Ok(())
 }
