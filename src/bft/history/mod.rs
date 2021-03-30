@@ -57,6 +57,14 @@ impl<O> Log<O> {
         }
     }
 
+    /// Replaces the current `Log` with an empty one, and returns
+    /// the replaced instance.
+    pub fn take(&mut self) -> Self {
+        let mut old = Log::new();
+        std::mem::swap(self, &mut old);
+        old
+    }
+
     /// Adds a new `message` and its respective `header` to the log.
     pub fn insert(&mut self, header: Header, message: SystemMessage<O>) -> Info {
         let message = StoredMessage { header, message };
