@@ -87,7 +87,7 @@ impl<'a, T> Future for ChannelRxFut<'a, T> {
     type Output = Result<T>;
 
     #[inline]
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<T>> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<T>> {
         Pin::new(&mut self.inner)
             .poll_next(cx)
             .map(|opt| opt.ok_or(Error::simple(ErrorKind::CommunicationChannel)))
