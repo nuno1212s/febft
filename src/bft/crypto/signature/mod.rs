@@ -19,7 +19,7 @@ pub struct PublicKey {
     inner: ring_ed25519::PublicKey,
 }
 
-/// Reference to the public component of a `KeyPair`.
+/// Reference to a `PublicKey`.
 pub struct PublicKeyRef<'a> {
     #[cfg(feature = "crypto_signature_ring_ed25519")]
     inner: &'a ring_ed25519::PublicKey,
@@ -82,7 +82,7 @@ impl PublicKey {
     ///
     /// The buffer should be an owned type, such as a `Vec<u8>` or an
     /// array of bytes.
-    pub fn from_bytes<B: AsRef<[u8]>>(raw_bytes: &[u8]) -> Result<Self> {
+    pub fn from_bytes(raw_bytes: &[u8]) -> Result<Self> {
         let inner = {
             #[cfg(feature = "crypto_signature_ring_ed25519")]
             { ring_ed25519::PublicKey::from_bytes(raw_bytes)? }
