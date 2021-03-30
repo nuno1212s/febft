@@ -64,7 +64,7 @@ impl<O> Log<O> {
     pub fn insert(&mut self, header: Header, message: SystemMessage<O>) -> Info {
         let message = StoredMessage { header, message };
         if let SystemMessage::Consensus(ref m) = &message.message {
-            match m.kind {
+            match m.kind() {
                 ConsensusMessageKind::PrePrepare(_) => self.pre_prepares.push_back(message),
                 ConsensusMessageKind::Prepare => self.prepares.push_back(message),
                 ConsensusMessageKind::Commit => self.commits.push_back(message),
@@ -76,13 +76,13 @@ impl<O> Log<O> {
 
 /// Represents a handle to the logger.
 pub struct LoggerHandle<O> {
-    my_tx: ChannelTx<(Header, SystemMessage<O>)>,
+    my_tx: ChannelTx<LogOperation<O>>,
 }
 
 impl<O> LoggerHandle<O> {
     /// Adds a new `message` and its respective `header` to the log.
     pub async fn insert(&mut self, header: Header, message: SystemMessage<O>) -> Result<()> {
-        self.my_tx.send(LogOperation::Insert(header, message)).await;
+        self.my_tx.send(LogOperation::Insert(header, message)).await
     }
 }
 
@@ -108,7 +108,10 @@ impl<O> Logger<O> {
     /// Spawns a new logging task into the async runtime.
     ///
     /// A handle to the master message channel, `system_tx`, should be provided.
-    pub fn new(system_tx: MessageChannelTx<O>) -> LoggerHandle<O> {
+    pub fn new(system_tx: MessageChannelTx<O>) -> LoggerHandle<O>
+    where
+        O: Send + 'static,
+    {
         let log = Log::new();
         let (my_tx, my_rx) = channel::new_bounded(CHAN_BOUND);
         let mut logger = Logger {
@@ -117,9 +120,9 @@ impl<O> Logger<O> {
             log,
         };
         rt::spawn(async move {
-            loop {
+            while let Ok(log_op) = logger.my_rx.recv().await {
                 // TODO: add other log operations, namely garbage collection
-                match logger.my_rx.recv() {
+                match log_op {
                     LogOperation::Insert(header, message) => {
                         logger.log.insert(header, message);
                     },
