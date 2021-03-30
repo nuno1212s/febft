@@ -14,6 +14,7 @@ use error::*;
 
 /// Configure the init process of the library.
 pub struct InitConfig {
+    /// Number of threads used by the async runtime.
     pub async_threads: usize,
 }
 
