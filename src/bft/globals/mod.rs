@@ -59,8 +59,10 @@ impl<T> Global<T> {
 
     /// Checks for the initialization of a global variable.
     ///
-    /// Even if the compiler reports it's unsafe, under a `static mut`
-    /// variable, it should always be safe to call.
+    /// This method is potentially unsafe to call, because the reference
+    /// may dangle if we deinitialize the library, by dropping `InitGuard`.
+    /// In practice, it should always be safe, since dropping the `InitGuard`
+    /// is the last thing users of `febft` should do.
     pub fn get(&self) -> Option<&T> {
         if self.guard.test() {
             self.value.as_ref()
