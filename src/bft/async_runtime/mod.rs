@@ -10,15 +10,23 @@ use std::pin::Pin;
 use std::future::Future;
 use std::task::{Context, Poll};
 
-use once_cell::sync::OnceCell;
-
+use crate::bft::globals::Global;
 use crate::bft::error::*;
 
 #[cfg(feature = "async_runtime_tokio")]
-static RUNTIME: OnceCell<tokio::Runtime> = OnceCell::new();
+static mut RUNTIME: Global<tokio::Runtime> = Global::new();
 
 #[cfg(feature = "async_runtime_async_std")]
-static RUNTIME: OnceCell<async_std::Runtime> = OnceCell::new();
+static mut RUNTIME: Global<async_std::Runtime> = Global::new();
+
+macro_rules! runtime {
+    () => {
+        match unsafe { RUNTIME.get() } {
+            Some(ref rt) => rt,
+            None => panic!("Async runtime wasn't initialized"),
+        }
+    }
+}
 
 /// A `JoinHandle` represents a future that can be awaited on.
 ///
@@ -36,21 +44,21 @@ pub struct JoinHandle<T> {
 /// This function initializes the async runtime.
 ///
 /// It should be called once before the core protocol starts executing.
-pub fn init(num_threads: usize) -> Result<()> {
+pub unsafe fn init(num_threads: usize) -> Result<()> {
     #[cfg(feature = "async_runtime_tokio")]
-    {
-        tokio::init(num_threads).and_then(|rt| {
-            RUNTIME.set(rt)
-                .simple_msg(ErrorKind::AsyncRuntime, "Failed to set global runtime instance")
-        })
-    }
+    { tokio::init(num_threads).map(|rt| RUNTIME.set(rt)) }
+
     #[cfg(feature = "async_runtime_async_std")]
-    {
-        async_std::init(num_threads).and_then(|rt| {
-            RUNTIME.set(rt)
-                .simple_msg(ErrorKind::AsyncRuntime, "Failed to set global runtime instance")
-        })
-    }
+    { async_std::init(num_threads).map(|rt| RUNTIME.set(rt)) }
+}
+
+/// This function drops the async runtime.
+///
+/// It shouldn't be needed to be called manually called, as the
+/// `InitGuard` should take care of calling this.
+pub unsafe fn drop() -> Result<()> {
+    RUNTIME.drop();
+    Ok(())
 }
 
 /// Spawns a new task `F` into the async runtime's thread pool.
@@ -62,21 +70,13 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    match RUNTIME.get() {
-        Some(ref rt) => {
-            let inner = rt.spawn(future);
-            JoinHandle { inner }
-        },
-        None => panic!("Async runtime wasn't initialized"),
-    }
+    let inner = runtime!().spawn(future);
+    JoinHandle { inner }
 }
 
 /// Blocks on a future `F` until it completes.
 pub fn block_on<F: Future>(future: F) -> F::Output {
-    match RUNTIME.get() {
-        Some(ref rt) => rt.block_on(future),
-        None => panic!("Async runtime wasn't initialized"),
-    }
+    runtime!().block_on(future)
 }
 
 impl<T> Future for JoinHandle<T> {

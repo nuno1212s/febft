@@ -6,15 +6,17 @@
 pub mod async_runtime;
 pub mod communication;
 pub mod threadpool;
+pub mod globals;
 pub mod history;
 pub mod crypto;
 pub mod error;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::ops::Drop;
 
 use error::*;
+use globals::Guard;
 
-static INITIALIZED: AtomicBool = AtomicBool::new(false);
+static INITIALIZED: Guard = Guard::new();
 
 /// Configure the init process of the library.
 pub struct InitConfig {
@@ -22,16 +24,34 @@ pub struct InitConfig {
     pub async_threads: usize,
 }
 
+/// Handle to the global data.
+///
+/// When dropped, the data is deinitialized.
+pub struct InitGuard;
+
 /// Initializes global data.
 ///
 /// Should always be called before other methods, otherwise runtime
 /// panics may ensue.
-pub fn init(c: InitConfig) -> Result<()> {
-    if INITIALIZED.load(Ordering::Acquire) {
-        return Ok(());
+pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
+    if INITIALIZED.test() {
+        return Ok(None);
     }
     async_runtime::init(c.async_threads)?;
     communication::socket::init()?;
-    INITIALIZED.store(true, Ordering::Release);
+    INITIALIZED.set();
+    Ok(Some(InitGuard))
+}
+
+impl Drop for InitGuard {
+    fn drop(&mut self) {
+        unsafe { drop().unwrap() }
+    }
+}
+
+unsafe fn drop() -> Result<()> {
+    async_runtime::drop()?;
+    communication::socket::drop()?;
+    INITIALIZED.unset();
     Ok(())
 }

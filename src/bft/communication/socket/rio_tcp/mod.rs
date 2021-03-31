@@ -1,3 +1,5 @@
+// FIXME: not working
+
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -6,10 +8,10 @@ use std::task::{Poll, Context};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 
 use rio::Uring;
-use once_cell::sync::OnceCell;
 use futures::io::{AsyncRead, AsyncWrite};
 use socket2::{Protocol, Socket as SSocket, Domain, Type};
 
+use crate::bft::globals::Global;
 use crate::bft::error::{
     self,
     ErrorKind,
@@ -21,17 +23,17 @@ use crate::bft::error::{
 struct Rio(Arc<Uring>);
 
 // global `Uring` instance
-static RIO: OnceCell<Uring> = OnceCell::new();
+static mut RIO: Global<Uring> = Global::new();
 
 // ordering of uring operations; link will wait for previous
 // ops to finish before executing the requested op
 const ORD: rio::Ordering = rio::Ordering::Link;
 
 // initialize the global `Uring` instance
-pub fn init() -> error::Result<()> {
+pub unsafe fn init() -> error::Result<()> {
     let ring = rio::new()
         .wrapped(ErrorKind::CommunicationSocketRioTcp)?;
-    let ring = unsafe {
+    let ring = {
         // remove `Arc` wrapping because direct access to
         // the `Uring` is faster than going through another
         // layer of indirection; the `Arc` is not necessary
@@ -40,8 +42,14 @@ pub fn init() -> error::Result<()> {
         let ring: Rio = std::mem::transmute(ring);
         Arc::try_unwrap(ring.0).unwrap()
     };
-    RIO.set(ring)
-        .simple_msg(ErrorKind::CommunicationSocketRioTcp, "Failed to set global uring instance")
+    RIO.set(ring);
+    Ok(())
+}
+
+// drop the global `Uring` instance
+pub unsafe fn drop() -> error::Result<()> {
+    RIO.drop();
+    Ok(())
 }
 
 pub struct Socket {
@@ -84,7 +92,7 @@ impl Listener {
 
 impl AsyncRead for Socket {
     fn poll_read(
-        mut self: Pin<&mut Self>, 
+        self: Pin<&mut Self>, 
         cx: &mut Context<'_>, 
         mut buf: &mut [u8]
     ) -> Poll<io::Result<usize>>
@@ -97,7 +105,7 @@ impl AsyncRead for Socket {
 
 impl AsyncWrite for Socket {
     fn poll_write(
-        mut self: Pin<&mut Self>, 
+        self: Pin<&mut Self>, 
         cx: &mut Context<'_>, 
         buf: &[u8]
     ) -> Poll<io::Result<usize>>
@@ -108,7 +116,7 @@ impl AsyncWrite for Socket {
     }
 
     fn poll_flush(
-        mut self: Pin<&mut Self>, 
+        self: Pin<&mut Self>, 
         cx: &mut Context<'_>
     ) -> Poll<io::Result<()>>
     {
@@ -116,7 +124,7 @@ impl AsyncWrite for Socket {
     }
 
     fn poll_close(
-        mut self: Pin<&mut Self>, 
+        self: Pin<&mut Self>, 
         _cx: &mut Context<'_>
     ) -> Poll<io::Result<()>>
     {
@@ -126,7 +134,7 @@ impl AsyncWrite for Socket {
 
 #[inline(always)]
 fn ring() -> &'static Uring {
-    match RIO.get() {
+    match unsafe { RIO.get() } {
         Some(ref ring) => ring,
         None => panic!("Linux io_uring wasn't initialized"),
     }

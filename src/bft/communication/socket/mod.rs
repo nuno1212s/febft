@@ -45,9 +45,17 @@ pub struct Socket {
 }
 
 /// Initialize the sockets module.
-pub fn init() -> error::Result<()> {
+pub unsafe fn init() -> error::Result<()> {
     #[cfg(feature = "socket_rio_tcp")]
     { rio_tcp::init()?; }
+
+    Ok(())
+}
+
+/// Drops the global data associated with sockets.
+pub unsafe fn drop() -> error::Result<()> {
+    #[cfg(feature = "socket_rio_tcp")]
+    { rio_tcp::drop()?; }
 
     Ok(())
 }
