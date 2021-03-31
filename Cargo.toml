@@ -15,7 +15,7 @@ readme = "README.md"
 default = [
     "async_runtime_tokio",
     "threadpool_crossbeam",
-    "socket_tokio_tcp",
+    "socket_rio_tcp",
     "serialize_capnp",
     "crypto_signature_ring_ed25519",
     "crypto_hash_ring_sha2"
@@ -23,6 +23,7 @@ default = [
 
 socket_tokio_tcp = ["tokio", "tokio-util"]
 socket_async_std_tcp = ["async-std"]
+socket_rio_tcp = ["rio", "socket2"]
 
 serialize_capnp = ["capnp"]
 serialize_serde = ["serde"]
@@ -64,3 +65,5 @@ bincode = { version = "1", optional = true }
 cthpool = { git = "https://github.com/sug0/cthpool", optional = true }
 rmp-serde = { version = "0.15", optional = true }
 serde_cbor = { version = "0.11", optional = true }
+rio = { version = "0.9", optional = true }
+socket2 = { version = "0.4", optional = true }

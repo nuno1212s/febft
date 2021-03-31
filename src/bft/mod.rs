@@ -31,6 +31,7 @@ pub fn init(c: InitConfig) -> Result<()> {
         return Ok(());
     }
     async_runtime::init(c.async_threads)?;
+    communication::socket::init()?;
     INITIALIZED.store(true, Ordering::Release);
     Ok(())
 }
