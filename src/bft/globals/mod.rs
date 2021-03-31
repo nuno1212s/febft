@@ -1,0 +1,71 @@
+//! Abstractions to deal with global variables.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// A `Guard` is used to check for the initialization of a global value.
+pub struct Guard(AtomicBool);
+
+impl Guard {
+    /// Creates a new global variable `Guard`.
+    pub const fn new() -> Self {
+        Self(AtomicBool::new(false))
+    }
+
+    /// Sets the global variable as initialized. 
+    pub fn set(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    /// Sets the global variable as dropped. 
+    pub fn unset(&self) {
+        self.0.store(false, Ordering::Release);
+    }
+
+    /// Checks if a global variable is initialized.
+    pub fn test(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// A `Global` represents a global variable.
+///
+/// Checking for initialization is thread safe, but dropping or
+/// setting a value is unsafe, and should be done with caution.
+pub struct Global<T> {
+    guard: Guard,
+    value: Option<T>,
+}
+
+impl<T> Global<T> {
+    /// Creates a new global variable handle.
+    pub const fn new() -> Self {
+        Self {
+            guard: Guard::new(),
+            value: None,
+        }
+    }
+
+    /// Initializes the global variable with a `value`.
+    pub fn set(&mut self, value: T) {
+        self.value = Some(value);
+        self.guard.set();
+    }
+
+    /// Drops the global variable.
+    pub fn drop(&mut self) {
+        self.guard.unset();
+        self.value.take();
+    }
+
+    /// Checks for the initialization of a global variable.
+    ///
+    /// Even if the compiler reports it's unsafe, under a `static mut`
+    /// variable, it should always be safe to call.
+    pub fn get(&self) -> Option<&T> {
+        if self.guard.test() {
+            self.value.as_ref()
+        } else {
+            None
+        }
+    }
+}
