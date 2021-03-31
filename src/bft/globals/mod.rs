@@ -56,7 +56,9 @@ impl<T> Global<T> {
         self.guard.unset();
         self.value.take();
     }
+}
 
+impl<T: Sync> Global<T> {
     /// Checks for the initialization of a global variable.
     ///
     /// This method is potentially unsafe to call, because the reference
