@@ -43,14 +43,6 @@ pub struct WireMessage<'a> {
 /// The `Message` type encompasses all the messages traded between different
 /// asynchronous tasks in the system.
 ///
-// TODO: include `Header` in `System`, or perhaps repeat some
-// information in the payload, such as signatures, from, to, ...
-// this is necessary for the receiving node to perform protocol
-// specific actions, such as who voted for a prepare in the consensus
-// layer
-//
-// pub struct ReceivedWireMessage { header, system_message } ???
-//
 pub enum Message<O> {
     /// Client requests and process sub-protocol messages.
     System(Header, SystemMessage<O>),
