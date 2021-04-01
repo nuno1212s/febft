@@ -2,7 +2,12 @@
 
 use std::collections::VecDeque;
 
-use crate::bft::communication::message::ConsensusMessage;
+use crate::bft::error::*;
+use crate::bft::communication::message::{
+    ConsensusMessage,
+    SystemMessage,
+    Message,
+};
 
 /// Represents a queue of messages to be ordered in a consensus instance.
 ///
@@ -12,6 +17,7 @@ use crate::bft::communication::message::ConsensusMessage;
 /// processed in the correct order.
 pub struct TBOQueue {
     curr_seq: i32,
+    get_queue: bool,
     pre_prepares: VecDeque<VecDeque<ConsensusMessage>>,
     prepares: VecDeque<VecDeque<ConsensusMessage>>,
     commits: VecDeque<VecDeque<ConsensusMessage>>,
@@ -22,6 +28,7 @@ impl TBOQueue {
     fn new_impl(curr_seq: i32) -> Self {
         Self {
             curr_seq,
+            get_queue: false,
             pre_prepares: VecDeque::new(),
             prepares: VecDeque::new(),
             commits: VecDeque::new(),
@@ -65,6 +72,62 @@ impl TBOQueue {
         Self::new_impl(curr_seq)
     }
 
+    //pub async fn next_message(
+    //    &mut self,
+    //    node: &mut Node,
+    //    consensus: &Consensus,
+    //) -> Result<Message> {
+    //    match self.phase {
+    //        ProtoPhase::End => return Err("System has shut down").wrapped(ErrorKind::Consensus),
+    //        ProtoPhase::Init => {
+    //            if let Some(request) = self.requests.pop_front() {
+    //                if self.leader == self.node.id {
+    //                    self.propose_value(request.value);
+    //                }
+    //                self.phase = ProtoPhase::PrePreparing;
+    //            }
+    //            let message = self.node.receive().await?;
+    //            message
+    //        },
+    //        ProtoPhase::PrePreparing if get_queue => {
+    //            if let Some(m) = pop_message(&mut self.tbo_pre_prepare) {
+    //                Message::System(SystemMessage::Consensus(m))
+    //            } else {
+    //                get_queue = false;
+    //                continue;
+    //            }
+    //        },
+    //        ProtoPhase::Preparing(_) if get_queue => {
+    //            if let Some(m) = pop_message(&mut self.tbo_prepare) {
+    //                Message::System(SystemMessage::Consensus(m))
+    //            } else {
+    //                get_queue = false;
+    //                continue;
+    //            }
+    //        },
+    //        ProtoPhase::Commiting(_) if get_queue => {
+    //            if let Some(m) = pop_message(&mut self.tbo_commit) {
+    //                Message::System(SystemMessage::Consensus(m))
+    //            } else {
+    //                get_queue = false;
+    //                continue;
+    //            }
+    //        },
+    //        _ => {
+    //            let message = self.node.receive().await?;
+    //            message
+    //        },
+    //    }
+    //}
+
+    /// Advances the message queues, and updates the consensus instance id.
+    pub fn next_instance(&mut self) {
+        self.curr_seq += 1;
+        Self::advance_message_queue(&mut self.pre_prepares);
+        Self::advance_message_queue(&mut self.prepares);
+        Self::advance_message_queue(&mut self.commits);
+    }
+
     /// Queues a `PRE-PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
     pub fn queue_pre_prepare(&mut self, m: ConsensusMessage) {
@@ -82,4 +145,20 @@ impl TBOQueue {
     pub fn queue_commit(&mut self, m: ConsensusMessage) {
         Self::queue_message(self.curr_seq, &mut self.commits, m)
     }
+}
+
+#[derive(Debug, Copy, Clone)]
+enum ProtoPhase {
+    Init,
+    PrePreparing,
+    Preparing(u32),
+    Commiting(u32),
+    Executing,
+    End,
+}
+
+pub struct Consensus {
+    phase: ProtoPhase,
+    seq: i32,
+    leader: u32,
 }
