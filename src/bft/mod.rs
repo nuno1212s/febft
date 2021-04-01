@@ -6,6 +6,7 @@
 pub mod async_runtime;
 pub mod communication;
 pub mod threadpool;
+pub mod consensus;
 pub mod globals;
 pub mod history;
 pub mod crypto;
