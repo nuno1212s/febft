@@ -104,7 +104,7 @@ impl NodeConfig {
 
     /// Returns a reference to the `PublicKey` of the node `i`.
     pub fn public_key_of(&self, i: NodeId) -> &PublicKey {
-        self.pk[&i]
+        &self.pk[&i]
     }
 }
 
