@@ -220,8 +220,8 @@ impl<'a> WireMessage<'a> {
 
     /// Wraps a `Header` and a byte array payload into a `WireMessage`.
     pub fn from_parts(header: Header, payload: &'a [u8]) -> Result<Self> {
-        if header.length() != payload.len() {
-            Err(Error::simple(ErrorKind::CommunicationMessage))
+        if header.payload_length() != payload.len() {
+            return Err(Error::simple(ErrorKind::CommunicationMessage));
         }
         Ok(Self { header, payload })
     }
