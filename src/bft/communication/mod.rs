@@ -27,6 +27,7 @@ use crate::bft::communication::socket::Socket;
 use crate::bft::communication::message::{
     Header,
     Message,
+    WireMessage,
 };
 use crate::bft::communication::channel::{
     MessageChannelTx,
@@ -81,19 +82,15 @@ struct NodeTxData {
     sock: Mutex<Socket>,
 }
 
-struct PeerData {
-    addr: SocketAddr,
-    pk: PublicKey,
-}
-
 /// A `Node` contains handles to other processes in the system, and is
 /// the core component used in the wire communication between processes.
 pub struct Node<O> {
     id: NodeId,
-    peers: Arc<HashMap<NodeId, PeerData>>,
+    peer_addrs: HashMap<NodeId, SocketAddr>,
+    peer_keys: Arc<HashMap<NodeId, PublicKey>>,
     others_tx: HashMap<NodeId, Arc<NodeTxData>>,
     my_tx: MessageChannelTx<O>,
-    my_rx: MessageChannelTx<O>,
+    my_rx: MessageChannelRx<O>,
 }
 
 /// Represents a configuration used to bootstrap a `Node`.
@@ -138,7 +135,7 @@ impl NodeConfig {
     }
 }
 
-impl<O> Node<O> {
+impl<O: Send + 'static> Node<O> {
     // max no. of messages allowed in the channel
     const CHAN_BOUND: usize = 128;
 
@@ -150,84 +147,101 @@ impl<O> Node<O> {
     ///
     /// Rogue messages (i.e. not pertaining to the bootstrapping protocol)
     /// are returned in a `Vec`.
-    pub fn bootstrap(c: NodeConfig) -> Result<(Self, Vec<Message<O>>)> {
-        if c.addrs.len() < (3*cfg.f + 1) {
+    pub async fn bootstrap(cfg: NodeConfig) -> Result<(Self, Vec<Message<O>>)> {
+        if cfg.addrs.len() < (3*cfg.f + 1) {
             return Err("Invalid number of replicas")
                 .wrapped(ErrorKind::Communication);
         }
-        if c.id.into() >= c.addrs.len() {
+        if usize::from(cfg.id) >= cfg.addrs.len() {
             return Err("Invalid node ID")
                 .wrapped(ErrorKind::Communication);
         }
 
-        let id = c.id;
+        let id = cfg.id;
         let n = cfg.addrs.len();
 
-        let listener = socket::bind(cfg.addrs[id]).await
+        let listener = socket::bind(cfg.addrs[&id]).await
             .wrapped(ErrorKind::Communication)?;
 
         let mut others_tx = HashMap::new();
-        let (tx, mut rx) = new_message_channel(Self::CHAN_BOUND);
+        let peer_keys = Arc::new(cfg.pk);
+        let (tx, mut rx) = new_message_channel::<O>(Self::CHAN_BOUND);
 
         // rx side (accept conns from replica)
         let tx_clone = tx.clone();
+        let peer_keys_clone = Arc::clone(&peer_keys);
         rt::spawn(async move {
-            let mut tx = tx_clone;
-            let mut buf = [0; Header::LENGTH];
+            let tx = tx_clone;
+            let pk = peer_keys_clone;
+            // TODO: check if we have terminated the node, and exit
             loop {
                 if let Ok(mut sock) = listener.accept().await {
-                    if let Err(_) = sock.read_exact(&mut buf[..]).await {
-                        // errors reading -> faulty connection;
-                        // drop this socket
-                        continue;
-                    }
+                    let mut tx = tx.clone();
+                    let pk = Arc::clone(&pk);
+                    rt::spawn(async move {
+                        let mut buf = [0; Header::LENGTH];
 
-                    // check if they are who they say who they are
-                    let id = {
-                        // we are passing the correct length, safe to use unwrap()
-                        let header = Header::deserialize_from(&buf[..]).unwrap();
-
-                        // use an empty slice since we aren't expecting a payload;
-                        // errors will stem from sizes different than 0 in the header
-                        match WireMessage::from_parts(header, &[]) {
-                            Ok(wm) if !wm.is_valid(&pk) => {
-                                // invalid identity; drop connection
-                                continue;
-                            },
-                            Ok(wm) => wm.header().from(),
-                            Err(_) => continue,
+                        if let Err(_) = sock.read_exact(&mut buf[..]).await {
+                            // errors reading -> faulty connection;
+                            // drop this socket
+                            return;
                         }
-                    };
 
-                    if let Err(_) = tx.send(Message::ConnectedRx(id, sock)).await {
-                        // if sending fails, the node terminated, so we exit
-                        return;
-                    }
+                        // check if they are who they say who they are
+                        let id = {
+                            // we are passing the correct length, safe to use unwrap()
+                            let header = Header::deserialize_from(&buf[..]).unwrap();
+                            let id = header.from();
+
+                            // try to extract the public key associated with the
+                            // node in the header
+                            let pk = match pk.get(&id) {
+                                Some(pk) => pk,
+                                None => return,
+                            };
+
+                            // use an empty slice since we aren't expecting a payload;
+                            // errors will stem from sizes different than 0 in the header
+                            match WireMessage::from_parts(header, &[]) {
+                                Ok(wm) if !wm.is_valid(&pk) => {
+                                    // invalid identity; drop connection
+                                    return;
+                                },
+                                Ok(_) => id,
+                                Err(_) => return,
+                            }
+                        };
+
+                        tx.send(Message::ConnectedRx(id, sock)).await.unwrap_or(());
+                    });
                 }
             }
         });
 
+        /*
         // share the secret key between other tasks, but keep it in a
         // single memory location, with an `Arc`
-        let sk = Arc::new(c.sk);
+        let sk = Arc::new(cfg.sk);
 
         // build peers map
         let mut peers = HashMap::new();
         for i in NodeId::targets(0..n) {
             peers[i] = PeerData {
-                pk: c.pk[i],
-                addr: c.addrs[i],
+                pk: cfg.pk[i],
+                addr: cfg.addrs[i],
             }
         }
+        */
 
         // success
         let node = Node {
             id,
-            peers,
             others_tx,
-            my_tx,
-            my_rx,
+            my_tx: tx,
+            my_rx: rx,
+            peer_keys,
+            peer_addrs: cfg.addrs,
         };
-        Ok((node, rogue))
+        Ok((node, Vec::new()))
     }
 }
