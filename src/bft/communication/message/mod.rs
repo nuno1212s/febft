@@ -6,8 +6,13 @@ use std::mem::MaybeUninit;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
+use crate::bft::crypto::hash::Context;
+use crate::bft::crypto::signature::{
+    Signature,
+    PublicKey,
+    KeyPair,
+};
 use crate::bft::crypto::hash::Digest;
-use crate::bft::crypto::signature::Signature;
 use crate::bft::communication::socket::Socket;
 use crate::bft::communication::NodeId;
 use crate::bft::error::*;
@@ -28,7 +33,7 @@ pub struct Header {
     pub(crate) to: u32,
     // length of the payload
     pub(crate) length: u64,
-    // sign(hash(version + from + to + length + serialize(payload)))
+    // sign(hash(le(version) + le(from) + le(to) + le(length) + serialize(payload)))
     pub(crate) signature: [u8; Signature::LENGTH],
 }
 
@@ -193,10 +198,21 @@ impl<'a> WireMessage<'a> {
     /// The current version of the wire protocol.
     pub const CURRENT_VERSION: u32 = 0;
 
+    /// Wraps a `Header` and a byte array payload into a `WireMessage`.
+    pub fn from_parts(header: Header, payload: &'a [u8]) -> Self {
+        Self { header, payload }
+    }
+
     /// Constructs a new message to be sent over the wire.
-    pub fn new(from: NodeId, to: NodeId, payload: &'a [u8], sig: Signature) -> Self {
-        let signature = unsafe { std::mem::transmute(sig) };
-        let (from, to): (u32, u32) = (from.into(), to.into());
+    pub fn new(sk: &KeyPair, from: NodeId, to: NodeId, payload: &'a [u8]) -> Self {
+        let signature = Self::sign_parts(
+            sk,
+            from.into(),
+            to.into(),
+            payload,
+        );
+        let signature = unsafe { std::mem::transmute(signature) };
+        let (from, to) = (from.into(), to.into());
         let header = Header {
             version: Self::CURRENT_VERSION,
             length: payload.len() as u64,
@@ -204,7 +220,47 @@ impl<'a> WireMessage<'a> {
             from,
             to,
         };
-        Self { header, payload }
+        Self::from_parts(header, payload)
+    }
+
+    fn digest_parts(from: u32, to: u32, payload: &[u8]) -> Digest {
+        // sign(hash(le(version) + le(from) + le(to) + le(length) + serialize(payload)))
+        let mut ctx = Context::new();
+
+        let buf = Self::CURRENT_VERSION.to_le_bytes();
+        ctx.update(&buf[..]);
+
+        let buf = from.to_le_bytes();
+        ctx.update(&buf[..]);
+
+        let buf = to.to_le_bytes();
+        ctx.update(&buf[..]);
+
+        let buf = (payload.len() as u64).to_le_bytes();
+        ctx.update(&buf[..]);
+
+        if payload.len() > 0 {
+            ctx.update(payload);
+        }
+        ctx.finish()
+    }
+
+    fn sign_parts(sk: &KeyPair, from: u32, to: u32, payload: &[u8]) -> Signature {
+        let digest = Self::digest_parts(from, to, payload);
+        // XXX: unwrap() should always work, much like heap allocs
+        // should always work
+        sk.sign(digest.as_ref()).unwrap()
+    }
+
+    fn verify_parts(
+        pk: &PublicKey,
+        sig: &Signature,
+        from: u32,
+        to: u32,
+        payload: &[u8],
+    ) -> Result<()> {
+        let digest = Self::digest_parts(from, to, payload);
+        pk.verify(digest.as_ref(), sig)
     }
 
     /// Retrieve the inner `Header` and payload byte buffer stored
@@ -224,10 +280,24 @@ impl<'a> WireMessage<'a> {
     }
 
     /// Checks for the correctness of the `WireMessage`. This implies
-    /// checking signatures and other metadata.
-    pub fn is_valid(&self) -> bool {
-        // TODO: verify signature, etc
-        self.header.version == Self::CURRENT_VERSION
+    /// checking its signature.
+    pub fn is_valid(&self, pk: &PublicKey) -> bool {
+        let preliminary_check_failed =
+            self.header.version != WireMessage::CURRENT_VERSION
+            || self.header.length != self.payload.len() as u64;
+        if preliminary_check_failed {
+            return false;
+        }
+        // unwrap() should be safe because of the `Header`
+        let signature = Signature::from_bytes(&self.header.signature[..])
+            .unwrap();
+        Self::verify_parts(
+            pk,
+            &signature,
+            self.header.from,
+            self.header.to,
+            self.payload,
+        ).is_ok()
     }
 }
 
@@ -241,12 +311,13 @@ mod tests {
     fn test_header_serialize() {
         let signature = Signature::from_bytes(&[0; Signature::LENGTH][..])
             .expect("Invalid signature length");
-        let (old_header, _) = WireMessage::new(
-            NodeId::from(0),
-            NodeId::from(3),
-            b"I am a cool payload!",
+        let old_header = Header {
+            version: WireMessage::CURRENT_VERSION,
+            from: NodeId::from(0),
+            to: NodeId::from(3),
+            length: 0,
             signature,
-        ).into_inner();
+        };
         let mut buf = [0; Header::LENGTH];
         old_header.serialize_into(&mut buf[..])
             .expect("Serialize failed");
