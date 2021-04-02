@@ -203,7 +203,7 @@ impl<O: Send + 'static> Node<O> {
                             // use an empty slice since we aren't expecting a payload;
                             // errors will stem from sizes different than 0 in the header
                             match WireMessage::from_parts(header, &[]) {
-                                Ok(wm) if !wm.is_valid(&pk) => {
+                                Ok(wm) if !wm.is_valid(pk) => {
                                     // invalid identity; drop connection
                                     return;
                                 },
@@ -217,6 +217,26 @@ impl<O: Send + 'static> Node<O> {
                 }
             }
         });
+
+        // TODO: tx side (connect to replica)
+        /*
+        for other_id in (0..n).filter(|&x| x != id) {
+            let tx = tx.clone();
+            let addr = cfg.addrs[other_id as usize];
+            tokio::spawn(async move {
+                // try 10 times
+                for _ in 0..10 {
+                    if let Ok(mut conn) = TcpStream::connect(addr).await {
+                        conn.write_u32(id).await.unwrap();
+                        tx.send(Message::ConnectedTx(other_id, conn)).await.unwrap_or(());
+                        return;
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                }
+                panic!("something went wrong :]")
+            });
+        }
+        */
 
         /*
         // share the secret key between other tasks, but keep it in a
