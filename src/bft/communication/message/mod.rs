@@ -192,6 +192,26 @@ impl Header {
     pub fn version(&self) -> u32 {
         self.version
     }
+
+    /// The originating `NodeId`.
+    pub fn from(&self) -> NodeId {
+        self.from.into()
+    }
+
+    /// The destiny `NodeId`.
+    pub fn to(&self) -> NodeId {
+        self.to.into()
+    }
+
+    /// The length of the payload associated with this `Header`.
+    pub fn payload_length(&self) -> usize {
+        self.length as usize
+    }
+
+    /// The signature of this `Header` and associated payload.
+    pub fn signature(&self) -> Signature {
+        Signature::from_bytes(&self.signature[..]).unwrap()
+    }
 }
 
 impl<'a> WireMessage<'a> {
