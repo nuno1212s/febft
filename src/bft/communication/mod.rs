@@ -22,6 +22,7 @@ use futures::lock::Mutex;
 use smallvec::SmallVec;
 
 use crate::bft::error::*;
+use crate::bft::async_runtime as rt;
 use crate::bft::communication::socket::Socket;
 use crate::bft::communication::message::{
     Header,
@@ -150,78 +151,80 @@ impl<O> Node<O> {
     /// Rogue messages (i.e. not pertaining to the bootstrapping protocol)
     /// are returned in a `Vec`.
     pub fn bootstrap(c: NodeConfig) -> Result<(Self, Vec<Message<O>>)> {
-        unimplemented!()
-        // if c.addrs.len() < (3*cfg.f + 1) {
-        //     return Err("Invalid number of replicas")
-        //         .wrapped(ErrorKind::Communication);
-        // }
-        // if c.id.into() >= c.addrs.len() {
-        //     return Err("Invalid node ID")
-        //         .wrapped(ErrorKind::Communication);
-        // }
+        if c.addrs.len() < (3*cfg.f + 1) {
+            return Err("Invalid number of replicas")
+                .wrapped(ErrorKind::Communication);
+        }
+        if c.id.into() >= c.addrs.len() {
+            return Err("Invalid node ID")
+                .wrapped(ErrorKind::Communication);
+        }
 
-        // let id = c.id;
-        // let n = cfg.addrs.len();
+        let id = c.id;
+        let n = cfg.addrs.len();
 
-        // let listener = socket::bind(cfg.addrs[id]).await
-        //     .wrapped(ErrorKind::Communication)?;
+        let listener = socket::bind(cfg.addrs[id]).await
+            .wrapped(ErrorKind::Communication)?;
 
-        // let mut others_tx = HashMap::new();
-        // let (tx, mut rx) = new_message_channel(Self::CHAN_BOUND);
+        let mut others_tx = HashMap::new();
+        let (tx, mut rx) = new_message_channel(Self::CHAN_BOUND);
 
-        // // rx side (accept conns from replica)
-        // let tx_clone = tx.clone();
-        // tokio::spawn(async move {
-        //     let mut tx = tx_clone;
-        //     let mut buf = [0; Header::LENGTH];
-        //     loop {
-        //         if let Ok(mut sock) = listener.accept().await {
-        //             // TODO: receive a header with an empty payload, verify
-        //             // the header signature, extract id from header
-        //             if let Err(_) = sock.read_exact(&mut buf[..]).await {
-        //                 // errors reading -> faulty connection;
-        //                 // drop this socket
-        //                 continue;
-        //             }
+        // rx side (accept conns from replica)
+        let tx_clone = tx.clone();
+        rt::spawn(async move {
+            let mut tx = tx_clone;
+            let mut buf = [0; Header::LENGTH];
+            loop {
+                if let Ok(mut sock) = listener.accept().await {
+                    // TODO: receive a header with an empty payload, verify
+                    // the header signature, extract id from header
+                    if let Err(_) = sock.read_exact(&mut buf[..]).await {
+                        // errors reading -> faulty connection;
+                        // drop this socket
+                        continue;
+                    }
 
-        //             // check if they are who they say who they are
-        //             let header = {
-        //                 // we are passing the correct length, safe to use unwrap()
-        //                 let h = Header::deserialize_from(&buf[..]).unwrap();
-        //                 let wire_message = WireMessage::from_parts(h, &[]);
+                    // check if they are who they say who they are
+                    let id = {
+                        // we are passing the correct length, safe to use unwrap()
+                        let h = Header::deserialize_from(&buf[..]).unwrap();
+                        let wire_message = WireMessage::from_parts(h, &[]);
+                        if !wire_message.is_valid(&pk) {
+                            // invalid identity, drop connection
+                            continue;
+                        }
+                        h.from()
+                    };
 
-        //                 if wire_message,
-        //             };
+                    if let Err(_) = tx.send(Message::ConnectedRx(id, sock)).await {
+                        // if sending fails, the program terminated, so we exit
+                        return;
+                    }
+                }
+            }
+        });
 
-        //             if let Err(_) = tx.send(Message::ConnectedRx(id, sock)).await {
-        //                 // if sending fails, the program terminated, so we exit
-        //                 return;
-        //             }
-        //         }
-        //     }
-        // });
+        // share the secret key between other tasks, but keep it in a
+        // single memory location, with an `Arc`
+        let sk = Arc::new(c.sk);
 
-        // // share the secret key between other tasks, but keep it in a
-        // // single memory location, with an `Arc`
-        // let sk = Arc::new(c.sk);
+        // build peers map
+        let mut peers = HashMap::new();
+        for i in NodeId::targets(0..n) {
+            peers[i] = PeerData {
+                pk: c.pk[i],
+                addr: c.addrs[i],
+            }
+        }
 
-        // // build peers map
-        // let mut peers = HashMap::new();
-        // for i in NodeId::targets(0..n) {
-        //     peers[i] = PeerData {
-        //         pk: c.pk[i],
-        //         addr: c.addrs[i],
-        //     }
-        // }
-
-        // // success
-        // let node = Node {
-        //     id,
-        //     peers,
-        //     others_tx,
-        //     my_tx,
-        //     my_rx,
-        // };
-        // Ok((node, rogue))
+        // success
+        let node = Node {
+            id,
+            peers,
+            others_tx,
+            my_tx,
+            my_rx,
+        };
+        Ok((node, rogue))
     }
 }
