@@ -173,7 +173,11 @@ impl<O> Node<O> {
                 if let Ok(mut sock) = listener.accept().await {
                     // TODO: send a header with an empty payload, sign
                     // the header, extract id from header
-                    tx.send(Message::ConnectedRx(id, conn)).await.unwrap();
+
+                    if let Err(_) = tx.send(Message::ConnectedRx(id, conn)).await {
+                        // if sending fails, the program terminated, so we exit
+                        return;
+                    }
                 }
             }
         });
