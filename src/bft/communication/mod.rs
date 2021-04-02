@@ -20,10 +20,17 @@ use std::collections::HashMap;
 use futures::lock::Mutex;
 
 use crate::bft::error::*;
-use crate::bft::communication::socket::Socket;
+use crate::bft::communication::message::{
+    Message,
+};
+use crate::bft::communication::socket::{
+    self,
+    Socket,
+};
 use crate::bft::communication::channel::{
     MessageChannelTx,
     MessageChannelRx,
+    new_message_channel,
 };
 use crate::bft::crypto::signature::{
     PublicKey,
@@ -35,6 +42,17 @@ use crate::bft::crypto::signature::{
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[repr(transparent)]
 pub struct NodeId(u32);
+
+impl NodeId {
+    pub fn targets<I>(into_iterator: I) -> impl Iterator<Item = Self>
+    where
+        I: IntoIterator<Item = u32>,
+    {
+        into_iterator
+            .into_iter()
+            .map(Self)
+    }
+}
 
 impl From<u32> for NodeId {
     #[inline]
@@ -57,11 +75,22 @@ impl From<NodeId> for u32 {
     }
 }
 
+struct NodeTxData {
+    sk: Arc<KeyPair>,
+    sock: Mutex<Socket>,
+}
+
+struct PeerData {
+    addr: SocketAddr,
+    pk: PublicKey,
+}
+
 /// A `Node` contains handles to other processes in the system, and is
 /// the core component used in the wire communication between processes.
 pub struct Node<O> {
-    config: Arc<NodeConfig>,
-    others_tx: HashMap<NodeId, Arc<Mutex<Socket>>>,
+    id: NodeId,
+    peers: HashMap<NodeId, PeerData>,
+    others_tx: HashMap<NodeId, Arc<NodeTxData>>,
     my_tx: MessageChannelTx<O>,
     my_rx: MessageChannelTx<O>,
 }
@@ -109,18 +138,67 @@ impl NodeConfig {
 }
 
 impl<O> Node<O> {
+    // max no. of messages allowed in the channel
+    const CHAN_BOUND: usize = 128;
+
     /// Bootstrap a `Node`, i.e. create connections between itself and its
     /// peer nodes.
-    pub fn bootstrap(c: NodeConfig) -> Result<Self> {
-        unimplemented!()
-        //if c.addrs.len() < (3*cfg.f + 1) {
-        //    return Err("Invalid number of replicas")
-        //        .wrapped(ErrorKind::Communication);
-        //}
-        //if c.id.into() >= c.addrs.len() {
-        //    return Err("Invalid node ID")
-        //        .wrapped(ErrorKind::Communication);
-        //}
-        //let id = 
+    ///
+    /// Rogue messages (i.e. not pertaining to the bootstrapping protocol)
+    /// are returned in a `Vec`.
+    pub fn bootstrap(c: NodeConfig) -> Result<(Self, Vec<Message<O>>> {
+        if c.addrs.len() < (3*cfg.f + 1) {
+            return Err("Invalid number of replicas")
+                .wrapped(ErrorKind::Communication);
+        }
+        if c.id.into() >= c.addrs.len() {
+            return Err("Invalid node ID")
+                .wrapped(ErrorKind::Communication);
+        }
+
+        let id = c.id;
+        let n = cfg.addrs.len();
+
+        let listener = socket::bind(cfg.addrs[id]).await
+            .wrapped(ErrorKind::Communication)?;
+
+        let mut others_tx = HashMap::new();
+        let (tx, mut rx) = new_message_channel(Self::CHAN_BOUND);
+
+        // rx side (accept conns from replica)
+        let tx_clone = tx.clone();
+        tokio::spawn(async move {
+            let mut tx = tx_clone;
+            loop {
+                if let Ok(mut sock) = listener.accept().await {
+                    // TODO: send a header with an empty payload, sign
+                    // the header, extract id from header
+                    tx.send(Message::ConnectedRx(id, conn)).await.unwrap();
+                }
+            }
+        });
+
+        // share the secret key between other tasks, but keep it in a
+        // single memory location, with an `Arc`
+        let sk = Arc::new(c.sk);
+
+        // build peers map
+        let mut peers = HashMap::new();
+        for i in NodeId::targets(0..n) {
+            peers[i] = PeerData {
+                pk: c.pk[i],
+                addr: c.addrs[i],
+            }
+        }
+
+        // success
+        let node = Node {
+            id,
+            peers,
+            others_tx,
+            my_tx,
+            my_rx,
+        };
+        Ok((node, rogue))
     }
 }
