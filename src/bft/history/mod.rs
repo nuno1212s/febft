@@ -16,8 +16,6 @@ use crate::bft::communication::message::{
     ConsensusMessageKind,
 };
 
-const CHAN_BOUND: usize = 128;
-
 /// Information reported after a logging operation.
 pub enum Info {
     /// Nothing to report.
@@ -110,6 +108,9 @@ pub struct Logger<O> {
 }
 
 impl<O> Logger<O> {
+    // max no. of messages allowed in the channel
+    const CHAN_BOUND: usize = 128;
+
     /// Spawns a new logging task into the async runtime.
     ///
     /// A handle to the master message channel, `system_tx`, should be provided.
@@ -118,7 +119,7 @@ impl<O> Logger<O> {
         O: Send + 'static,
     {
         let log = Log::new();
-        let (my_tx, my_rx) = channel::new_bounded(CHAN_BOUND);
+        let (my_tx, my_rx) = channel::new_bounded(Self::CHAN_BOUND);
         let mut logger = Logger {
             my_rx,
             system_tx,
