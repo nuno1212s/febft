@@ -219,8 +219,11 @@ impl<'a> WireMessage<'a> {
     pub const CURRENT_VERSION: u32 = 0;
 
     /// Wraps a `Header` and a byte array payload into a `WireMessage`.
-    pub fn from_parts(header: Header, payload: &'a [u8]) -> Self {
-        Self { header, payload }
+    pub fn from_parts(header: Header, payload: &'a [u8]) -> Result<Self> {
+        if header.length() != payload.len() {
+            Err(Error::simple(ErrorKind::CommunicationMessage))
+        }
+        Ok(Self { header, payload })
     }
 
     /// Constructs a new message to be sent over the wire.
@@ -240,7 +243,7 @@ impl<'a> WireMessage<'a> {
             from,
             to,
         };
-        Self::from_parts(header, payload)
+        Self { header, payload }
     }
 
     fn digest_parts(from: u32, to: u32, payload: &[u8]) -> Digest {

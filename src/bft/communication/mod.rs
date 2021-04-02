@@ -176,8 +176,6 @@ impl<O> Node<O> {
             let mut buf = [0; Header::LENGTH];
             loop {
                 if let Ok(mut sock) = listener.accept().await {
-                    // TODO: receive a header with an empty payload, verify
-                    // the header signature, extract id from header
                     if let Err(_) = sock.read_exact(&mut buf[..]).await {
                         // errors reading -> faulty connection;
                         // drop this socket
@@ -187,17 +185,22 @@ impl<O> Node<O> {
                     // check if they are who they say who they are
                     let id = {
                         // we are passing the correct length, safe to use unwrap()
-                        let h = Header::deserialize_from(&buf[..]).unwrap();
-                        let wire_message = WireMessage::from_parts(h, &[]);
-                        if !wire_message.is_valid(&pk) {
-                            // invalid identity, drop connection
-                            continue;
+                        let header = Header::deserialize_from(&buf[..]).unwrap();
+
+                        // use an empty slice since we aren't expecting a payload;
+                        // errors will stem from sizes different than 0 in the header
+                        match WireMessage::from_parts(header, &[]) {
+                            Ok(wm) if !wm.is_valid(&pk) => {
+                                // invalid identity; drop connection
+                                continue;
+                            },
+                            Ok(wm) => wm.header().from(),
+                            Err(_) => continue,
                         }
-                        h.from()
                     };
 
                     if let Err(_) = tx.send(Message::ConnectedRx(id, sock)).await {
-                        // if sending fails, the program terminated, so we exit
+                        // if sending fails, the node terminated, so we exit
                         return;
                     }
                 }
