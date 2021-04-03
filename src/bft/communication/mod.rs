@@ -258,7 +258,7 @@ impl<O: Send + 'static> Node<O> {
         sk: Arc<KeyPair>,
         pk: Arc<HashMap<NodeId, PublicKey>>,
     ) {
-        let mut buf = [0; Header::LENGTH + NONCE_LENGTH];
+        let mut buf_header = [0; Header::LENGTH];
         let mut buf_nonce = [0; 2 * NONCE_LENGTH];
 
         // since we take the 2nd turn writing our
@@ -274,20 +274,20 @@ impl<O: Send + 'static> Node<O> {
 
         // write our nonce
         if let Err(_) = sock.write_all(&mut buf_nonce[NONCE_LENGTH..]).await {
-            // errors reading -> faulty connection;
+            // errors writing -> faulty connection;
             // drop this socket
             return;
         }
 
         // read the peer's header
-        if let Err(_) = sock.read_exact(&mut buf[..Header::Length]).await {
+        if let Err(_) = sock.read_exact(&mut buf_header[..]).await {
             // errors reading -> faulty connection;
             // drop this socket
             return;
         }
 
         // we are passing the correct length, safe to use unwrap()
-        let header = Header::deserialize_from(&buf[..]).unwrap();
+        let header = Header::deserialize_from(&buf_header[..]).unwrap();
 
         // check if they are who they say who they are
         let peer_id = {
@@ -312,9 +312,17 @@ impl<O: Send + 'static> Node<O> {
         };
 
         // send our own identity to confirm handshake
-        let wm = WireMessage::new(&sk, my_id, peer_id, &buf_nonce[..]);
+        let (header, _) = WireMessage::new(&sk, my_id, peer_id, &buf_nonce[..])
+            into_iter();
 
-        // ...
+        header.serialize_into(&mut buf_header[..]).unwrap();
+
+        // no need to send nonce again
+        if let Err(_) = sock.write_all(&mut buf_header[..]).await {
+            // errors writing -> faulty connection;
+            // drop this socket
+            return;
+        }
 
         tx.send(Message::ConnectedRx(id, sock)).await.unwrap_or(());
     }
