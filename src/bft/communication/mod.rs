@@ -125,7 +125,7 @@ pub struct NodeConfig {
     ///
     /// The number of stored addresses accounts for the `n` parameter
     /// of the BFT system, i.e. `n >= 3*f + 1`. For any `NodeConfig`
-    /// assigned to `c`, the IP address of `c.addrs[c.id.into()]`
+    /// assigned to `c`, the IP address of `c.addrs[&c.id]`
     /// should be equivalent to `localhost`.
     pub addrs: HashMap<NodeId, (SocketAddr, String)>,
     /// The list of public keys of all nodes in the system.
