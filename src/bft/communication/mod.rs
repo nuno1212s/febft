@@ -23,7 +23,10 @@ use smallvec::SmallVec;
 
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
-use crate::bft::communication::socket::Socket;
+use crate::bft::communication::socket::{
+    Socket,
+    Listener,
+};
 use crate::bft::communication::message::{
     Header,
     Message,
@@ -168,55 +171,7 @@ impl<O: Send + 'static> Node<O> {
         let (tx, mut rx) = new_message_channel::<O>(Self::CHAN_BOUND);
 
         // rx side (accept conns from replica)
-        let tx_clone = tx.clone();
-        let peer_keys_clone = Arc::clone(&peer_keys);
-        rt::spawn(async move {
-            let tx = tx_clone;
-            let pk = peer_keys_clone;
-            // TODO: check if we have terminated the node, and exit
-            loop {
-                if let Ok(mut sock) = listener.accept().await {
-                    let mut tx = tx.clone();
-                    let pk = Arc::clone(&pk);
-                    rt::spawn(async move {
-                        let mut buf = [0; Header::LENGTH];
-
-                        if let Err(_) = sock.read_exact(&mut buf[..]).await {
-                            // errors reading -> faulty connection;
-                            // drop this socket
-                            return;
-                        }
-
-                        // check if they are who they say who they are
-                        let id = {
-                            // we are passing the correct length, safe to use unwrap()
-                            let header = Header::deserialize_from(&buf[..]).unwrap();
-                            let id = header.from();
-
-                            // try to extract the public key associated with the
-                            // node in the header
-                            let pk = match pk.get(&id) {
-                                Some(pk) => pk,
-                                None => return,
-                            };
-
-                            // use an empty slice since we aren't expecting a payload;
-                            // errors will stem from sizes different than 0 in the header
-                            match WireMessage::from_parts(header, &[]) {
-                                Ok(wm) if !wm.is_valid(pk) => {
-                                    // invalid identity; drop connection
-                                    return;
-                                },
-                                Ok(_) => id,
-                                Err(_) => return,
-                            }
-                        };
-
-                        tx.send(Message::ConnectedRx(id, sock)).await.unwrap_or(());
-                    });
-                }
-            }
-        });
+        rt::spawn(Self::rx_side(listener, tx.clone(), Arc::clone(&peer_keys)));
 
         // TODO: tx side (connect to replica)
         /*
@@ -263,5 +218,61 @@ impl<O: Send + 'static> Node<O> {
             peer_addrs: cfg.addrs,
         };
         Ok((node, Vec::new()))
+    }
+
+    // TODO: check if we have terminated the node, and exit
+    async fn rx_side(
+        listener: Listener,
+        mut tx: MessageChannelTx<O>,
+        pk: Arc<HashMap<NodeId, PublicKey>>,
+    ) {
+            loop {
+                if let Ok(sock) = listener.accept().await {
+                    let tx = tx.clone();
+                    let pk = Arc::clone(&pk);
+                    rt::spawn(Self::rx_side_task(sock, tx, pk));
+                }
+            }
+    }
+
+    async fn rx_side_task(
+        mut sock: Socket,
+        mut tx: MessageChannelTx<O>,
+        pk: Arc<HashMap<NodeId, PublicKey>>,
+    ) {
+        let mut buf = [0; Header::LENGTH];
+
+        if let Err(_) = sock.read_exact(&mut buf[..]).await {
+            // errors reading -> faulty connection;
+            // drop this socket
+            return;
+        }
+
+        // check if they are who they say who they are
+        let id = {
+            // we are passing the correct length, safe to use unwrap()
+            let header = Header::deserialize_from(&buf[..]).unwrap();
+            let id = header.from();
+
+            // try to extract the public key associated with the
+            // node in the header
+            let pk = match pk.get(&id) {
+                Some(pk) => pk,
+                None => return,
+            };
+
+            // use an empty slice since we aren't expecting a payload;
+            // errors will stem from sizes different than 0 in the header
+            match WireMessage::from_parts(header, &[]) {
+                Ok(wm) if !wm.is_valid(pk) => {
+                    // invalid identity; drop connection
+                    return;
+                },
+                Ok(_) => id,
+                Err(_) => return,
+            }
+        };
+
+        tx.send(Message::ConnectedRx(id, sock)).await.unwrap_or(());
     }
 }
