@@ -242,6 +242,7 @@ impl<'a> WireMessage<'a> {
                     to.into(),
                     payload,
                 );
+                // safety: signatures have repr(transparent)
                 unsafe { std::mem::transmute(signature) }
             })
             .unwrap_or([0; Signature::LENGTH]);
