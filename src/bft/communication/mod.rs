@@ -18,10 +18,19 @@ use std::net::SocketAddr;
 use std::collections::HashMap;
 use std::time::Duration;
 
+use rustls::{
+    ClientConfig,
+    ServerConfig,
+};
+use async_tls::{
+    server::TlsStream as TlsStreamSrv,
+    client::TlsStream as TlsStreamCli,
+    TlsConnector,
+    TlsAcceptor,
+};
 use futures_timer::Delay;
 use futures::lock::Mutex;
 use smallvec::SmallVec;
-use rand_core::{RngCore, OsRng};
 use futures::io::{
     AsyncReadExt,
     AsyncWriteExt,
@@ -88,7 +97,7 @@ impl From<NodeId> for u32 {
 
 struct NodeTxData {
     sk: Arc<KeyPair>,
-    sock: Mutex<Socket>,
+    sock: Mutex<TlsStreamSrv<Socket>>,
 }
 
 /// A `Node` contains handles to other processes in the system, and is
@@ -117,32 +126,14 @@ pub struct NodeConfig {
     /// assigned to `c`, the IP address of `c.addrs[c.id.into()]`
     /// should be equivalent to `localhost`.
     pub addrs: HashMap<NodeId, SocketAddr>,
-    /// The secret key of this particular `Node`.
-    pub sk: KeyPair,
     /// The list of public keys of all nodes in the system.
     pub pk: HashMap<NodeId, PublicKey>,
-}
-
-impl NodeConfig {
-    /// Returns the address of the running `Node`.
-    pub fn my_addr(&self) -> SocketAddr {
-        self.addr_of(self.id)
-    }
-
-    /// Returns the address of a node with id `i`.
-    pub fn addr_of(&self, i: NodeId) -> SocketAddr {
-        self.addrs[&i]
-    }
-
-    /// Returns a reference to our `KeyPair`.
-    pub fn key_pair(&self) -> &KeyPair {
-        &self.sk
-    }
-
-    /// Returns a reference to the `PublicKey` of the node `i`.
-    pub fn public_key_of(&self, i: NodeId) -> &PublicKey {
-        &self.pk[&i]
-    }
+    /// The secret key of this particular `Node`.
+    pub sk: KeyPair,
+    /// The TLS configuration used to connect to peer nodes.
+    pub client_config: ClientConfig,
+    /// The TLS configuration used to accept connections from peer nodes.
+    pub server_config: ServerConfig,
 }
 
 impl<O: Send + 'static> Node<O> {
@@ -151,9 +142,6 @@ impl<O: Send + 'static> Node<O> {
 
     // max no. of bytes to inline before doing a heap alloc
     const BUFSIZ_RECV: usize = 16384;
-
-    // number of random bytes to send on handshake
-    const NONCE_LENGTH: usize = 8;
 
     /// Bootstrap a `Node`, i.e. create connections between itself and its
     /// peer nodes.
@@ -176,19 +164,22 @@ impl<O: Send + 'static> Node<O> {
         let listener = socket::bind(cfg.addrs[&id]).await
             .wrapped(ErrorKind::Communication)?;
 
-        let mut peer_tx = HashMap::new();
-        let peer_keys = Arc::new(cfg.pk);
         let (tx, rx) = new_message_channel::<O>(Self::CHAN_BOUND);
+        let acceptor: TlsAcceptor = cfg.server_config.into();
 
         // rx side (accept conns from replica)
-        rt::spawn(Self::rx_side_accept(id, listener, tx.clone(), Arc::clone(&peer_keys)));
+        rt::spawn(Self::rx_side_accept(id, listener, acceptor, tx.clone()));
+
+        // tx side (connect to replica)
+        Self::tx_side_connect(id, tx.clone(), &cfg.addrs);
 
         // share the secret key between other tasks, but keep it in a
         // single memory location, with an `Arc`
         let my_key = Arc::new(cfg.sk);
 
-        // tx side (connect to replica)
-        Self::tx_side_connect(id, Arc::clone(&my_key), tx.clone(), &cfg.addrs);
+        // peer data
+        let mut peer_tx = HashMap::new();
+        let peer_keys = Arc::new(cfg.pk);
 
         // success
         let node = Node {
@@ -206,78 +197,64 @@ impl<O: Send + 'static> Node<O> {
     #[inline]
     fn tx_side_connect(
         id: NodeId,
-        sk: Arc<KeyPair>,
         tx: MessageChannelTx<O>,
         addrs: &HashMap<NodeId, SocketAddr>,
     ) {
-        for other_id in NodeId::targets((0..n).filter(|&i| i != id)) {
-            let tx = tx.clone();
-            let sk = Arc::clone(&sk);
-            let addr = addrs[&other_id];
-            rt::spawn(async move {
-                // try 10 times
-                for _ in 0..10 {
-                    if let Ok(mut sock) = socket::connect(addr).await {
-                        conn.write_u32(id).await.unwrap();
-                        tx.send(Message::ConnectedTx(other_id, conn)).await.unwrap();
-                        return;
-                    }
-                    // sleep for 1 second and retry
-                    Delay::new(Duration::from_secs(1)).await;
-                }
-                // announce we have failed to connect to the peer node
-                let e = Error::simple(ErrorKind::Communication);
-                tx.send(Message::Error(other_id, e)).await.unwrap();
-            });
-        }
+        unimplemented!()
+        //for other_id in NodeId::targets((0..n).filter(|&i| i != id)) {
+        //    let tx = tx.clone();
+        //    let sk = Arc::clone(&sk);
+        //    let addr = addrs[&other_id];
+        //    rt::spawn(async move {
+        //        // try 10 times
+        //        for _ in 0..10 {
+        //            if let Ok(mut sock) = socket::connect(addr).await {
+        //                conn.write_u32(id).await.unwrap();
+        //                tx.send(Message::ConnectedTx(other_id, conn)).await.unwrap();
+        //                return;
+        //            }
+        //            // sleep for 1 second and retry
+        //            Delay::new(Duration::from_secs(1)).await;
+        //        }
+        //        // announce we have failed to connect to the peer node
+        //        let e = Error::simple(ErrorKind::Communication);
+        //        tx.send(Message::Error(other_id, e)).await.unwrap();
+        //    });
+        //}
     }
 
     // TODO: check if we have terminated the node, and exit
     async fn rx_side_accept(
         my_id: NodeId,
         listener: Listener,
-        mut tx: MessageChannelTx<O>,
-        sk: Arc<KeyPair>,
-        pk: Arc<HashMap<NodeId, PublicKey>>,
+        acceptor: TlsAcceptor,
+        tx: MessageChannelTx<O>,
     ) {
         loop {
             if let Ok(sock) = listener.accept().await {
                 let tx = tx.clone();
-                let sk = Arc::clone(&sk);
-                let pk = Arc::clone(&pk);
-                rt::spawn(Self::rx_side_accept_task(sock, tx, sk, pk));
+                let acceptor = acceptor.clone();
+                rt::spawn(Self::rx_side_accept_task(my_id, acceptor, sock, tx));
             }
         }
     }
 
-    // performs a cryptographic handshake with a peer node
+    // performs a cryptographic handshake with a peer node;
+    // header doesn't need to be signed, since we won't be
+    // storing this message in the history log
     async fn rx_side_accept_task(
         my_id: NodeId,
-        mut sock: Socket,
+        acceptor: TlsAcceptor,
+        sock: Socket,
         mut tx: MessageChannelTx<O>,
-        sk: Arc<KeyPair>,
-        pk: Arc<HashMap<NodeId, PublicKey>>,
     ) {
         let mut buf_header = [0; Header::LENGTH];
-        let mut buf_nonce = [0; 2 * NONCE_LENGTH];
 
-        // since we take the 2nd turn writing our
-        // nonce, save it on the 2nd half of the buffer
-        OsRng.fill_bytes(&mut buf_nonce[NONCE_LENGTH..]);
-
-        // read the peer's nonce
-        if let Err(_) = sock.read_exact(&mut buf_nonce[..NONCE_LENGTH]).await {
-            // errors reading -> faulty connection;
-            // drop this socket
-            return;
-        }
-
-        // write our nonce
-        if let Err(_) = sock.write_all(&mut buf_nonce[NONCE_LENGTH..]).await {
-            // errors writing -> faulty connection;
-            // drop this socket
-            return;
-        }
+        // TLS handshake; drop connection if it fails
+        let mut sock = match acceptor.accept(sock).await {
+            Ok(s) => s,
+            Err(_) => return,
+        };
 
         // read the peer's header
         if let Err(_) = sock.read_exact(&mut buf_header[..]).await {
@@ -289,41 +266,13 @@ impl<O: Send + 'static> Node<O> {
         // we are passing the correct length, safe to use unwrap()
         let header = Header::deserialize_from(&buf_header[..]).unwrap();
 
-        // check if they are who they say who they are
-        let peer_id = {
-            let id = header.from();
-
-            // try to extract the public key associated with the
-            // node in the header
-            let pk = match pk.get(&id) {
-                Some(pk) => pk,
-                None => return,
-            };
-
-            // confirm peer identity
-            match WireMessage::from_parts(header, &buf_nonce[..]) {
-                Ok(wm) if !wm.is_valid(my_id, pk) => {
-                    // invalid identity; drop connection
-                    return;
-                },
-                Ok(_) => id,
-                Err(_) => return,
-            }
+        // extract peer id
+        let peer_id = match WireMessage::from_parts(header, &[]) {
+            Ok(wm) if !wm.is_valid(my_id, None) => return,
+            Ok(wm) => wm.header().from(),
+            Err(_) => return,
         };
 
-        // send our own identity to confirm handshake
-        let (header, _) = WireMessage::new(&sk, my_id, peer_id, &buf_nonce[..])
-            into_iter();
-
-        header.serialize_into(&mut buf_header[..]).unwrap();
-
-        // no need to send nonce again
-        if let Err(_) = sock.write_all(&mut buf_header[..]).await {
-            // errors writing -> faulty connection;
-            // drop this socket
-            return;
-        }
-
-        tx.send(Message::ConnectedRx(id, sock)).await.unwrap_or(());
+        tx.send(Message::ConnectedRx(peer_id, sock)).await.unwrap_or(());
     }
 }

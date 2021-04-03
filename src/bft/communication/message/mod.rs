@@ -6,6 +6,11 @@ use std::mem::MaybeUninit;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
+use async_tls::{
+    server::TlsStream as TlsStreamSrv,
+    client::TlsStream as TlsStreamCli,
+};
+
 use crate::bft::crypto::hash::Context;
 use crate::bft::crypto::signature::{
     Signature,
@@ -53,10 +58,10 @@ pub enum Message<O> {
     System(Header, SystemMessage<O>),
     /// A client with id `NodeId` has finished connecting to the socket `Socket`.
     /// This socket should only perform write operations.
-    ConnectedTx(NodeId, Socket),
+    ConnectedTx(NodeId, TlsStreamCli<Socket>),
     /// A client with id `NodeId` has finished connecting to the socket `Socket`.
     /// This socket should only perform read operations.
-    ConnectedRx(NodeId, Socket),
+    ConnectedRx(NodeId, TlsStreamSrv<Socket>),
     /// Errors reported by asynchronous tasks.
     Error(NodeId /* FIXME: Option<NodeId> ? */, Error),
 }
@@ -303,8 +308,8 @@ impl<'a> WireMessage<'a> {
     }
 
     /// Checks for the correctness of the `WireMessage`. This implies
-    /// checking its signature.
-    pub fn is_valid(&self, destination: NodeId, pk: &PublicKey) -> bool {
+    /// checking its signature, if a `PublicKey` is provided.
+    pub fn is_valid(&self, destination: NodeId, public_key: Option<&PublicKey>) -> bool {
         let destination: u32 = destination.into();
         let preliminary_check_failed =
             self.header.version != WireMessage::CURRENT_VERSION
@@ -313,16 +318,20 @@ impl<'a> WireMessage<'a> {
         if preliminary_check_failed {
             return false;
         }
-        // unwrap() should be safe because of the `Header`
-        let signature = Signature::from_bytes(&self.header.signature[..])
-            .unwrap();
-        Self::verify_parts(
-            pk,
-            &signature,
-            self.header.from,
-            self.header.to,
-            self.payload,
-        ).is_ok()
+        public_key
+            .map(|pk| {
+                // unwrap() should be safe because of the `Header`
+                let signature = Signature::from_bytes(&self.header.signature[..])
+                    .unwrap();
+                Self::verify_parts(
+                    pk,
+                    &signature,
+                    self.header.from,
+                    self.header.to,
+                    self.payload,
+                ).is_ok()
+            })
+            .unwrap_or(true)
     }
 }
 
