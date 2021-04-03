@@ -313,8 +313,7 @@ impl<'a> WireMessage<'a> {
         let destination: u32 = destination.into();
         let preliminary_check_failed =
             self.header.version != WireMessage::CURRENT_VERSION
-            || self.header.to != destination
-            || self.header.length != self.payload.len() as u64;
+            || self.header.to != destination;
         if preliminary_check_failed {
             return false;
         }
