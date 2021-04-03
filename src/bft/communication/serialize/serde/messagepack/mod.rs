@@ -11,7 +11,7 @@ where
 {
     let mut w = buf.writer();
     rmp_serde::encode::write(&mut w, &m)
-        .map(|()| w.into_inner())
+        .map(|_| w)
         .wrapped(ErrorKind::CommunicationSerializeSerdeMessagepack)
 }
 

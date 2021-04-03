@@ -10,7 +10,7 @@ where
     W: Write,
 {
     bincode::serialize_into(&mut w, &m)
-        .map(|()| w.into_inner())
+        .map(|_| w)
         .wrapped(ErrorKind::CommunicationSerializeSerdeBincode)
 }
 

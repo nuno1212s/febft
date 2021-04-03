@@ -10,7 +10,7 @@ where
     W: Write,
 {
     serde_cbor::to_writer(&mut w, &m)
-        .map(|()| w.into_inner())
+        .map(|_| w)
         .wrapped(ErrorKind::CommunicationSerializeSerdeCbor)
 }
 
