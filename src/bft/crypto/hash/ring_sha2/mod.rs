@@ -4,6 +4,9 @@ use ring::digest::{
     SHA256_OUTPUT_LEN,
 };
 
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
+
 use crate::bft::error::*;
 
 pub struct Context {
@@ -12,6 +15,7 @@ pub struct Context {
 
 #[derive(Copy, Clone)]
 #[repr(transparent)]
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct Digest([u8; Digest::LENGTH]);
 
 impl Context {

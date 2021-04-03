@@ -3,6 +3,9 @@
 #[cfg(feature = "crypto_hash_ring_sha2")]
 mod ring_sha2;
 
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
+
 use crate::bft::error::*;
 
 /// The type `Context` represents an on-going hash digest calculation.
@@ -14,6 +17,7 @@ pub struct Context {
 /// Represents a hash digest.
 #[derive(Copy, Clone)]
 #[repr(transparent)]
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct Digest {
     #[cfg(feature = "crypto_hash_ring_sha2")]
     inner: ring_sha2::Digest,
