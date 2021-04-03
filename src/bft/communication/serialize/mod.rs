@@ -78,3 +78,44 @@ where
     #[cfg(feature = "serialize_serde_cbor")]
     { serde::cbor::deserialize_message(r) }
 }
+
+////////////////////////////////////////////////////////////
+//
+//    WARNING !! !! !!
+//    ================
+//
+//    gore below :-)
+//
+////////////////////////////////////////////////////////////
+
+/// Marker trait to abstract between different serialization
+/// crates.
+#[cfg(feature = "serialize_serde")]
+pub trait Marshal: Serialize {}
+
+/// Marker trait to abstract between different serialization
+/// crates.
+#[cfg(feature = "serialize_capnp")]
+pub trait Marshal: ToCapnp {}
+
+/// Marker trait to abstract between different serialization
+/// crates.
+#[cfg(feature = "serialize_serde")]
+pub trait Unmarshal: for<'de> Deserialize<'de> {}
+
+/// Marker trait to abstract between different serialization
+/// crates.
+#[cfg(feature = "serialize_capnp")]
+pub trait Unmarshal: FromCapnp {}
+
+#[cfg(feature = "serialize_serde")]
+impl<T: Serialize> Marshal for T {}
+
+#[cfg(feature = "serialize_capnp")]
+impl<T: ToCapnp> Marshal for T {}
+
+#[cfg(feature = "serialize_serde")]
+impl<T: for<'de> Deserialize<'de>> Unmarshal for T {}
+
+#[cfg(feature = "serialize_capnp")]
+impl<T: FromCapnp> Unmarshal for T {}
