@@ -39,6 +39,8 @@ use futures::io::{
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::serialize::{
+    Marshal,
+    Unmarshal,
     serialize_message,
     deserialize_message,
 };
@@ -85,6 +87,13 @@ impl From<u32> for NodeId {
     }
 }
 
+impl From<usize> for NodeId {
+    #[inline]
+    fn from(id: usize) -> NodeId {
+        NodeId(id as u32)
+    }
+}
+
 impl From<NodeId> for usize {
     #[inline]
     fn from(id: NodeId) -> usize {
@@ -101,7 +110,7 @@ impl From<NodeId> for u32 {
 
 struct NodeTxData {
     sk: Arc<KeyPair>,
-    sock: Mutex<TlsStreamSrv<Socket>>,
+    sock: Mutex<TlsStreamCli<Socket>>,
 }
 
 /// A `Node` contains handles to other processes in the system, and is
@@ -142,12 +151,16 @@ pub struct NodeConfig {
     pub server_config: ServerConfig,
 }
 
-impl<O: Send + 'static> Node<O> {
-    // max no. of messages allowed in the channel
-    const CHAN_BOUND: usize = 128;
+// max no. of messages allowed in the channel
+const NODE_CHAN_BOUND: usize = 128;
 
-    // max no. of bytes to inline before doing a heap alloc
-    const BUFSIZ_RECV: usize = 16384;
+// max no. of bytes to inline before doing a heap alloc
+const NODE_BUFSIZ_RECV: usize = 16384;
+
+impl<O> Node<O>
+where
+    O: Send + Marshal + Unmarshal + 'static,
+{
 
     /// Bootstrap a `Node`, i.e. create connections between itself and its
     /// peer nodes.
@@ -170,10 +183,10 @@ impl<O: Send + 'static> Node<O> {
         let listener = socket::bind(cfg.addrs[&id].0).await
             .wrapped(ErrorKind::Communication)?;
 
-        let (tx, mut rx) = new_message_channel::<O>(Self::CHAN_BOUND);
+        let (tx, rx) = new_message_channel::<O>(NODE_CHAN_BOUND);
         let acceptor: TlsAcceptor = cfg.server_config.into();
         let connector: TlsConnector = cfg.client_config.into();
-        let max_id: NodeId = (cfg.addr.len() - 1).into();
+        let max_id: NodeId = (cfg.addrs.len() - 1).into();
 
         // rx side (accept conns from replica)
         rt::spawn(Self::rx_side_accept(max_id, id, listener, acceptor, tx.clone()));
@@ -185,11 +198,10 @@ impl<O: Send + 'static> Node<O> {
         // single memory location, with an `Arc`
         let my_key = Arc::new(cfg.sk);
 
-        // peer data
-        let mut peer_tx = HashMap::new();
+        // node def
+        let peer_tx = HashMap::new();
         let peer_keys = Arc::new(cfg.pk);
-
-        let node = Node {
+        let mut node = Node {
             id,
             my_key,
             my_tx: tx,
@@ -202,10 +214,10 @@ impl<O: Send + 'static> Node<O> {
 
         // receive peer connections from channel
         let mut rogue = Vec::new();
-        let mut c = vec![0; cfg.addrs.len()];
+        let mut c = vec![0; node.peer_addrs.len()];
 
         while !c.iter().all(|&i| i == 2) {
-            let message = rx.recv().await.unwrap();
+            let message = node.my_rx.recv().await.unwrap();
 
             match message {
                 Message::ConnectedTx(id, sock) => {
@@ -231,8 +243,8 @@ impl<O: Send + 'static> Node<O> {
     }
 
     pub fn handle_connected_tx(&mut self, peer_id: NodeId, sock: TlsStreamCli<Socket>) {
-        self.peer_tx.insert(id, Arc::new(NodeTxData {
-            sk: Arc::clone(&my_key),
+        self.peer_tx.insert(peer_id, Arc::new(NodeTxData {
+            sk: Arc::clone(&self.my_key),
             sock: Mutex::new(sock),
         }));
     }
@@ -240,7 +252,7 @@ impl<O: Send + 'static> Node<O> {
     pub fn handle_connected_rx(&self, peer_id: NodeId, mut sock: TlsStreamSrv<Socket>) {
         let mut tx = self.my_tx.clone();
         rt::spawn(async move {
-            let mut buf: SmallVec<[_; Self::BUFSIZ_RECV]> = SmallVec::new();
+            let mut buf: SmallVec<[_; NODE_BUFSIZ_RECV]> = SmallVec::new();
 
             // TODO
             //  - verify signatures???
