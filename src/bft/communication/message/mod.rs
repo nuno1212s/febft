@@ -62,8 +62,12 @@ pub enum Message<O> {
     /// A client with id `NodeId` has finished connecting to the socket `Socket`.
     /// This socket should only perform read operations.
     ConnectedRx(NodeId, TlsStreamSrv<Socket>),
-    /// Errors reported by asynchronous tasks.
-    Error(NodeId /* FIXME: Option<NodeId> ? */, Error),
+    /// Send half of node with id `NodeId` has disconnected.
+    DisconnectedTx(NodeId),
+    /// Receive half of node with id `Some(NodeId)` has disconnected.
+    ///
+    /// The id is only equal to `None` during a `Node` bootstrap process.
+    DisconnectedRx(Option<NodeId>),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
