@@ -304,9 +304,11 @@ impl<'a> WireMessage<'a> {
 
     /// Checks for the correctness of the `WireMessage`. This implies
     /// checking its signature.
-    pub fn is_valid(&self, pk: &PublicKey) -> bool {
+    pub fn is_valid(&self, destination: NodeId, pk: &PublicKey) -> bool {
+        let destination: u32 = destination.into();
         let preliminary_check_failed =
             self.header.version != WireMessage::CURRENT_VERSION
+            || self.header.to != destination
             || self.header.length != self.payload.len() as u64;
         if preliminary_check_failed {
             return false;
