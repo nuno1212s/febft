@@ -106,10 +106,11 @@ pub struct Node<O> {
     id: NodeId,
     my_key: Arc<KeyPair>,
     peer_keys: Arc<HashMap<NodeId, PublicKey>>,
-    peer_addrs: HashMap<NodeId, SocketAddr>,
-    peer_tx: HashMap<NodeId, Arc<NodeTxData>>,
     my_tx: MessageChannelTx<O>,
     my_rx: MessageChannelRx<O>,
+    peer_addrs: HashMap<NodeId, (SocketAddr, String)>,
+    peer_tx: HashMap<NodeId, Arc<NodeTxData>>,
+    connector: TlsConnector,
 }
 
 /// Represents a configuration used to bootstrap a `Node`.
@@ -119,13 +120,14 @@ pub struct NodeConfig {
     pub f: usize,
     /// The id of this `Node`.
     pub id: NodeId,
-    /// The addresses of all nodes in the system.
+    /// The addresses of all nodes in the system, as well as the
+    /// domain name associated with this address.
     ///
     /// The number of stored addresses accounts for the `n` parameter
     /// of the BFT system, i.e. `n >= 3*f + 1`. For any `NodeConfig`
     /// assigned to `c`, the IP address of `c.addrs[c.id.into()]`
     /// should be equivalent to `localhost`.
-    pub addrs: HashMap<NodeId, SocketAddr>,
+    pub addrs: HashMap<NodeId, (SocketAddr, String)>,
     /// The list of public keys of all nodes in the system.
     pub pk: HashMap<NodeId, PublicKey>,
     /// The secret key of this particular `Node`.
@@ -149,29 +151,29 @@ impl<O: Send + 'static> Node<O> {
     /// Rogue messages (i.e. not pertaining to the bootstrapping protocol)
     /// are returned in a `Vec`.
     pub async fn bootstrap(cfg: NodeConfig) -> Result<(Self, Vec<Message<O>>)> {
+        let id = cfg.id;
+
         if cfg.addrs.len() < (3*cfg.f + 1) {
             return Err("Invalid number of replicas")
                 .wrapped(ErrorKind::Communication);
         }
-        if usize::from(cfg.id) >= cfg.addrs.len() {
+        if usize::from(id) >= cfg.addrs.len() {
             return Err("Invalid node ID")
                 .wrapped(ErrorKind::Communication);
         }
 
-        let id = cfg.id;
-        let n = cfg.addrs.len();
-
-        let listener = socket::bind(cfg.addrs[&id]).await
+        let listener = socket::bind(cfg.addrs[&id].0).await
             .wrapped(ErrorKind::Communication)?;
 
         let (tx, rx) = new_message_channel::<O>(Self::CHAN_BOUND);
         let acceptor: TlsAcceptor = cfg.server_config.into();
+        let connector: TlsConnector = cfg.client_config.into();
 
         // rx side (accept conns from replica)
         rt::spawn(Self::rx_side_accept(id, listener, acceptor, tx.clone()));
 
         // tx side (connect to replica)
-        Self::tx_side_connect(id, tx.clone(), &cfg.addrs);
+        Self::tx_side_connect(id, connector.clone(), tx.clone(), &cfg.addrs);
 
         // share the secret key between other tasks, but keep it in a
         // single memory location, with an `Arc`
@@ -190,37 +192,81 @@ impl<O: Send + 'static> Node<O> {
             peer_tx,
             peer_keys,
             peer_addrs: cfg.addrs,
+            connector,
         };
         Ok((node, Vec::new()))
     }
 
     #[inline]
     fn tx_side_connect(
-        id: NodeId,
+        my_id: NodeId,
+        connector: TlsConnector,
         tx: MessageChannelTx<O>,
-        addrs: &HashMap<NodeId, SocketAddr>,
+        addrs: &HashMap<NodeId, (SocketAddr, String)>,
     ) {
-        unimplemented!()
-        //for other_id in NodeId::targets((0..n).filter(|&i| i != id)) {
-        //    let tx = tx.clone();
-        //    let sk = Arc::clone(&sk);
-        //    let addr = addrs[&other_id];
-        //    rt::spawn(async move {
-        //        // try 10 times
-        //        for _ in 0..10 {
-        //            if let Ok(mut sock) = socket::connect(addr).await {
-        //                conn.write_u32(id).await.unwrap();
-        //                tx.send(Message::ConnectedTx(other_id, conn)).await.unwrap();
-        //                return;
-        //            }
-        //            // sleep for 1 second and retry
-        //            Delay::new(Duration::from_secs(1)).await;
-        //        }
-        //        // announce we have failed to connect to the peer node
-        //        let e = Error::simple(ErrorKind::Communication);
-        //        tx.send(Message::Error(other_id, e)).await.unwrap();
-        //    });
-        //}
+        let n = addrs.len() as u32;
+        for other_id in NodeId::targets(0..n).filter(|&id| id != my_id) {
+            let tx = tx.clone();
+            let addr = addrs[&other_id].clone();
+            let connector = connector.clone();
+            rt::spawn(Self::tx_side_connect_task(my_id, other_id, connector, tx, addr));
+        }
+    }
+
+    async fn tx_side_connect_task(
+        my_id: NodeId,
+        other_id: NodeId,
+        connector: TlsConnector,
+        mut tx: MessageChannelTx<O>,
+        (addr, hostname): (SocketAddr, String),
+    ) {
+        const RETRY: usize = 10;
+        // notes
+        // ========
+        //
+        // 1) not an issue if `tx` is closed, this is not a
+        // permanently running task, so channel send failures
+        // are tolerated
+        //
+        // 2) try to connect up to `RETRY` times, then announce
+        // failure with a channel send op
+        for _ in 0..RETRY {
+            if let Ok(sock) = socket::connect(addr).await {
+                // TLS handshake; drop connection if it fails
+                let mut sock = match connector.connect(hostname, sock).await {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+
+                // create header
+                let (header, _) = WireMessage::new(
+                    my_id,
+                    other_id,
+                    &[],
+                    None,
+                ).into_inner();
+
+                // serialize header
+                let mut buf = [0; Header::LENGTH];
+                header.serialize_into(&mut buf[..]).unwrap();
+
+                // send header
+                if let Err(_) = sock.write_all(&buf[..]).await {
+                    // errors writing -> faulty connection;
+                    // drop this socket
+                    return;
+                }
+
+                // success
+                tx.send(Message::ConnectedTx(other_id, sock)).await.unwrap_or(());
+                return;
+            }
+            // sleep for 1 second and retry
+            Delay::new(Duration::from_secs(1)).await;
+        }
+        // announce we have failed to connect to the peer node
+        let e = Error::simple(ErrorKind::Communication);
+        tx.send(Message::Error(other_id, e)).await.unwrap_or(());
     }
 
     // TODO: check if we have terminated the node, and exit

@@ -233,14 +233,18 @@ impl<'a> WireMessage<'a> {
     }
 
     /// Constructs a new message to be sent over the wire.
-    pub fn new(sk: &KeyPair, from: NodeId, to: NodeId, payload: &'a [u8]) -> Self {
-        let signature = Self::sign_parts(
-            sk,
-            from.into(),
-            to.into(),
-            payload,
-        );
-        let signature = unsafe { std::mem::transmute(signature) };
+    pub fn new(from: NodeId, to: NodeId, payload: &'a [u8], sk: Option<&KeyPair>) -> Self {
+        let signature = sk
+            .map(|sk| {
+                let signature = Self::sign_parts(
+                    sk,
+                    from.into(),
+                    to.into(),
+                    payload,
+                );
+                unsafe { std::mem::transmute(signature) }
+            })
+            .unwrap_or([0; Signature::LENGTH]);
         let (from, to) = (from.into(), to.into());
         let header = Header {
             version: Self::CURRENT_VERSION,
