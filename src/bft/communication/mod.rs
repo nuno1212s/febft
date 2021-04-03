@@ -205,17 +205,17 @@ impl<O: Send + 'static> Node<O> {
         addrs: &HashMap<NodeId, (SocketAddr, String)>,
     ) {
         let n = addrs.len() as u32;
-        for other_id in NodeId::targets(0..n).filter(|&id| id != my_id) {
+        for peer_id in NodeId::targets(0..n).filter(|&id| id != my_id) {
             let tx = tx.clone();
-            let addr = addrs[&other_id].clone();
+            let addr = addrs[&peer_id].clone();
             let connector = connector.clone();
-            rt::spawn(Self::tx_side_connect_task(my_id, other_id, connector, tx, addr));
+            rt::spawn(Self::tx_side_connect_task(my_id, peer_id, connector, tx, addr));
         }
     }
 
     async fn tx_side_connect_task(
         my_id: NodeId,
-        other_id: NodeId,
+        peer_id: NodeId,
         connector: TlsConnector,
         mut tx: MessageChannelTx<O>,
         (addr, hostname): (SocketAddr, String),
@@ -241,7 +241,7 @@ impl<O: Send + 'static> Node<O> {
                 // create header
                 let (header, _) = WireMessage::new(
                     my_id,
-                    other_id,
+                    peer_id,
                     &[],
                     None,
                 ).into_inner();
@@ -258,7 +258,7 @@ impl<O: Send + 'static> Node<O> {
                 }
 
                 // success
-                tx.send(Message::ConnectedTx(other_id, sock)).await.unwrap_or(());
+                tx.send(Message::ConnectedTx(peer_id, sock)).await.unwrap_or(());
                 return;
             }
             // sleep for 1 second and retry
@@ -266,7 +266,7 @@ impl<O: Send + 'static> Node<O> {
         }
         // announce we have failed to connect to the peer node
         let e = Error::simple(ErrorKind::Communication);
-        tx.send(Message::Error(other_id, e)).await.unwrap_or(());
+        tx.send(Message::Error(peer_id, e)).await.unwrap_or(());
     }
 
     // TODO: check if we have terminated the node, and exit
