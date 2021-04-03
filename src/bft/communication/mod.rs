@@ -268,7 +268,7 @@ impl<O: Send + 'static> Node<O> {
 
         // extract peer id
         let peer_id = match WireMessage::from_parts(header, &[]) {
-            Ok(wm) if !wm.is_valid(my_id, None) => return,
+            Ok(wm) if wm.header().to() != my_id => return,
             Ok(wm) => wm.header().from(),
             Err(_) => return,
         };

@@ -225,10 +225,11 @@ impl<'a> WireMessage<'a> {
 
     /// Wraps a `Header` and a byte array payload into a `WireMessage`.
     pub fn from_parts(header: Header, payload: &'a [u8]) -> Result<Self> {
-        if header.payload_length() != payload.len() {
+        let wm = Self { header, payload };
+        if !wm.is_valid(None) {
             return Err(Error::simple(ErrorKind::CommunicationMessage));
         }
-        Ok(Self { header, payload })
+        Ok(wm)
     }
 
     /// Constructs a new message to be sent over the wire.
@@ -309,11 +310,10 @@ impl<'a> WireMessage<'a> {
 
     /// Checks for the correctness of the `WireMessage`. This implies
     /// checking its signature, if a `PublicKey` is provided.
-    pub fn is_valid(&self, destination: NodeId, public_key: Option<&PublicKey>) -> bool {
-        let destination: u32 = destination.into();
+    pub fn is_valid(&self, public_key: Option<&PublicKey>) -> bool {
         let preliminary_check_failed =
             self.header.version != WireMessage::CURRENT_VERSION
-            || self.header.to != destination;
+            || self.header.length != self.payload.len() as u64;
         if preliminary_check_failed {
             return false;
         }
