@@ -121,7 +121,7 @@ pub struct NodeConfig {
     /// The id of this `Node`.
     pub id: NodeId,
     /// The addresses of all nodes in the system, as well as the
-    /// domain name associated with this address.
+    /// domain name associated with each address.
     ///
     /// The number of stored addresses accounts for the `n` parameter
     /// of the BFT system, i.e. `n >= 3*f + 1`. For any `NodeConfig`
@@ -153,6 +153,7 @@ impl<O: Send + 'static> Node<O> {
     pub async fn bootstrap(cfg: NodeConfig) -> Result<(Self, Vec<Message<O>>)> {
         let id = cfg.id;
 
+        // initial checks of correctness
         if cfg.addrs.len() < (3*cfg.f + 1) {
             return Err("Invalid number of replicas")
                 .wrapped(ErrorKind::Communication);
