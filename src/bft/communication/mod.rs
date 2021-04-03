@@ -38,6 +38,10 @@ use futures::io::{
 
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
+use crate::bft::communication::serialize::{
+    serialize_message,
+    deserialize_message,
+};
 use crate::bft::communication::socket::{
     Socket,
     Listener,
@@ -166,12 +170,13 @@ impl<O: Send + 'static> Node<O> {
         let listener = socket::bind(cfg.addrs[&id].0).await
             .wrapped(ErrorKind::Communication)?;
 
-        let (tx, rx) = new_message_channel::<O>(Self::CHAN_BOUND);
+        let (tx, mut rx) = new_message_channel::<O>(Self::CHAN_BOUND);
         let acceptor: TlsAcceptor = cfg.server_config.into();
         let connector: TlsConnector = cfg.client_config.into();
+        let max_id: NodeId = (cfg.addr.len() - 1).into();
 
         // rx side (accept conns from replica)
-        rt::spawn(Self::rx_side_accept(id, listener, acceptor, tx.clone()));
+        rt::spawn(Self::rx_side_accept(max_id, id, listener, acceptor, tx.clone()));
 
         // tx side (connect to replica)
         Self::tx_side_connect(id, connector.clone(), tx.clone(), &cfg.addrs);
@@ -184,7 +189,6 @@ impl<O: Send + 'static> Node<O> {
         let mut peer_tx = HashMap::new();
         let peer_keys = Arc::new(cfg.pk);
 
-        // success
         let node = Node {
             id,
             my_key,
@@ -195,7 +199,90 @@ impl<O: Send + 'static> Node<O> {
             peer_addrs: cfg.addrs,
             connector,
         };
-        Ok((node, Vec::new()))
+
+        // receive peer connections from channel
+        let mut rogue = Vec::new();
+        let mut c = vec![0; cfg.addrs.len()];
+
+        while !c.iter().all(|&i| i == 2) {
+            let message = rx.recv().await.unwrap();
+
+            match message {
+                Message::ConnectedTx(id, sock) => {
+                    node.handle_connected_tx(id, sock);
+                    let id: usize = id.into();
+                    c[id] += 1;
+                },
+                Message::ConnectedRx(id, sock) => {
+                    node.handle_connected_rx(id, sock);
+                    let id: usize = id.into();
+                    c[id] += 1;
+                },
+                Message::DisconnectedTx(_) | Message::DisconnectedRx(_) => {
+                    let e = Error::simple(ErrorKind::Communication);
+                    return Err(e);
+                },
+                m => rogue.push(m),
+            }
+        }
+
+        // success
+        Ok((node, rogue))
+    }
+
+    pub fn handle_connected_tx(&mut self, peer_id: NodeId, sock: TlsStreamCli<Socket>) {
+        self.peer_tx.insert(id, Arc::new(NodeTxData {
+            sk: Arc::clone(&my_key),
+            sock: Mutex::new(sock),
+        }));
+    }
+
+    pub fn handle_connected_rx(&self, peer_id: NodeId, mut sock: TlsStreamSrv<Socket>) {
+        let mut tx = self.my_tx.clone();
+        rt::spawn(async move {
+            let mut buf: SmallVec<[_; Self::BUFSIZ_RECV]> = SmallVec::new();
+
+            // TODO
+            //  - verify signatures???
+            //  - exit condition (when the `System` is dropped)
+            loop {
+                // read the peer's header
+                if let Err(_) = sock.read_exact(&mut buf[..Header::LENGTH]).await {
+                    // errors reading -> faulty connection;
+                    // drop this socket
+                    break;
+                }
+
+                // we are passing the correct length, safe to use unwrap()
+                let header = Header::deserialize_from(&buf[..Header::LENGTH]).unwrap();
+
+                // reserve space for message
+                buf.clear();
+                buf.reserve(header.payload_length());
+
+                // read the peer's payload
+                if let Err(_) = sock.read_exact(&mut buf[..header.payload_length()]).await {
+                    // errors reading -> faulty connection;
+                    // drop this socket
+                    break;
+                }
+
+                // deserialize payload
+                let message = match deserialize_message(&buf[..header.payload_length()]) {
+                    Ok(m) => m,
+                    Err(_) => {
+                        // errors deserializing -> faulty connection;
+                        // drop this socket
+                        break;
+                    },
+                };
+
+                tx.send(Message::System(header, message)).await.unwrap_or(());
+            }
+
+            // announce we have disconnected
+            tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
+        });
     }
 
     #[inline]
@@ -236,7 +323,7 @@ impl<O: Send + 'static> Node<O> {
                 // TLS handshake; drop connection if it fails
                 let mut sock = match connector.connect(hostname, sock).await {
                     Ok(s) => s,
-                    Err(_) => return,
+                    Err(_) => break,
                 };
 
                 // create header
@@ -255,7 +342,7 @@ impl<O: Send + 'static> Node<O> {
                 if let Err(_) = sock.write_all(&buf[..]).await {
                     // errors writing -> faulty connection;
                     // drop this socket
-                    return;
+                    break;
                 }
 
                 // success
@@ -266,12 +353,12 @@ impl<O: Send + 'static> Node<O> {
             Delay::new(Duration::from_secs(1)).await;
         }
         // announce we have failed to connect to the peer node
-        let e = Error::simple(ErrorKind::Communication);
-        tx.send(Message::Error(peer_id, e)).await.unwrap_or(());
+        tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
     }
 
     // TODO: check if we have terminated the node, and exit
     async fn rx_side_accept(
+        max_id: NodeId,
         my_id: NodeId,
         listener: Listener,
         acceptor: TlsAcceptor,
@@ -281,7 +368,7 @@ impl<O: Send + 'static> Node<O> {
             if let Ok(sock) = listener.accept().await {
                 let tx = tx.clone();
                 let acceptor = acceptor.clone();
-                rt::spawn(Self::rx_side_accept_task(my_id, acceptor, sock, tx));
+                rt::spawn(Self::rx_side_accept_task(max_id, my_id, acceptor, sock, tx));
             }
         }
     }
@@ -290,6 +377,7 @@ impl<O: Send + 'static> Node<O> {
     // header doesn't need to be signed, since we won't be
     // storing this message in the history log
     async fn rx_side_accept_task(
+        max_id: NodeId,
         my_id: NodeId,
         acceptor: TlsAcceptor,
         sock: Socket,
@@ -297,29 +385,38 @@ impl<O: Send + 'static> Node<O> {
     ) {
         let mut buf_header = [0; Header::LENGTH];
 
-        // TLS handshake; drop connection if it fails
-        let mut sock = match acceptor.accept(sock).await {
-            Ok(s) => s,
-            Err(_) => return,
-        };
+        // this loop is just a trick;
+        // the `break` instructions act as a `goto` statement
+        loop {
+            // TLS handshake; drop connection if it fails
+            let mut sock = match acceptor.accept(sock).await {
+                Ok(s) => s,
+                Err(_) => break,
+            };
 
-        // read the peer's header
-        if let Err(_) = sock.read_exact(&mut buf_header[..]).await {
-            // errors reading -> faulty connection;
-            // drop this socket
+            // read the peer's header
+            if let Err(_) = sock.read_exact(&mut buf_header[..]).await {
+                // errors reading -> faulty connection;
+                // drop this socket
+                break;
+            }
+
+            // we are passing the correct length, safe to use unwrap()
+            let header = Header::deserialize_from(&buf_header[..]).unwrap();
+
+            // extract peer id
+            let peer_id = match WireMessage::from_parts(header, &[]) {
+                Ok(wm) if wm.header().from() > max_id => break,
+                Ok(wm) if wm.header().to() != my_id => break,
+                Ok(wm) => wm.header().from(),
+                Err(_) => break,
+            };
+
+            tx.send(Message::ConnectedRx(peer_id, sock)).await.unwrap_or(());
             return;
         }
 
-        // we are passing the correct length, safe to use unwrap()
-        let header = Header::deserialize_from(&buf_header[..]).unwrap();
-
-        // extract peer id
-        let peer_id = match WireMessage::from_parts(header, &[]) {
-            Ok(wm) if wm.header().to() != my_id => return,
-            Ok(wm) => wm.header().from(),
-            Err(_) => return,
-        };
-
-        tx.send(Message::ConnectedRx(peer_id, sock)).await.unwrap_or(());
+        // announce we have failed to connect to the peer node
+        tx.send(Message::DisconnectedRx(None)).await.unwrap_or(());
     }
 }
