@@ -60,3 +60,10 @@ impl ToCapnp for () {
         unimplemented!()
     }
 }
+
+
+#[cfg(test)]
+mod unit_capnp {
+    #![allow(unused)]
+    include!(concat!(env!("OUT_DIR"), "/src/bft/communication/serialize/capnp/unit_capnp.rs"));
+}
