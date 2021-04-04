@@ -13,6 +13,9 @@ use capnp::message::{
 use crate::bft::error::*;
 use crate::bft::communication::message::SystemMessage;
 
+#[cfg(test)]
+use crate::bft::communication::message::ConsensusMessageKind;
+
 // FIXME: maybe use `capnp::message::ScratchSpaceHeapAllocator` instead of
 // `capnp::message::HeapAllocator`; this requires some wrapper type for
 // allocating messages, which is slightly annoying, but ultimately better
@@ -56,11 +59,38 @@ impl ToCapnp for () {
     where
         A: Allocator
     {
-        // TODO: create schema files to test this
-        unimplemented!()
+        let mut sys_msg: unit_capnp::system_message::Builder = root.init_root();
+        match m {
+            SystemMessage::Request(_) => sys_msg.set_request(()),
+            SystemMessage::Consensus(m) => {
+                let mut consensus = sys_msg.init_consensus();
+                consensus.set_sequence_number(m.sequence_number());
+
+                let mut message_kind = consensus.init_message_kind();
+                match m.kind() {
+                    ConsensusMessageKind::PrePrepare(digest) => {
+                        let d = digest.as_ref();
+                        let mut pre_prepare = message_kind.init_pre_prepare(d.len() as u32);
+                        pre_prepare.copy_from_slice(d);
+                    },
+                    ConsensusMessageKind::Prepare => message_kind.set_prepare(()),
+                    ConsensusMessageKind::Commit => message_kind.set_commit(()),
+                }
+            },
+        }
+        Ok(())
     }
 }
 
+#[cfg(test)]
+impl FromCapnp for () {
+    fn from_capnp<S>(reader: &Reader<S>) -> Result<SystemMessage<()>>
+    where
+        S: ReaderSegments
+    {
+        unimplemented!()
+    }
+}
 
 #[cfg(test)]
 mod unit_capnp {
