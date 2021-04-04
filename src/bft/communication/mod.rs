@@ -217,7 +217,12 @@ where
         let mut rogue = Vec::new();
         let mut c = vec![0; node.peer_addrs.len()];
 
-        while !c.iter().all(|&i| i == 2) {
+        while c
+            .iter()
+            .enumerate()
+            .filter(|(id, _)| *id == usize::from(node.id))
+            .any(|(_, &n)| n != 2_i32)
+        {
             let message = node.my_rx.recv().await.unwrap();
 
             match message {
