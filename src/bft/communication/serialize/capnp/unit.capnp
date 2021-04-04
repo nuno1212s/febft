@@ -1,5 +1,9 @@
 @0xeed7170ad58e7c02;
 
+using Rust = import "rust.capnp";
+
+$Rust.parentModule("bft::communication::serialize::capnp");
+
 struct SystemMessage {
     union {
         request @0 :Void;
