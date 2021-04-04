@@ -451,3 +451,18 @@ where
         tx.send(Message::DisconnectedRx(None)).await.unwrap_or(());
     }
 }
+
+enum SendTo<O> {
+    Me {
+        // a handle to our message channel
+        tx: MessageChannelTx<O>,
+    },
+    Peers {
+        // the id of the peer
+        id: NodeId,
+        // our secret key
+        sk: Arc<KeyPair>,
+        // data associated with peer
+        data: Arc<NodeTxData>,
+    },
+}
