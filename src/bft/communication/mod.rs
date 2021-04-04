@@ -254,6 +254,19 @@ where
         //}
     }
 
+    fn send_to(&self, id: NodeId) -> SendTo<O> {
+        if self.id != id {
+            SendTo::Peers {
+                id,
+                sk: Arc::clone(&self.my_key),
+                data: Arc::clone(&self.peer_tx[&id]),
+            }
+        } else {
+            let tx = self.my_tx.clone();
+            SendTo::Me { tx }
+        }
+    }
+
     /// Receive one message from peer nodes or ourselves.
     pub async fn receive(&mut self) -> Result<Message<O>> {
         self.my_rx.recv().await
