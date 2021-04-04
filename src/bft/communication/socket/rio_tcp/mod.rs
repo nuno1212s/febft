@@ -135,7 +135,7 @@ impl AsyncWrite for Socket {
 
 #[inline(always)]
 fn ring() -> &'static Uring {
-    match unsafe { RIO.guard().get() } {
+    match unsafe { RIO.get() } {
         Some(ref ring) => ring,
         None => panic!("Linux io_uring wasn't initialized"),
     }

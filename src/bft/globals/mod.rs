@@ -35,7 +35,7 @@ impl Flag {
 /// Checking for initialization is thread safe, but dropping or
 /// setting a value is unsafe, and should be done with caution.
 pub struct Global<T> {
-    guard: Flag,
+    flag: Flag,
     value: Option<T>,
 }
 
@@ -43,7 +43,7 @@ impl<T: 'static> Global<T> {
     /// Creates a new global variable handle.
     pub const fn new() -> Self {
         Self {
-            guard: Flag::new(),
+            flag: Flag::new(),
             value: None,
         }
     }
@@ -52,13 +52,13 @@ impl<T: 'static> Global<T> {
     #[inline]
     pub fn set(&'static mut self, value: T) {
         self.value = Some(value);
-        self.guard.set();
+        self.flag.set();
     }
 
     /// Drops the global variable.
     #[inline]
     pub fn drop(&'static mut self) {
-        self.guard.unset();
+        self.flag.unset();
         self.value.take();
     }
 }
@@ -72,7 +72,7 @@ impl<T: Sync + 'static> Global<T> {
     /// is the last thing users of `febft` should do.
     #[inline]
     pub fn get(&'static self) -> Option<&'static T> {
-        if self.guard.test() {
+        if self.flag.test() {
             self.value.as_ref()
         } else {
             None

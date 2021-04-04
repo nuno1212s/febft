@@ -21,7 +21,7 @@ static mut RUNTIME: Global<async_std::Runtime> = Global::new();
 
 macro_rules! runtime {
     () => {
-        match unsafe { RUNTIME.guard().get() } {
+        match unsafe { RUNTIME.get() } {
             Some(ref rt) => rt,
             None => panic!("Async runtime wasn't initialized"),
         }
