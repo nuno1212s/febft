@@ -52,6 +52,7 @@ use crate::bft::communication::message::{
     Header,
     Message,
     WireMessage,
+    SystemMessage,
 };
 use crate::bft::communication::channel::{
     MessageChannelTx,
@@ -240,6 +241,17 @@ where
 
         // success
         Ok((node, rogue))
+    }
+
+    /// Broadcast a `SystemMessage` to a group of nodes.
+    pub fn broadcast(&self, m: SystemMessage<O>, targets: impl Iterator<Item = NodeId>) {
+        unimplemented!()
+        //for id in targets {
+        //    let send_to = self.send_to(id);
+        //    tokio::spawn(async move {
+        //        send_to.value(m).await.unwrap();
+        //    });
+        //}
     }
 
     /// Receive one message from peer nodes or ourselves.
