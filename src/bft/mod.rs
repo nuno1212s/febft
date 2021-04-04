@@ -51,8 +51,8 @@ impl Drop for InitGuard {
 }
 
 unsafe fn drop() -> Result<()> {
+    INITIALIZED.unset();
     async_runtime::drop()?;
     communication::socket::drop()?;
-    INITIALIZED.unset();
     Ok(())
 }
