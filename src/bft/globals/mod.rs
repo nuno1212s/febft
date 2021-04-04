@@ -2,11 +2,11 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// A `Guard` is used to check for the initialization of a global value.
-pub struct Guard(AtomicBool);
+/// A `Flag` is used to check for the initialization of a global value.
+pub struct Flag(AtomicBool);
 
-impl Guard {
-    /// Creates a new global variable `Guard`.
+impl Flag {
+    /// Creates a new global variable `Flag`.
     pub const fn new() -> Self {
         Self(AtomicBool::new(false))
     }
@@ -32,7 +32,7 @@ impl Guard {
 /// Checking for initialization is thread safe, but dropping or
 /// setting a value is unsafe, and should be done with caution.
 pub struct Global<T> {
-    guard: Guard,
+    guard: Flag,
     value: Option<T>,
 }
 
@@ -40,7 +40,7 @@ impl<T> Global<T> {
     /// Creates a new global variable handle.
     pub const fn new() -> Self {
         Self {
-            guard: Guard::new(),
+            guard: Flag::new(),
             value: None,
         }
     }

@@ -15,9 +15,9 @@ pub mod error;
 use std::ops::Drop;
 
 use error::*;
-use globals::Guard;
+use globals::Flag;
 
-static INITIALIZED: Guard = Guard::new();
+static INITIALIZED: Flag = Flag::new();
 
 /// Configure the init process of the library.
 pub struct InitConfig {
