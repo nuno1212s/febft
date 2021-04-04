@@ -49,3 +49,14 @@ pub fn deserialize_message<O: FromCapnp, R: Read>(r: R) -> Result<SystemMessage<
         .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to deserialize using capnp")?;
     O::from_capnp(&reader)
 }
+
+#[cfg(test)]
+impl ToCapnp for () {
+    fn to_capnp<A>(m: SystemMessage<()>, root: &mut Builder<A>) -> Result<()>
+    where
+        A: Allocator
+    {
+        // TODO: create schema files to test this
+        unimplemented!()
+    }
+}

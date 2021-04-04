@@ -109,3 +109,10 @@ impl<T: for<'de> Deserialize<'de>> Unmarshal for T {}
 
 #[cfg(feature = "serialize_capnp")]
 impl<T: FromCapnp> Unmarshal for T {}
+
+// XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX
+
+#[cfg(test)]
+mod tests {
+    // TODO: impl ToCapnp for ()
+}
