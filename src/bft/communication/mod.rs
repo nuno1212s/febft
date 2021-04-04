@@ -242,6 +242,12 @@ where
         Ok((node, rogue))
     }
 
+    /// Receive one message from peer nodes or ourselves.
+    pub async fn receive(&mut self) -> Result<Message<O>> {
+        self.my_rx.recv().await
+    }
+
+    /// Method called upon a `Message::ConnectedTx`.
     pub fn handle_connected_tx(&mut self, peer_id: NodeId, sock: TlsStreamCli<Socket>) {
         self.peer_tx.insert(peer_id, Arc::new(NodeTxData {
             sk: Arc::clone(&self.my_key),
@@ -249,6 +255,7 @@ where
         }));
     }
 
+    /// Method called upon a `Message::ConnectedRx`.
     pub fn handle_connected_rx(&self, peer_id: NodeId, mut sock: TlsStreamSrv<Socket>) {
         let mut tx = self.my_tx.clone();
         rt::spawn(async move {
