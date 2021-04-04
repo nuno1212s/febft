@@ -91,3 +91,21 @@ impl AsRef<[u8]> for Signature {
         &self.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Signature, KeyPair};
+
+    #[test]
+    fn test_sign_verify() {
+        let k = KeyPair::from_bytes(&[0; 32][..]).expect("Invalid key bytes");
+
+        let message = b"test message";
+        let signature = k.sign(message)
+            .expect("Signature failed");
+        k
+            .public_key()
+            .verify(message, &signature)
+            .expect("Verify failed");
+    }
+}

@@ -351,18 +351,15 @@ impl<'a> WireMessage<'a> {
 mod tests {
     use crate::bft::communication::message::{WireMessage, Header};
     use crate::bft::crypto::signature::Signature;
-    use crate::bft::communication::NodeId;
 
     #[test]
     fn test_header_serialize() {
-        let signature = Signature::from_bytes(&[0; Signature::LENGTH][..])
-            .expect("Invalid signature length");
         let old_header = Header {
             version: WireMessage::CURRENT_VERSION,
-            from: NodeId::from(0),
-            to: NodeId::from(3),
+            signature: [0; Signature::LENGTH],
+            from: 0,
+            to: 3,
             length: 0,
-            signature,
         };
         let mut buf = [0; Header::LENGTH];
         old_header.serialize_into(&mut buf[..])
