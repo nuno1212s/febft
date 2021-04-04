@@ -114,5 +114,28 @@ impl<T: FromCapnp> Unmarshal for T {}
 
 #[cfg(test)]
 mod tests {
-    // TODO: impl ToCapnp for ()
+    use super::{
+        serialize_message,
+        deserialize_message,
+    };
+    use crate::bft::communication::message::{
+        SystemMessage,
+        RequestMessage,
+    };
+
+    #[test]
+    fn test_serialize() {
+        let mut buf = Vec::new();
+
+        let m1 = RequestMessage::new(());
+        let m1 = SystemMessage::Request(m1);
+
+        serialize_message(&mut buf, m1.clone()).unwrap();
+        let m2: SystemMessage<()> = deserialize_message(&buf[..]).unwrap();
+
+        match (m1, m2) {
+            (SystemMessage::Request(_), SystemMessage::Request(_)) => (),
+            _ => panic!("Deserialize failed"),
+        }
+    }
 }
