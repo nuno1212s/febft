@@ -29,9 +29,9 @@ use crate::bft::communication::message::SystemMessage;
 #[cfg(feature = "serialize_capnp")]
 pub use self::capnp::{ToCapnp, FromCapnp};
 
-/// Serialize a wire message into the write `W`.
+/// Serialize a wire message into the writer `W`.
 ///
-/// Once the operation is finished, the buffer is returned.
+/// Once the operation is finished, the writer is returned.
 pub fn serialize_message<O, W>(w: W, m: SystemMessage<O>) -> Result<W>
 where
     O: Marshal,
