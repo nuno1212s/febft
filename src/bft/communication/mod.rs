@@ -160,7 +160,7 @@ const NODE_BUFSIZ_RECV: usize = 16384;
 
 impl<O> Node<O>
 where
-    O: Send + Marshal + Unmarshal + 'static,
+    O: Clone + Send + Marshal + Unmarshal + 'static,
 {
 
     /// Bootstrap a `Node`, i.e. create connections between itself and its
@@ -244,14 +244,19 @@ where
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
-    pub fn broadcast(&self, m: SystemMessage<O>, targets: impl Iterator<Item = NodeId>) {
-        unimplemented!()
-        //for id in targets {
-        //    let send_to = self.send_to(id);
-        //    tokio::spawn(async move {
-        //        send_to.value(m).await.unwrap();
-        //    });
-        //}
+    pub fn broadcast(
+        &self,
+        header: Header,
+        message: SystemMessage<O>,
+        targets: impl Iterator<Item = NodeId>,
+    ) {
+        for id in targets {
+            let mut send_to = self.send_to(id);
+            let message = message.clone();
+            rt::spawn(async move {
+                send_to.value(header, message).await;
+            });
+        }
     }
 
     fn send_to(&self, id: NodeId) -> SendTo<O> {
@@ -478,4 +483,28 @@ enum SendTo<O> {
         // data associated with peer
         data: Arc<NodeTxData>,
     },
+}
+
+impl<O> SendTo<O>
+where
+    O: Send + Marshal + 'static,
+{
+    async fn value(&mut self, h: Header, m: SystemMessage<O>) {
+        match self {
+            SendTo::Me { ref mut tx } => {
+                Self::me(h, m, tx).await
+            },
+            SendTo::Peers { id, ref sk, ref data } => {
+                Self::peers(h, m, &*sk, &*data).await
+            },
+        }
+    }
+
+    async fn me(h: Header, m: SystemMessage<O>, s: &mut MessageChannelTx<O>) {
+        s.send(Message::System(h, m)).await.unwrap_or(())
+    }
+
+    async fn peers(h: Header, m: SystemMessage<O>, k: &KeyPair, d: &NodeTxData) {
+        unimplemented!()
+    }
 }

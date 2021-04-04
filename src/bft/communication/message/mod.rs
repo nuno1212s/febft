@@ -76,6 +76,7 @@ pub enum Message<O> {
 /// This can be either a `Request` from a client, a `Consensus` message,
 /// or even `ViewChange` messages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
 pub enum SystemMessage<O> {
     Request(RequestMessage<O>),
     Consensus(ConsensusMessage),
@@ -86,6 +87,7 @@ pub enum SystemMessage<O> {
 /// The `O` type argument symbolizes the client operation to be performed
 /// over the replicated state.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
 pub struct RequestMessage<O> {
     operation: O,
 }
@@ -95,6 +97,7 @@ pub struct RequestMessage<O> {
 /// Different types of consensus messages are represented in the `ConsensusMessageKind`
 /// type.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Copy, Clone)]
 pub struct ConsensusMessage {
     seq: i32,
     kind: ConsensusMessageKind,
@@ -102,6 +105,7 @@ pub struct ConsensusMessage {
 
 /// Represents one of many different consensus stages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Copy, Clone)]
 pub enum ConsensusMessageKind {
     /// Pre-prepare a request, according to the BFT protocol.
     /// The `Digest` represens the hash of the
