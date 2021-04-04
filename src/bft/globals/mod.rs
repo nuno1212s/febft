@@ -35,7 +35,7 @@ impl Flag {
 /// Checking for initialization is thread safe, but dropping or
 /// setting a value is unsafe, and should be done with caution.
 pub struct Global<T> {
-    flag: Flag,
+    guard: Flag,
     value: Option<T>,
 }
 
@@ -43,7 +43,7 @@ impl<T: 'static> Global<T> {
     /// Creates a new global variable handle.
     pub const fn new() -> Self {
         Self {
-            flag: Flag::new(),
+            guard: Flag::new(),
             value: None,
         }
     }
@@ -52,41 +52,28 @@ impl<T: 'static> Global<T> {
     #[inline]
     pub fn set(&'static mut self, value: T) {
         self.value = Some(value);
-        self.flag.set();
+        self.guard.set();
     }
 
     /// Drops the global variable.
     #[inline]
     pub fn drop(&'static mut self) {
-        self.flag.unset();
+        self.guard.unset();
         self.value.take();
     }
 }
 
 impl<T: Sync + 'static> Global<T> {
-    /// Returns a `GlobalGuard` for a `Global` variable.
+    /// Checks for the initialization of a global variable.
     ///
-    /// Calling `get()` on the returned value safely checks
-    /// for the initialization of the global variable.
+    /// This method is potentially unsafe to call, because the reference
+    /// may dangle if we deinitialize the library, by dropping `InitGuard`.
+    /// In practice, it should always be safe, since dropping the `InitGuard`
+    /// is the last thing users of `febft` should do.
     #[inline]
-    pub fn guard(&'static self) -> GlobalGuard<'static, T> {
-        GlobalGuard { inner: self }
-    }
-}
-
-/// A safe wrapper for a `Global`, which checks for initialization
-/// before every access.
-pub struct GlobalGuard<'a, T> {
-    inner: &'a Global<T>,
-}
-
-impl<T: Sync + 'static> GlobalGuard<'static, T> {
-    /// Returns a reference to the value contained in a global variable,
-    /// if it is initialized.
-    #[inline]
-    pub fn get(&self) -> Option<&'static T> {
-        if self.inner.flag.test() {
-            self.inner.value.as_ref()
+    pub fn get(&'static self) -> Option<&'static T> {
+        if self.guard.test() {
+            self.value.as_ref()
         } else {
             None
         }
