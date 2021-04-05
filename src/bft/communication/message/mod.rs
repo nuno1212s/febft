@@ -1,6 +1,7 @@
 //! This module contains types associated with messages traded
 //! between the system processes.
 
+use std::io;
 use std::mem::MaybeUninit;
 
 #[cfg(feature = "serialize_serde")]
@@ -13,6 +14,10 @@ use smallvec::{
 use async_tls::{
     server::TlsStream as TlsStreamSrv,
     client::TlsStream as TlsStreamCli,
+};
+use futures::io::{
+    AsyncWriteExt,
+    AsyncWrite,
 };
 
 use crate::bft::crypto::hash::Context;
@@ -266,7 +271,8 @@ impl<T: Array<Item = u8>> From<WireMessage<'_>> for OwnedWireMessage<SmallVec<T>
 }
 
 impl<T: AsRef<[u8]>> OwnedWireMessage<T> {
-    fn borrowed<'a>(&'a self) -> WireMessage<'a> {
+    /// Returns a reference to a `WireMessage`.
+    pub fn borrowed<'a>(&'a self) -> WireMessage<'a> {
         WireMessage {
             header: self.header,
             payload: self.payload.as_ref(),
@@ -391,6 +397,36 @@ impl<'a> WireMessage<'a> {
                 ).is_ok()
             })
             .unwrap_or(true)
+    }
+
+    /// Serialize a `WireMessage` into an async writer.
+    pub async fn write_to<W: AsyncWrite + Unpin>(&self, mut w: W) -> io::Result<()> {
+        let mut buf = [0; Header::LENGTH];
+        self.header.serialize_into(&mut buf[..]).unwrap();
+
+        // FIXME: switch to vectored writes?
+        w.write_all(&buf[..]).await?;
+        if self.payload.len() > 0 {
+            w.write_all(&self.payload).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Converts this `WireMessage` into an owned one.
+    pub fn with_owned_buffer<T: AsRef<[u8]>>(self, buf: T) -> Option<OwnedWireMessage<T>> {
+        let buf_p = buf.as_ref()[0] as *const u8;
+        let payload_p = &self.payload[0] as *const u8;
+
+        // both point to the same memory region, safe
+        if buf_p == payload_p {
+            Some(OwnedWireMessage {
+                header: self.header,
+                payload: buf,
+            })
+        } else {
+            None
+        }
     }
 }
 
