@@ -14,6 +14,7 @@ use rand_core::{
     RngCore,
 };
 
+use febft::bft::error::*;
 use febft::bft::async_runtime as rt;
 use febft::bft::threadpool::{
     self,
@@ -32,7 +33,6 @@ use febft::bft::crypto::signature::{
     KeyPair,
     PublicKey,
 };
-use febft::bft::error::*;
 
 macro_rules! addr {
     ($h:expr => $a:expr) => {{
@@ -99,7 +99,7 @@ async fn setup_node(
     sk: KeyPair,
     pk: HashMap<NodeId, PublicKey>,
 ) -> Result<Node<()>> {
-    // for testing purposes, turn off TLS auth
+    // read TLS configs concurrently
     let (client_config, server_config) = {
         let cli = get_client_config(&t, id);
         let srv = get_server_config(&t, id);
