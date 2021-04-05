@@ -47,6 +47,9 @@ expose_impl = []
 itertools = "0.9"
 capnpc = "0.14"
 
+[dev-dependencies]
+rcgen = "0.8"
+
 [dependencies]
 futures = "0.3"
 futures-timer = "3"
