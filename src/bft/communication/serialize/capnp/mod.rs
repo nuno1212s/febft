@@ -77,7 +77,7 @@ impl ToCapnp for () {
                 match m.kind() {
                     ConsensusMessageKind::PrePrepare(digest) => {
                         let d = digest.as_ref();
-                        let mut pre_prepare = message_kind.init_pre_prepare(d.len() as u32);
+                        let pre_prepare = message_kind.init_pre_prepare(d.len() as u32);
                         pre_prepare.copy_from_slice(d);
                     },
                     ConsensusMessageKind::Prepare => message_kind.set_prepare(()),
