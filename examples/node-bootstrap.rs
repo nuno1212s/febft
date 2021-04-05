@@ -1,6 +1,8 @@
+use std::time::Duration;
 use std::net::SocketAddr;
 use std::collections::HashMap;
 
+use futures_timer::Delay;
 use futures::io::{AsyncReadExt, AsyncWriteExt};
 use rustls::{
     ServerConfig,
@@ -30,7 +32,7 @@ use febft::bft::error::*;
 
 macro_rules! addr {
     ($a:expr) => {{
-        if let Some((name, _)) = $a.split_once(':') {
+        if let Some(name) = $a.split(':').next() {
             let addr: SocketAddr = $a.parse().unwrap();
             (addr, String::from(name))
         } else {
@@ -58,17 +60,31 @@ fn main() {
 }
 
 async fn async_main() {
-    let sk: HashMap<NodeId, KeyPair> = sk_stream()
+    let mut secret_keys: HashMap<NodeId, KeyPair> = sk_stream()
+        .take(4)
         .enumerate()
         .map(|(id, sk)| (NodeId::from(id), sk))
         .collect();
-    let pk: HashMap<NodeId, PublicKey> = sk
+    let public_keys: HashMap<NodeId, PublicKey> = secret_keys
         .iter()
         .map(|(id, sk)| (*id, sk.public_key().into()))
         .collect();
 
-    println!("{:#?}", sk);
-    println!("{:#?}", pk);
+    for id in NodeId::targets(0..4) {
+        let sk = secret_keys.remove(&id).unwrap();
+        let fut = setup_node(
+            id,
+            sk,
+            public_keys.clone(),
+        );
+        rt::spawn(async move {
+            let node = fut.await.unwrap();
+            println!("Spawn node #{}", usize::from(node.id()));
+        });
+    }
+
+    // wait 3 seconds then exit
+    Delay::new(Duration::from_secs(3)).await;
 }
 
 async fn setup_node(id: NodeId, sk: KeyPair, pk: HashMap<NodeId, PublicKey>) -> Result<Node<()>> {
@@ -81,10 +97,10 @@ async fn setup_node(id: NodeId, sk: KeyPair, pk: HashMap<NodeId, PublicKey>) -> 
         id,
         f: 1,
         addrs: map! {
-            NodeId::from(0) => addr!("127.0.0.1:10000"),
-            NodeId::from(1) => addr!("127.0.0.1:10001"),
-            NodeId::from(2) => addr!("127.0.0.1:10002"),
-            NodeId::from(3) => addr!("127.0.0.1:10003"),
+            NodeId::from(0u32) => addr!("127.0.0.1:10000"),
+            NodeId::from(1u32) => addr!("127.0.0.1:10001"),
+            NodeId::from(2u32) => addr!("127.0.0.1:10002"),
+            NodeId::from(3u32) => addr!("127.0.0.1:10003")
         },
         sk,
         pk,

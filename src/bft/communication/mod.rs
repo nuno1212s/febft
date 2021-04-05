@@ -236,9 +236,13 @@ where
                     let id: usize = id.into();
                     c[id] += 1;
                 },
-                Message::DisconnectedTx(_) | Message::DisconnectedRx(_) => {
-                    let e = Error::simple(ErrorKind::Communication);
-                    return Err(e);
+                Message::DisconnectedTx(_) => {
+                    return Err("Disconnected from send side")
+                        .wrapped(ErrorKind::Communication);
+                },
+                Message::DisconnectedRx(_) => {
+                    return Err("Disconnected from receive side")
+                        .wrapped(ErrorKind::Communication);
                 },
                 m => rogue.push(m),
             }
@@ -246,6 +250,11 @@ where
 
         // success
         Ok((node, rogue))
+    }
+
+    /// Reports the id of this `Node`.
+    pub fn id(&self) -> NodeId {
+        self.id
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
