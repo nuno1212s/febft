@@ -314,6 +314,10 @@ where
             //  - verify signatures???
             //  - exit condition (when the `System` is dropped)
             loop {
+                // reserve space for header
+                buf.clear();
+                buf.resize(Header::LENGTH, 0);
+
                 // read the peer's header
                 if let Err(_) = sock.read_exact(&mut buf[..Header::LENGTH]).await {
                     // errors reading -> faulty connection;
@@ -327,6 +331,7 @@ where
                 // reserve space for message
                 buf.clear();
                 buf.reserve(header.payload_length());
+                buf.resize(Header::LENGTH, 0);
 
                 // read the peer's payload
                 if let Err(_) = sock.read_exact(&mut buf[..header.payload_length()]).await {
