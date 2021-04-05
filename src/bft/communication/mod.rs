@@ -156,7 +156,7 @@ pub struct NodeConfig {
 const NODE_CHAN_BOUND: usize = 128;
 
 // max no. of bytes to inline before doing a heap alloc
-const NODE_BUFSIZ_RECV: usize = 16384;
+const NODE_BUFSIZ: usize = 16384;
 
 impl<O> Node<O>
 where
@@ -251,7 +251,6 @@ where
     /// Broadcast a `SystemMessage` to a group of nodes.
     pub fn broadcast(
         &self,
-        header: Header,
         message: SystemMessage<O>,
         targets: impl Iterator<Item = NodeId>,
     ) {
@@ -259,21 +258,27 @@ where
             let mut send_to = self.send_to(id);
             let message = message.clone();
             rt::spawn(async move {
-                send_to.value(header, message).await;
+                send_to.value(message).await;
             });
         }
     }
 
-    fn send_to(&self, id: NodeId) -> SendTo<O> {
-        if self.id != id {
+    fn send_to(&self, peer_id: NodeId) -> SendTo<O> {
+        let my_id = self.id;
+        let tx = self.my_tx.clone();
+        if my_id != peer_id {
             SendTo::Peers {
-                id,
-                sk: Arc::clone(&self.my_key),
-                data: Arc::clone(&self.peer_tx[&id]),
+                tx,
+                my_id,
+                peer_id,
+                data: Arc::clone(&self.peer_tx[&peer_id]),
             }
         } else {
-            let tx = self.my_tx.clone();
-            SendTo::Me { tx }
+            SendTo::Me {
+                tx,
+                my_id,
+                sk: Arc::clone(&self.my_key),
+            }
         }
     }
 
@@ -294,7 +299,7 @@ where
     pub fn handle_connected_rx(&self, peer_id: NodeId, mut sock: TlsStreamSrv<Socket>) {
         let mut tx = self.my_tx.clone();
         rt::spawn(async move {
-            let mut buf: SmallVec<[_; NODE_BUFSIZ_RECV]> = SmallVec::new();
+            let mut buf: SmallVec<[_; NODE_BUFSIZ]> = SmallVec::new();
 
             // TODO
             //  - verify signatures???
@@ -477,16 +482,22 @@ where
 
 enum SendTo<O> {
     Me {
+        // our id
+        my_id: NodeId,
+        // our secret key
+        sk: Arc<KeyPair>,
         // a handle to our message channel
         tx: MessageChannelTx<O>,
     },
     Peers {
+        // our id
+        my_id: NodeId,
         // the id of the peer
-        id: NodeId,
-        // our secret key
-        sk: Arc<KeyPair>,
+        peer_id: NodeId,
         // data associated with peer
         data: Arc<NodeTxData>,
+        // a handle to our message channel
+        tx: MessageChannelTx<O>,
     },
 }
 
@@ -494,22 +505,63 @@ impl<O> SendTo<O>
 where
     O: Send + Marshal + 'static,
 {
-    async fn value(&mut self, h: Header, m: SystemMessage<O>) {
+    async fn value(&mut self, m: SystemMessage<O>) {
         match self {
-            SendTo::Me { ref mut tx } => {
-                Self::me(h, m, tx).await
+            SendTo::Me { my_id, ref sk, ref mut tx } => {
+                Self::me(*my_id, m, &*sk, tx).await
             },
-            SendTo::Peers { id, ref sk, ref data } => {
-                Self::peers(h, m, &*sk, &*data).await
+            SendTo::Peers { my_id, peer_id, ref data, ref mut tx } => {
+                Self::peers(*my_id, *peer_id, m, &*data, tx).await
             },
         }
     }
 
-    async fn me(h: Header, m: SystemMessage<O>, s: &mut MessageChannelTx<O>) {
-        s.send(Message::System(h, m)).await.unwrap_or(())
+    async fn me(
+        my_id: NodeId,
+        m: SystemMessage<O>,
+        sk: &KeyPair,
+        tx: &mut MessageChannelTx<O>,
+    ) {
+        // serialize
+        let mut buf: SmallVec<[_; NODE_BUFSIZ]> = SmallVec::new();
+        serialize_message(&mut buf, &m).unwrap();
+
+        // create wire msg
+        let (h, _) = WireMessage::new(
+            my_id,
+            my_id,
+            &buf[..],
+            Some(sk),
+        ).into_inner();
+
+        // send
+        tx.send(Message::System(h, m)).await.unwrap_or(())
     }
 
-    async fn peers(h: Header, m: SystemMessage<O>, k: &KeyPair, d: &NodeTxData) {
-        unimplemented!()
+    async fn peers(
+        my_id: NodeId,
+        peer_id: NodeId,
+        m: SystemMessage<O>,
+        d: &NodeTxData,
+        tx: &mut MessageChannelTx<O>,
+    ) {
+        // serialize
+        let mut buf: SmallVec<[_; NODE_BUFSIZ]> = SmallVec::new();
+        serialize_message(&mut buf, &m).unwrap();
+
+        // create wire msg
+        let wm = WireMessage::new(
+            my_id,
+            peer_id,
+            &buf[..],
+            Some(&d.sk),
+        );
+
+        // send
+        let mut sock = d.sock.lock().await;
+        if let Err(_) = wm.write_to(&mut *sock).await {
+            // error sending, drop connection
+            tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
+        }
     }
 }
