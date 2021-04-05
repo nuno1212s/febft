@@ -220,8 +220,7 @@ where
         while c
             .iter()
             .enumerate()
-            .filter(|(id, _)| *id == usize::from(node.id))
-            .any(|(_, &n)| n != 2_i32)
+            .any(|(id, &n)| id != usize::from(node.id) && n != 2_i32)
         {
             let message = node.my_rx.recv().await.unwrap();
 
