@@ -41,12 +41,12 @@ pub trait FromCapnp: Sized {
 
 /// Serialize a wire message using a Cap'n'Proto segment builder.
 pub trait ToCapnp: Sized {
-    fn to_capnp<A>(m: SystemMessage<Self>, root: &mut Builder<A>) -> Result<()>
+    fn to_capnp<A>(m: &SystemMessage<Self>, root: &mut Builder<A>) -> Result<()>
     where
         A: Allocator;
 }
 
-pub fn serialize_message<O: ToCapnp, W: Write>(mut w: W, m: SystemMessage<O>) -> Result<W> {
+pub fn serialize_message<O: ToCapnp, W: Write>(mut w: W, m: &SystemMessage<O>) -> Result<W> {
     let mut root = capnp::message::Builder::new(HeapAllocator::new());
     O::to_capnp(m, &mut root)?;
     serialize::write_message(&mut w, &root)
@@ -62,7 +62,7 @@ pub fn deserialize_message<O: FromCapnp, R: Read>(r: R) -> Result<SystemMessage<
 
 #[cfg(test)]
 impl ToCapnp for () {
-    fn to_capnp<A>(m: SystemMessage<()>, root: &mut Builder<A>) -> Result<()>
+    fn to_capnp<A>(m: &SystemMessage<()>, root: &mut Builder<A>) -> Result<()>
     where
         A: Allocator
     {

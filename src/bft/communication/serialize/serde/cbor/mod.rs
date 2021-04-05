@@ -4,12 +4,12 @@ use serde::{Serialize, Deserialize};
 use crate::bft::error::*;
 use crate::bft::communication::message::SystemMessage;
 
-pub fn serialize_message<O, W>(mut w: W, m: SystemMessage<O>) -> Result<W>
+pub fn serialize_message<O, W>(mut w: W, m: &SystemMessage<O>) -> Result<W>
 where
     O: Serialize,
     W: Write,
 {
-    serde_cbor::to_writer(&mut w, &m)
+    serde_cbor::to_writer(&mut w, m)
         .map(|_| w)
         .wrapped(ErrorKind::CommunicationSerializeSerdeCbor)
 }

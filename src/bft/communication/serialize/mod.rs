@@ -32,7 +32,7 @@ pub use self::capnp::{ToCapnp, FromCapnp};
 /// Serialize a wire message into the writer `W`.
 ///
 /// Once the operation is finished, the writer is returned.
-pub fn serialize_message<O, W>(w: W, m: SystemMessage<O>) -> Result<W>
+pub fn serialize_message<O, W>(w: W, m: &SystemMessage<O>) -> Result<W>
 where
     O: Marshal,
     W: Write,
@@ -130,7 +130,7 @@ mod tests {
         let m1 = RequestMessage::new(());
         let m1 = SystemMessage::Request(m1);
 
-        serialize_message(&mut buf, m1.clone()).unwrap();
+        serialize_message(&mut buf, &m1).unwrap();
         let m2: SystemMessage<()> = deserialize_message(&buf[..]).unwrap();
 
         match (m1, m2) {
