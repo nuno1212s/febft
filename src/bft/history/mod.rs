@@ -58,9 +58,7 @@ impl<O> Log<O> {
     /// Replaces the current `Log` with an empty one, and returns
     /// the replaced instance.
     pub fn take(&mut self) -> Self {
-        let mut old = Log::new();
-        std::mem::swap(self, &mut old);
-        old
+        std::mem::replace(self, Log::new())
     }
 
     /// Adds a new `message` and its respective `header` to the log.
