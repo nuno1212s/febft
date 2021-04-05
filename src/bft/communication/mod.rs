@@ -549,6 +549,8 @@ where
         let mut buf: SmallVec<[_; NODE_BUFSIZ]> = SmallVec::new();
         serialize_message(&mut buf, &m).unwrap();
 
+        // FIXME : AVOID SERIALIZING TWICE ^^^^
+
         // create wire msg
         let wm = WireMessage::new(
             my_id,
