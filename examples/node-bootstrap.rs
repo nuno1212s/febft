@@ -1,3 +1,5 @@
+use std::fs::File;
+use std::io::BufReader;
 use std::time::Duration;
 use std::net::SocketAddr;
 use std::collections::HashMap;
@@ -5,9 +7,11 @@ use std::collections::HashMap;
 use futures_timer::Delay;
 use futures::io::{AsyncReadExt, AsyncWriteExt};
 use rustls::{
+    internal::pemfile,
     ServerConfig,
     ClientConfig,
     NoClientAuth,
+    RootCertStore,
 };
 use rand_core::{
     OsRng,
@@ -118,8 +122,8 @@ async fn setup_node(
         },
         sk,
         pk,
-        server_config,
         client_config,
+        server_config,
     };
 
     Node::bootstrap(conf).await.map(|(n, _)| n)
@@ -149,9 +153,36 @@ async fn get_server_config(t: &ThreadPool, id: NodeId) -> ServerConfig {
 async fn get_client_config(t: &ThreadPool, id: NodeId) -> ClientConfig {
     let (tx, rx) = oneshot::channel();
     t.execute(move || {
-        let cfg = ClientConfig::new();
+        let id = usize::from(id);
+        let mut cfg = ClientConfig::new();
+
+        // configure ca file
+        let mut certs = {
+            let mut file = open_file("ca-root/root.crt");
+            pemfile::certs(&mut file).unwrap()
+        };
+        cfg.root_store.add(&certs[0]);
+
+        // configure our cert chain and secret key
+        let sk = {
+            let mut file = open_file(&format!("ca-root/cop0{}/cop0{}.key", id, id));
+            let mut sk = pemfile::rsa_private_keys(&mut file).unwrap();
+            sk.remove(0)
+        };
+        let chain = {
+            let mut file = open_file(&format!("ca-root/cop0{}/cop0{}.crt", id, id));
+            let c = pemfile::certs(&mut file).unwrap();
+            certs.extend(c);
+            certs
+        };
+        cfg.set_single_client_cert(chain, sk);
 
         tx.send(cfg).unwrap();
     });
     rx.await.unwrap()
+}
+
+fn open_file(path: &str) -> BufReader<File> {
+    let file = File::open(path).unwrap();
+    BufReader::new(file)
 }
