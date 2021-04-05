@@ -86,13 +86,15 @@ async fn async_main() {
             public_keys.clone(),
         );
         rt::spawn(async move {
+            println!("Bootstrapping node #{}", usize::from(id));
             let node = fut.await.unwrap();
-            println!("Spawn node #{}", usize::from(node.id()));
+            println!("Spawned node #{}", usize::from(node.id()));
+            Delay::new(Duration::from_secs(3)).await;
         });
     }
     drop(pool);
 
-    // wait 3 seconds then exit
+    // wait up to 3 seconds then exit
     Delay::new(Duration::from_secs(3)).await;
 }
 
