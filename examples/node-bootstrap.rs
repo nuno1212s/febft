@@ -5,13 +5,12 @@ use std::net::SocketAddr;
 use std::collections::HashMap;
 
 use futures_timer::Delay;
-use futures::io::{AsyncReadExt, AsyncWriteExt};
 use rustls::{
     internal::pemfile,
     ServerConfig,
     ClientConfig,
-    NoClientAuth,
     RootCertStore,
+    AllowAnyAuthenticatedClient,
 };
 use rand_core::{
     OsRng,
@@ -140,10 +139,21 @@ fn sk_stream() -> impl Iterator<Item = KeyPair> {
     })
 }
 
-async fn get_server_config(t: &ThreadPool, id: NodeId) -> ServerConfig {
+async fn get_server_config(t: &ThreadPool, _id: NodeId) -> ServerConfig {
     let (tx, rx) = oneshot::channel();
     t.execute(move || {
-        let cfg = ServerConfig::new(NoClientAuth::new());
+        let mut root_store = RootCertStore::empty();
+
+        // read ca file
+        let certs = {
+            let mut file = open_file("./ca-root/root.crt");
+            pemfile::certs(&mut file).expect("root cert")
+        };
+        root_store.add(&certs[0]).unwrap();
+
+        // create server conf
+        let auth = AllowAnyAuthenticatedClient::new(root_store);
+        let cfg = ServerConfig::new(auth);
 
         tx.send(cfg).unwrap();
     });
@@ -153,29 +163,29 @@ async fn get_server_config(t: &ThreadPool, id: NodeId) -> ServerConfig {
 async fn get_client_config(t: &ThreadPool, id: NodeId) -> ClientConfig {
     let (tx, rx) = oneshot::channel();
     t.execute(move || {
-        let id = usize::from(id);
+        let id = usize::from(id) + 1;
         let mut cfg = ClientConfig::new();
 
         // configure ca file
         let mut certs = {
-            let mut file = open_file("ca-root/root.crt");
-            pemfile::certs(&mut file).unwrap()
+            let mut file = open_file("./ca-root/root.crt");
+            pemfile::certs(&mut file).expect("root cert")
         };
-        cfg.root_store.add(&certs[0]);
+        cfg.root_store.add(&certs[0]).unwrap();
 
         // configure our cert chain and secret key
         let sk = {
-            let mut file = open_file(&format!("ca-root/cop0{}/cop0{}.key", id, id));
-            let mut sk = pemfile::rsa_private_keys(&mut file).unwrap();
+            let mut file = open_file(&format!("./ca-root/cop0{}/cop0{}.key", id, id));
+            let mut sk = pemfile::rsa_private_keys(&mut file).expect("secret key");
             sk.remove(0)
         };
         let chain = {
-            let mut file = open_file(&format!("ca-root/cop0{}/cop0{}.crt", id, id));
-            let c = pemfile::certs(&mut file).unwrap();
+            let mut file = open_file(&format!("./ca-root/cop0{}/cop0{}.crt", id, id));
+            let c = pemfile::certs(&mut file).expect("cop cert");
             certs.extend(c);
             certs
         };
-        cfg.set_single_client_cert(chain, sk);
+        cfg.set_single_client_cert(chain, sk).unwrap();
 
         tx.send(cfg).unwrap();
     });
@@ -183,6 +193,6 @@ async fn get_client_config(t: &ThreadPool, id: NodeId) -> ClientConfig {
 }
 
 fn open_file(path: &str) -> BufReader<File> {
-    let file = File::open(path).unwrap();
+    let file = File::open(path).expect(path);
     BufReader::new(file)
 }
