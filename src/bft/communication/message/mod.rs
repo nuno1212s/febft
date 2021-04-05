@@ -6,6 +6,10 @@ use std::mem::MaybeUninit;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
+use smallvec::{
+    SmallVec,
+    Array,
+};
 use async_tls::{
     server::TlsStream as TlsStreamSrv,
     client::TlsStream as TlsStreamCli,
@@ -48,6 +52,13 @@ pub struct Header {
 pub struct WireMessage<'a> {
     pub(crate) header: Header,
     pub(crate) payload: &'a [u8],
+}
+
+/// A generic `WireMessage`, for different `AsRef<[u8]>` types.
+#[derive(Clone, Debug)]
+pub struct OwnedWireMessage<T> {
+    pub(crate) header: Header,
+    pub(crate) payload: T,
 }
 
 /// The `Message` type encompasses all the messages traded between different
@@ -224,6 +235,42 @@ impl Header {
     /// The signature of this `Header` and associated payload.
     pub fn signature(&self) -> Signature {
         Signature::from_bytes(&self.signature[..]).unwrap()
+    }
+}
+
+impl From<WireMessage<'_>> for OwnedWireMessage<Box<[u8]>> {
+    fn from(wm: WireMessage<'_>) -> Self {
+        OwnedWireMessage {
+            header: wm.header,
+            payload: Vec::from(wm.payload).into_boxed_slice(),
+        }
+    }
+}
+
+impl From<WireMessage<'_>> for OwnedWireMessage<Vec<u8>> {
+    fn from(wm: WireMessage<'_>) -> Self {
+        OwnedWireMessage {
+            header: wm.header,
+            payload: Vec::from(wm.payload),
+        }
+    }
+}
+
+impl<T: Array<Item = u8>> From<WireMessage<'_>> for OwnedWireMessage<SmallVec<T>> {
+    fn from(wm: WireMessage<'_>) -> Self {
+        OwnedWireMessage {
+            header: wm.header,
+            payload: SmallVec::from(wm.payload),
+        }
+    }
+}
+
+impl<T: AsRef<[u8]>> OwnedWireMessage<T> {
+    fn borrowed<'a>(&'a self) -> WireMessage<'a> {
+        WireMessage {
+            header: self.header,
+            payload: self.payload.as_ref(),
+        }
     }
 }
 
