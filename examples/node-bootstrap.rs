@@ -32,12 +32,8 @@ use febft::bft::error::*;
 
 macro_rules! addr {
     ($a:expr) => {{
-        if let Some(name) = $a.split(':').next() {
-            let addr: SocketAddr = $a.parse().unwrap();
-            (addr, String::from(name))
-        } else {
-            unreachable!()
-        }
+        let addr: SocketAddr = $a.parse().unwrap();
+        (addr, String::from("example.com"))
     }}
 }
 
