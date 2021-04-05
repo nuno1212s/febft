@@ -139,9 +139,10 @@ fn sk_stream() -> impl Iterator<Item = KeyPair> {
     })
 }
 
-async fn get_server_config(t: &ThreadPool, _id: NodeId) -> ServerConfig {
+async fn get_server_config(t: &ThreadPool, id: NodeId) -> ServerConfig {
     let (tx, rx) = oneshot::channel();
     t.execute(move || {
+        let id = usize::from(id) + 1;
         let mut root_store = RootCertStore::empty();
 
         // read ca file
@@ -153,7 +154,21 @@ async fn get_server_config(t: &ThreadPool, _id: NodeId) -> ServerConfig {
 
         // create server conf
         let auth = AllowAnyAuthenticatedClient::new(root_store);
-        let cfg = ServerConfig::new(auth);
+        let mut cfg = ServerConfig::new(auth);
+
+        // configure our cert chain and secret key
+        let sk = {
+            let mut file = open_file(&format!("./ca-root/cop0{}/cop0{}.key", id, id));
+            let mut sk = pemfile::rsa_private_keys(&mut file).expect("secret key");
+            sk.remove(0)
+        };
+        let chain = {
+            let mut file = open_file(&format!("./ca-root/cop0{}/cop0{}.crt", id, id));
+            let mut c = pemfile::certs(&mut file).expect("cop cert");
+            c.extend(certs);
+            c
+        };
+        cfg.set_single_cert(chain, sk).unwrap();
 
         tx.send(cfg).unwrap();
     });
@@ -167,7 +182,7 @@ async fn get_client_config(t: &ThreadPool, id: NodeId) -> ClientConfig {
         let mut cfg = ClientConfig::new();
 
         // configure ca file
-        let mut certs = {
+        let certs = {
             let mut file = open_file("./ca-root/root.crt");
             pemfile::certs(&mut file).expect("root cert")
         };
@@ -181,9 +196,9 @@ async fn get_client_config(t: &ThreadPool, id: NodeId) -> ClientConfig {
         };
         let chain = {
             let mut file = open_file(&format!("./ca-root/cop0{}/cop0{}.crt", id, id));
-            let c = pemfile::certs(&mut file).expect("cop cert");
-            certs.extend(c);
-            certs
+            let mut c = pemfile::certs(&mut file).expect("cop cert");
+            c.extend(certs);
+            c
         };
         cfg.set_single_client_cert(chain, sk).unwrap();
 
