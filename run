@@ -2,17 +2,19 @@
 
 cargo_do() {
     export RUSTFLAGS="-C target-cpu=native"
-    exec cargo +nightly $1 --features expose_impl
+    subcmd=$1
+    shift
+    exec cargo +nightly $subcmd --features expose_impl $@
 }
 
 case $1 in
     clean)
         rm -rf target/
         ;;
-    build|test|bench|doc)
-        cargo_do $1
+    build|test|bench|doc|run)
+        cargo_do $@
         ;;
     *)
-        echo Usage: $0 "<test|bench|doc|clean>"
+        echo Usage: $0 "<build|test|bench|doc|run>"
         exit 1
 esac
