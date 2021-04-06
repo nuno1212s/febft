@@ -129,18 +129,22 @@ pub struct Node<O> {
 
 /// Represents a configuration used to bootstrap a `Node`.
 pub struct NodeConfig {
+    /// The total number of nodes in the system.
+    ///
+    /// Typically, BFT systems set this parameter to 4.
+    /// This parameter is constrained by the following: `n >= 3*f + 1`.
+    pub n: usize,
     /// The number of nodes allowed to fail in the system.
+    ///
     /// Typically, BFT systems set this parameter to 1.
     pub f: usize,
     /// The id of this `Node`.
     pub id: NodeId,
-    /// The addresses of all nodes in the system, as well as the
-    /// domain name associated with each address.
+    /// The addresses of all nodes in the system (including clients),
+    /// as well as the domain name associated with each address.
     ///
-    /// The number of stored addresses accounts for the `n` parameter
-    /// of the BFT system, i.e. `n >= 3*f + 1`. For any `NodeConfig`
-    /// assigned to `c`, the IP address of `c.addrs[&c.id]`
-    /// should be equivalent to `localhost`.
+    /// For any `NodeConfig` assigned to `c`, the IP address of
+    /// `c.addrs[&c.id]` should be equivalent to `localhost`.
     pub addrs: HashMap<NodeId, (SocketAddr, String)>,
     /// The list of public keys of all nodes in the system.
     pub pk: HashMap<NodeId, PublicKey>,
@@ -172,11 +176,11 @@ where
         let id = cfg.id;
 
         // initial checks of correctness
-        if cfg.addrs.len() < (3*cfg.f + 1) {
+        if cfg.n < (3*cfg.f + 1) {
             return Err("Invalid number of replicas")
                 .wrapped(ErrorKind::Communication);
         }
-        if usize::from(id) >= cfg.addrs.len() {
+        if usize::from(id) >= cfg.n {
             return Err("Invalid node ID")
                 .wrapped(ErrorKind::Communication);
         }
@@ -187,13 +191,13 @@ where
         let (tx, rx) = new_message_channel::<O>(NODE_CHAN_BOUND);
         let acceptor: TlsAcceptor = cfg.server_config.into();
         let connector: TlsConnector = cfg.client_config.into();
-        let max_id: NodeId = (cfg.addrs.len() - 1).into();
+        let max_id: NodeId = NodeId::from(cfg.n);
 
         // rx side (accept conns from replica)
         rt::spawn(Self::rx_side_accept(max_id, id, listener, acceptor, tx.clone()));
 
         // tx side (connect to replica)
-        Self::tx_side_connect(id, connector.clone(), tx.clone(), &cfg.addrs);
+        Self::tx_side_connect(cfg.n as u32, id, connector.clone(), tx.clone(), &cfg.addrs);
 
         // share the secret key between other tasks, but keep it in a
         // single memory location, with an `Arc`
@@ -215,7 +219,7 @@ where
 
         // receive peer connections from channel
         let mut rogue = Vec::new();
-        let mut c = vec![0; node.peer_addrs.len()];
+        let mut c = vec![0; cfg.n];
 
         while c
             .iter()
@@ -359,12 +363,12 @@ where
 
     #[inline]
     fn tx_side_connect(
+        n: u32,
         my_id: NodeId,
         connector: TlsConnector,
         tx: MessageChannelTx<O>,
         addrs: &HashMap<NodeId, (SocketAddr, String)>,
     ) {
-        let n = addrs.len() as u32;
         for peer_id in NodeId::targets(0..n).filter(|&id| id != my_id) {
             let tx = tx.clone();
             let addr = addrs[&peer_id].clone();

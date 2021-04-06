@@ -114,6 +114,7 @@ async fn setup_node(
     // build the node conf
     let conf = NodeConfig {
         id,
+        n: 4,
         f: 1,
         addrs: map! {
             NodeId::from(0u32) => addr!("cop01" => "127.0.0.1:10001"),
