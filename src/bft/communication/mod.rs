@@ -330,7 +330,7 @@ where
                 // reserve space for message
                 buf.clear();
                 buf.reserve(header.payload_length());
-                buf.resize(Header::LENGTH, 0);
+                buf.resize(header.payload_length(), 0);
 
                 // read the peer's payload
                 if let Err(_) = sock.read_exact(&mut buf[..header.payload_length()]).await {
