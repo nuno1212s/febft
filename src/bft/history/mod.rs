@@ -98,7 +98,7 @@ impl<O> Clone for LoggerHandle<O> {
 pub struct Logger<O> {
     // handle used to receive messages to be logged
     my_rx: ChannelRx<LogOperation<O>>,
-    // handle to the master channel used by the `System`;
+    // handle to the master channel used by the `Replica`;
     // signals checkpoint messages
     system_tx: MessageChannelTx<O>,
     // the message log itself

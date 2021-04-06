@@ -33,7 +33,7 @@ pub trait Service {
 /*
 FIXME:
 
-pub struct System<S: Service> {
+pub struct Replica<S: Service> {
     node: Node<S::Request, S::Reply>,
 }
 

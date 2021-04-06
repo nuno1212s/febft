@@ -315,7 +315,7 @@ where
 
             // TODO
             //  - verify signatures???
-            //  - exit condition (when the `System` is dropped)
+            //  - exit condition (when the `Replica` or `Client` is dropped)
             loop {
                 // reserve space for header
                 buf.clear();
