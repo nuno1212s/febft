@@ -5,6 +5,7 @@
 
 pub mod async_runtime;
 pub mod communication;
+pub mod executable;
 pub mod threadpool;
 pub mod consensus;
 pub mod globals;
