@@ -12,6 +12,11 @@
 //! - `serialize_serde_BACKEND`, where `BACKEND` may be `bincode`, for instance.
 //!   Consult the `Cargo.toml` file for more alternatives.
 
+// TODO: serialize pass through mode, where we just
+// clone the input buffer into a Vec<u8>;
+//
+// this is useful for HTTP and other text/binary protocols
+
 #[cfg(feature = "serialize_capnp")]
 mod capnp;
 
