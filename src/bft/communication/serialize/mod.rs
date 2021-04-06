@@ -12,8 +12,18 @@
 //! - `serialize_serde_BACKEND`, where `BACKEND` may be `bincode`, for instance.
 //!   Consult the `Cargo.toml` file for more alternatives.
 
-// TODO: serialize pass through mode, where we just
-// clone the input buffer into a Vec<u8>;
+// TODO: serialize express mode for SystemMessage<Vec<u8>>
+// or SystemMessage<SmallVec<[u8; _]>>
+//
+// steps:
+// ======
+// 1) new Vec<u8> buffer
+// 2) write the following:
+//   2.1) message tag (ConsensusMessage, RequestMessage, ...)
+//   2.2) message payload length if is request or reply
+//   2.2) message payload if is request or reply
+//     2.2.1) just copy input buffer from SystemMessage
+// 3) flush buffer to the wire
 //
 // this is useful for HTTP and other text/binary protocols
 
