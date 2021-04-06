@@ -18,7 +18,7 @@ default = [
     "socket_tokio_tcp",
     "serialize_serde_bincode",
     "crypto_signature_ring_ed25519",
-    "crypto_hash_ring_sha2"
+    "crypto_hash_blake3_blake3"
 ]
 
 socket_tokio_tcp = ["tokio", "tokio-util"]
@@ -36,6 +36,7 @@ async_runtime_async_std = ["async-std"]
 
 crypto_signature_ring_ed25519 = ["ring"]
 crypto_hash_ring_sha2 = ["ring"]
+crypto_hash_blake3_blake3 = ["blake3"]
 
 threadpool_crossbeam = ["threadpool-crossbeam-channel"]
 threadpool_cthpool = ["cthpool"]
@@ -71,3 +72,4 @@ rmp-serde = { version = "0.15", optional = true }
 serde_cbor = { version = "0.11", optional = true }
 rio = { version = "0.9", optional = true }
 socket2 = { version = "0.4", optional = true }
+blake3 = { version = "0.3", optional = true }
