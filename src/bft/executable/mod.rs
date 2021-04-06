@@ -29,3 +29,12 @@ pub trait Service {
     /// meanwhile updating the application state.
     fn process(&mut self, state: &mut Self::State, request: Self::Request) -> Result<Self::Reply>;
 }
+
+/*
+FIXME:
+
+pub struct System<S: Service> {
+    node: Node<S::Request, S::Reply>,
+}
+
+*/
