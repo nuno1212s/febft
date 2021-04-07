@@ -251,6 +251,9 @@ where
             }
         }
 
+        // wait for other peers to connect
+        Delay::new(Duration::from_millis(100)).await;
+
         // success
         Ok((node, rogue))
     }
