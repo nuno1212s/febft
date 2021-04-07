@@ -32,6 +32,11 @@ use febft::bft::communication::{
     NodeId,
     NodeConfig,
 };
+use febft::bft::communication::message::{
+    Message,
+    SystemMessage,
+    RequestMessage,
+};
 use febft::bft::crypto::signature::{
     KeyPair,
     PublicKey,
@@ -87,14 +92,19 @@ async fn async_main() {
         );
         rt::spawn(async move {
             println!("Bootstrapping node #{}", usize::from(id));
-            let node = fut.await.unwrap();
-            println!("Spawned node #{}", usize::from(node.id()));
-            Delay::new(Duration::from_secs(3)).await;
+            let (mut node, rogue) = fut.await.unwrap();
+            println!("Spawned node #{}; len(rogue) => {}", usize::from(node.id()), rogue.len());
+            let m = SystemMessage::Request(RequestMessage::new(()));
+            node.broadcast(m, NodeId::targets(0..4));
+            for _ in 0..4 {
+                let _m = node.receive();
+                println!("Node #{} received message", usize::from(id));
+            }
         });
     }
     drop(pool);
 
-    // wait up to 3 seconds then exit
+    // wait 3 seconds then exit
     Delay::new(Duration::from_secs(3)).await;
 }
 
@@ -103,7 +113,7 @@ async fn setup_node(
     id: NodeId,
     sk: KeyPair,
     pk: HashMap<NodeId, PublicKey>,
-) -> Result<Node<()>> {
+) -> Result<(Node<()>, Vec<Message<()>>)> {
     // read TLS configs concurrently
     let (client_config, server_config) = {
         let cli = get_client_config(&t, id);
@@ -128,7 +138,7 @@ async fn setup_node(
         server_config,
     };
 
-    Node::bootstrap(conf).await.map(|(n, _)| n)
+    Node::bootstrap(conf).await
 }
 
 fn sk_stream() -> impl Iterator<Item = KeyPair> {
