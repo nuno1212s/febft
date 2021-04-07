@@ -140,6 +140,9 @@ pub struct NodeConfig {
     pub f: usize,
     /// The id of this `Node`.
     pub id: NodeId,
+    /// Time `Duration` used to sleep waiting for peer nodes
+    /// to synchronize their operation.
+    pub sync: Duration,
     /// The addresses of all nodes in the system (including clients),
     /// as well as the domain name associated with each address.
     ///
@@ -239,20 +242,24 @@ where
                     let id: usize = id.into();
                     c[id] += 1;
                 },
-                Message::DisconnectedTx(_) => {
-                    return Err("Disconnected from send side")
-                        .wrapped(ErrorKind::Communication);
+                Message::DisconnectedTx(NodeId(i)) => {
+                    let s = format!("Node {} disconnected from send side", i);
+                    return Err(s).wrapped(ErrorKind::Communication);
                 },
-                Message::DisconnectedRx(_) => {
-                    return Err("Disconnected from receive side")
-                        .wrapped(ErrorKind::Communication);
+                Message::DisconnectedRx(Some(NodeId(i))) => {
+                    let s = format!("Node {} disconnected from receive side", i);
+                    return Err(s).wrapped(ErrorKind::Communication);
+                },
+                Message::DisconnectedRx(None) => {
+                    let s = "Disconnected from receive side";
+                    return Err(s).wrapped(ErrorKind::Communication);
                 },
                 m => rogue.push(m),
             }
         }
 
         // wait for other peers to connect
-        Delay::new(Duration::from_millis(100)).await;
+        Delay::new(cfg.sync).await;
 
         // success
         Ok((node, rogue))

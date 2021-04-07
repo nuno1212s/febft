@@ -126,6 +126,7 @@ async fn setup_node(
         id,
         n: 4,
         f: 1,
+        sync: Duration::from_millis(100),
         addrs: map! {
             NodeId::from(0u32) => addr!("cop01" => "127.0.0.1:10001"),
             NodeId::from(1u32) => addr!("cop02" => "127.0.0.1:10002"),
