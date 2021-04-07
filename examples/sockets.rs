@@ -33,11 +33,26 @@ async fn client_main() -> io::Result<()> {
     let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
     let mut sock = socket::connect(addr).await?;
 
-    let mut buf = [0; 32];
-    let n = sock.read(&mut buf[..]).await?;
+    let mut buf = Vec::new();
 
-    println!("{:?}", std::str::from_utf8(&buf[..n]));
-    Ok(())
+    loop {
+        // read msg size
+        let mut size = [0; 4];
+        sock.read_exact(&mut size[..]).await?;
+        let size = u32::from_be_bytes(size) as usize;
+
+        if size == 0 {
+            break Ok(());
+        }
+
+        // reserve space for msg
+        buf.clear();
+        buf.resize(size, 0);
+
+        // read and print it
+        sock.read_exact(&mut buf[..]).await?;
+        println!("{:?}", std::str::from_utf8(&buf[..]));
+    }
 }
 
 async fn listener_main() -> io::Result<()> {
@@ -52,5 +67,13 @@ async fn listener_main() -> io::Result<()> {
 }
 
 async fn handle_client(mut sock: Socket) -> io::Result<()> {
-    sock.write_all(b"Badass FreesTyle").await
+    const TIMES: usize = 5;
+    const MSG: &[u8] = b"Badass FreesTyle";
+    const LEN: [u8; 4] = (MSG.len() as u32).to_be_bytes();
+    const ZERO: [u8; 4] = [0; 4];
+    for _ in 0..TIMES {
+        sock.write_all(&LEN[..]).await?;
+        sock.write_all(MSG).await?;
+    }
+    sock.write_all(&ZERO[..]).await
 }
