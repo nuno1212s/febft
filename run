@@ -15,6 +15,6 @@ case $1 in
         cargo_do $@
         ;;
     *)
-        echo Usage: $0 "<build|test|bench|doc|run>"
+        echo Usage: $0 "<build|test|bench|doc|run|clean>"
         exit 1
 esac
