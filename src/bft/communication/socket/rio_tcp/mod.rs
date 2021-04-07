@@ -8,7 +8,7 @@ use std::future::Future;
 use std::task::{Poll, Context};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 
-use rio::Uring;
+use rio::{Uring, Completion};
 use futures::io::{AsyncRead, AsyncWrite};
 use socket2::{Protocol, Socket as SSocket, Domain, Type};
 
@@ -55,6 +55,8 @@ pub unsafe fn drop() -> error::Result<()> {
 
 pub struct Socket {
     inner: TcpStream,
+    reading: Option<Completion<'static, usize>>,
+    writing: Option<Completion<'static, usize>>,
 }
 
 pub struct Listener {
@@ -79,7 +81,7 @@ pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
     let socket = SSocket::new(domain, ttype, protocol)?;
     ring().connect(&socket, &addr, ORD).await?;
     let inner: TcpStream = socket.into();
-    Ok(Socket { inner })
+    Ok(Socket { inner, reading: None, writing: None })
 }
 
 impl Listener {
@@ -87,7 +89,7 @@ impl Listener {
         ring()
             .accept(&self.inner)
             .await
-            .map(|inner| Socket { inner })
+            .map(|inner| Socket { inner, reading: None, writing: None })
     }
 }
 
@@ -95,12 +97,30 @@ impl AsyncRead for Socket {
     fn poll_read(
         self: Pin<&mut Self>, 
         cx: &mut Context<'_>, 
-        mut buf: &mut [u8]
+        buf: &mut [u8]
     ) -> Poll<io::Result<usize>>
     {
-        let mut completion = ring()
-            .recv_ordered(&self.inner, &mut buf, ORD);
-        Pin::new(&mut completion).poll(cx)
+        let this = &mut *self;
+        match &mut this.reading {
+            Some(ref mut c) => match Pin::new(c).poll(cx) {
+                p @ Poll::Ready(_) => {
+                    this.reading = None;
+                    p
+                },
+                Poll::Pending => Poll::Pending,
+            },
+            None => {
+                let mut c = ring()
+                    .recv_ordered(&self.inner, &mut buf, ORD);
+                match Pin::new(&mut c).poll(cx) {
+                    p @ Poll::Ready(_) => p,
+                    Poll::Pending => {
+                        this.reading = Some(c);
+                        Poll::Pending
+                    },
+                }
+            },
+        }
     }
 }
 
