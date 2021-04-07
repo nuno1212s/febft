@@ -1,5 +1,9 @@
 // FIXME: not working
 // https://unixism.net/2020/04/io-uring-by-example-part-1-introduction/
+//
+// XXX: try this as an alternative, and purge rio backend:
+// https://docs.rs/nuclei/0.1.3/nuclei/index.html
+// https://github.com/vertexclique/nuclei
 
 use std::io;
 use std::pin::Pin;
