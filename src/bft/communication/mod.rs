@@ -38,12 +38,7 @@ use futures::io::{
 
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
-use crate::bft::communication::serialize::{
-    Marshal,
-    Unmarshal,
-    serialize_message,
-    deserialize_message,
-};
+use crate::bft::communication::serialize::Data;
 use crate::bft::communication::socket::{
     Socket,
     Listener,
@@ -116,12 +111,12 @@ struct NodeTxData {
 
 /// A `Node` contains handles to other processes in the system, and is
 /// the core component used in the wire communication between processes.
-pub struct Node<O, P> {
+pub struct Node<D: Data> {
     id: NodeId,
     my_key: Arc<KeyPair>,
     peer_keys: Arc<HashMap<NodeId, PublicKey>>,
-    my_tx: MessageChannelTx<O, P>,
-    my_rx: MessageChannelRx<O, P>,
+    my_tx: MessageChannelTx<D::Request, D::Reply>,
+    my_rx: MessageChannelRx<D::Request, D::Reply>,
     peer_addrs: HashMap<NodeId, (SocketAddr, String)>,
     peer_tx: HashMap<NodeId, Arc<NodeTxData>>,
     connector: TlsConnector,
@@ -162,10 +157,11 @@ const NODE_CHAN_BOUND: usize = 128;
 // max no. of bytes to inline before doing a heap alloc
 const NODE_BUFSIZ: usize = 16384;
 
-impl<O, P> Node<O, P>
+impl<D> Node<D>
 where
-    O: Clone + Send + Marshal + Unmarshal + 'static,
-    P: Clone + Send + Marshal + Unmarshal + 'static,
+    D: Data,
+    D::Request: Clone + Send + 'static,
+    D::Reply: Clone + Send + 'static,
 {
 
     /// Bootstrap a `Node`, i.e. create connections between itself and its
@@ -173,7 +169,9 @@ where
     ///
     /// Rogue messages (i.e. not pertaining to the bootstrapping protocol)
     /// are returned in a `Vec`.
-    pub async fn bootstrap(cfg: NodeConfig) -> Result<(Self, Vec<Message<O, P>>)> {
+    pub async fn bootstrap(
+        cfg: NodeConfig,
+    ) -> Result<(Self, Vec<Message<D::Request, D::Reply>>)> {
         let id = cfg.id;
 
         // initial checks of correctness
@@ -189,7 +187,7 @@ where
         let listener = socket::bind(cfg.addrs[&id].0).await
             .wrapped(ErrorKind::Communication)?;
 
-        let (tx, rx) = new_message_channel::<O, P>(NODE_CHAN_BOUND);
+        let (tx, rx) = new_message_channel::<D::Request, D::Reply>(NODE_CHAN_BOUND);
         let acceptor: TlsAcceptor = cfg.server_config.into();
         let connector: TlsConnector = cfg.client_config.into();
         let max_id: NodeId = NodeId::from(cfg.n);
@@ -268,7 +266,7 @@ where
     /// Broadcast a `SystemMessage` to a group of nodes.
     pub fn broadcast(
         &self,
-        message: SystemMessage<O, P>,
+        message: SystemMessage<D::Request, D::Reply>,
         targets: impl Iterator<Item = NodeId>,
     ) {
         for id in targets {
@@ -280,7 +278,7 @@ where
         }
     }
 
-    fn send_to(&self, peer_id: NodeId) -> SendTo<O, P> {
+    fn send_to(&self, peer_id: NodeId) -> SendTo<D> {
         let my_id = self.id;
         let tx = self.my_tx.clone();
         if my_id != peer_id {
@@ -300,7 +298,7 @@ where
     }
 
     /// Receive one message from peer nodes or ourselves.
-    pub async fn receive(&mut self) -> Result<Message<O, P>> {
+    pub async fn receive(&mut self) -> Result<Message<D::Request, D::Reply>> {
         self.my_rx.recv().await
     }
 
@@ -349,7 +347,7 @@ where
                 }
 
                 // deserialize payload
-                let message = match deserialize_message(&buf[..header.payload_length()]) {
+                let message = match D::deserialize_message(&buf[..header.payload_length()]) {
                     Ok(m) => m,
                     Err(_) => {
                         // errors deserializing -> faulty connection;
@@ -371,7 +369,7 @@ where
         n: u32,
         my_id: NodeId,
         connector: TlsConnector,
-        tx: MessageChannelTx<O, P>,
+        tx: MessageChannelTx<D::Request, D::Reply>,
         addrs: &HashMap<NodeId, (SocketAddr, String)>,
     ) {
         for peer_id in NodeId::targets(0..n).filter(|&id| id != my_id) {
@@ -386,7 +384,7 @@ where
         my_id: NodeId,
         peer_id: NodeId,
         connector: TlsConnector,
-        mut tx: MessageChannelTx<O, P>,
+        mut tx: MessageChannelTx<D::Request, D::Reply>,
         (addr, hostname): (SocketAddr, String),
     ) {
         const RETRY: usize = 10;
@@ -443,7 +441,7 @@ where
         my_id: NodeId,
         listener: Listener,
         acceptor: TlsAcceptor,
-        tx: MessageChannelTx<O, P>,
+        tx: MessageChannelTx<D::Request, D::Reply>,
     ) {
         loop {
             if let Ok(sock) = listener.accept().await {
@@ -462,7 +460,7 @@ where
         my_id: NodeId,
         acceptor: TlsAcceptor,
         sock: Socket,
-        mut tx: MessageChannelTx<O, P>,
+        mut tx: MessageChannelTx<D::Request, D::Reply>,
     ) {
         let mut buf_header = [0; Header::LENGTH];
 
@@ -502,14 +500,14 @@ where
     }
 }
 
-enum SendTo<O, P> {
+enum SendTo<D: Data> {
     Me {
         // our id
         my_id: NodeId,
         // our secret key
         sk: Arc<KeyPair>,
         // a handle to our message channel
-        tx: MessageChannelTx<O, P>,
+        tx: MessageChannelTx<D::Request, D::Reply>,
     },
     Peers {
         // our id
@@ -519,16 +517,17 @@ enum SendTo<O, P> {
         // data associated with peer
         data: Arc<NodeTxData>,
         // a handle to our message channel
-        tx: MessageChannelTx<O, P>,
+        tx: MessageChannelTx<D::Request, D::Reply>,
     },
 }
 
-impl<O, P> SendTo<O, P>
+impl<D> SendTo<D>
 where
-    O: Send + Marshal + 'static,
-    P: Send + Marshal + 'static,
+    D: Data,
+    D::Request: Send + 'static,
+    D::Reply: Send + 'static,
 {
-    async fn value(&mut self, m: SystemMessage<O, P>) {
+    async fn value(&mut self, m: SystemMessage<D::Request, D::Reply>) {
         match self {
             SendTo::Me { my_id, ref sk, ref mut tx } => {
                 Self::me(*my_id, m, &*sk, tx).await
@@ -541,13 +540,13 @@ where
 
     async fn me(
         my_id: NodeId,
-        m: SystemMessage<O, P>,
+        m: SystemMessage<D::Request, D::Reply>,
         sk: &KeyPair,
-        tx: &mut MessageChannelTx<O, P>,
+        tx: &mut MessageChannelTx<D::Request, D::Reply>,
     ) {
         // serialize
         let mut buf: SmallVec<[_; NODE_BUFSIZ]> = SmallVec::new();
-        serialize_message(&mut buf, &m).unwrap();
+        D::serialize_message(&mut buf, &m).unwrap();
 
         // create wire msg
         let (h, _) = WireMessage::new(
@@ -564,13 +563,13 @@ where
     async fn peers(
         my_id: NodeId,
         peer_id: NodeId,
-        m: SystemMessage<O, P>,
+        m: SystemMessage<D::Request, D::Reply>,
         d: &NodeTxData,
-        tx: &mut MessageChannelTx<O, P>,
+        tx: &mut MessageChannelTx<D::Request, D::Reply>,
     ) {
         // serialize
         let mut buf: SmallVec<[_; NODE_BUFSIZ]> = SmallVec::new();
-        serialize_message(&mut buf, &m).unwrap();
+        D::serialize_message(&mut buf, &m).unwrap();
 
         // FIXME : AVOID SERIALIZING TWICE ^^^^
 
