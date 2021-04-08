@@ -430,6 +430,29 @@ impl<'a> WireMessage<'a> {
     }
 }
 
+impl<O> Message<O> {
+    /// Returns the `Header` of this message, if it is
+    /// a `SystemMessage`.
+    pub fn header(&self) -> Result<&Header> {
+        match self {
+            Message::System(ref h, _) =>
+                Ok(h),
+            Message::ConnectedTx(_, _) =>
+                Err("Expected System found ConnectedTx")
+                    .wrapped(ErrorKind::CommunicationMessage),
+            Message::ConnectedRx(_, _) =>
+                Err("Expected System found ConnectedRx")
+                    .wrapped(ErrorKind::CommunicationMessage),
+            Message::DisconnectedTx(_) =>
+                Err("Expected System found DisconnectedTx")
+                    .wrapped(ErrorKind::CommunicationMessage),
+            Message::DisconnectedRx(_) =>
+                Err("Expected System found DisconnectedRx")
+                    .wrapped(ErrorKind::CommunicationMessage),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::bft::communication::message::{WireMessage, Header};
