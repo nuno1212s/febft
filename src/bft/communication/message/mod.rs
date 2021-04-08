@@ -69,9 +69,9 @@ pub struct OwnedWireMessage<T> {
 /// The `Message` type encompasses all the messages traded between different
 /// asynchronous tasks in the system.
 ///
-pub enum Message<O> {
+pub enum Message<O, R> {
     /// Client requests and process sub-protocol messages.
-    System(Header, SystemMessage<O>),
+    System(Header, SystemMessage<O, R>),
     /// A client with id `NodeId` has finished connecting to the socket `Socket`.
     /// This socket should only perform write operations.
     ConnectedTx(NodeId, TlsStreamCli<Socket>),
@@ -93,8 +93,9 @@ pub enum Message<O> {
 /// or even `ViewChange` messages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub enum SystemMessage<O> {
+pub enum SystemMessage<O, R> {
     Request(RequestMessage<O>),
+    Reply(ReplyMessage<R>),
     Consensus(ConsensusMessage),
 }
 
@@ -106,6 +107,15 @@ pub enum SystemMessage<O> {
 #[derive(Clone)]
 pub struct RequestMessage<O> {
     operation: O,
+}
+
+/// Represents a reply to a client.
+///
+/// The `R` type argument symbolizes the response payload.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct ReplyMessage<R> {
+    payload: R,
 }
 
 /// Represents a message from the consensus sub-protocol.
@@ -143,6 +153,18 @@ impl<O> RequestMessage<O> {
     /// Returns a reference to the operation of type `O`.
     pub fn operation(&self) -> &O {
         &self.operation
+    }
+}
+
+impl<R> ReplyMessage<R> {
+    /// Creates a new `ReplyMessage`.
+    pub fn new(payload: R) -> Self {
+        Self { operation }
+    }
+
+    /// Returns a reference to the payload of type `R`.
+    pub fn payload(&self) -> &R {
+        &self.payload
     }
 }
 
@@ -430,7 +452,7 @@ impl<'a> WireMessage<'a> {
     }
 }
 
-impl<O> Message<O> {
+impl<O, R> Message<O, R> {
     /// Returns the `Header` of this message, if it is
     /// a `SystemMessage`.
     pub fn header(&self) -> Result<&Header> {

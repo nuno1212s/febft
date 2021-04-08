@@ -33,22 +33,28 @@ use crate::bft::crypto::hash::Digest;
 // each task would have its own `Serializer` instance
 
 /// Deserialize a wire message from a Cap'n'Proto segment reader.
-pub trait FromCapnp: Sized {
-    fn from_capnp<S>(reader: &Reader<S>) -> Result<SystemMessage<Self>>
+pub trait FromCapnp {
+    type Request: Sized;
+    type Reply: Sized;
+
+    fn from_capnp<S>(reader: &Reader<S>) -> Result<SystemMessage<Self::Request, Self::Reply>>
     where
         S: ReaderSegments;
 }
 
 /// Serialize a wire message using a Cap'n'Proto segment builder.
-pub trait ToCapnp: Sized {
-    fn to_capnp<A>(m: &SystemMessage<Self>, root: &mut Builder<A>) -> Result<()>
+pub trait ToCapnp {
+    type Request: Sized;
+    type Reply: Sized;
+
+    fn to_capnp<A>(m: &SystemMessage<Self::Request, Self::Reply>, root: &mut Builder<A>) -> Result<()>
     where
         A: Allocator;
 }
 
 pub fn serialize_message<O, R, W>(mut w: W, m: &SystemMessage<O, R>) -> Result<W>
 where
-    (O, R): ToCapnp,
+    (O, R): ToCapnp<Request = O, Reply = R>,
     W: Write,
 {
     let mut root = capnp::message::Builder::new(HeapAllocator::new());
@@ -60,7 +66,7 @@ where
 
 pub fn deserialize_message<O, R, Rd>(r: Rd) -> Result<SystemMessage<O, R>>
 where
-    (O, R): FromCapnp,
+    (O, R): FromCapnp<Request = O, Reply = R>,
     Rd: Read,
 {
     let reader = serialize::read_message(r, Default::default())
@@ -70,6 +76,9 @@ where
 
 #[cfg(test)]
 impl ToCapnp for ((), ()) {
+    type Request = ();
+    type Reply = ();
+
     fn to_capnp<A>(m: &SystemMessage<(), ()>, root: &mut Builder<A>) -> Result<()>
     where
         A: Allocator
@@ -100,6 +109,9 @@ impl ToCapnp for ((), ()) {
 
 #[cfg(test)]
 impl FromCapnp for ((), ()) {
+    type Request = ();
+    type Reply = ();
+
     fn from_capnp<S>(reader: &Reader<S>) -> Result<SystemMessage<(), ()>>
     where
         S: ReaderSegments
