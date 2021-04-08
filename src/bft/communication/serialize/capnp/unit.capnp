@@ -7,7 +7,8 @@ $Rust.parentModule("bft::communication::serialize::capnp");
 struct SystemMessage {
     union {
         request @0 :Void;
-        consensus @1 :ConsensusMessage;
+        reply @1 :Void;
+        consensus @2 :ConsensusMessage;
     }
 }
 

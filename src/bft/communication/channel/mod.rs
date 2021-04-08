@@ -103,22 +103,22 @@ impl<'a, T> FusedFuture for ChannelRxFut<'a, T> {
 /// Represents the sending half of a `Message` channel.
 ///
 /// The handle can be cloned as many times as needed for cheap.
-pub struct MessageChannelTx<O> {
-    other: ChannelTx<Message<O>>,
-    requests: ChannelTx<(Header, RequestMessage<O>)>,
+pub struct MessageChannelTx<O, R> {
+    other: ChannelTx<Message<O, R>>,
+    requests: ChannelTx<(Header, RequestMessage<O, R>)>,
     consensus: ChannelTx<(Header, ConsensusMessage)>,
 }
 
 /// Represents the receiving half of a `Message` channel.
-pub struct MessageChannelRx<O> {
-    other: ChannelRx<Message<O>>,
-    requests: ChannelRx<(Header, RequestMessage<O>)>,
+pub struct MessageChannelRx<O, R> {
+    other: ChannelRx<Message<O, R>>,
+    requests: ChannelRx<(Header, RequestMessage<O, R>)>,
     consensus: ChannelRx<(Header, ConsensusMessage)>,
 }
 
 /// Creates a new channel that can queue up to `bound` messages
 /// from different async senders.
-pub fn new_message_channel<O>(bound: usize) -> (MessageChannelTx<O>, MessageChannelRx<O>) {
+pub fn new_message_channel<O, R>(bound: usize) -> (MessageChannelTx<O, R>, MessageChannelRx<O, R>) {
     let (c_tx, c_rx) = new_bounded(bound);
     let (r_tx, r_rx) = new_bounded(bound);
     let (o_tx, o_rx) = new_bounded(bound);
@@ -135,7 +135,7 @@ pub fn new_message_channel<O>(bound: usize) -> (MessageChannelTx<O>, MessageChan
     (tx, rx)
 }
 
-impl<O> Clone for MessageChannelTx<O> {
+impl<O, R> Clone for MessageChannelTx<O, R> {
     fn clone(&self) -> Self {
         Self {
             consensus: self.consensus.clone(),
@@ -145,8 +145,8 @@ impl<O> Clone for MessageChannelTx<O> {
     }
 }
 
-impl<O> MessageChannelTx<O> {
-    pub async fn send(&mut self, message: Message<O>) -> Result<()> {
+impl<O, R> MessageChannelTx<O, R> {
+    pub async fn send(&mut self, message: Message<O, R>) -> Result<()> {
         match message {
             Message::System(header, message) => {
                 match message {
@@ -165,8 +165,8 @@ impl<O> MessageChannelTx<O> {
     }
 }
 
-impl<O> MessageChannelRx<O> {
-    pub async fn recv(&mut self) -> Result<Message<O>> {
+impl<O, R> MessageChannelRx<O, R> {
+    pub async fn recv(&mut self) -> Result<Message<O, R>> {
         let message = select! {
             result = self.consensus.recv() => {
                 let (h, c) = result?;

@@ -46,29 +46,38 @@ pub trait ToCapnp: Sized {
         A: Allocator;
 }
 
-pub fn serialize_message<O: ToCapnp, W: Write>(mut w: W, m: &SystemMessage<O>) -> Result<W> {
+pub fn serialize_message<O, R, W>(mut w: W, m: &SystemMessage<O, R>) -> Result<W>
+where
+    (O, R): ToCapnp,
+    W: Write,
+{
     let mut root = capnp::message::Builder::new(HeapAllocator::new());
-    O::to_capnp(m, &mut root)?;
+    <(O, R)>::to_capnp(m, &mut root)?;
     serialize::write_message(&mut w, &root)
         .map(|_| w)
         .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to serialize using capnp")
 }
 
-pub fn deserialize_message<O: FromCapnp, R: Read>(r: R) -> Result<SystemMessage<O>> {
+pub fn deserialize_message<O, R, Rd>(r: Rd) -> Result<SystemMessage<O, R>>
+where
+    (O, R): FromCapnp,
+    Rd: Read,
+{
     let reader = serialize::read_message(r, Default::default())
         .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to deserialize using capnp")?;
-    O::from_capnp(&reader)
+    <(O, R)>::from_capnp(&reader)
 }
 
 #[cfg(test)]
-impl ToCapnp for () {
-    fn to_capnp<A>(m: &SystemMessage<()>, root: &mut Builder<A>) -> Result<()>
+impl ToCapnp for ((), ()) {
+    fn to_capnp<A>(m: &SystemMessage<(), ()>, root: &mut Builder<A>) -> Result<()>
     where
         A: Allocator
     {
         let mut sys_msg: unit_capnp::system_message::Builder = root.init_root();
         match m {
             SystemMessage::Request(_) => sys_msg.set_request(()),
+            SystemMessage::Reply(_) => sys_msg.set_reply(()),
             SystemMessage::Consensus(m) => {
                 let mut consensus = sys_msg.init_consensus();
                 consensus.set_sequence_number(m.sequence_number());
@@ -90,8 +99,8 @@ impl ToCapnp for () {
 }
 
 #[cfg(test)]
-impl FromCapnp for () {
-    fn from_capnp<S>(reader: &Reader<S>) -> Result<SystemMessage<()>>
+impl FromCapnp for ((), ()) {
+    fn from_capnp<S>(reader: &Reader<S>) -> Result<SystemMessage<(), ()>>
     where
         S: ReaderSegments
     {
@@ -104,6 +113,7 @@ impl FromCapnp for () {
 
         match sys_msg_which {
             unit_capnp::system_message::Which::Request(_) => Ok(SystemMessage::Request(RequestMessage::new(()))),
+            unit_capnp::system_message::Which::Reply(_) => Ok(SystemMessage::Reply(ReplyMessage::new(()))),
             unit_capnp::system_message::Which::Consensus(Ok(consensus)) => {
                 let seq = consensus
                     .reborrow()

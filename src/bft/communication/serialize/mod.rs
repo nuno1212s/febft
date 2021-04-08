@@ -146,7 +146,7 @@ mod tests {
         let m1 = SystemMessage::Request(m1);
 
         serialize_message(&mut buf, &m1).unwrap();
-        let m2: SystemMessage<()> = deserialize_message(&buf[..]).unwrap();
+        let m2: SystemMessage<(), ()> = deserialize_message(&buf[..]).unwrap();
 
         match (m1, m2) {
             (SystemMessage::Request(_), SystemMessage::Request(_)) => (),

@@ -25,27 +25,27 @@ pub enum Info {
     Full,
 }
 
-enum LogOperation<O> {
-    Insert(Header, SystemMessage<O>),
+enum LogOperation<O, R> {
+    Insert(Header, SystemMessage<O, R>),
 }
 
-struct StoredMessage<O> {
+struct StoredMessage<O, R> {
     header: Header,
-    message: SystemMessage<O>,
+    message: SystemMessage<O, R>,
 }
 
 /// Represents a log of messages received by the BFT system.
-pub struct Log<O> {
-    pre_prepares: VecDeque<StoredMessage<O>>,
-    prepares: VecDeque<StoredMessage<O>>,
-    commits: VecDeque<StoredMessage<O>>,
+pub struct Log<O, R> {
+    pre_prepares: VecDeque<StoredMessage<O, R>>,
+    prepares: VecDeque<StoredMessage<O, R>>,
+    commits: VecDeque<StoredMessage<O, R>>,
     // others: ...
 }
 
 // TODO:
 // - garbage collect the log
 // - save the log to persistent storage
-impl<O> Log<O> {
+impl<O, R> Log<O, R> {
     /// Creates a new message log.
     pub fn new() -> Self {
         Self {
@@ -62,7 +62,7 @@ impl<O> Log<O> {
     }
 
     /// Adds a new `message` and its respective `header` to the log.
-    pub fn insert(&mut self, header: Header, message: SystemMessage<O>) -> Info {
+    pub fn insert(&mut self, header: Header, message: SystemMessage<O, R>) -> Info {
         let message = StoredMessage { header, message };
         if let SystemMessage::Consensus(ref m) = &message.message {
             match m.kind() {
@@ -76,18 +76,18 @@ impl<O> Log<O> {
 }
 
 /// Represents a handle to the logger.
-pub struct LoggerHandle<O> {
-    my_tx: ChannelTx<LogOperation<O>>,
+pub struct LoggerHandle<O, R> {
+    my_tx: ChannelTx<LogOperation<O, R>>,
 }
 
-impl<O> LoggerHandle<O> {
+impl<O, R> LoggerHandle<O, R> {
     /// Adds a new `message` and its respective `header` to the log.
-    pub async fn insert(&mut self, header: Header, message: SystemMessage<O>) -> Result<()> {
+    pub async fn insert(&mut self, header: Header, message: SystemMessage<O, R>) -> Result<()> {
         self.my_tx.send(LogOperation::Insert(header, message)).await
     }
 }
 
-impl<O> Clone for LoggerHandle<O> {
+impl<O, R> Clone for LoggerHandle<O, R> {
     fn clone(&self) -> Self {
         let my_tx = self.my_tx.clone();
         Self { my_tx }
@@ -95,24 +95,24 @@ impl<O> Clone for LoggerHandle<O> {
 }
 
 /// Represents an async message logging task.
-pub struct Logger<O> {
+pub struct Logger<O, R> {
     // handle used to receive messages to be logged
-    my_rx: ChannelRx<LogOperation<O>>,
+    my_rx: ChannelRx<LogOperation<O, R>>,
     // handle to the master channel used by the `Replica`;
     // signals checkpoint messages
-    system_tx: MessageChannelTx<O>,
+    system_tx: MessageChannelTx<O, R>,
     // the message log itself
-    log: Log<O>,
+    log: Log<O, R>,
 }
 
-impl<O> Logger<O> {
+impl<O, R> Logger<O, R> {
     // max no. of messages allowed in the channel
     const CHAN_BOUND: usize = 128;
 
     /// Spawns a new logging task into the async runtime.
     ///
     /// A handle to the master message channel, `system_tx`, should be provided.
-    pub fn new(system_tx: MessageChannelTx<O>) -> LoggerHandle<O>
+    pub fn new(system_tx: MessageChannelTx<O, R>) -> LoggerHandle<O, R>
     where
         O: Send + 'static,
     {
