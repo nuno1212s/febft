@@ -13,11 +13,11 @@ use crate::bft::communication::message::SystemMessage;
 pub trait Data {
     /// Represents the requests forwarded to replicas by the
     /// clients of the BFT system.
-    type Request: Marshal + Unmarshal;
+    type Request;
 
     /// Represents the replies forwarded to clients by replicas
     /// in the BFT system.
-    type Reply: Marshal + Unmarshal;
+    type Reply;
 
     /// The application state, which is mutated by client
     /// requests.
@@ -26,7 +26,7 @@ pub trait Data {
     /// Serialize a wire message into the writer `W`.
     ///
     /// Once the operation is finished, the writer is returned.
-    pub fn serialize_message<W>(w: W, m: &SystemMessage<Self::Request, Self::Reply>) -> Result<W>
+    pub fn serialize_message<W>(w: W, m: &SystemMessage<Self::Request, Self::Reply>) -> Result<()>
     where
         W: Write;
 
