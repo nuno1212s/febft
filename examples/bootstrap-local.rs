@@ -6,6 +6,10 @@ use std::time::Duration;
 use std::collections::HashMap;
 
 use futures_timer::Delay;
+use rand_core::{
+    OsRng,
+    RngCore,
+};
 
 use febft::bft::threadpool;
 use febft::bft::communication::NodeId;
@@ -77,4 +81,15 @@ async fn async_main() {
 
     // wait 3 seconds then exit
     Delay::new(Duration::from_secs(3)).await;
+}
+
+pub fn sk_stream() -> impl Iterator<Item = KeyPair> {
+    std::iter::repeat_with(|| {
+        // only valid for ed25519!
+        let mut buf = [0; 32];
+
+        // gen key
+        OsRng.fill_bytes(&mut buf[..]);
+        KeyPair::from_bytes(&buf[..]).unwrap()
+    })
 }

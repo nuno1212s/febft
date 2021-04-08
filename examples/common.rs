@@ -11,10 +11,6 @@ use rustls::{
     RootCertStore,
     AllowAnyAuthenticatedClient,
 };
-use rand_core::{
-    OsRng,
-    RngCore,
-};
 
 use febft::bft::error::*;
 use febft::bft::threadpool::ThreadPool;
@@ -76,17 +72,6 @@ pub async fn setup_node(
     };
 
     Node::bootstrap(conf).await
-}
-
-pub fn sk_stream() -> impl Iterator<Item = KeyPair> {
-    std::iter::repeat_with(|| {
-        // only valid for ed25519!
-        let mut buf = [0; 32];
-
-        // gen key
-        OsRng.fill_bytes(&mut buf[..]);
-        KeyPair::from_bytes(&buf[..]).unwrap()
-    })
 }
 
 async fn get_server_config(t: &ThreadPool, id: NodeId) -> ServerConfig {
