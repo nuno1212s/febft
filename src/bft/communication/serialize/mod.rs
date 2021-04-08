@@ -1,7 +1,10 @@
 //! This module is responsible for serializing wire messages in `febft`.
 //!
 //! All relevant types transmitted over the wire are `serde` aware, if
-//! this feature is enabled.
+//! this feature is enabled with `serialize_serde`. Slightly more exotic
+//! serialization routines, for better throughput, can be utilized, such
+//! as [Cap'n'Proto](https://capnproto.org/capnp-tool.html), but these are
+//! expected to be implemented by the user.
 
 use std::io::{Read, Write};
 
