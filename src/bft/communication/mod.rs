@@ -140,9 +140,6 @@ pub struct NodeConfig {
     pub f: usize,
     /// The id of this `Node`.
     pub id: NodeId,
-    /// Time `Duration` used to sleep waiting for peer nodes
-    /// to synchronize their operation.
-    pub sync: Duration,
     /// The addresses of all nodes in the system (including clients),
     /// as well as the domain name associated with each address.
     ///
@@ -257,9 +254,6 @@ where
                 m => rogue.push(m),
             }
         }
-
-        // wait for other peers to connect
-        Delay::new(cfg.sync).await;
 
         // success
         Ok((node, rogue))
