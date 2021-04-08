@@ -27,8 +27,6 @@ pub trait Data {
     type State;
 
     /// Serialize a wire message into the writer `W`.
-    ///
-    /// Once the operation is finished, the writer is returned.
     pub fn serialize_message<W>(w: W, m: &SystemMessage<Self::Request, Self::Reply>) -> Result<()>
     where
         W: Write;
