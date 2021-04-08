@@ -4,35 +4,10 @@ use std::io::{Write, BufWriter};
 
 use itertools::Itertools;
 
-const MESSAGE_CAPNP_SRC: &str = "src/bft/communication/serialize/capnp/unit.capnp";
 const ERROR_KIND_DST: &str = "error_kind.rs";
 
 fn main() {
     generate_error_kinds();
-    generate_message_from_capnp();
-}
-
-fn generate_message_from_capnp() {
-    let cargo_profile = std::env::var("CARGO_PROFILE");
-
-    let using_capnp = std::env::var("CARGO_FEATURE_SERIALIZE_CAPNP").is_ok();
-    let testing = cargo_profile
-        .as_ref()
-        .map(String::as_ref)
-        .into_iter()
-        .all(|p: &str| p == "test");
-
-    // check if we need to compile capnp schema
-    if !(using_capnp && testing) {
-        return;
-    }
-
-    // recompile capnp message into rust when the source changes
-    println!("cargo:rerun-if-changed={}", MESSAGE_CAPNP_SRC);
-    capnpc::CompilerCommand::new()
-        .file(MESSAGE_CAPNP_SRC)
-        .run()
-        .unwrap();
 }
 
 fn generate_error_kinds() {
