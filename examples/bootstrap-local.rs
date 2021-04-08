@@ -83,7 +83,7 @@ async fn async_main() {
                     .expect(&format!("on node {}", u32::from(id)))
                     .from()
                     .into();
-                println!("Node #{} received message from #{}", u32::from(id), peer);
+                println!("Node #{} received message {} from #{}", u32::from(id), debug_msg(m), peer);
             }
             // avoid early drop of node
             rt::spawn(async move {
@@ -112,20 +112,24 @@ fn sk_stream() -> impl Iterator<Item = KeyPair> {
 fn debug_rogue(rogue: Vec<Message<()>>) -> String {
     let mut buf = String::new();
     buf.push_str("[ ");
-    for m in rogue.iter() {
-        let code = match m {
-            Message::System(_, m) => match m {
-                SystemMessage::Request(_) => "Req",
-                _ => unreachable!(),
-            },
-            Message::ConnectedTx(_, _) => "CTx",
-            Message::ConnectedRx(_, _) => "CRx",
-            Message::DisconnectedTx(_) => "DTx",
-            Message::DisconnectedRx(_) => "DRx",
-        };
+    for m in rogue {
+        let code = debug_msg(m);
         buf.push_str(code);
         buf.push_str(" ");
     }
     buf.push_str("]");
     buf
+}
+
+fn debug_msg(m: Message<()>) -> &'static str {
+    match m {
+        Message::System(_, m) => match m {
+            SystemMessage::Request(_) => "Req",
+            _ => unreachable!(),
+        },
+        Message::ConnectedTx(_, _) => "CTx",
+        Message::ConnectedRx(_, _) => "CRx",
+        Message::DisconnectedTx(_) => "DTx",
+        Message::DisconnectedRx(_) => "DRx",
+    }
 }
