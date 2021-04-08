@@ -108,28 +108,3 @@ fn sk_stream() -> impl Iterator<Item = KeyPair> {
         KeyPair::from_bytes(&buf[..]).unwrap()
     })
 }
-
-fn debug_rogue(rogue: Vec<Message<()>>) -> String {
-    let mut buf = String::new();
-    buf.push_str("[ ");
-    for m in rogue {
-        let code = debug_msg(m);
-        buf.push_str(code);
-        buf.push_str(" ");
-    }
-    buf.push_str("]");
-    buf
-}
-
-fn debug_msg(m: Message<()>) -> &'static str {
-    match m {
-        Message::System(_, m) => match m {
-            SystemMessage::Request(_) => "Req",
-            _ => unreachable!(),
-        },
-        Message::ConnectedTx(_, _) => "CTx",
-        Message::ConnectedRx(_, _) => "CRx",
-        Message::DisconnectedTx(_) => "DTx",
-        Message::DisconnectedRx(_) => "DRx",
-    }
-}
