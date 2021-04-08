@@ -12,11 +12,11 @@ use crate::bft::communication::serialize::{
 pub trait Service {
     /// Represents the requests forwarded to replicas by the
     /// clients of the BFT system.
-    type Request: Marshal<Self::Reply> + Unmarshal<Self::Request>;
+    type Request: Marshal + Unmarshal;
 
     /// Represents the replies forwarded to clients by replicas
     /// in the BFT system.
-    type Reply: Marshal<Self::Reply> + Unmarshal<Self::Request>;
+    type Reply: Marshal + Unmarshal;
 
     /// The application state, which is mutated by client
     /// requests.

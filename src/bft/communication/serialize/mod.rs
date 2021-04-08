@@ -47,14 +47,24 @@ pub use self::capnp::{ToCapnp, FromCapnp};
 /// Serialize a wire message into the writer `W`.
 ///
 /// Once the operation is finished, the writer is returned.
+#[cfg(feature = "serialize_capnp")]
 pub fn serialize_message<O, P, W>(w: W, m: &SystemMessage<O, P>) -> Result<W>
 where
-    O: Marshal<P>,
+    O: ToCapnp<P = P>,
     W: Write,
 {
-    #[cfg(feature = "serialize_capnp")]
-    { capnp::serialize_message(w, m) }
+    capnp::serialize_message(w, m)
+}
 
+/// Serialize a wire message into the writer `W`.
+///
+/// Once the operation is finished, the writer is returned.
+#[cfg(feature = "serialize_serde")]
+pub fn serialize_message<O, P, W>(w: W, m: &SystemMessage<O, P>) -> Result<W>
+where
+    SystemMessage<O, P>: Serialize,
+    W: Write,
+{
     #[cfg(feature = "serialize_serde_bincode")]
     { serde::bincode::serialize_message(w, m) }
 
@@ -66,14 +76,22 @@ where
 }
 
 /// Deserialize a wire message from a reader `R`.
+#[cfg(feature = "serialize_capnp")]
 pub fn deserialize_message<O, P, R>(r: R) -> Result<SystemMessage<O, P>>
 where
-    P: Unmarshal<O>,
+    P: FromCapnp<O = O>,
     R: Read,
 {
-    #[cfg(feature = "serialize_capnp")]
-    { capnp::deserialize_message(r) }
+    capnp::deserialize_message(r)
+}
 
+/// Deserialize a wire message from a reader `R`.
+#[cfg(feature = "serialize_serde")]
+pub fn deserialize_message<O, P, R>(r: R) -> Result<SystemMessage<O, P>>
+where
+    SystemMessage<O, P>: for <'de> Deserialize<'de>,
+    R: Read,
+{
     #[cfg(feature = "serialize_serde_bincode")]
     { serde::bincode::deserialize_message(r) }
 
@@ -83,71 +101,6 @@ where
     #[cfg(feature = "serialize_serde_cbor")]
     { serde::cbor::deserialize_message(r) }
 }
-
-////////////////////////////////////////////////////////////
-//
-//    WARNING !! !! !!
-//    ================
-//
-//    gore below :-)
-//
-////////////////////////////////////////////////////////////
-
-/// Marker trait to abstract between different serialization
-/// crates.
-#[cfg(feature = "serialize_serde")]
-pub trait Marshal<P>
-where
-    Self: Serialize,
-    P: Serialize,
-{}
-
-/// Marker trait to abstract between different serialization
-/// crates.
-#[cfg(feature = "serialize_capnp")]
-pub trait Marshal<P>: ToCapnp<P = P> {}
-
-/// Marker trait to abstract between different serialization
-/// crates.
-#[cfg(feature = "serialize_serde")]
-pub trait Unmarshal<O>
-where
-    O: for<'de> Deserialize<'de>,
-    Self: for<'de> Deserialize<'de>,
-{}
-
-/// Marker trait to abstract between different serialization
-/// crates.
-#[cfg(feature = "serialize_capnp")]
-pub trait Unmarshal<O>: FromCapnp<O = O> {}
-
-#[cfg(feature = "serialize_serde")]
-impl<O, P> Marshal<P> for O
-where
-    O: Serialize,
-    P: Serialize,
-{}
-
-#[cfg(feature = "serialize_capnp")]
-impl<O, P> Marshal<P> for O
-where
-    O: ToCapnp<P = P>,
-{}
-
-#[cfg(feature = "serialize_serde")]
-impl<O, P> Unmarshal<O> for P
-where
-    O: for<'de> Deserialize<'de>,
-    P: for<'de> Deserialize<'de>,
-{}
-
-#[cfg(feature = "serialize_capnp")]
-impl<O, P> Unmarshal<O> for P
-where
-    P: FromCapnp<O = O>,
-{}
-
-// XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX
 
 #[cfg(test)]
 mod tests {

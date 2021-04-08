@@ -164,8 +164,8 @@ const NODE_BUFSIZ: usize = 16384;
 
 impl<O, P> Node<O, P>
 where
-    O: Clone + Send + Marshal<P> + 'static,
-    P: Clone + Send + Unmarshal<O> + 'static,
+    O: Clone + Send + Marshal + Unmarshal + 'static,
+    P: Clone + Send + Marshal + Unmarshal + 'static,
 {
 
     /// Bootstrap a `Node`, i.e. create connections between itself and its
@@ -525,8 +525,8 @@ enum SendTo<O, P> {
 
 impl<O, P> SendTo<O, P>
 where
-    O: Send + Marshal<P> + 'static,
-    P: Send + 'static,
+    O: Send + Marshal + 'static,
+    P: Send + Marshal + 'static,
 {
     async fn value(&mut self, m: SystemMessage<O, P>) {
         match self {
