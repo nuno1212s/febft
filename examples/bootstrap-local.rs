@@ -73,7 +73,7 @@ async fn async_main() {
             let m = SystemMessage::Request(RequestMessage::new(()));
             node.broadcast(m, NodeId::targets(0..4));
             for _ in 0..4 {
-                let _m = node.receive();
+                let _m = node.receive().await;
                 println!("Node #{} received message", usize::from(id));
             }
         });

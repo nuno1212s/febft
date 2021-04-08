@@ -77,7 +77,7 @@ async fn async_main(id: NodeId) {
             sk,
             addrs,
             public_keys,
-            Duration::from_secs(1),
+            Duration::from_secs(10),
         );
         println!("Bootstrapping node #{}", usize::from(id));
         let (node, rogue) = fut.await.unwrap();
@@ -91,7 +91,7 @@ async fn async_main(id: NodeId) {
 
     // receive peer messages
     for _ in 0..4 {
-        let _m = node.receive();
+        let _m = node.receive().await;
         println!("Node #{} received message", usize::from(id));
     }
 }
