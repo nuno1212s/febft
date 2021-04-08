@@ -2,6 +2,7 @@ mod common;
 
 use common::*;
 
+use std::time::Duration;
 use std::collections::HashMap;
 
 use febft::bft::threadpool;
@@ -76,6 +77,7 @@ async fn async_main(id: NodeId) {
             sk,
             addrs,
             public_keys,
+            Duration::from_secs(1),
         );
         println!("Bootstrapping node #{}", usize::from(id));
         let (node, rogue) = fut.await.unwrap();

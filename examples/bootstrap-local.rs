@@ -64,6 +64,7 @@ async fn async_main() {
             sk,
             addrs,
             public_keys.clone(),
+            Duration::from_millis(200),
         );
         rt::spawn(async move {
             println!("Bootstrapping node #{}", usize::from(id));

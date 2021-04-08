@@ -50,6 +50,7 @@ pub async fn setup_node(
     sk: KeyPair,
     addrs: HashMap<NodeId, (SocketAddr, String)>,
     pk: HashMap<NodeId, PublicKey>,
+    sync: Duration,
 ) -> Result<(Node<()>, Vec<Message<()>>)> {
     // read TLS configs concurrently
     let (client_config, server_config) = {
@@ -63,7 +64,7 @@ pub async fn setup_node(
         id,
         n: 4,
         f: 1,
-        sync: Duration::from_millis(100),
+        sync,
         sk,
         pk,
         addrs,
