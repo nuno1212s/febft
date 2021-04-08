@@ -33,51 +33,48 @@ use crate::bft::crypto::hash::Digest;
 // each task would have its own `Serializer` instance
 
 /// Deserialize a wire message from a Cap'n'Proto segment reader.
-pub trait FromCapnp {
-    type Request: Sized;
-    type Reply: Sized;
+pub trait FromCapnp: Sized {
+    type O: Sized;
 
-    fn from_capnp<S>(reader: &Reader<S>) -> Result<SystemMessage<Self::Request, Self::Reply>>
+    fn from_capnp<S>(reader: &Reader<S>) -> Result<SystemMessage<Self::O, Self>>
     where
         S: ReaderSegments;
 }
 
 /// Serialize a wire message using a Cap'n'Proto segment builder.
-pub trait ToCapnp {
-    type Request: Sized;
-    type Reply: Sized;
+pub trait ToCapnp; Sized {
+    type P: Sized;
 
-    fn to_capnp<A>(m: &SystemMessage<Self::Request, Self::Reply>, root: &mut Builder<A>) -> Result<()>
+    fn to_capnp<A>(m: &SystemMessage<Self, Self::P>, root: &mut Builder<A>) -> Result<()>
     where
         A: Allocator;
 }
 
-pub fn serialize_message<O, R, W>(mut w: W, m: &SystemMessage<O, R>) -> Result<W>
+pub fn serialize_message<O, P, W>(mut w: W, m: &SystemMessage<O, P>) -> Result<W>
 where
-    (O, R): ToCapnp<Request = O, Reply = R>,
+    O: ToCapnp<P = P>,
     W: Write,
 {
     let mut root = capnp::message::Builder::new(HeapAllocator::new());
-    <(O, R)>::to_capnp(m, &mut root)?;
+    O::to_capnp(m, &mut root)?;
     serialize::write_message(&mut w, &root)
         .map(|_| w)
         .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to serialize using capnp")
 }
 
-pub fn deserialize_message<O, R, Rd>(r: Rd) -> Result<SystemMessage<O, R>>
+pub fn deserialize_message<O, P, R>(r: R) -> Result<SystemMessage<O, P>>
 where
-    (O, R): FromCapnp<Request = O, Reply = R>,
-    Rd: Read,
+    P: ToCapnp<O = O>,
+    R: Read,
 {
     let reader = serialize::read_message(r, Default::default())
         .wrapped_msg(ErrorKind::CommunicationSerializeCapnp, "Failed to deserialize using capnp")?;
-    <(O, R)>::from_capnp(&reader)
+    P::from_capnp(&reader)
 }
 
 #[cfg(test)]
-impl ToCapnp for ((), ()) {
-    type Request = ();
-    type Reply = ();
+impl ToCapnp for () {
+    type P = ();
 
     fn to_capnp<A>(m: &SystemMessage<(), ()>, root: &mut Builder<A>) -> Result<()>
     where
@@ -108,9 +105,8 @@ impl ToCapnp for ((), ()) {
 }
 
 #[cfg(test)]
-impl FromCapnp for ((), ()) {
-    type Request = ();
-    type Reply = ();
+impl FromCapnp for () {
+    type O = ();
 
     fn from_capnp<S>(reader: &Reader<S>) -> Result<SystemMessage<(), ()>>
     where

@@ -69,9 +69,9 @@ pub struct OwnedWireMessage<T> {
 /// The `Message` type encompasses all the messages traded between different
 /// asynchronous tasks in the system.
 ///
-pub enum Message<O, R> {
+pub enum Message<O, P> {
     /// Client requests and process sub-protocol messages.
-    System(Header, SystemMessage<O, R>),
+    System(Header, SystemMessage<O, P>),
     /// A client with id `NodeId` has finished connecting to the socket `Socket`.
     /// This socket should only perform write operations.
     ConnectedTx(NodeId, TlsStreamCli<Socket>),
@@ -93,9 +93,9 @@ pub enum Message<O, R> {
 /// or even `ViewChange` messages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub enum SystemMessage<O, R> {
+pub enum SystemMessage<O, P> {
     Request(RequestMessage<O>),
-    Reply(ReplyMessage<R>),
+    Reply(ReplyMessage<P>),
     Consensus(ConsensusMessage),
 }
 
@@ -111,11 +111,11 @@ pub struct RequestMessage<O> {
 
 /// Represents a reply to a client.
 ///
-/// The `R` type argument symbolizes the response payload.
+/// The `P` type argument symbolizes the response payload.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct ReplyMessage<R> {
-    payload: R,
+pub struct ReplyMessage<P> {
+    payload: P,
 }
 
 /// Represents a message from the consensus sub-protocol.
@@ -156,14 +156,14 @@ impl<O> RequestMessage<O> {
     }
 }
 
-impl<R> ReplyMessage<R> {
+impl<P> ReplyMessage<P> {
     /// Creates a new `ReplyMessage`.
-    pub fn new(payload: R) -> Self {
-        Self { operation }
+    pub fn new(payload: P) -> Self {
+        Self { payload }
     }
 
-    /// Returns a reference to the payload of type `R`.
-    pub fn payload(&self) -> &R {
+    /// Returns a reference to the payload of type `P`.
+    pub fn payload(&self) -> &P {
         &self.payload
     }
 }
@@ -452,7 +452,7 @@ impl<'a> WireMessage<'a> {
     }
 }
 
-impl<O, R> Message<O, R> {
+impl<O, P> Message<O, P> {
     /// Returns the `Header` of this message, if it is
     /// a `SystemMessage`.
     pub fn header(&self) -> Result<&Header> {

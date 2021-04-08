@@ -47,9 +47,9 @@ pub use self::capnp::{ToCapnp, FromCapnp};
 /// Serialize a wire message into the writer `W`.
 ///
 /// Once the operation is finished, the writer is returned.
-pub fn serialize_message<O, W>(w: W, m: &SystemMessage<O>) -> Result<W>
+pub fn serialize_message<O, P, W>(w: W, m: &SystemMessage<O, P>) -> Result<W>
 where
-    O: Marshal,
+    O: Marshal<P>,
     W: Write,
 {
     #[cfg(feature = "serialize_capnp")]
@@ -66,9 +66,9 @@ where
 }
 
 /// Deserialize a wire message from a reader `R`.
-pub fn deserialize_message<O, R>(r: R) -> Result<SystemMessage<O>>
+pub fn deserialize_message<O, P, R>(r: R) -> Result<SystemMessage<O, P>>
 where
-    O: Unmarshal,
+    P: Unmarshal<O>,
     R: Read,
 {
     #[cfg(feature = "serialize_capnp")]
@@ -96,34 +96,56 @@ where
 /// Marker trait to abstract between different serialization
 /// crates.
 #[cfg(feature = "serialize_serde")]
-pub trait Marshal: Serialize {}
+pub trait Marshal<P>
+where
+    Self: Serialize,
+    P: Serialize,
+{}
 
 /// Marker trait to abstract between different serialization
 /// crates.
 #[cfg(feature = "serialize_capnp")]
-pub trait Marshal: ToCapnp {}
+pub trait Marshal<P>: ToCapnp<P = P> {}
 
 /// Marker trait to abstract between different serialization
 /// crates.
 #[cfg(feature = "serialize_serde")]
-pub trait Unmarshal: for<'de> Deserialize<'de> {}
+pub trait Unmarshal<O>
+where
+    O: for<'de> Deserialize<'de>,
+    Self: for<'de> Deserialize<'de>,
+{}
 
 /// Marker trait to abstract between different serialization
 /// crates.
 #[cfg(feature = "serialize_capnp")]
-pub trait Unmarshal: FromCapnp {}
+pub trait Unmarshal<O>: FromCapnp<O = O> {}
 
 #[cfg(feature = "serialize_serde")]
-impl<T: Serialize> Marshal for T {}
+impl<O, P> Marshal<P> for O
+where
+    O: Serialize,
+    P: Serialize,
+{}
 
 #[cfg(feature = "serialize_capnp")]
-impl<T: ToCapnp> Marshal for T {}
+impl<O, P> Marshal<P> for O
+where
+    O: ToCapnp<P = P>,
+{}
 
 #[cfg(feature = "serialize_serde")]
-impl<T: for<'de> Deserialize<'de>> Unmarshal for T {}
+impl<O, P> Unmarshal<O> for P
+where
+    O: for<'de> Deserialize<'de>,
+    P: for<'de> Deserialize<'de>,
+{}
 
 #[cfg(feature = "serialize_capnp")]
-impl<T: FromCapnp> Unmarshal for T {}
+impl<O, P> Unmarshal<O> for P
+where
+    P: FromCapnp<O = O>,
+{}
 
 // XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX-XXX
 
