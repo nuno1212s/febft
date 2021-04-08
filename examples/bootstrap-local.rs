@@ -64,18 +64,30 @@ async fn async_main() {
             sk,
             addrs,
             public_keys.clone(),
-            Duration::from_millis(200),
         );
         rt::spawn(async move {
-            println!("Bootstrapping node #{}", usize::from(id));
+            println!("Bootstrapping node #{}", u32::from(id));
             let (mut node, rogue) = fut.await.unwrap();
-            println!("Spawned node #{}; len(rogue) => {}", usize::from(node.id()), rogue.len());
+            println!("Spawned node #{}; len(rogue) => {}", u32::from(node.id()), rogue.len());
             let m = SystemMessage::Request(RequestMessage::new(()));
             node.broadcast(m, NodeId::targets(0..4));
             for _ in 0..4 {
-                let _m = node.receive().await;
-                println!("Node #{} received message", usize::from(id));
+                let m = node
+                    .receive()
+                    .await
+                    .unwrap();
+                let peer: u32 = m
+                    .header()
+                    .expect(&format!("on node {}", u32::from(id)))
+                    .from()
+                    .into();
+                println!("Node #{} received message from #{}", u32::from(id), peer);
             }
+            // avoid early drop of node
+            rt::spawn(async move {
+                let _node = node;
+                let () = std::future::pending().await;
+            });
         });
     }
     drop(pool);

@@ -1,6 +1,5 @@
 use std::fs::File;
 use std::io::BufReader;
-use std::time::Duration;
 use std::net::SocketAddr;
 use std::collections::HashMap;
 
@@ -50,7 +49,6 @@ pub async fn setup_node(
     sk: KeyPair,
     addrs: HashMap<NodeId, (SocketAddr, String)>,
     pk: HashMap<NodeId, PublicKey>,
-    sync: Duration,
 ) -> Result<(Node<()>, Vec<Message<()>>)> {
     // read TLS configs concurrently
     let (client_config, server_config) = {
@@ -64,7 +62,6 @@ pub async fn setup_node(
         id,
         n: 4,
         f: 1,
-        sync,
         sk,
         pk,
         addrs,

@@ -5,6 +5,8 @@ use common::*;
 use std::time::Duration;
 use std::collections::HashMap;
 
+use futures_timer::Delay;
+
 use febft::bft::threadpool;
 use febft::bft::communication::NodeId;
 use febft::bft::async_runtime as rt;
@@ -77,11 +79,10 @@ async fn async_main(id: NodeId) {
             sk,
             addrs,
             public_keys,
-            Duration::from_secs(10),
         );
-        println!("Bootstrapping node #{}", usize::from(id));
+        println!("Bootstrapping...");
         let (node, rogue) = fut.await.unwrap();
-        println!("Spawned node #{}; len(rogue) => {}", usize::from(node.id()), rogue.len());
+        println!("Spawned node; len(rogue) => {}", rogue.len());
         node
     };
 
@@ -91,9 +92,20 @@ async fn async_main(id: NodeId) {
 
     // receive peer messages
     for _ in 0..4 {
-        let _m = node.receive().await;
-        println!("Node #{} received message", usize::from(id));
+        let m = node
+            .receive()
+            .await
+            .unwrap();
+        let peer: u32 = m
+            .header()
+            .expect(&format!("on node {}", u32::from(id)))
+            .from()
+            .into();
+        println!("Received message from #{}", peer);
     }
+
+    // wait 30 seconds then exit
+    Delay::new(Duration::from_secs(30)).await;
 }
 
 const KEY_SIZE: usize = 32;
