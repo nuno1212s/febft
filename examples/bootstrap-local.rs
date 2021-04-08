@@ -21,6 +21,7 @@ use febft::bft::{
 use febft::bft::communication::message::{
     SystemMessage,
     RequestMessage,
+    Message,
 };
 use febft::bft::crypto::signature::{
     KeyPair,
@@ -68,7 +69,8 @@ async fn async_main() {
         rt::spawn(async move {
             println!("Bootstrapping node #{}", u32::from(id));
             let (mut node, rogue) = fut.await.unwrap();
-            println!("Spawned node #{}; len(rogue) => {}", u32::from(node.id()), rogue.len());
+            println!("Spawned node #{}", u32::from(id));
+            println!("Rogue on node #{} => {}", u32::from(id), debug_rogue(rogue));
             let m = SystemMessage::Request(RequestMessage::new(()));
             node.broadcast(m, NodeId::targets(0..4));
             for _ in 0..4 {
@@ -96,7 +98,7 @@ async fn async_main() {
     Delay::new(Duration::from_secs(3)).await;
 }
 
-pub fn sk_stream() -> impl Iterator<Item = KeyPair> {
+fn sk_stream() -> impl Iterator<Item = KeyPair> {
     std::iter::repeat_with(|| {
         // only valid for ed25519!
         let mut buf = [0; 32];
@@ -105,4 +107,25 @@ pub fn sk_stream() -> impl Iterator<Item = KeyPair> {
         OsRng.fill_bytes(&mut buf[..]);
         KeyPair::from_bytes(&buf[..]).unwrap()
     })
+}
+
+fn debug_rogue(rogue: Vec<Message<()>>) -> String {
+    let mut buf = String::new();
+    buf.push_str("[ ");
+    for m in rogue.iter() {
+        let code = match m {
+            Message::System(_, m) => match m {
+                SystemMessage::Request(_) => "Req",
+                _ => unreachable!(),
+            },
+            Message::ConnectedTx(_, _) => "CTx",
+            Message::ConnectedRx(_, _) => "CRx",
+            Message::DisconnectedTx(_) => "DTx",
+            Message::DisconnectedRx(_) => "DRx",
+        };
+        buf.push_str(code);
+        buf.push_str(" ");
+    }
+    buf.push_str("]");
+    buf
 }
