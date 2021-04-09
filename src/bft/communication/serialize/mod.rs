@@ -41,6 +41,9 @@ pub trait ReplicaData: SharedData {
     /// The application state, which is mutated by client
     /// requests.
     type State;
+
+    // TODO: state serialization for the
+    // state transfer protocol
 }
 
 /// Extension of `SharedData`, pertaining solely to clients.
