@@ -191,7 +191,6 @@ impl Data for NullData {
             .wrapped(ErrorKind::Communication)
     }
 
-    /// Deserialize a wire message from a reader `R`.
     fn deserialize_message<R>(r: R) -> Result<SystemMessage<(), ()>>
     where
         R: Read
