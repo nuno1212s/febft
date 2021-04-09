@@ -105,7 +105,7 @@ pub struct Logger<O, P> {
     log: Log<O, P>,
 }
 
-impl<O, P: Send + 'static> Logger<O, P> {
+impl<O, P> Logger<O, P> {
     // max no. of messages allowed in the channel
     const CHAN_BOUND: usize = 128;
 
@@ -115,6 +115,7 @@ impl<O, P: Send + 'static> Logger<O, P> {
     pub fn new(system_tx: MessageChannelTx<O, P>) -> LoggerHandle<O, P>
     where
         O: Send + 'static,
+        P: Send + 'static,
     {
         let log = Log::new();
         let (my_tx, my_rx) = channel::new_bounded(Self::CHAN_BOUND);
