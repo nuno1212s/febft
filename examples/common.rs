@@ -15,7 +15,7 @@ use rustls::{
 
 use febft::bft::error::*;
 use febft::bft::threadpool::ThreadPool;
-use febft::bft::communication::serialize::Data;
+use febft::bft::communication::serialize::SharedData;
 use febft::bft::communication::message::{
     Message,
     SystemMessage,
@@ -178,10 +178,9 @@ fn open_file(path: &str) -> BufReader<File> {
 
 pub struct NullData;
 
-impl Data for NullData {
+impl SharedData for NullData {
     type Request = ();
     type Reply = ();
-    type State = ();
 
     fn serialize_message<W>(w: W, m: &SystemMessage<(), ()>) -> Result<()>
     where
