@@ -10,13 +10,21 @@ use crate::bft::communication::{
 
 /// This struct contains information related with an
 /// active `febft` view.
-pub struct SystemInfo {
+pub struct ViewInfo {
     leader: NodeId,
-    n: usize,
-    f: usize,
+    params: SystemParams,
 }
 
 /// Represents a replica in `febft`.
 pub struct Replica<S: Service> {
+    info: ViewInfo,
     node: Node<S::Data>,
+}
+
+/// This struct contains the system parameters of
+/// a replica or client in `febft`, i.e. `n` and `f`
+/// such that `n >= 3*f + 1`.
+pub struct SystemParams {
+    n: usize,
+    f: usize,
 }
