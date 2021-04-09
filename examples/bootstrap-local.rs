@@ -21,7 +21,6 @@ use febft::bft::{
 use febft::bft::communication::message::{
     SystemMessage,
     RequestMessage,
-    Message,
 };
 use febft::bft::crypto::signature::{
     KeyPair,
