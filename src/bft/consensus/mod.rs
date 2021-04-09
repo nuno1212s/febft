@@ -78,10 +78,10 @@ impl TBOQueue {
 macro_rules! extract_msg {
     ($g:expr, $q:expr) => {
         if let Some(m) = Self::pop_message($q) {
-            Some(PollStatus::NextMessage(m))
+            PollStatus::NextMessage(m)
         } else {
             *$g = false;
-            Some(PollStatus::Recv)
+            PollStatus::Recv
         }
     }
 }
@@ -103,10 +103,9 @@ impl TBOQueue {
     }
 
     /// Poll this `TBOQueue` for new consensus messages.
-    pub fn poll(&mut self, phase: ProtoPhase) -> Option<PollStatus> {
+    pub fn poll(&mut self, phase: ProtoPhase) -> PollStatus {
         match phase {
-            ProtoPhase::End => None,
-            ProtoPhase::Init => Some(PollStatus::Propose),
+            ProtoPhase::Init => PollStatus::Propose,
             ProtoPhase::PrePreparing if self.get_queue => {
                 extract_msg!(&mut self.get_queue, &mut self.pre_prepares)
             },
@@ -116,7 +115,7 @@ impl TBOQueue {
             ProtoPhase::Commiting(_) if self.get_queue => {
                 extract_msg!(&mut self.get_queue, &mut self.commits)
             },
-            _ => Some(PollStatus::Recv),
+            _ => PollStatus::Recv,
         }
     }
 
@@ -165,8 +164,6 @@ pub enum ProtoPhase {
     /// Running the `COMMIT` phase. The integer represents
     /// the number of votes received.
     Commiting(u32),
-    /// The consensus protocol is no longer running.
-    End,
 }
 
 /// Contains the state of an active consensus instance, as well
