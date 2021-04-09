@@ -11,8 +11,14 @@ use crate::bft::communication::message::{
 
 /// Represents the status of calling `poll()` on a `TBOQueue`.
 pub enum PollStatus {
+    /// The `Replica` associated with this `TBOQueue` should
+    /// poll its main channel for more messages.
     Recv,
+    /// The `Replica` associated with this `TBOQueue` should
+    /// propose a new client request to be ordered, if it is
+    /// the leader.
     Propose,
+    /// A new consensus message is available to be processed.
     NextMessage(ConsensusMessage),
 }
 
@@ -90,6 +96,13 @@ impl TBOQueue {
         Self::new_impl(curr_seq)
     }
 
+    /// Signal this `TBOQueue` that it may be able to extract new
+    /// consensus messages from its internal storage.
+    pub fn signal(&mut self) {
+        self.get_queue = true;
+    }
+
+    /// Poll this `TBOQueue` for new consensus messages.
     pub fn poll(&mut self, phase: ProtoPhase) -> Option<PollStatus> {
         match phase {
             ProtoPhase::End => None,
