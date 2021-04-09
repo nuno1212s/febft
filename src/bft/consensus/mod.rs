@@ -172,3 +172,19 @@ pub struct Consensus {
     phase: ProtoPhase,
     tbo: TBOQueue,
 }
+
+impl Consensus {
+    /// Starts a new consensus protocol tracker.
+    pub fn new() -> Self {
+        Self {
+            phase: ProtoPhase::Init,
+            tbo: TBOQueue::new(0),
+        }
+    }
+
+    /// Returns a reference to the `TBOQueue` of this
+    /// `Consensus` protocol tracker.
+    pub fn tbo(&mut self) -> &mut TBOQueue {
+        &mut self.tbo
+    }
+}
