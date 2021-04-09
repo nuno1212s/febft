@@ -13,7 +13,10 @@ use crate::bft::communication::message::SystemMessage;
 
 /// Marker trait containing the types used by the application,
 /// as well as routines to serialize the application data.
-pub trait Data {
+///
+/// Both clients and replicas should implement this trait,
+/// to communicate with each other.
+pub trait SharedData {
     /// Represents the requests forwarded to replicas by the
     /// clients of the BFT system.
     type Request;
@@ -21,10 +24,6 @@ pub trait Data {
     /// Represents the replies forwarded to clients by replicas
     /// in the BFT system.
     type Reply;
-
-    /// The application state, which is mutated by client
-    /// requests.
-    type State;
 
     /// Serialize a wire message into the writer `W`.
     fn serialize_message<W>(w: W, m: &SystemMessage<Self::Request, Self::Reply>) -> Result<()>
@@ -36,3 +35,15 @@ pub trait Data {
     where
         R: Read;
 }
+
+/// Extension of `SharedData`, pertaining solely to replicas.
+pub trait Data: SharedData {
+    /// The application state, which is mutated by client
+    /// requests.
+    type State;
+}
+
+/// Extension of `SharedData`, pertaining solely to clients.
+pub trait ClientData: SharedData {}
+
+impl<D: SharedData> ClientData for D {}

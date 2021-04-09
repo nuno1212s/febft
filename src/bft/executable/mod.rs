@@ -1,7 +1,10 @@
 //! User application execution business logic.
 
 use crate::bft::error::*;
-use crate::bft::communication::serialize::Data;
+use crate::bft::communication::serialize::{
+    Data,
+    SharedData,
+};
 
 /// A user defined `Service`.
 ///
@@ -18,8 +21,8 @@ pub trait Service {
     fn process(
         &mut self,
         state: &mut <<Self as Service>::Data as Data>::State,
-        request: <<Self as Service>::Data as Data>::Request,
-    ) -> Result<<<Self as Service>::Data as Data>::Reply>;
+        request: <<Self as Service>::Data as SharedData>::Request,
+    ) -> Result<<<Self as Service>::Data as SharedData>::Reply>;
 }
 
 /*
