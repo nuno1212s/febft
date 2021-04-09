@@ -9,6 +9,13 @@ use crate::bft::communication::message::{
     Message,
 };
 
+/// Represents the status of calling `poll()` on a `TBOQueue`.
+pub enum PollStatus {
+    Recv,
+    Propose,
+    NextMessage(ConsensusMessage),
+}
+
 /// Represents a queue of messages to be ordered in a consensus instance.
 ///
 /// Because of the asynchrony of the Internet, messages may arrive out of
@@ -62,6 +69,17 @@ impl TBOQueue {
     }
 }
 
+macro_rules! extract_msg {
+    ($g:expr, $q:expr) => {
+        if let Some(m) = Self::pop_message($q) {
+            Some(PollStatus::NextMessage(m))
+        } else {
+            *$g = false;
+            Some(PollStatus::Recv)
+        }
+    }
+}
+
 // XXX: api
 impl TBOQueue {
     /// Creates a new instance of `TBOQueue`.
@@ -72,53 +90,22 @@ impl TBOQueue {
         Self::new_impl(curr_seq)
     }
 
-    //pub async fn next_message(
-    //    &mut self,
-    //    node: &mut Node,
-    //    consensus: &Consensus,
-    //) -> Result<Message> {
-    //    match self.phase {
-    //        ProtoPhase::End => return Err("System has shut down").wrapped(ErrorKind::Consensus),
-    //        ProtoPhase::Init => {
-    //            if let Some(request) = self.requests.pop_front() {
-    //                if self.leader == self.node.id {
-    //                    self.propose_value(request.value);
-    //                }
-    //                self.phase = ProtoPhase::PrePreparing;
-    //            }
-    //            let message = self.node.receive().await?;
-    //            message
-    //        },
-    //        ProtoPhase::PrePreparing if get_queue => {
-    //            if let Some(m) = pop_message(&mut self.tbo_pre_prepare) {
-    //                Message::System(SystemMessage::Consensus(m))
-    //            } else {
-    //                get_queue = false;
-    //                continue;
-    //            }
-    //        },
-    //        ProtoPhase::Preparing(_) if get_queue => {
-    //            if let Some(m) = pop_message(&mut self.tbo_prepare) {
-    //                Message::System(SystemMessage::Consensus(m))
-    //            } else {
-    //                get_queue = false;
-    //                continue;
-    //            }
-    //        },
-    //        ProtoPhase::Commiting(_) if get_queue => {
-    //            if let Some(m) = pop_message(&mut self.tbo_commit) {
-    //                Message::System(SystemMessage::Consensus(m))
-    //            } else {
-    //                get_queue = false;
-    //                continue;
-    //            }
-    //        },
-    //        _ => {
-    //            let message = self.node.receive().await?;
-    //            message
-    //        },
-    //    }
-    //}
+    pub fn poll(&mut self, phase: ProtoPhase) -> Option<PollStatus> {
+        match phase {
+            ProtoPhase::End => None,
+            ProtoPhase::Init => Some(PollStatus::Propose),
+            ProtoPhase::PrePreparing if self.get_queue => {
+                extract_msg!(&mut self.get_queue, &mut self.pre_prepares)
+            },
+            ProtoPhase::Preparing(_) if self.get_queue => {
+                extract_msg!(&mut self.get_queue, &mut self.prepares)
+            },
+            ProtoPhase::Commiting(_) if self.get_queue => {
+                extract_msg!(&mut self.get_queue, &mut self.commits)
+            },
+            _ => Some(PollStatus::Recv),
+        }
+    }
 
     /// Advances the message queues, and updates the consensus instance id.
     pub fn next_instance(&mut self) {
@@ -147,16 +134,25 @@ impl TBOQueue {
     }
 }
 
+/// Repreents the current phase of the consensus protocol.
 #[derive(Debug, Copy, Clone)]
-enum ProtoPhase {
+pub enum ProtoPhase {
+    /// Start of a new consensus instance.
     Init,
+    /// Running the `PRE-PREPARE` phase.
     PrePreparing,
+    /// Running the `PREPARE` phase. The integer represents
+    /// the number of votes received.
     Preparing(u32),
+    /// Running the `COMMIT` phase. The integer represents
+    /// the number of votes received.
     Commiting(u32),
-    Executing,
+    /// The consensus protocol is no longer running.
     End,
 }
 
+/// Contains the state of an active consensus instance, as well
+/// as future instances.
 pub struct Consensus {
     phase: ProtoPhase,
     tbo: TBOQueue,
