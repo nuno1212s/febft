@@ -3,12 +3,7 @@
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 
-use crate::bft::error::*;
-use crate::bft::communication::message::{
-    ConsensusMessage,
-    SystemMessage,
-    Message,
-};
+use crate::bft::communication::message::ConsensusMessage;
 
 /// Represents the status of calling `poll()` on a `TBOQueue`.
 pub enum PollStatus {
