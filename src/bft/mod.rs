@@ -12,6 +12,7 @@ pub mod globals;
 pub mod history;
 pub mod crypto;
 pub mod error;
+pub mod core;
 
 use std::ops::Drop;
 
