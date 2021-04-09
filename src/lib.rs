@@ -12,8 +12,8 @@
 //!     + E.g. `threadpool_cthpool`.
 //! - The sockets library used to communicate with other nodes:
 //!     + E.g. `socket_async_std_tcp`.
-//! - The framework used to serialize messages sent over the wire:
-//!     + E.g. `serialize_serde_messagepack`.
+//! - If the serialization of wire messages is possible with `serde`:
+//!     + With `serialize_serde`.
 //! - The crypto library used to perform public key crypto operations:
 //!     + E.g. `crypto_signature_ring_ed25519`.
 //! - The crypto library used to calculate hash digests of messages:
