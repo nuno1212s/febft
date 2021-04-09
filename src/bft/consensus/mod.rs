@@ -120,7 +120,12 @@ impl TBOQueue {
         }
     }
 
-    /// Advances the message queues, and updates the consensus instance id.
+    /// Reports the id of the consensus this `TBOQueue` is tracking.
+    pub fn tracking_instance(&self) -> i32 {
+        self.curr_seq
+    }
+
+    /// Advances the message queue, and updates the consensus instance id.
     pub fn next_instance(&mut self) {
         self.curr_seq += 1;
         Self::advance_message_queue(&mut self.pre_prepares);
