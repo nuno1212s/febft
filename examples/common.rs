@@ -1,7 +1,9 @@
+#![allow(dead_code)]
+
 use std::fs::File;
-use std::io::BufReader;
 use std::net::SocketAddr;
 use std::collections::HashMap;
+use std::io::{BufReader, Read, Write};
 
 use rustls::{
     internal::pemfile,
@@ -13,6 +15,7 @@ use rustls::{
 
 use febft::bft::error::*;
 use febft::bft::threadpool::ThreadPool;
+use febft::bft::communication::serialize::Data;
 use febft::bft::communication::message::{
     Message,
     SystemMessage,
@@ -46,7 +49,7 @@ macro_rules! map {
      }};
 }
 
-pub fn debug_rogue(rogue: Vec<Message<()>>) -> String {
+pub fn debug_rogue(rogue: Vec<Message<(), ()>>) -> String {
     let mut buf = String::new();
     buf.push_str("[ ");
     for m in rogue {
@@ -58,7 +61,7 @@ pub fn debug_rogue(rogue: Vec<Message<()>>) -> String {
     buf
 }
 
-pub fn debug_msg(m: Message<()>) -> &'static str {
+pub fn debug_msg(m: Message<(), ()>) -> &'static str {
     match m {
         Message::System(_, m) => match m {
             SystemMessage::Request(_) => "Req",
@@ -77,7 +80,7 @@ pub async fn setup_node(
     sk: KeyPair,
     addrs: HashMap<NodeId, (SocketAddr, String)>,
     pk: HashMap<NodeId, PublicKey>,
-) -> Result<(Node<()>, Vec<Message<()>>)> {
+) -> Result<(Node<NullData>, Vec<Message<(), ()>>)> {
     // read TLS configs concurrently
     let (client_config, server_config) = {
         let cli = get_client_config(&t, id);
@@ -172,3 +175,30 @@ fn open_file(path: &str) -> BufReader<File> {
     let file = File::open(path).expect(path);
     BufReader::new(file)
 }
+
+pub struct NullData;
+
+impl Data for NullData {
+    type Request = ();
+    type Reply = ();
+    type State = ();
+
+    fn serialize_message<W>(w: W, m: &SystemMessage<(), ()>) -> Result<()>
+    where
+        W: Write
+    {
+        bincode::serialize_into(w, m)
+            .wrapped(ErrorKind::Communication)
+    }
+
+    /// Deserialize a wire message from a reader `R`.
+    fn deserialize_message<R>(r: R) -> Result<SystemMessage<(), ()>>
+    where
+        R: Read
+    {
+        bincode::deserialize_from(r)
+            .wrapped(ErrorKind::Communication)
+    }
+}
+
+fn main() {}
