@@ -159,6 +159,5 @@ enum ProtoPhase {
 
 pub struct Consensus {
     phase: ProtoPhase,
-    seq: i32,
-    leader: u32,
+    tbo: TBOQueue,
 }
