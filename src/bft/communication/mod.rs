@@ -163,7 +163,6 @@ where
     D::Request: Clone + Send + 'static,
     D::Reply: Clone + Send + 'static,
 {
-
     /// Bootstrap a `Node`, i.e. create connections between itself and its
     /// peer nodes.
     ///
@@ -190,10 +189,10 @@ where
         let (tx, rx) = new_message_channel::<D::Request, D::Reply>(NODE_CHAN_BOUND);
         let acceptor: TlsAcceptor = cfg.server_config.into();
         let connector: TlsConnector = cfg.client_config.into();
-        let max_id: NodeId = NodeId::from(cfg.n);
 
         // rx side (accept conns from replica)
-        rt::spawn(Self::rx_side_accept(max_id, id, listener, acceptor, tx.clone()));
+        let first_cli: NodeId = cfg.n.into();
+        rt::spawn(Self::rx_side_accept(first_cli, id, listener, acceptor, tx.clone()));
 
         // tx side (connect to replica)
         Self::tx_side_connect(cfg.n as u32, id, connector.clone(), tx.clone(), &cfg.addrs);
@@ -231,12 +230,18 @@ where
                 Message::ConnectedTx(id, sock) => {
                     node.handle_connected_tx(id, sock);
                     let id: usize = id.into();
-                    c[id] += 1;
+                    if id < cfg.n {
+                        // not a client connection, increase count
+                        c[id] += 1;
+                    }
                 },
                 Message::ConnectedRx(id, sock) => {
                     node.handle_connected_rx(id, sock);
                     let id: usize = id.into();
-                    c[id] += 1;
+                    if id < cfg.n {
+                        // not a client connection, increase count
+                        c[id] += 1;
+                    }
                 },
                 Message::DisconnectedTx(NodeId(i)) => {
                     let s = format!("Node {} disconnected from send side", i);
@@ -374,6 +379,9 @@ where
     ) {
         for peer_id in NodeId::targets(0..n).filter(|&id| id != my_id) {
             let tx = tx.clone();
+            // FIXME: this line can crash the program if the user
+            // provides an invalid HashMap, maybe return a Result<()>
+            // from this function
             let addr = addrs[&peer_id].clone();
             let connector = connector.clone();
             rt::spawn(Self::tx_side_connect_task(my_id, peer_id, connector, tx, addr));
@@ -437,7 +445,7 @@ where
 
     // TODO: check if we have terminated the node, and exit
     async fn rx_side_accept(
-        max_id: NodeId,
+        first_cli: NodeId,
         my_id: NodeId,
         listener: Listener,
         acceptor: TlsAcceptor,
@@ -447,7 +455,7 @@ where
             if let Ok(sock) = listener.accept().await {
                 let tx = tx.clone();
                 let acceptor = acceptor.clone();
-                rt::spawn(Self::rx_side_accept_task(max_id, my_id, acceptor, sock, tx));
+                rt::spawn(Self::rx_side_accept_task(first_cli, my_id, acceptor, sock, tx));
             }
         }
     }
@@ -456,7 +464,7 @@ where
     // header doesn't need to be signed, since we won't be
     // storing this message in the history log
     async fn rx_side_accept_task(
-        max_id: NodeId,
+        first_cli: NodeId,
         my_id: NodeId,
         acceptor: TlsAcceptor,
         sock: Socket,
@@ -485,9 +493,13 @@ where
 
             // extract peer id
             let peer_id = match WireMessage::from_parts(header, &[]) {
-                Ok(wm) if wm.header().from() > max_id => break,
+                // drop connections from other clis if we are a cli
+                Ok(wm) if wm.header().from() >= first_cli && my_id >= first_cli => break,
+                // drop connections to the wrong dest
                 Ok(wm) if wm.header().to() != my_id => break,
+                // accept all other conns
                 Ok(wm) => wm.header().from(),
+                // drop connections with invalid headers
                 Err(_) => break,
             };
 
