@@ -24,12 +24,3 @@ pub trait Service {
         request: <Self::Data as SharedData>::Request,
     ) -> Result<<Self::Data as SharedData>::Reply>;
 }
-
-/*
-TODO:
-
-pub struct Replica<S: Service> {
-    node: Node<S::Request, S::Reply>,
-}
-
-*/
