@@ -1,6 +1,7 @@
 //! The consensus algorithm used for `febft` and other logic.
 
 use std::collections::VecDeque;
+use std::ops::{Deref, DerefMut};
 
 use crate::bft::error::*;
 use crate::bft::communication::message::{
@@ -88,11 +89,7 @@ macro_rules! extract_msg {
 
 // XXX: api
 impl TBOQueue {
-    /// Creates a new instance of `TBOQueue`.
-    ///
-    /// The integer `curr_seq` represents the id of the currently
-    /// running consensus instance.
-    pub fn new(curr_seq: i32) -> Self {
+    fn new(curr_seq: i32) -> Self {
         Self::new_impl(curr_seq)
     }
 
@@ -103,7 +100,7 @@ impl TBOQueue {
     }
 
     /// Poll this `TBOQueue` for new consensus messages.
-    pub fn poll(&mut self, phase: ProtoPhase) -> PollStatus {
+    fn poll_queue(&mut self, phase: ProtoPhase) -> PollStatus {
         match phase {
             ProtoPhase::Init => PollStatus::Propose,
             ProtoPhase::PrePreparing if self.get_queue => {
@@ -182,9 +179,22 @@ impl Consensus {
         }
     }
 
-    /// Returns a reference to the `TBOQueue` of this
-    /// `Consensus` protocol tracker.
-    pub fn tbo(&mut self) -> &mut TBOQueue {
+    /// Check if we can process new consensus messages.
+    pub fn poll(&mut self) -> PollStatus {
+        self.tbo.poll_queue(self.phase)
+    }
+}
+
+impl Deref for Consensus {
+    type Target = TBOQueue;
+
+    fn deref(&self) -> &TBOQueue {
+        &self.tbo
+    }
+}
+
+impl DerefMut for Consensus {
+    fn deref_mut(&mut self) -> &mut TBOQueue {
         &mut self.tbo
     }
 }
