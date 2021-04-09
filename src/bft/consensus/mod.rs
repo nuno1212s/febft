@@ -105,7 +105,7 @@ impl TBOQueue {
             ProtoPhase::Preparing(_) if self.get_queue => {
                 extract_msg!(&mut self.get_queue, &mut self.prepares)
             },
-            ProtoPhase::Commiting(_) if self.get_queue => {
+            ProtoPhase::Committing(_) if self.get_queue => {
                 extract_msg!(&mut self.get_queue, &mut self.commits)
             },
             _ => PollStatus::Recv,
@@ -156,7 +156,7 @@ pub enum ProtoPhase {
     Preparing(u32),
     /// Running the `COMMIT` phase. The integer represents
     /// the number of votes received.
-    Commiting(u32),
+    Committing(u32),
 }
 
 /// Contains the state of an active consensus instance, as well
