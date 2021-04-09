@@ -37,7 +37,7 @@ pub trait SharedData {
 }
 
 /// Extension of `SharedData`, pertaining solely to replicas.
-pub trait Data: SharedData {
+pub trait ReplicaData: SharedData {
     /// The application state, which is mutated by client
     /// requests.
     type State;

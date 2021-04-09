@@ -38,7 +38,7 @@ use futures::io::{
 
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
-use crate::bft::communication::serialize::Data;
+use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::socket::{
     Socket,
     Listener,
@@ -111,7 +111,7 @@ struct NodeTxData {
 
 /// A `Node` contains handles to other processes in the system, and is
 /// the core component used in the wire communication between processes.
-pub struct Node<D: Data> {
+pub struct Node<D: SharedData> {
     id: NodeId,
     my_key: Arc<KeyPair>,
     peer_keys: Arc<HashMap<NodeId, PublicKey>>,
@@ -159,7 +159,7 @@ const NODE_BUFSIZ: usize = 16384;
 
 impl<D> Node<D>
 where
-    D: Data + 'static,
+    D: SharedData + 'static,
     D::Request: Clone + Send + 'static,
     D::Reply: Clone + Send + 'static,
 {
@@ -512,7 +512,7 @@ where
     }
 }
 
-enum SendTo<D: Data> {
+enum SendTo<D: SharedData> {
     Me {
         // our id
         my_id: NodeId,
@@ -535,7 +535,7 @@ enum SendTo<D: Data> {
 
 impl<D> SendTo<D>
 where
-    D: Data + 'static,
+    D: SharedData + 'static,
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
