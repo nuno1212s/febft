@@ -84,6 +84,10 @@ pub enum Message<O, P> {
     ///
     /// The id is only equal to `None` during a `Node` bootstrap process.
     DisconnectedRx(Option<NodeId>),
+    /// The request of a client with id `NodeId` has finished executing.
+    ///
+    /// The payload delivered to the client is `P`.
+    ExecutionFinished(NodeId, P),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
@@ -470,6 +474,9 @@ impl<O, P> Message<O, P> {
                     .wrapped(ErrorKind::CommunicationMessage),
             Message::DisconnectedRx(_) =>
                 Err("Expected System found DisconnectedRx")
+                    .wrapped(ErrorKind::CommunicationMessage),
+            Message::ExecutionFinished(_, _) =>
+                Err("Expected System found ExecutionFinished")
                     .wrapped(ErrorKind::CommunicationMessage),
         }
     }
