@@ -27,12 +27,12 @@ pub trait Data {
     type State;
 
     /// Serialize a wire message into the writer `W`.
-    pub fn serialize_message<W>(w: W, m: &SystemMessage<Self::Request, Self::Reply>) -> Result<()>
+    fn serialize_message<W>(w: W, m: &SystemMessage<Self::Request, Self::Reply>) -> Result<()>
     where
         W: Write;
 
     /// Deserialize a wire message from a reader `R`.
-    pub fn deserialize_message<O, P, R>(r: R) -> Result<SystemMessage<Self::Request, Self::Reply>>
+    fn deserialize_message<R>(r: R) -> Result<SystemMessage<Self::Request, Self::Reply>>
     where
         R: Read;
 }

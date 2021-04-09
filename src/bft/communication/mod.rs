@@ -159,7 +159,7 @@ const NODE_BUFSIZ: usize = 16384;
 
 impl<D> Node<D>
 where
-    D: Data,
+    D: Data + 'static,
     D::Request: Clone + Send + 'static,
     D::Reply: Clone + Send + 'static,
 {
@@ -523,7 +523,7 @@ enum SendTo<D: Data> {
 
 impl<D> SendTo<D>
 where
-    D: Data,
+    D: Data + 'static,
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {

@@ -105,7 +105,7 @@ pub struct Logger<O, P> {
     log: Log<O, P>,
 }
 
-impl<O, P> Logger<O, P> {
+impl<O, P: Send + 'static> Logger<O, P> {
     // max no. of messages allowed in the channel
     const CHAN_BOUND: usize = 128;
 

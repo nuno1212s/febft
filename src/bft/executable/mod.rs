@@ -11,15 +11,15 @@ pub trait Service {
     type Data: Data;
 
     /// Returns the initial state of the application.
-    fn initial_state(&mut self) -> Result<Self::Data::State>;
+    fn initial_state(&mut self) -> Result<<<Self as Service>::Data as Data>::State>;
 
     /// Process a user request, producing a matching reply,
     /// meanwhile updating the application state.
     fn process(
         &mut self,
-        state: &mut Self::Data::State,
-        request: Self::Data::Request,
-    ) -> Result<Self::Data::Reply>;
+        state: &mut <<Self as Service>::Data as Data>::State,
+        request: <<Self as Service>::Data as Data>::Request,
+    ) -> Result<<<Self as Service>::Data as Data>::Reply>;
 }
 
 /*

@@ -115,7 +115,7 @@ pub struct MessageChannelTx<O, P> {
 pub struct MessageChannelRx<O, P> {
     other: ChannelRx<Message<O, P>>,
     requests: ChannelRx<(Header, RequestMessage<O>)>,
-    replies: ChannelTx<(Header, ReplyMessage<P>)>,
+    replies: ChannelRx<(Header, ReplyMessage<P>)>,
     consensus: ChannelRx<(Header, ConsensusMessage)>,
 }
 
@@ -146,7 +146,7 @@ impl<O, P> Clone for MessageChannelTx<O, P> {
         Self {
             consensus: self.consensus.clone(),
             requests: self.requests.clone(),
-            replies: self.requests.clone(),
+            replies: self.replies.clone(),
             other: self.other.clone(),
         }
     }
@@ -188,7 +188,7 @@ impl<O, P> MessageChannelRx<O, P> {
             },
             result = self.replies.recv() => {
                 let (h, r) = result?;
-                Message::System(h, SystemMessage::ReplyMessage(r))
+                Message::System(h, SystemMessage::Reply(r))
             },
             result = self.other.recv() => {
                 let message = result?;
