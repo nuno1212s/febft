@@ -17,7 +17,7 @@ default = [
     "threadpool_crossbeam",
     "socket_tokio_tcp",
     "serialize_serde",
-    "channel_async_channel_mpmc",
+    "channel_futures_mpsc",
     "crypto_signature_ring_ed25519",
     "crypto_hash_blake3_blake3"
 ]
