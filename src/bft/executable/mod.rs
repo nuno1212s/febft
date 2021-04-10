@@ -78,6 +78,16 @@ where
         system_tx: MessageChannelTx<Request<S>, Reply<S>>,
         service: S,
     ) -> ExecutorHandle<S> {
+        // TODO: task steps (loop)
+        //   - receive request from channel
+        //   - send request to separate execution thread
+        //     - or thread pool! (use global instance with init fn)
+        //   - await its completion with oneshot channel
+        //     - avoid using Arc by sending the service along
+        //       with the request operation in the channel
+        //   - send reply payload to `system_tx`
+        //
+        // TODO: EXIT CONDITION!
         unimplemented!()
     }
 }
