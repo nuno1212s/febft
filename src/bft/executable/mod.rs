@@ -59,7 +59,7 @@ pub struct Executor<S: Service> {
     my_rx: ChannelRx<ExecutionRequest<Request<S>>>,
     system_tx: MessageChannelTx<Request<S>, Reply<S>>,
     state: State<S>,
-    service: S,
+    service: Option<S>,
 }
 
 /// Represents a handle to the client request executor.
