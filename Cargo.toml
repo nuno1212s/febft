@@ -17,7 +17,7 @@ default = [
     "threadpool_crossbeam",
     "socket_tokio_tcp",
     "serialize_serde",
-    "channel_futures_mpsc",
+    "channel_async_channel_mpmc",
     "crypto_signature_ring_ed25519",
     "crypto_hash_blake3_blake3"
 ]
@@ -39,6 +39,8 @@ threadpool_crossbeam = ["threadpool-crossbeam-channel"]
 threadpool_cthpool = ["cthpool"]
 
 channel_futures_mpsc = []
+channel_flume_mpmc = ["flume"]
+channel_async_channel_mpmc = ["async-channel"]
 
 #bench = ["expose_impl", "oneshot", "futures-timer", "async-semaphore"]
 expose_impl = []
@@ -68,3 +70,5 @@ cthpool = { git = "https://github.com/sug0/cthpool", optional = true }
 rio = { version = "0.9", optional = true }
 socket2 = { version = "0.4", optional = true }
 blake3 = { version = "0.3", optional = true }
+flume = { version = "0.10", optional = true }
+async-channel = { version = "1", optional = true }

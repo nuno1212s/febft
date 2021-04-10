@@ -3,6 +3,12 @@
 #[cfg(feature = "channel_futures_mpsc")]
 mod futures_mpsc;
 
+#[cfg(feature = "channel_flume_mpmc")]
+mod flume_mpmc;
+
+#[cfg(feature = "channel_async_channel_mpmc")]
+mod async_channel_mpmc;
+
 use std::pin::Pin;
 use std::future::Future;
 use std::task::{Poll, Context};
@@ -24,18 +30,36 @@ use crate::bft::communication::message::{
 pub struct ChannelTx<T> {
     #[cfg(feature = "channel_futures_mpsc")]
     inner: futures_mpsc::ChannelTx<T>,
+
+    #[cfg(feature = "channel_flume_mpmc")]
+    inner: flume_mpmc::ChannelTx<T>,
+
+    #[cfg(feature = "channel_async_channel_mpmc")]
+    inner: async_channel_mpmc::ChannelTx<T>,
 }
 
 /// General purpose channel's receiving half.
 pub struct ChannelRx<T> {
     #[cfg(feature = "channel_futures_mpsc")]
     inner: futures_mpsc::ChannelRx<T>,
+
+    #[cfg(feature = "channel_flume_mpmc")]
+    inner: flume_mpmc::ChannelRx<T>,
+
+    #[cfg(feature = "channel_async_channel_mpmc")]
+    inner: async_channel_mpmc::ChannelRx<T>,
 }
 
 /// Future for a general purpose channel's receiving operation.
 pub struct ChannelRxFut<'a, T> {
     #[cfg(feature = "channel_futures_mpsc")]
     inner: futures_mpsc::ChannelRxFut<'a, T>,
+
+    #[cfg(feature = "channel_flume_mpmc")]
+    inner: flume_mpmc::ChannelRxFut<'a, T>,
+
+    #[cfg(feature = "channel_async_channel_mpmc")]
+    inner: async_channel_mpmc::ChannelRxFut<'a, T>,
 }
 
 impl<T> Clone for ChannelTx<T> {
@@ -53,6 +77,12 @@ pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
     let (tx, rx) = {
         #[cfg(feature = "channel_futures_mpsc")]
         { futures_mpsc::new_bounded(bound) }
+
+        #[cfg(feature = "channel_flume_mpmc")]
+        { flume_mpmc::new_bounded(bound) }
+
+        #[cfg(feature = "channel_async_channel_mpmc")]
+        { async_channel_mpmc::new_bounded(bound) }
     };
     let tx = ChannelTx { inner: tx };
     let rx = ChannelRx { inner: rx };
