@@ -86,6 +86,18 @@ pub struct ExecutorHandle<S: Service> {
     my_tx: ChannelTx<ExecutionRequest<Request<S>>>,
 }
 
+//impl<S: Service> ExecutorHandle<S>
+//where
+//    S: Service + Send + 'static,
+//    Request<S>: Send + 'static,
+//    Reply<S>: Send + 'static,
+//{
+//    /// Adds a new `message` and its respective `header` to the log.
+//    pub async fn queue(&mut self, to: NodeId, req: ) -> Result<()> {
+//        self.my_tx.send(LogOperation::Insert(header, message)).await
+//    }
+//}
+
 impl<S: Service> Clone for ExecutorHandle<S> {
     fn clone(&self) -> Self {
         let my_tx = self.my_tx.clone();
