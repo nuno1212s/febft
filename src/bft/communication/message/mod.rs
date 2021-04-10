@@ -158,6 +158,11 @@ impl<O> RequestMessage<O> {
     pub fn operation(&self) -> &O {
         &self.operation
     }
+
+    /// Unwraps this `RequestMessage`.
+    pub fn into_inner(self) -> O {
+        self.operation
+    }
 }
 
 impl<P> ReplyMessage<P> {
