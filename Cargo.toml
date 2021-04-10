@@ -17,6 +17,7 @@ default = [
     "threadpool_crossbeam",
     "socket_tokio_tcp",
     "serialize_serde",
+    "channel_futures_mpsc",
     "crypto_signature_ring_ed25519",
     "crypto_hash_blake3_blake3"
 ]
@@ -36,6 +37,8 @@ crypto_hash_blake3_blake3 = ["blake3"]
 
 threadpool_crossbeam = ["threadpool-crossbeam-channel"]
 threadpool_cthpool = ["cthpool"]
+
+channel_futures_mpsc = []
 
 #bench = ["expose_impl", "oneshot", "futures-timer", "async-semaphore"]
 expose_impl = []

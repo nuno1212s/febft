@@ -1,19 +1,14 @@
 //! FIFO channels used to send messages between async tasks.
 
+#[cfg(feature = "channel_futures_mpsc")]
+mod futures_mpsc;
+
 use std::pin::Pin;
 use std::future::Future;
 use std::task::{Poll, Context};
 
 use futures::select;
-use futures::channel::mpsc;
-use futures::stream::{
-    Stream,
-    FusedStream,
-};
-use futures::future::{
-    poll_fn,
-    FusedFuture,
-};
+use futures::future::FusedFuture;
 
 use crate::bft::error::*;
 use crate::bft::communication::message::{
@@ -27,20 +22,24 @@ use crate::bft::communication::message::{
 
 /// General purpose channel's sending half.
 pub struct ChannelTx<T> {
-    inner: mpsc::Sender<T>,
+    #[cfg(feature = "channel_futures_mpsc")]
+    inner: futures_mpsc::ChannelTx<T>,
 }
 
 /// General purpose channel's receiving half.
 pub struct ChannelRx<T> {
-    inner: mpsc::Receiver<T>,
+    #[cfg(feature = "channel_futures_mpsc")]
+    inner: futures_mpsc::ChannelRx<T>,
 }
 
 /// Future for a general purpose channel's receiving operation.
 pub struct ChannelRxFut<'a, T> {
-    inner: &'a mut mpsc::Receiver<T>,
+    #[cfg(feature = "channel_futures_mpsc")]
+    inner: futures_mpsc::ChannelRxFut<'a, T>,
 }
 
 impl<T> Clone for ChannelTx<T> {
+    #[inline]
     fn clone(&self) -> Self {
         let inner = self.inner.clone();
         Self { inner }
@@ -49,8 +48,12 @@ impl<T> Clone for ChannelTx<T> {
 
 /// Creates a new general purpose channel that can queue up to
 /// `bound` messages from different async senders.
+#[inline]
 pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
-    let (tx, rx) = mpsc::channel(bound);
+    let (tx, rx) = {
+        #[cfg(feature = "channel_futures_mpsc")]
+        { futures_mpsc::new_bounded(bound) }
+    };
     let tx = ChannelTx { inner: tx };
     let rx = ChannelRx { inner: rx };
     (tx, rx)
@@ -59,27 +62,14 @@ pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
 impl<T> ChannelTx<T> {
     #[inline]
     pub async fn send(&mut self, message: T) -> Result<()> {
-        self.ready().await?;
-        self.inner
-            .try_send(message)
-            .simple(ErrorKind::CommunicationChannel)
-    }
-
-    #[inline]
-    async fn ready(&mut self) -> Result<()> {
-        poll_fn(|cx| match self.inner.poll_ready(cx) {
-            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(e)) if e.is_full() => Poll::Pending,
-            Poll::Ready(_) => Poll::Ready(Err(Error::simple(ErrorKind::CommunicationChannel))),
-            Poll::Pending => Poll::Pending,
-        }).await
+        self.inner.send(message).await
     }
 }
 
 impl<T> ChannelRx<T> {
     #[inline]
     pub fn recv<'a>(&'a mut self) -> ChannelRxFut<'a, T> {
-        let inner = &mut self.inner;
+        let inner = self.inner.recv();
         ChannelRxFut { inner }
     }
 }
@@ -89,13 +79,12 @@ impl<'a, T> Future for ChannelRxFut<'a, T> {
 
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<T>> {
-        Pin::new(&mut self.inner)
-            .poll_next(cx)
-            .map(|opt| opt.ok_or(Error::simple(ErrorKind::CommunicationChannel)))
+        Pin::new(&mut self.inner).poll(cx)
     }
 }
 
 impl<'a, T> FusedFuture for ChannelRxFut<'a, T> {
+    #[inline]
     fn is_terminated(&self) -> bool {
         self.inner.is_terminated()
     }
