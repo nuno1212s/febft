@@ -276,6 +276,8 @@ impl Consensus {
         // the amount of votes received
         match self.phase {
             ProtoPhase::Init => {
+                // in the init phase, we can't do anything,
+                // queue the message for later
                 match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
                         self.queue_pre_prepare(message);
@@ -292,6 +294,8 @@ impl Consensus {
                 }
             },
             ProtoPhase::PrePreparing => {
+                // queue message if we're not pre-preparing
+                // and on the same seq as the message
                 self.current = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) if message.sequence_number() != self.sequence_number() => {
                         self.queue_pre_prepare(message);
@@ -309,6 +313,7 @@ impl Consensus {
                         return ConsensusStatus::Deciding;
                     },
                 };
+                // leader can't vote for a prepare
                 if node.id() != view.leader() {
                     let message = SystemMessage::Consensus(ConsensusMessage::new(
                         self.sequence_number(),
@@ -317,10 +322,13 @@ impl Consensus {
                     let targets = NodeId::targets_usize(0..view.params().n());
                     node.broadcast(message, targets);
                 }
+                // enter preparing phase
                 self.phase = ProtoPhase::Preparing(0);
                 ConsensusStatus::Deciding
             },
             ProtoPhase::Preparing(i) => {
+                // queue message if we're not preparing
+                // and on the same seq as the message
                 let i = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
                         self.queue_pre_prepare(message);
@@ -336,6 +344,8 @@ impl Consensus {
                         return ConsensusStatus::Deciding;
                     },
                 };
+                // check if we have gathered enough votes,
+                // and transition to a new phase
                 self.phase = if i == view.params().quorum() {
                     let message = SystemMessage::Consensus(ConsensusMessage::new(
                         self.sequence_number(),
@@ -350,6 +360,8 @@ impl Consensus {
                 ConsensusStatus::Deciding
             },
             ProtoPhase::Committing(i) => {
+                // queue message if we're not committing
+                // and on the same seq as the message
                 let i = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
                         self.queue_pre_prepare(message);
@@ -365,7 +377,11 @@ impl Consensus {
                     },
                     ConsensusMessageKind::Commit => i + 1,
                 };
+                // check if we have gathered enough votes,
+                // and transition to a new phase
                 if i == view.params().quorum() {
+                    // we have reached a decision,
+                    // notify core protocol
                     self.phase = ProtoPhase::Init;
                     let sig = self.current.take().unwrap();
                     ConsensusStatus::Decided(sig)
