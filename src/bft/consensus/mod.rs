@@ -236,7 +236,7 @@ impl Consensus {
             self.sequence_number(),
             ConsensusMessageKind::PrePrepare(sig),
         ));
-        let targets = NodeId::targets_usize(0..view.params().n());
+        let targets = NodeId::targets(0..view.params().n());
         node.broadcast(message, targets);
     }
 
@@ -319,7 +319,7 @@ impl Consensus {
                         self.sequence_number(),
                         ConsensusMessageKind::Prepare,
                     ));
-                    let targets = NodeId::targets_usize(0..view.params().n());
+                    let targets = NodeId::targets(0..view.params().n());
                     node.broadcast(message, targets);
                 }
                 // enter preparing phase
@@ -351,7 +351,7 @@ impl Consensus {
                         self.sequence_number(),
                         ConsensusMessageKind::Commit,
                     ));
-                    let targets = NodeId::targets_usize(0..view.params().n());
+                    let targets = NodeId::targets(0..view.params().n());
                     node.broadcast(message, targets);
                     ProtoPhase::Committing(0)
                 } else {

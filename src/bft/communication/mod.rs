@@ -66,7 +66,7 @@ use crate::bft::crypto::signature::{
 pub struct NodeId(u32);
 
 impl NodeId {
-    pub fn targets<I>(into_iterator: I) -> impl Iterator<Item = Self>
+    pub fn targets_u32<I>(into_iterator: I) -> impl Iterator<Item = Self>
     where
         I: IntoIterator<Item = u32>,
     {
@@ -75,7 +75,7 @@ impl NodeId {
             .map(Self)
     }
 
-    pub fn targets_usize<I>(into_iterator: I) -> impl Iterator<Item = Self>
+    pub fn targets<I>(into_iterator: I) -> impl Iterator<Item = Self>
     where
         I: IntoIterator<Item = usize>,
     {
@@ -386,7 +386,7 @@ where
         tx: MessageChannelTx<D::Request, D::Reply>,
         addrs: &HashMap<NodeId, (SocketAddr, String)>,
     ) {
-        for peer_id in NodeId::targets(0..n).filter(|&id| id != my_id) {
+        for peer_id in NodeId::targets_u32(0..n).filter(|&id| id != my_id) {
             let tx = tx.clone();
             // FIXME: this line can crash the program if the user
             // provides an invalid HashMap, maybe return a Result<()>
