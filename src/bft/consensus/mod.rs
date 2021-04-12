@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 
-use crate::bft::core::ViewInfo;
+use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::signature::Signature;
 use crate::bft::history::LoggerHandle;
 use crate::bft::communication::message::{
