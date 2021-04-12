@@ -294,9 +294,9 @@ where
         for id in targets {
             let s = self.send_to(id);
             if id == self.id {
-                other_send_tos.push(s);
-            } else {
                 my_send_to = Some(s);
+            } else {
+                other_send_tos.push(s);
             }
         }
 
