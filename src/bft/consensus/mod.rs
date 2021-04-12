@@ -3,6 +3,9 @@
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 
+use crate::bft::core::ViewInfo;
+use crate::bft::communication::Node;
+use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::message::ConsensusMessage;
 
 /// Represents the status of calling `poll()` on a `TBOQueue`.
@@ -178,6 +181,22 @@ impl Consensus {
     /// Check if we can process new consensus messages.
     pub fn poll(&mut self) -> PollStatus {
         self.tbo.poll_queue(self.phase)
+    }
+
+    /// Process a message for a particular consensus instance.
+    pub fn process_message<D>(
+        &mut self,
+        message: ConsensusMessage,
+        view: ViewInfo,
+        node: &mut Node<D>,
+    )
+    where
+        D: SharedData + 'static,
+        D::Request: Clone + Send + 'static,
+        D::Reply: Clone + Send + 'static,
+    {
+        // TODO: store PrePrepare digest
+        unimplemented!()
     }
 }
 
