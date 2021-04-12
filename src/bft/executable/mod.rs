@@ -23,6 +23,9 @@ enum ExecutionRequest<O> {
     // process the state of the service
     ReadWrite(NodeId, Signature, O),
     // read the state of the service
+    //
+    // TODO: the current api can't handle
+    // sending the application state
     Read(NodeId),
 }
 
