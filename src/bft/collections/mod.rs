@@ -1,3 +1,5 @@
+//! Wrappers around `std::collections`.
+
 use std::default::Default;
 
 #[cfg(feature = "collections_randomstate_twox_hash")]
