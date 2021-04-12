@@ -19,7 +19,8 @@ default = [
     "serialize_serde",
     "channel_futures_mpsc",
     "crypto_signature_ring_ed25519",
-    "crypto_hash_blake3_blake3"
+    "crypto_hash_blake3_blake3",
+    "collections_randomstate_twox_hash"
 ]
 
 socket_tokio_tcp = ["tokio", "tokio-util"]
@@ -42,6 +43,9 @@ channel_futures_mpsc = []
 channel_flume_mpmc = ["flume"]
 channel_async_channel_mpmc = ["async-channel"]
 
+collections_randomstate_std = []
+collections_randomstate_twox_hash = ["twox-hash"]
+
 #bench = ["expose_impl", "oneshot", "futures-timer", "async-semaphore"]
 expose_impl = []
 
@@ -58,7 +62,6 @@ futures = "0.3"
 futures-timer = "3"
 async-tls = "0.11"
 rustls = "0.19"
-twox-hash = "1"
 smallvec = { version = "1", features = ["union", "write"] }
 async-std = { version = "1", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
@@ -74,3 +77,4 @@ socket2 = { version = "0.4", optional = true }
 blake3 = { version = "0.3", optional = true }
 flume = { version = "0.10", optional = true }
 async-channel = { version = "1", optional = true }
+twox-hash = { version = "1", optional = true }
