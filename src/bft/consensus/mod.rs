@@ -7,19 +7,19 @@ use crate::bft::core::ViewInfo;
 use crate::bft::crypto::signature::Signature;
 use crate::bft::history::LoggerHandle;
 use crate::bft::communication::message::{
+    Header,
     ConsensusMessage,
     ConsensusMessageKind,
 };
-use crate::bft::collections::{
-    self,
-    HashSet,
-};
+//use crate::bft::collections::{
+//    self,
+//    HashSet,
+//};
 use crate::bft::communication::{
     Node,
     NodeId,
 };
 use crate::bft::executable::{
-    ExecutorHandle,
     Service,
     Request,
     Reply,
@@ -186,7 +186,19 @@ pub struct Consensus {
     phase: ProtoPhase,
     tbo: TBOQueue,
     current: Option<Signature>,
-    voted: HashSet<NodeId>,
+    //voted: HashSet<NodeId>,
+}
+
+/// Status returned from processing a consensus message.
+pub enum ConsensusStatus {
+    /// A particular node tried voting twice.
+    VotedTwice(NodeId),
+    /// A `febft` quorum still hasn't made a decision
+    /// on a client request to be executed.
+    Deciding,
+    /// A `febft` quorum decided on the execution of
+    /// the request with the given `Signature`.
+    Decided(Signature),
 }
 
 impl Consensus {
@@ -195,9 +207,31 @@ impl Consensus {
         Self {
             phase: ProtoPhase::Init,
             tbo: TBOQueue::new(initial_seq_no),
-            voted: collections::hash_set(),
+            //voted: collections::hash_set(),
             current: None,
         }
+    }
+
+    /// Proposes a new request with signature `sig`.
+    ///
+    /// This function will only succeed if the `node` is
+    /// the leader of the current `view`.
+    pub fn propose<S>(&self, sig: Signature, view: ViewInfo, node: &mut Node)
+    where
+        S: Service + Send + 'static,
+        State<S>: Send + 'static,
+        Request<S>: Send + 'static,
+        Reply<S>: Send + 'static,
+    {
+        if node.id() != view.leader() {
+            return;
+        }
+        let message = ConsensusMessage::new(
+            self.sequence_number(),
+            ConsensusMessageKind::PrePrepare(sig),
+        );
+        let targets = NodeId::targets(0..view.params().n());
+        node.broadcast(message, targets);
     }
 
     /// Returns the current protocol phase.
@@ -213,57 +247,60 @@ impl Consensus {
     /// Starts a new consensus instance.
     pub fn next_instance(&mut self) {
         self.tbo.next_instance_queue();
-        self.voted.clear();
+        //self.voted.clear();
     }
 
     /// Process a message for a particular consensus instance.
     pub fn process_message<S>(
         &mut self,
+        header: Header,
         message: ConsensusMessage,
         view: ViewInfo,
-        exec: &mut ExecutorHandle<S>,
         log: &mut LoggerHandle<Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
-    )
+    ) -> ConsensusStatus
     where
         S: Service + Send + 'static,
         State<S>: Send + 'static,
         Request<S>: Send + 'static,
         Reply<S>: Send + 'static,
     {
+        // FIXME: make sure a replica doesn't vote twice
+        // by keeping track of who voted, and not just
+        // the amount of votes received
         match self.phase {
             ProtoPhase::Init => {
                 match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
-                        self.tbo.queue_pre_prepare(message);
-                        return;
+                        self.queue_pre_prepare(message);
+                        return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Prepare => {
-                        self.tbo.queue_prepare(message);
-                        return;
+                        self.queue_prepare(message);
+                        return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Commit => {
-                        self.tbo.queue_commit(message);
-                        return;
+                        self.queue_commit(message);
+                        return ConsensusStatus::Deciding;
                     },
                 }
             },
             ProtoPhase::PrePreparing => {
                 self.current = match message.kind {
                     ConsensusMessageKind::PrePrepare(_) if message.sequence_number() != self.sequence_number() => {
-                        self.tbo.queue_pre_prepare(message);
-                        return,
+                        self.queue_pre_prepare(message);
+                        return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::PrePrepare(sig) => {
                         Some(sig)
                     },
                     ConsensusMessageKind::Prepare => {
-                        self.tbo.queue_prepare(message);
-                        return;
+                        self.queue_prepare(message);
+                        return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Commit => {
-                        self.tbo.queue_commit(message);
-                        return;
+                        self.queue_commit(message);
+                        return ConsensusStatus::Deciding;
                     },
                 };
                 if node.id() != view.leader() {
@@ -272,33 +309,39 @@ impl Consensus {
                         ConsensusMessageKind::Prepare,
                     );
                     let targets = NodeId::targets(0..view.params().n());
-                    self.node.broadcast(message, targets);
+                    node.broadcast(message, targets);
                 }
-                ProtoPhase::Preparing(0)
+                self.phase = ProtoPhase::Preparing(0);
+                ConsensusStatus::Deciding
             },
             ProtoPhase::Preparing(i) => {
-                let i = match message.kind {
+                let i = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
-                        queue_message(self.seq, &mut self.tbo_pre_prepare, message);
-                        return self.phase;
+                        self.queue_pre_prepare(message);
+                        return ConsensusStatus::Deciding;
                     },
-                    ConsensusMessageKind::Prepare if message.seq != self.seq => {
-                        queue_message(self.seq, &mut self.tbo_prepare, message);
-                        return self.phase;
+                    ConsensusMessageKind::Prepare if message.sequence_number() != self.sequence_number() => {
+                        self.queue_prepare(message);
+                        return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Prepare => i + 1,
                     ConsensusMessageKind::Commit => {
-                        queue_message(self.seq, &mut self.tbo_commit, message);
-                        return self.phase;
+                        self.queue_commit(message);
+                        return ConsensusStatus::Deciding;
                     },
                 };
-                if i == self.quorum() {
-                    let message = self.new_consensus_msg(ConsensusMessageKind::Commit);
-                    self.node.broadcast(message, 0_u32..self.n);
+                self.phase = if i == view.params().quorum() {
+                    let message = ConsensusMessage::new(
+                        self.sequence_number(),
+                        ConsensusMessageKind::Commit,
+                    );
+                    let targets = NodeId::targets(0..view.params().n());
+                    node.broadcast(message, targets);
                     ProtoPhase::Commiting(0)
                 } else {
                     ProtoPhase::Preparing(i)
-                }
+                };
+                ConsensusStatus::Deciding
             },
             ProtoPhase::Commiting(i) => {
                 let i = match message.kind {
@@ -322,21 +365,6 @@ impl Consensus {
                     ProtoPhase::Commiting(i)
                 }
             },
-            ProtoPhase::Executing => {
-                match message.kind {
-                    ConsensusMessageKind::PrePrepare(_) => {
-                        queue_message(self.seq, &mut self.tbo_pre_prepare, message);
-                    },
-                    ConsensusMessageKind::Prepare => {
-                        queue_message(self.seq, &mut self.tbo_prepare, message);
-                    },
-                    ConsensusMessageKind::Commit => {
-                        queue_message(self.seq, &mut self.tbo_commit, message);
-                    },
-                };
-                eprintln!("Value executed on r{} -> {}", self.node.id, self.value);
-                ProtoPhase::Init
-            },
         }
     }
 }
@@ -344,12 +372,14 @@ impl Consensus {
 impl Deref for Consensus {
     type Target = TBOQueue;
 
+    #[inline]
     fn deref(&self) -> &TBOQueue {
         &self.tbo
     }
 }
 
 impl DerefMut for Consensus {
+    #[inline]
     fn deref_mut(&mut self) -> &mut TBOQueue {
         &mut self.tbo
     }
