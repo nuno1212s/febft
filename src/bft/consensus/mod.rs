@@ -222,8 +222,8 @@ impl Consensus {
     where
         S: Service + Send + 'static,
         State<S>: Send + 'static,
-        Request<S>: Clone + Send + 'static,
-        Reply<S>: Clone + Send + 'static,
+        Request<S>: Send + 'static,
+        Reply<S>: Send + 'static,
     {
         match self.phase {
             ProtoPhase::Init => self.phase = ProtoPhase::PrePreparing,
