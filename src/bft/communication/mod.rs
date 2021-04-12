@@ -644,6 +644,9 @@ where
         );
 
         // send
+        //
+        // FIXME: sending may hang forever, because of network
+        // problems; add a timeout
         let mut sock = d.sock.lock().await;
         if let Err(_) = wm.write_to(&mut *sock).await {
             // error sending, drop connection
