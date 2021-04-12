@@ -166,11 +166,14 @@ const NODE_CHAN_BOUND: usize = 128;
 // max no. of bytes to inline before doing a heap alloc
 const NODE_BUFSIZ: usize = 16384;
 
+// max no. of SendTo's to inline before doing a heap alloc
+const NODE_VIEWSIZ: usize = 8;
+
 impl<D> Node<D>
 where
     D: SharedData + 'static,
-    D::Request: Clone + Send + 'static,
-    D::Reply: Clone + Send + 'static,
+    D::Request: Send + 'static,
+    D::Reply: Send + 'static,
 {
     /// Bootstrap a `Node`, i.e. create connections between itself and its
     /// peer nodes.
@@ -283,13 +286,39 @@ where
         message: SystemMessage<D::Request, D::Reply>,
         targets: impl Iterator<Item = NodeId>,
     ) {
+        let mut my_send_to = None;
+        let mut other_send_tos: SmallVec<[_; NODE_VIEWSIZ]> = SmallVec::new();
+
         for id in targets {
-            let mut send_to = self.send_to(id);
-            let message = message.clone();
-            rt::spawn(async move {
-                send_to.value(message).await;
-            });
+            let s = self.send_to(id);
+            if id == self.id {
+                other_send_tos.push(s);
+            } else {
+                my_send_to = Some(s);
+            }
         }
+
+        rt::spawn(async move {
+            // serialize
+            let mut buf: SmallVec<[_; NODE_BUFSIZ]> = SmallVec::new();
+            D::serialize_message(&mut buf, &message).unwrap();
+
+            // send to ourselves
+            if let Some(mut send_to) = my_send_to {
+                let buf = buf.clone();
+                rt::spawn(async move {
+                    send_to.value(Err((message, buf))).await;
+                });
+            }
+
+            // send to others
+            for mut send_to in other_send_tos {
+                let buf = buf.clone();
+                rt::spawn(async move {
+                    send_to.value(Ok(buf)).await;
+                });
+            }
+        });
     }
 
     fn send_to(&self, peer_id: NodeId) -> SendTo<D> {
@@ -542,19 +571,25 @@ enum SendTo<D: SharedData> {
     },
 }
 
+type Buf = SmallVec<[u8; NODE_BUFSIZ]>;
+
 impl<D> SendTo<D>
 where
     D: SharedData + 'static,
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
-    async fn value(&mut self, m: SystemMessage<D::Request, D::Reply>) {
+    async fn value(&mut self, m: std::result::Result<Buf, (SystemMessage<D::Request, D::Reply>, Buf)>) {
         match self {
             SendTo::Me { my_id, ref sk, ref mut tx } => {
-                Self::me(*my_id, m, &*sk, tx).await
+                if let Err((m, b)) = m {
+                    Self::me(*my_id, m, b, &*sk, tx).await
+                }
             },
             SendTo::Peers { my_id, peer_id, ref data, ref mut tx } => {
-                Self::peers(*my_id, *peer_id, m, &*data, tx).await
+                if let Ok(b) = m {
+                    Self::peers(*my_id, *peer_id, b, &*data, tx).await
+                }
             },
         }
     }
@@ -562,18 +597,15 @@ where
     async fn me(
         my_id: NodeId,
         m: SystemMessage<D::Request, D::Reply>,
+        b: Buf,
         sk: &KeyPair,
         tx: &mut MessageChannelTx<D::Request, D::Reply>,
     ) {
-        // serialize
-        let mut buf: SmallVec<[_; NODE_BUFSIZ]> = SmallVec::new();
-        D::serialize_message(&mut buf, &m).unwrap();
-
         // create wire msg
         let (h, _) = WireMessage::new(
             my_id,
             my_id,
-            &buf[..],
+            &b[..],
             Some(sk),
         ).into_inner();
 
@@ -584,21 +616,15 @@ where
     async fn peers(
         my_id: NodeId,
         peer_id: NodeId,
-        m: SystemMessage<D::Request, D::Reply>,
+        b: Buf,
         d: &NodeTxData,
         tx: &mut MessageChannelTx<D::Request, D::Reply>,
     ) {
-        // serialize
-        let mut buf: SmallVec<[_; NODE_BUFSIZ]> = SmallVec::new();
-        D::serialize_message(&mut buf, &m).unwrap();
-
-        // FIXME : AVOID SERIALIZING TWICE ^^^^
-
         // create wire msg
         let wm = WireMessage::new(
             my_id,
             peer_id,
-            &buf[..],
+            &b[..],
             Some(&d.sk),
         );
 

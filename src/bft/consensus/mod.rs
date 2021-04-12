@@ -268,8 +268,8 @@ impl Consensus {
     where
         S: Service + Send + 'static,
         State<S>: Send + 'static,
-        Request<S>: Clone + Send + 'static,
-        Reply<S>: Clone + Send + 'static,
+        Request<S>: Send + 'static,
+        Reply<S>: Send + 'static,
     {
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just
