@@ -78,9 +78,13 @@ where
     Request<S>: Send + 'static,
     Reply<S>: Send + 'static,
 {
-    /// Adds a new `message` and its respective `header` to the log.
-    pub async fn queue(&mut self, to: NodeId, sig: Signature, req: Request<S>) -> Result<()> {
-        self.my_tx.send(ExecutionRequest::ReadWrite(to, sig, req)).await
+    /// Queues a particular request `req` for execution.
+    ///
+    /// The client `from` signed its request `req`, resulting in the
+    /// signature `sig`. This value is used to notify `from` of the
+    /// completion of the related request `req`.
+    pub async fn queue(&mut self, from: NodeId, sig: Signature, req: Request<S>) -> Result<()> {
+        self.my_tx.send(ExecutionRequest::ReadWrite(from, sig, req)).await
     }
 }
 
