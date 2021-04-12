@@ -584,11 +584,15 @@ where
             SendTo::Me { my_id, ref sk, ref mut tx } => {
                 if let Err((m, b)) = m {
                     Self::me(*my_id, m, b, &*sk, tx).await
+                } else {
+                    unreachable!()
                 }
             },
             SendTo::Peers { my_id, peer_id, ref data, ref mut tx } => {
                 if let Ok(b) = m {
                     Self::peers(*my_id, *peer_id, b, &*data, tx).await
+                } else {
+                    unreachable!()
                 }
             },
         }
