@@ -89,7 +89,7 @@ pub enum Message<O, P> {
     /// The request of a client with id `NodeId` has finished executing.
     ///
     /// The payload delivered to the client is `P`.
-    ExecutionFinished(NodeId, P),
+    ExecutionFinished(NodeId, Signature, P),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
@@ -482,7 +482,7 @@ impl<O, P> Message<O, P> {
             Message::DisconnectedRx(_) =>
                 Err("Expected System found DisconnectedRx")
                     .wrapped(ErrorKind::CommunicationMessage),
-            Message::ExecutionFinished(_, _) =>
+            Message::ExecutionFinished(_, _, _) =>
                 Err("Expected System found ExecutionFinished")
                     .wrapped(ErrorKind::CommunicationMessage),
         }
