@@ -296,7 +296,7 @@ impl Consensus {
             },
             ProtoPhase::PrePreparing => {
                 // queue message if we're not pre-preparing
-                // or on the same seq as the message
+                // or in the same seq as the message
                 self.current = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) if message.sequence_number() != self.sequence_number() => {
                         self.queue_pre_prepare(message);
@@ -329,7 +329,7 @@ impl Consensus {
             },
             ProtoPhase::Preparing(i) => {
                 // queue message if we're not preparing
-                // or on the same seq as the message
+                // or in the same seq as the message
                 let i = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
                         self.queue_pre_prepare(message);
@@ -362,7 +362,7 @@ impl Consensus {
             },
             ProtoPhase::Committing(i) => {
                 // queue message if we're not committing
-                // or on the same seq as the message
+                // or in the same seq as the message
                 let i = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
                         self.queue_pre_prepare(message);
