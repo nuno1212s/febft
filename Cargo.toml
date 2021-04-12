@@ -58,6 +58,7 @@ futures = "0.3"
 futures-timer = "3"
 async-tls = "0.11"
 rustls = "0.19"
+twox-hash = "1"
 smallvec = { version = "1", features = ["union", "write"] }
 async-std = { version = "1", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
