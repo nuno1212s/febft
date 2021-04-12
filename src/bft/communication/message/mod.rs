@@ -20,13 +20,15 @@ use futures::io::{
     AsyncWrite,
 };
 
-use crate::bft::crypto::hash::Context;
 use crate::bft::crypto::signature::{
     Signature,
     PublicKey,
     KeyPair,
 };
-use crate::bft::crypto::hash::Digest;
+use crate::bft::crypto::hash::{
+    Context,
+    Digest,
+};
 use crate::bft::communication::socket::Socket;
 use crate::bft::communication::NodeId;
 use crate::bft::error::*;
@@ -138,9 +140,9 @@ pub struct ConsensusMessage {
 #[derive(Copy, Clone)]
 pub enum ConsensusMessageKind {
     /// Pre-prepare a request, according to the BFT protocol.
-    /// The `Digest` represens the hash of the
-    /// serialized request payload.
-    PrePrepare(Digest),
+    /// The `Signature` represens the signed hash of the
+    /// serialized request payload and respective header.
+    PrePrepare(Signature),
     /// Prepare a request.
     Prepare,
     /// Commit a request, signaling the system is almost ready

@@ -26,7 +26,7 @@ socket_tokio_tcp = ["tokio", "tokio-util"]
 socket_async_std_tcp = ["async-std"]
 socket_rio_tcp = ["rio", "socket2"]
 
-serialize_serde = ["serde"]
+serialize_serde = ["serde", "serde-big-array"]
 
 async_runtime_tokio = ["tokio"]
 async_runtime_async_std = ["async-std"]
@@ -66,6 +66,7 @@ ring = { version = "0.16", optional = true }
 threadpool-crossbeam-channel = { version = "1", optional = true }
 #async-semaphore = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
+serde-big-array = { version = "0.3", optional = true }
 cthpool = { git = "https://github.com/sug0/cthpool", optional = true }
 rio = { version = "0.9", optional = true }
 socket2 = { version = "0.4", optional = true }

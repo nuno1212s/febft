@@ -1,5 +1,8 @@
 //! Public key cryptographic operations.
 
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
+
 use crate::bft::error::*;
 
 #[cfg(feature = "crypto_signature_ring_ed25519")]
@@ -29,6 +32,7 @@ pub struct PublicKeyRef<'a> {
 /// a digital signature with a private key.
 #[derive(Copy, Clone)]
 #[repr(transparent)]
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct Signature {
     #[cfg(feature = "crypto_signature_ring_ed25519")]
     inner: ring_ed25519::Signature,

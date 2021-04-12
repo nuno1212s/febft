@@ -1,3 +1,9 @@
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
+
+#[cfg(feature = "serialize_serde")]
+use serde_big_array::big_array;
+
 use ring::{
     signature as rsig,
     signature::KeyPair as RKeyPair,
@@ -18,9 +24,16 @@ pub struct PublicKey {
     pk: rsig::UnparsedPublicKey<RPubKey>,
 }
 
+#[cfg(feature = "serialize_serde")]
+big_array! { SignatureArray; }
+
 #[derive(Copy, Clone)]
 #[repr(transparent)]
-pub struct Signature([u8; Signature::LENGTH]);
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+pub struct Signature(
+    #[cfg_attr(feature = "serialize_serde", serde(with = "SignatureArray"))]
+    [u8; Signature::LENGTH]
+);
 
 impl KeyPair {
     pub fn from_bytes(seed_bytes: &[u8]) -> Result<Self> {
