@@ -259,10 +259,10 @@ impl Consensus {
     /// Process a message for a particular consensus instance.
     pub fn process_message<S>(
         &mut self,
-        header: Header,
+        _header: Header,
         message: ConsensusMessage,
         view: ViewInfo,
-        log: &mut LoggerHandle<Request<S>, Reply<S>>,
+        _log: &mut LoggerHandle<Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) -> ConsensusStatus
     where
@@ -274,6 +274,7 @@ impl Consensus {
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just
         // the amount of votes received
+        // FIXME: log the message
         match self.phase {
             ProtoPhase::Init => {
                 // in the init phase, we can't do anything,
