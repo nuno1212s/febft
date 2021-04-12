@@ -74,6 +74,15 @@ impl NodeId {
             .into_iter()
             .map(Self)
     }
+
+    pub fn targets_usize<I>(into_iterator: I) -> impl Iterator<Item = Self>
+    where
+        I: IntoIterator<Item = usize>,
+    {
+        into_iterator
+            .into_iter()
+            .map(NodeId::from)
+    }
 }
 
 impl From<u32> for NodeId {

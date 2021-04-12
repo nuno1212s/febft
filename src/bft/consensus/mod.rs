@@ -8,6 +8,7 @@ use crate::bft::crypto::signature::Signature;
 use crate::bft::history::LoggerHandle;
 use crate::bft::communication::message::{
     Header,
+    SystemMessage,
     ConsensusMessage,
     ConsensusMessageKind,
 };
@@ -174,10 +175,10 @@ pub enum ProtoPhase {
     PrePreparing,
     /// Running the `PREPARE` phase. The integer represents
     /// the number of votes received.
-    Preparing(u32),
+    Preparing(usize),
     /// Running the `COMMIT` phase. The integer represents
     /// the number of votes received.
-    Committing(u32),
+    Committing(usize),
 }
 
 /// Contains the state of an active consensus instance, as well
@@ -215,22 +216,27 @@ impl Consensus {
     /// Proposes a new request with signature `sig`.
     ///
     /// This function will only succeed if the `node` is
-    /// the leader of the current `view`.
-    pub fn propose<S>(&self, sig: Signature, view: ViewInfo, node: &mut Node)
+    /// the leader of the current `view` and the `node` is
+    /// in the phase `ProtoPhase::Init`.
+    pub fn propose<S>(&mut self, sig: Signature, view: ViewInfo, node: &mut Node<S::Data>)
     where
         S: Service + Send + 'static,
         State<S>: Send + 'static,
-        Request<S>: Send + 'static,
-        Reply<S>: Send + 'static,
+        Request<S>: Clone + Send + 'static,
+        Reply<S>: Clone + Send + 'static,
     {
+        match self.phase {
+            ProtoPhase::Init => self.phase = ProtoPhase::PrePreparing,
+            _ => return,
+        }
         if node.id() != view.leader() {
             return;
         }
-        let message = ConsensusMessage::new(
+        let message = SystemMessage::Consensus(ConsensusMessage::new(
             self.sequence_number(),
             ConsensusMessageKind::PrePrepare(sig),
-        );
-        let targets = NodeId::targets(0..view.params().n());
+        ));
+        let targets = NodeId::targets_usize(0..view.params().n());
         node.broadcast(message, targets);
     }
 
@@ -262,8 +268,8 @@ impl Consensus {
     where
         S: Service + Send + 'static,
         State<S>: Send + 'static,
-        Request<S>: Send + 'static,
-        Reply<S>: Send + 'static,
+        Request<S>: Clone + Send + 'static,
+        Reply<S>: Clone + Send + 'static,
     {
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just
@@ -286,13 +292,13 @@ impl Consensus {
                 }
             },
             ProtoPhase::PrePreparing => {
-                self.current = match message.kind {
+                self.current = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) if message.sequence_number() != self.sequence_number() => {
                         self.queue_pre_prepare(message);
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::PrePrepare(sig) => {
-                        Some(sig)
+                        Some(sig.clone())
                     },
                     ConsensusMessageKind::Prepare => {
                         self.queue_prepare(message);
@@ -304,11 +310,11 @@ impl Consensus {
                     },
                 };
                 if node.id() != view.leader() {
-                    let message = ConsensusMessage::new(
+                    let message = SystemMessage::Consensus(ConsensusMessage::new(
                         self.sequence_number(),
                         ConsensusMessageKind::Prepare,
-                    );
-                    let targets = NodeId::targets(0..view.params().n());
+                    ));
+                    let targets = NodeId::targets_usize(0..view.params().n());
                     node.broadcast(message, targets);
                 }
                 self.phase = ProtoPhase::Preparing(0);
@@ -331,38 +337,41 @@ impl Consensus {
                     },
                 };
                 self.phase = if i == view.params().quorum() {
-                    let message = ConsensusMessage::new(
+                    let message = SystemMessage::Consensus(ConsensusMessage::new(
                         self.sequence_number(),
                         ConsensusMessageKind::Commit,
-                    );
-                    let targets = NodeId::targets(0..view.params().n());
+                    ));
+                    let targets = NodeId::targets_usize(0..view.params().n());
                     node.broadcast(message, targets);
-                    ProtoPhase::Commiting(0)
+                    ProtoPhase::Committing(0)
                 } else {
                     ProtoPhase::Preparing(i)
                 };
                 ConsensusStatus::Deciding
             },
-            ProtoPhase::Commiting(i) => {
-                let i = match message.kind {
+            ProtoPhase::Committing(i) => {
+                let i = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
-                        queue_message(self.seq, &mut self.tbo_pre_prepare, message);
-                        return self.phase;
+                        self.queue_pre_prepare(message);
+                        return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Prepare => {
-                        queue_message(self.seq, &mut self.tbo_prepare, message);
-                        return self.phase;
+                        self.queue_prepare(message);
+                        return ConsensusStatus::Deciding;
                     },
-                    ConsensusMessageKind::Commit if message.seq != self.seq => {
-                        queue_message(self.seq, &mut self.tbo_commit, message);
-                        return self.phase;
+                    ConsensusMessageKind::Commit if message.sequence_number() != self.sequence_number() => {
+                        self.queue_commit(message);
+                        return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Commit => i + 1,
                 };
-                if i == self.quorum() {
-                    ProtoPhase::Executing
+                if i == view.params().quorum() {
+                    self.phase = ProtoPhase::Init;
+                    let sig = self.current.take().unwrap();
+                    ConsensusStatus::Decided(sig)
                 } else {
-                    ProtoPhase::Commiting(i)
+                    self.phase = ProtoPhase::Committing(i);
+                    ConsensusStatus::Deciding
                 }
             },
         }
