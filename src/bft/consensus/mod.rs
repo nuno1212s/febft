@@ -130,19 +130,19 @@ impl TBOQueue {
 
     /// Queues a `PRE-PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
-    pub fn queue_pre_prepare(&mut self, m: ConsensusMessage) {
+    fn queue_pre_prepare(&mut self, m: ConsensusMessage) {
         Self::queue_message(self.curr_seq, &mut self.pre_prepares, m)
     }
 
     /// Queues a `PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
-    pub fn queue_prepare(&mut self, m: ConsensusMessage) {
+    fn queue_prepare(&mut self, m: ConsensusMessage) {
         Self::queue_message(self.curr_seq, &mut self.prepares, m)
     }
 
     /// Queues a `COMMIT` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
-    pub fn queue_commit(&mut self, m: ConsensusMessage) {
+    fn queue_commit(&mut self, m: ConsensusMessage) {
         Self::queue_message(self.curr_seq, &mut self.commits, m)
     }
 }
@@ -171,10 +171,10 @@ pub struct Consensus {
 
 impl Consensus {
     /// Starts a new consensus protocol tracker.
-    pub fn new() -> Self {
+    pub fn new(initial_seq_no: i32) -> Self {
         Self {
             phase: ProtoPhase::Init,
-            tbo: TBOQueue::new(0),
+            tbo: TBOQueue::new(initial_seq_no),
         }
     }
 

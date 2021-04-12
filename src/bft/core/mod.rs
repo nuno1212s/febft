@@ -47,6 +47,16 @@ impl SystemParams {
     pub fn quorum(&self) -> usize {
         2*self.f + 1
     }
+
+    /// Returns the `n` parameter.
+    pub fn n(&self) -> usize {
+        self.n
+    }
+
+    /// Returns the `f` parameter.
+    pub fn f(&self) -> usize {
+        self.f
+    }
 }
 
 impl ViewInfo {
@@ -61,8 +71,8 @@ impl ViewInfo {
     }
 
     /// Returns a copy of this node's `SystemParams`.
-    pub fn params(&self) -> SystemParams {
-        self.params
+    pub fn params(&self) -> &SystemParams {
+        &self.params
     }
 
     /// Returns the leader of the current view.
