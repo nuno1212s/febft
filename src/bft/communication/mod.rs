@@ -289,6 +289,8 @@ where
         let mut my_send_to = None;
         let mut other_send_tos: SmallVec<[_; NODE_VIEWSIZ]> = SmallVec::new();
 
+        // create SendTo's for ourselves and
+        // our peer nodes
         for id in targets {
             let s = self.send_to(id);
             if id == self.id {
@@ -307,6 +309,7 @@ where
             if let Some(mut send_to) = my_send_to {
                 let buf = buf.clone();
                 rt::spawn(async move {
+                    // Err -> our turn
                     send_to.value(Err((message, buf))).await;
                 });
             }
@@ -315,9 +318,15 @@ where
             for mut send_to in other_send_tos {
                 let buf = buf.clone();
                 rt::spawn(async move {
+                    // Ok -> peer turn
                     send_to.value(Ok(buf)).await;
                 });
             }
+
+            // XXX: final remarks: the Ok and Err act
+            // as an ad-hoc either enum, which allows
+            // rustc to prove only one task gets ownership
+            // of the `message`
         });
     }
 
@@ -585,6 +594,7 @@ where
                 if let Err((m, b)) = m {
                     Self::me(*my_id, m, b, &*sk, tx).await
                 } else {
+                    // optimize code path
                     unreachable!()
                 }
             },
@@ -592,6 +602,7 @@ where
                 if let Ok(b) = m {
                     Self::peers(*my_id, *peer_id, b, &*data, tx).await
                 } else {
+                    // optimize code path
                     unreachable!()
                 }
             },
