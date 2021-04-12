@@ -3,7 +3,6 @@ mod common;
 use common::*;
 
 use std::time::Duration;
-use std::collections::HashMap;
 
 use futures_timer::Delay;
 use rand_core::{
@@ -12,6 +11,7 @@ use rand_core::{
 };
 
 use febft::bft::threadpool;
+use febft::bft::collections::HashMap;
 use febft::bft::communication::NodeId;
 use febft::bft::async_runtime as rt;
 use febft::bft::{

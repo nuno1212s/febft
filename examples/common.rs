@@ -2,7 +2,6 @@
 
 use std::fs::File;
 use std::net::SocketAddr;
-use std::collections::HashMap;
 use std::io::{BufReader, Read, Write};
 
 use rustls::{
@@ -14,6 +13,7 @@ use rustls::{
 };
 
 use febft::bft::error::*;
+use febft::bft::collections::HashMap;
 use febft::bft::threadpool::ThreadPool;
 use febft::bft::communication::serialize::SharedData;
 use febft::bft::communication::message::{
@@ -41,7 +41,7 @@ macro_rules! addr {
 #[macro_export]
 macro_rules! map {
     ( $($key:expr => $value:expr),+ ) => {{
-        let mut m = ::std::collections::HashMap::new();
+        let mut m = ::febft::bft::collections::hash_map();
         $(
             m.insert($key, $value);
         )+

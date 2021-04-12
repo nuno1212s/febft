@@ -15,7 +15,6 @@ use serde::{Serialize, Deserialize};
 
 use std::sync::Arc;
 use std::net::SocketAddr;
-use std::collections::HashMap;
 use std::time::Duration;
 
 use rustls::{
@@ -38,6 +37,7 @@ use futures::io::{
 
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
+use crate::bft::collections::{self, HashMap};
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::socket::{
     Socket,
@@ -202,7 +202,7 @@ where
         let my_key = Arc::new(cfg.sk);
 
         // node def
-        let peer_tx = HashMap::new();
+        let peer_tx = collections::hash_map();
         let peer_keys = Arc::new(cfg.pk);
         let mut node = Node {
             id,
