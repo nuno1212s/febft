@@ -143,7 +143,7 @@ where
                             self.consensus.signal();
                         },
                         // FIXME: handle rogue reply messages
-                        SystemMessage::Reply(_) => (),
+                        SystemMessage::Reply(_) => panic!("rogue reply message detected"),
                     }
                 },
                 Message::ExecutionFinished(peer_id, signature, payload) => {
