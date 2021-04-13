@@ -118,8 +118,10 @@ struct NodeTxData {
     sock: Mutex<TlsStreamCli<Socket>>,
 }
 
-/// A `Node` contains handles to other processes in the system, and is
-/// the core component used in the wire communication between processes.
+/// Container for handles to other processes in the system.
+///
+/// A `Node` constitutes the core component used in the wire
+/// communication between processes.
 pub struct Node<D: SharedData> {
     id: NodeId,
     my_key: Arc<KeyPair>,
@@ -289,8 +291,18 @@ where
         message: SystemMessage<D::Request, D::Reply>,
         target: NodeId,
     ) {
-        let mut send_to = self.send_to(target);
+        let send_to = self.send_to(target);
         let my_id = self.id;
+        Self::send_impl(message, send_to, my_id, target)
+    }
+
+    #[inline]
+    fn send_impl(
+        message: SystemMessage<D::Request, D::Reply>,
+        mut send_to: SendTo<D>,
+        my_id: NodeId,
+        target: NodeId,
+    ) {
         rt::spawn(async move {
             // serialize
             let mut buf: SmallVec<[_; NODE_BUFSIZ]> = SmallVec::new();
@@ -314,7 +326,7 @@ where
         targets: impl Iterator<Item = NodeId>,
     ) {
         let mut my_send_to = None;
-        let mut other_send_tos: SmallVec<[_; NODE_VIEWSIZ]> = SmallVec::new();
+        let mut other_send_tos = SmallVec::new();
 
         // create SendTo's for ourselves and
         // our peer nodes
@@ -327,6 +339,15 @@ where
             }
         }
 
+        Self::broadcast_impl(message, my_send_to, other_send_tos)
+    }
+
+    #[inline]
+    fn broadcast_impl(
+        message: SystemMessage<D::Request, D::Reply>,
+        my_send_to: Option<SendTo<D>>,
+        other_send_tos: SmallVec<[SendTo<D>; NODE_VIEWSIZ]>,
+    ) {
         rt::spawn(async move {
             // serialize
             let mut buf: SmallVec<[_; NODE_BUFSIZ]> = SmallVec::new();
@@ -585,6 +606,41 @@ where
         tx.send(Message::DisconnectedRx(None)).await.unwrap_or(());
     }
 }
+
+/// A `SendNode` is a `Node` whose `broadcast()` and `send()`
+/// behaviors were detached for safe use between threads.
+pub struct SendNode<D: SharedData> {
+    id: NodeId,
+    my_key: Arc<KeyPair>,
+    peer_keys: Arc<HashMap<NodeId, PublicKey>>,
+    my_tx: MessageChannelTx<D::Request, D::Reply>,
+}
+
+//impl<D> SendNode<D>
+//where
+//    D: SharedData + 'static,
+//    D::Request: Send + 'static,
+//    D::Reply: Send + 'static,
+//{
+//    fn send_to(&self, peer_id: NodeId) -> SendTo<D> {
+//        let my_id = self.id;
+//        let tx = self.my_tx.clone();
+//        if my_id != peer_id {
+//            SendTo::Peers {
+//                tx,
+//                my_id,
+//                peer_id,
+//                data: Arc::clone(&self.peer_tx[&peer_id]),
+//            }
+//        } else {
+//            SendTo::Me {
+//                tx,
+//                my_id,
+//                sk: Arc::clone(&self.my_key),
+//            }
+//        }
+//    }
+//}
 
 enum SendTo<D: SharedData> {
     Me {
