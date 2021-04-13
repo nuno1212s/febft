@@ -88,3 +88,25 @@ impl<T> Future for JoinHandle<T> {
             .map(|result| result.wrapped_msg(ErrorKind::AsyncRuntime, "Failed to join handle"))
     }
 }
+
+/// Yields execution back to the async runtime.
+pub async fn yield_now() {
+    struct YieldNow {
+        yielded: bool,
+    }
+
+    impl Future for YieldNow {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            if self.yielded {
+                return Poll::Ready(());
+            }
+            self.yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+
+    YieldNow { yielded: false }.await
+}
