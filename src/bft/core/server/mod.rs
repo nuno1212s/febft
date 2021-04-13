@@ -123,7 +123,7 @@ where
                                 // if deciding, nothing to do
                                 ConsensusStatus::Deciding => (),
                                 // FIXME: implement this
-                                ConsensusStatus::VotedTwice(_) => unreachable!(),
+                                ConsensusStatus::VotedTwice(_) => unimplemented!(),
                                 // reached agreement, execute request
                                 ConsensusStatus::Decided(signature) => {
                                     // FIXME: if remove fails, what do we do?!
