@@ -280,6 +280,33 @@ where
         self.id
     }
 
+    /// Send a `SystemMessage` to a single destination.
+    ///
+    /// This method is somewhat more efficient than calling `broadcast()`
+    /// on a single target id.
+    pub fn send(
+        &self,
+        message: SystemMessage<D::Request, D::Reply>,
+        target: NodeId,
+    ) {
+        let mut send_to = self.send_to(target);
+        let my_id = self.id;
+        rt::spawn(async move {
+            // serialize
+            let mut buf: SmallVec<[_; NODE_BUFSIZ]> = SmallVec::new();
+            D::serialize_message(&mut buf, &message).unwrap();
+
+            // send
+            if my_id == target {
+                // Err -> our turn
+                send_to.value(Err((message, buf))).await;
+            } else {
+                // Ok -> peer turn
+                send_to.value(Ok(buf)).await;
+            }
+        });
+    }
+
     /// Broadcast a `SystemMessage` to a group of nodes.
     pub fn broadcast(
         &self,

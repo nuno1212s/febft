@@ -1,5 +1,6 @@
 //! The consensus algorithm used for `febft` and other logic.
 
+use std::marker::PhantomData;
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 
@@ -38,7 +39,7 @@ pub enum PollStatus {
     /// more messages.
     ProposeAndRecv,
     /// A new consensus message is available to be processed.
-    NextMessage(ConsensusMessage),
+    NextMessage(Header, ConsensusMessage),
 }
 
 /// Represents a queue of messages to be ordered in a consensus instance.
@@ -50,9 +51,9 @@ pub enum PollStatus {
 pub struct TBOQueue {
     curr_seq: i32,
     get_queue: bool,
-    pre_prepares: VecDeque<VecDeque<ConsensusMessage>>,
-    prepares: VecDeque<VecDeque<ConsensusMessage>>,
-    commits: VecDeque<VecDeque<ConsensusMessage>>,
+    pre_prepares: VecDeque<VecDeque<(Header, ConsensusMessage)>>,
+    prepares: VecDeque<VecDeque<(Header, ConsensusMessage)>>,
+    commits: VecDeque<VecDeque<(Header, ConsensusMessage)>>,
 }
 
 // XXX: details
@@ -67,7 +68,9 @@ impl TBOQueue {
         }
     }
 
-    fn pop_message(tbo: &mut VecDeque<VecDeque<ConsensusMessage>>) -> Option<ConsensusMessage> {
+    fn pop_message(
+        tbo: &mut VecDeque<VecDeque<(Header, ConsensusMessage)>>,
+    ) -> Option<(Header, ConsensusMessage)> {
         if tbo.is_empty() {
             None
         } else {
@@ -75,7 +78,12 @@ impl TBOQueue {
         }
     }
 
-    fn queue_message(curr_seq: i32, tbo: &mut VecDeque<VecDeque<ConsensusMessage>>, m: ConsensusMessage) {
+    fn queue_message(
+        curr_seq: i32,
+        tbo: &mut VecDeque<VecDeque<(Header, ConsensusMessage)>>,
+        h: Header,
+        m: ConsensusMessage,
+    ) {
         let index = m.sequence_number() - curr_seq;
         if index < 0 {
             // drop old messages
@@ -86,18 +94,20 @@ impl TBOQueue {
             let len = index - tbo.len() + 1;
             tbo.extend(std::iter::repeat_with(VecDeque::new).take(len));
         }
-        tbo[index].push_back(m);
+        tbo[index].push_back((h, m));
     }
 
-    fn advance_message_queue(tbo: &mut VecDeque<VecDeque<ConsensusMessage>>) {
+    fn advance_message_queue(
+        tbo: &mut VecDeque<VecDeque<(Header, ConsensusMessage)>>,
+    ) {
         tbo.pop_front();
     }
 }
 
 macro_rules! extract_msg {
     ($g:expr, $q:expr) => {
-        if let Some(m) = Self::pop_message($q) {
-            PollStatus::NextMessage(m)
+        if let Some((header, message)) = Self::pop_message($q) {
+            PollStatus::NextMessage(header, message)
         } else {
             *$g = false;
             PollStatus::Recv
@@ -149,20 +159,20 @@ impl TBOQueue {
 
     /// Queues a `PRE-PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
-    fn queue_pre_prepare(&mut self, m: ConsensusMessage) {
-        Self::queue_message(self.curr_seq, &mut self.pre_prepares, m)
+    fn queue_pre_prepare(&mut self, h: Header, m: ConsensusMessage) {
+        Self::queue_message(self.curr_seq, &mut self.pre_prepares, h, m)
     }
 
     /// Queues a `PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
-    fn queue_prepare(&mut self, m: ConsensusMessage) {
-        Self::queue_message(self.curr_seq, &mut self.prepares, m)
+    fn queue_prepare(&mut self, h: Header, m: ConsensusMessage) {
+        Self::queue_message(self.curr_seq, &mut self.prepares, h, m)
     }
 
     /// Queues a `COMMIT` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
-    fn queue_commit(&mut self, m: ConsensusMessage) {
-        Self::queue_message(self.curr_seq, &mut self.commits, m)
+    fn queue_commit(&mut self, h: Header, m: ConsensusMessage) {
+        Self::queue_message(self.curr_seq, &mut self.commits, h, m)
     }
 }
 
@@ -183,11 +193,12 @@ pub enum ProtoPhase {
 
 /// Contains the state of an active consensus instance, as well
 /// as future instances.
-pub struct Consensus {
+pub struct Consensus<S: Service> {
     phase: ProtoPhase,
     tbo: TBOQueue,
     current: Option<Signature>,
     //voted: HashSet<NodeId>,
+    _phantom: PhantomData<S>,
 }
 
 /// Status returned from processing a consensus message.
@@ -202,10 +213,17 @@ pub enum ConsensusStatus {
     Decided(Signature),
 }
 
-impl Consensus {
+impl<S> Consensus<S>
+where
+    S: Service + Send + 'static,
+    State<S>: Send + 'static,
+    Request<S>: Send + 'static,
+    Reply<S>: Send + 'static,
+{
     /// Starts a new consensus protocol tracker.
     pub fn new(initial_seq_no: i32) -> Self {
         Self {
+            _phantom: PhantomData,
             phase: ProtoPhase::Init,
             tbo: TBOQueue::new(initial_seq_no),
             //voted: collections::hash_set(),
@@ -218,13 +236,7 @@ impl Consensus {
     /// This function will only succeed if the `node` is
     /// the leader of the current `view` and the `node` is
     /// in the phase `ProtoPhase::Init`.
-    pub fn propose<S>(&mut self, sig: Signature, view: ViewInfo, node: &mut Node<S::Data>)
-    where
-        S: Service + Send + 'static,
-        State<S>: Send + 'static,
-        Request<S>: Send + 'static,
-        Reply<S>: Send + 'static,
-    {
+    pub fn propose(&mut self, sig: Signature, view: ViewInfo, node: &mut Node<S::Data>) {
         match self.phase {
             ProtoPhase::Init => self.phase = ProtoPhase::PrePreparing,
             _ => return,
@@ -257,20 +269,14 @@ impl Consensus {
     }
 
     /// Process a message for a particular consensus instance.
-    pub fn process_message<S>(
+    pub fn process_message(
         &mut self,
-        _header: Header,
+        header: Header,
         message: ConsensusMessage,
         view: ViewInfo,
         _log: &mut LoggerHandle<Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
-    ) -> ConsensusStatus
-    where
-        S: Service + Send + 'static,
-        State<S>: Send + 'static,
-        Request<S>: Send + 'static,
-        Reply<S>: Send + 'static,
-    {
+    ) -> ConsensusStatus {
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just
         // the amount of votes received
@@ -281,15 +287,15 @@ impl Consensus {
                 // queue the message for later
                 match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
-                        self.queue_pre_prepare(message);
+                        self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Prepare => {
-                        self.queue_prepare(message);
+                        self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Commit => {
-                        self.queue_commit(message);
+                        self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
                     },
                 }
@@ -299,18 +305,18 @@ impl Consensus {
                 // or in the same seq as the message
                 self.current = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) if message.sequence_number() != self.sequence_number() => {
-                        self.queue_pre_prepare(message);
+                        self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::PrePrepare(sig) => {
                         Some(sig.clone())
                     },
                     ConsensusMessageKind::Prepare => {
-                        self.queue_prepare(message);
+                        self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Commit => {
-                        self.queue_commit(message);
+                        self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
                     },
                 };
@@ -332,16 +338,16 @@ impl Consensus {
                 // or in the same seq as the message
                 let i = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
-                        self.queue_pre_prepare(message);
+                        self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Prepare if message.sequence_number() != self.sequence_number() => {
-                        self.queue_prepare(message);
+                        self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Prepare => i + 1,
                     ConsensusMessageKind::Commit => {
-                        self.queue_commit(message);
+                        self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
                     },
                 };
@@ -365,15 +371,15 @@ impl Consensus {
                 // or in the same seq as the message
                 let i = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
-                        self.queue_pre_prepare(message);
+                        self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Prepare => {
-                        self.queue_prepare(message);
+                        self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Commit if message.sequence_number() != self.sequence_number() => {
-                        self.queue_commit(message);
+                        self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Commit => i + 1,
@@ -395,7 +401,13 @@ impl Consensus {
     }
 }
 
-impl Deref for Consensus {
+impl<S> Deref for Consensus<S>
+where
+    S: Service + Send + 'static,
+    State<S>: Send + 'static,
+    Request<S>: Send + 'static,
+    Reply<S>: Send + 'static,
+{
     type Target = TBOQueue;
 
     #[inline]
@@ -404,7 +416,13 @@ impl Deref for Consensus {
     }
 }
 
-impl DerefMut for Consensus {
+impl<S> DerefMut for Consensus<S>
+where
+    S: Service + Send + 'static,
+    State<S>: Send + 'static,
+    Request<S>: Send + 'static,
+    Reply<S>: Send + 'static,
+{
     #[inline]
     fn deref_mut(&mut self) -> &mut TBOQueue {
         &mut self.tbo

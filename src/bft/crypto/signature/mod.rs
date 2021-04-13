@@ -30,7 +30,13 @@ pub struct PublicKeyRef<'a> {
 
 /// A `Signature` is the result of using `KeyPair::sign`. Represents
 /// a digital signature with a private key.
-#[derive(Copy, Clone)]
+//
+// FIXME: is it secure to derive PartialEq+Eq? maybe roll our own impl,
+// using something like this:
+//
+// https://golang.org/src/crypto/subtle/constant_time.go?s=505:546#L2
+//
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 #[repr(transparent)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct Signature {

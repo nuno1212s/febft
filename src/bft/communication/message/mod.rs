@@ -121,6 +121,7 @@ pub struct RequestMessage<O> {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct ReplyMessage<P> {
+    signature: Signature,
     payload: P,
 }
 
@@ -169,13 +170,19 @@ impl<O> RequestMessage<O> {
 
 impl<P> ReplyMessage<P> {
     /// Creates a new `ReplyMessage`.
-    pub fn new(payload: P) -> Self {
-        Self { payload }
+    pub fn new(signature: Signature, payload: P) -> Self {
+        Self { signature, payload }
     }
 
     /// Returns a reference to the payload of type `P`.
     pub fn payload(&self) -> &P {
         &self.payload
+    }
+
+    /// The signature if the request associated with
+    /// this reply.
+    pub fn signature(&self) -> &Signature {
+        &self.signature
     }
 }
 

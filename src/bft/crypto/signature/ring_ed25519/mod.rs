@@ -27,7 +27,7 @@ pub struct PublicKey {
 #[cfg(feature = "serialize_serde")]
 big_array! { SignatureArray; }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 #[repr(transparent)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct Signature(
