@@ -71,7 +71,7 @@ pub fn debug_msg(m: Message<(), ()>) -> &'static str {
         Message::ConnectedRx(_, _) => "CRx",
         Message::DisconnectedTx(_) => "DTx",
         Message::DisconnectedRx(_) => "DRx",
-        Message::ExecutionFinished(_, _) => "Exe",
+        Message::ExecutionFinished(_, _, _) => "Exe",
     }
 }
 
