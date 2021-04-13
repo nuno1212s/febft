@@ -6,7 +6,7 @@ use super::SystemParams;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
 use crate::bft::crypto::signature::Signature;
-use crate::bft::collections::{self, HashMap};
+use crate::bft::collections::{self, HashMap, HashSet};
 use crate::bft::consensus::{
     Consensus,
     PollStatus,
@@ -72,6 +72,7 @@ pub struct Replica<S: Service> {
     view: ViewInfo,
     requests: VecDeque<(Header, Request<S>)>,
     deciding: HashMap<Signature, (Header, Request<S>)>,
+    decided: HashSet<Signature>,
     consensus: Consensus<S>,
     node: Node<S::Data>,
 }
@@ -95,11 +96,23 @@ where
                 PollStatus::Recv => self.node.receive().await?,
                 PollStatus::NextMessage(h, m) => Message::System(h, SystemMessage::Consensus(m)),
                 PollStatus::ProposeAndRecv => {
-                    if let Some((h, r)) = self.requests.pop_front() {
-                        // FIXME: is this correct?
-                        let sig = h.signature();
-                        self.consensus.propose(sig, self.view, &mut self.node);
-                        self.deciding.insert(sig, (h, r));
+                    match self.requests.pop_front() {
+                        Some((h, r)) if self.decided.remove(h.signature()) => {
+                            // FIXME: is this correct? should we store a consensus
+                            // id to execute in order..?
+                            self.executor.queue(
+                                h.from(),
+                                h.signature().clone(),
+                                r,
+                            ).await?;
+                            continue;
+                        },
+                        Some((h, r)) => {
+                            let sig = h.signature().clone();
+                            self.consensus.propose(sig, self.view, &mut self.node);
+                            self.deciding.insert(sig, (h, r));
+                        },
+                        None => (),
                     }
                     self.node.receive().await?
                 },
@@ -127,13 +140,16 @@ where
                                 ConsensusStatus::VotedTwice(_) => unimplemented!(),
                                 // reached agreement, execute request
                                 ConsensusStatus::Decided(signature) => {
-                                    // FIXME: if remove fails, what do we do?!
                                     if let Some((header, request)) = self.deciding.remove(&signature) {
                                         self.executor.queue(
                                             header.from(),
                                             signature,
                                             request,
                                         ).await?;
+                                    } else {
+                                        // we haven't processed this request yet,
+                                        // store it as decided
+                                        self.decided.insert(header.signature().clone());
                                     }
                                     self.consensus.next_instance();
                                 },
