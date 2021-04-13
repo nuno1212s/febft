@@ -31,4 +31,19 @@ pub mod bft;
 #[cfg(not(feature = "expose_impl"))]
 mod bft;
 
-// TODO: re-export some stuff
+// TODO: re-export relevant stuff
+
+//#[doc(inline)]
+//pub use bft::executable;
+//
+//#[doc(inline)]
+//pub use bft::crypto::signature;
+//
+//#[doc(inline)]
+//pub use bft::core::SystemParams;
+//
+//#[doc(inline)]
+//pub use bft::core::server::{Replica, ViewInfo};
+
+//#[doc(inline)]
+//pub use bft::core::client::Client;
