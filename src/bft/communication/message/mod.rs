@@ -278,8 +278,8 @@ impl Header {
     }
 
     /// The signature of this `Header` and associated payload.
-    pub fn signature(&self) -> Signature {
-        Signature::from_bytes(&self.signature[..]).unwrap()
+    pub fn signature(&self) -> &Signature {
+        unsafe { std::mem::transmute(&self.signature) }
     }
 }
 
@@ -425,12 +425,9 @@ impl<'a> WireMessage<'a> {
         }
         public_key
             .map(|pk| {
-                // unwrap() should be safe because of the `Header`
-                let signature = Signature::from_bytes(&self.header.signature[..])
-                    .unwrap();
                 Self::verify_parts(
                     pk,
-                    &signature,
+                    self.header.signature(),
                     self.header.from,
                     self.header.to,
                     self.payload,
