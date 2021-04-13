@@ -17,6 +17,11 @@ use std::sync::Arc;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use either::{
+    Left,
+    Right,
+    Either,
+};
 use rustls::{
     ClientConfig,
     ServerConfig,
@@ -27,13 +32,14 @@ use async_tls::{
     TlsConnector,
     TlsAcceptor,
 };
-use futures_timer::Delay;
-use futures::lock::Mutex;
-use smallvec::SmallVec;
 use futures::io::{
     AsyncReadExt,
     AsyncWriteExt,
 };
+use parking_lot::RwLock;
+use futures_timer::Delay;
+use futures::lock::Mutex;
+use smallvec::SmallVec;
 
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
@@ -113,9 +119,21 @@ impl From<NodeId> for u32 {
     }
 }
 
-struct NodeTxData {
-    sk: Arc<KeyPair>,
-    sock: Mutex<TlsStreamCli<Socket>>,
+enum PeerTx {
+    // clients need shared access to the hashmap; the `Arc` on the second
+    // lock allows us to take ownership of a copy of the socket, so we
+    // don't block the thread with the guard of the first lock waiting
+    // on the second one
+    Client(Arc<RwLock<HashMap<NodeId, Arc<Mutex<TlsStreamCli<Socket>>>>>>),
+    // replicas don't need shared access to the hashmap, so
+    // we only need one lock (to restrict I/O to one producer at a time)
+    Server(HashMap<NodeId, Arc<Mutex<TlsStreamCli<Socket>>>>),
+}
+
+struct NodeShared {
+    my_key: KeyPair,
+    peer_addrs: HashMap<NodeId, (SocketAddr, String)>,
+    peer_keys: HashMap<NodeId, PublicKey>,
 }
 
 /// Container for handles to other processes in the system.
@@ -124,12 +142,10 @@ struct NodeTxData {
 /// communication between processes.
 pub struct Node<D: SharedData> {
     id: NodeId,
-    my_key: Arc<KeyPair>,
-    peer_keys: Arc<HashMap<NodeId, PublicKey>>,
     my_tx: MessageChannelTx<D::Request, D::Reply>,
     my_rx: MessageChannelRx<D::Request, D::Reply>,
-    peer_addrs: HashMap<NodeId, (SocketAddr, String)>,
-    peer_tx: HashMap<NodeId, Arc<NodeTxData>>,
+    shared: Arc<NodeShared>,
+    peer_tx: PeerTx,
     connector: TlsConnector,
 }
 
@@ -171,6 +187,8 @@ const NODE_BUFSIZ: usize = 16384;
 // max no. of SendTo's to inline before doing a heap alloc
 const NODE_VIEWSIZ: usize = 8;
 
+type SendTos<D> = SmallVec<[SendTo<D>; NODE_VIEWSIZ]>;
+
 impl<D> Node<D>
 where
     D: SharedData + 'static,
@@ -211,21 +229,23 @@ where
         // tx side (connect to replica)
         Self::tx_side_connect(cfg.n as u32, id, connector.clone(), tx.clone(), &cfg.addrs);
 
-        // share the secret key between other tasks, but keep it in a
-        // single memory location, with an `Arc`
-        let my_key = Arc::new(cfg.sk);
-
         // node def
-        let peer_tx = collections::hash_map();
-        let peer_keys = Arc::new(cfg.pk);
+        let peer_tx = if id >= first_cli {
+            PeerTx::Client(Arc::new(RwLock::new(collections::hash_map())))
+        } else {
+            PeerTx::Server(collections::hash_map())
+        };
+        let shared = Arc::new(NodeShared{
+            my_key: cfg.sk,
+            peer_keys: cfg.pk,
+            peer_addrs: cfg.addrs,
+        });
         let mut node = Node {
             id,
-            my_key,
+            shared,
+            peer_tx,
             my_tx: tx,
             my_rx: rx,
-            peer_tx,
-            peer_keys,
-            peer_addrs: cfg.addrs,
             connector,
         };
 
@@ -310,11 +330,11 @@ where
 
             // send
             if my_id == target {
-                // Err -> our turn
-                send_to.value(Err((message, buf))).await;
+                // Right -> our turn
+                send_to.value(Right((message, buf))).await;
             } else {
-                // Ok -> peer turn
-                send_to.value(Ok(buf)).await;
+                // Left -> peer turn
+                send_to.value(Left(buf)).await;
             }
         });
     }
@@ -326,7 +346,7 @@ where
         targets: impl Iterator<Item = NodeId>,
     ) {
         let mut my_send_to = None;
-        let mut other_send_tos = SmallVec::new();
+        let mut other_send_tos = SendTos::new();
 
         // create SendTo's for ourselves and
         // our peer nodes
@@ -346,7 +366,7 @@ where
     fn broadcast_impl(
         message: SystemMessage<D::Request, D::Reply>,
         my_send_to: Option<SendTo<D>>,
-        other_send_tos: SmallVec<[SendTo<D>; NODE_VIEWSIZ]>,
+        other_send_tos: SendTos<D>,
     ) {
         rt::spawn(async move {
             // serialize
@@ -357,8 +377,8 @@ where
             if let Some(mut send_to) = my_send_to {
                 let buf = buf.clone();
                 rt::spawn(async move {
-                    // Err -> our turn
-                    send_to.value(Err((message, buf))).await;
+                    // Right -> our turn
+                    send_to.value(Right((message, buf))).await;
                 });
             }
 
@@ -366,33 +386,59 @@ where
             for mut send_to in other_send_tos {
                 let buf = buf.clone();
                 rt::spawn(async move {
-                    // Ok -> peer turn
-                    send_to.value(Ok(buf)).await;
+                    // Left -> peer turn
+                    send_to.value(Left(buf)).await;
                 });
             }
 
-            // XXX: final remarks: the Ok and Err act
-            // as an ad-hoc either enum, which allows
+            // XXX: an either enum is used, which allows
             // rustc to prove only one task gets ownership
-            // of the `message`
+            // of the `message`, i.e. `Right` = oursleves
         });
+    }
+
+    fn send_tos(
+        &self,
+        targets: impl Iterator<Item = NodeId>,
+    ) -> (SendTo<D>, SendTos<D>) {
+        let mut my_send_to = None;
+        let mut other_send_tos = SendTos::new();
+
+        let peer_tx = match &self.peer_tx {
+            PeerTx::Client(ref lock) => {
+                let map = lock.read();
+                Left(ManuallyDrop::new(map))
+            },
+            PeerTx::Server(ref map) => Right(map),
+        };
+
+        for id in targets {
+            if id == self.id {
+                my_send_to = Some(s);
+            } else {
+                other_send_tos.push(s);
+            }
+        }
+
+        (my_send_to, other_send_tos)
     }
 
     fn send_to(&self, peer_id: NodeId) -> SendTo<D> {
         let my_id = self.id;
         let tx = self.my_tx.clone();
-        if my_id != peer_id {
-            SendTo::Peers {
-                tx,
+        let shared = Arc::clone(&self.shared);
+        if my_id == peer_id {
+            SendTo::Me {
+                shared,
                 my_id,
-                peer_id,
-                data: Arc::clone(&self.peer_tx[&peer_id]),
+                tx,
             }
         } else {
-            SendTo::Me {
-                tx,
+            SendTo::Peers {
+                shared,
+                peer_id,
                 my_id,
-                sk: Arc::clone(&self.my_key),
+                tx,
             }
         }
     }
@@ -404,10 +450,15 @@ where
 
     /// Method called upon a `Message::ConnectedTx`.
     pub fn handle_connected_tx(&mut self, peer_id: NodeId, sock: TlsStreamCli<Socket>) {
-        self.peer_tx.insert(peer_id, Arc::new(NodeTxData {
-            sk: Arc::clone(&self.my_key),
-            sock: Mutex::new(sock),
-        }));
+        match &mut self.peer_tx {
+            PeerTx::Server(ref mut peer_tx) => {
+                peer_tx.insert(peer_id, Mutex::new(sock));
+            },
+            PeerTx::Client(ref lock) => {
+                let mut peer_tx = lock.write();
+                peer_tx.insert(peer_id, Arc::new(Mutex::new(sock)));
+            },
+        }
     }
 
     /// Method called upon a `Message::ConnectedRx`.
@@ -607,16 +658,15 @@ where
     }
 }
 
-/// A `SendNode` is a `Node` whose `broadcast()` and `send()`
-/// behaviors were detached for safe use between threads.
-pub struct SendNode<D: SharedData> {
+/// Represents a client node, with only sending capabilities.
+pub struct ClientNode<D: SharedData> {
     id: NodeId,
-    my_key: Arc<KeyPair>,
-    peer_keys: Arc<HashMap<NodeId, PublicKey>>,
+    shared: Arc<NodeShared>,
+    peer_tx: Arc<RwLock<HashMap<NodeId, Arc<Mutex<TlsStreamCli<Socket>>>>>>,
     my_tx: MessageChannelTx<D::Request, D::Reply>,
 }
 
-//impl<D> SendNode<D>
+//impl<D> ClientNode<D>
 //where
 //    D: SharedData + 'static,
 //    D::Request: Send + 'static,
@@ -646,8 +696,8 @@ enum SendTo<D: SharedData> {
     Me {
         // our id
         my_id: NodeId,
-        // our secret key
-        sk: Arc<KeyPair>,
+        // shared data
+        shared: Arc<NodeShared>,
         // a handle to our message channel
         tx: MessageChannelTx<D::Request, D::Reply>,
     },
@@ -656,8 +706,10 @@ enum SendTo<D: SharedData> {
         my_id: NodeId,
         // the id of the peer
         peer_id: NodeId,
-        // data associated with peer
-        data: Arc<NodeTxData>,
+        // shared data
+        shared: Arc<NodeShared>,
+        // handle to socket
+        sock: Arc<Mutex<TlsStreamCli<Socket>>>,
         // a handle to our message channel
         tx: MessageChannelTx<D::Request, D::Reply>,
     },
@@ -671,19 +723,19 @@ where
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
-    async fn value(&mut self, m: std::result::Result<Buf, (SystemMessage<D::Request, D::Reply>, Buf)>) {
+    async fn value(&mut self, m: Either<Buf, (SystemMessage<D::Request, D::Reply>, Buf)>) {
         match self {
-            SendTo::Me { my_id, ref sk, ref mut tx } => {
-                if let Err((m, b)) = m {
-                    Self::me(*my_id, m, b, &*sk, tx).await
+            SendTo::Me { my_id, shared: ref sh, ref mut tx } => {
+                if let Right((m, b)) = m {
+                    Self::me(*my_id, m, b, &sh.my_key, tx).await
                 } else {
                     // optimize code path
                     unreachable!()
                 }
             },
-            SendTo::Peers { my_id, peer_id, ref data, ref mut tx } => {
-                if let Ok(b) = m {
-                    Self::peers(*my_id, *peer_id, b, &*data, tx).await
+            SendTo::Peers { my_id, peer_id, shared: ref sh, ref mut tx } => {
+                if let Left(b) = m {
+                    Self::peers(*my_id, *peer_id, b, &sh.my_key, &sh.peer_tx, tx).await
                 } else {
                     // optimize code path
                     unreachable!()
@@ -715,7 +767,8 @@ where
         my_id: NodeId,
         peer_id: NodeId,
         b: Buf,
-        d: &NodeTxData,
+        sk: &KeyPair,
+        peer_tx: &PeerTx,
         tx: &mut MessageChannelTx<D::Request, D::Reply>,
     ) {
         // create wire msg
@@ -723,17 +776,33 @@ where
             my_id,
             peer_id,
             &b[..],
-            Some(&d.sk),
+            Some(sk),
         );
 
         // send
         //
         // FIXME: sending may hang forever, because of network
         // problems; add a timeout
-        let mut sock = d.sock.lock().await;
-        if let Err(_) = wm.write_to(&mut *sock).await {
-            // error sending, drop connection
-            tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
+        match peer_tx {
+            PeerTx::Client(ref lock) => {
+                let lock = {
+                    let map = lock.read();
+                    Arc::clone(&map[&peer_id])
+                };
+                let mut sock = lock.lock().await;
+                if let Err(_) = wm.write_to(&mut *sock).await {
+                    // error sending, drop connection
+                    tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
+                }
+            },
+            PeerTx::Server(ref map) => {
+                let lock = &map[&peer_id];
+                let mut sock = lock.lock().await;
+                if let Err(_) = wm.write_to(&mut *sock).await {
+                    // error sending, drop connection
+                    tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
+                }
+            },
         }
     }
 }
