@@ -95,7 +95,7 @@ where
             let message = match self.consensus.poll() {
                 PollStatus::Recv => self.node.receive().await?,
                 PollStatus::NextMessage(h, m) => Message::System(h, SystemMessage::Consensus(m)),
-                PollStatus::ProposeAndRecv => {
+                PollStatus::TryProposeAndRecv => {
                     match self.requests.pop_front() {
                         Some((h, r)) if self.decided.remove(h.signature()) => {
                             // FIXME: is this correct? should we store a consensus

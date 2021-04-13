@@ -35,9 +35,11 @@ pub enum PollStatus {
     Recv,
     /// The `Replica` associated with this `TBOQueue` should
     /// propose a new client request to be ordered, if it is
-    /// the leader. Next, it should poll its main channel for
-    /// more messages.
-    ProposeAndRecv,
+    /// the leader, and then it should poll its main channel
+    /// for more messages. Alternatively, if the request has
+    /// already been decided, it should be queued for
+    /// execution.
+    TryProposeAndRecv,
     /// A new consensus message is available to be processed.
     NextMessage(Header, ConsensusMessage),
 }
@@ -130,7 +132,7 @@ impl TBOQueue {
     /// Poll this `TBOQueue` for new consensus messages.
     fn poll_queue(&mut self, phase: ProtoPhase) -> PollStatus {
         match phase {
-            ProtoPhase::Init => PollStatus::ProposeAndRecv,
+            ProtoPhase::Init => PollStatus::TryProposeAndRecv,
             ProtoPhase::PrePreparing if self.get_queue => {
                 extract_msg!(&mut self.get_queue, &mut self.pre_prepares)
             },
