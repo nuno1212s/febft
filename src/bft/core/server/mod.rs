@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 
 use super::SystemParams;
 use crate::bft::error::*;
+use crate::bft::async_runtime as rt;
 use crate::bft::crypto::signature::Signature;
 use crate::bft::collections::{self, HashMap};
 use crate::bft::consensus::{
@@ -121,7 +122,7 @@ where
                             );
                             match status {
                                 // if deciding, nothing to do
-                                ConsensusStatus::Deciding => (),
+                                ConsensusStatus::Deciding => rt::yield_now().await,
                                 // FIXME: implement this
                                 ConsensusStatus::VotedTwice(_) => unimplemented!(),
                                 // reached agreement, execute request
