@@ -26,6 +26,7 @@ struct ClientData<P> {
     ready: Mutex<HashMap<Signature, P>>,
 }
 
+/// Represents a client node in `febft`.
 // TODO: maybe make the clone impl more efficient
 pub struct Client<D: SharedData> {
     params: SystemParams,
@@ -43,6 +44,7 @@ impl<D: SharedData> Clone for Client<D> {
     }
 }
 
+/// A future for a client request in progress.
 pub struct ClientRequestFut<'a, P> {
     signature: Signature,
     data: &'a ClientData<P>,
