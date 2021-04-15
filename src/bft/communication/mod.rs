@@ -164,6 +164,10 @@ pub struct NodeConfig {
     pub f: usize,
     /// The id of this `Node`.
     pub id: NodeId,
+    /// The first id assigned to a client`Node`.
+    ///
+    /// Every other client id of the form `first_cli + i`.
+    pub first_cli: NodeId,
     /// The addresses of all nodes in the system (including clients),
     /// as well as the domain name associated with each address.
     ///
@@ -225,14 +229,13 @@ where
         let connector: TlsConnector = cfg.client_config.into();
 
         // rx side (accept conns from replica)
-        let first_cli: NodeId = cfg.n.into();
-        rt::spawn(Self::rx_side_accept(first_cli, id, listener, acceptor, tx.clone()));
+        rt::spawn(Self::rx_side_accept(cfg.first_cli, id, listener, acceptor, tx.clone()));
 
         // tx side (connect to replica)
         Self::tx_side_connect(cfg.n as u32, id, connector.clone(), tx.clone(), &cfg.addrs);
 
         // node def
-        let peer_tx = if id >= first_cli {
+        let peer_tx = if id >= cfg.first_cli {
             PeerTx::Client(Arc::new(RwLock::new(collections::hash_map())))
         } else {
             PeerTx::Server(collections::hash_map())

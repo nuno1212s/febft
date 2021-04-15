@@ -99,6 +99,7 @@ pub async fn setup_node(
         addrs,
         client_config,
         server_config,
+        first_cli: NodeId::from(1000u32),
     };
 
     Node::bootstrap(conf).await
