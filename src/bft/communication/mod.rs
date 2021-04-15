@@ -194,6 +194,8 @@ const NODE_BUFSIZ: usize = 16384;
 // max no. of SendTo's to inline before doing a heap alloc
 const NODE_VIEWSIZ: usize = 8;
 
+type Buf = SmallVec<[u8; NODE_BUFSIZ]>;
+
 type SendTos<D> = SmallVec<[SendTo<D>; NODE_VIEWSIZ]>;
 
 impl<D> Node<D>
@@ -347,7 +349,7 @@ where
     ) {
         rt::spawn(async move {
             // serialize
-            let mut buf: SmallVec<[_; NODE_BUFSIZ]> = SmallVec::new();
+            let mut buf: Buf = SmallVec::new();
             D::serialize_message(&mut buf, &message).unwrap();
 
             // send
@@ -385,7 +387,7 @@ where
     ) {
         rt::spawn(async move {
             // serialize
-            let mut buf: SmallVec<[_; NODE_BUFSIZ]> = SmallVec::new();
+            let mut buf: Buf = SmallVec::new();
             D::serialize_message(&mut buf, &message).unwrap();
 
             // send to ourselves
@@ -408,7 +410,7 @@ where
 
             // XXX: an either enum is used, which allows
             // rustc to prove only one task gets ownership
-            // of the `message`, i.e. `Right` = oursleves
+            // of the `message`, i.e. `Right` = ourselves
         });
     }
 
@@ -542,7 +544,7 @@ where
     pub fn handle_connected_rx(&self, peer_id: NodeId, mut sock: TlsStreamSrv<Socket>) {
         let mut tx = self.my_tx.clone();
         rt::spawn(async move {
-            let mut buf: SmallVec<[_; NODE_BUFSIZ]> = SmallVec::new();
+            let mut buf: Buf = SmallVec::new();
 
             // TODO
             //  - verify signatures???
@@ -828,8 +830,6 @@ enum SendTo<D: SharedData> {
         tx: MessageChannelTx<D::Request, D::Reply>,
     },
 }
-
-type Buf = SmallVec<[u8; NODE_BUFSIZ]>;
 
 impl<D> SendTo<D>
 where
