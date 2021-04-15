@@ -121,6 +121,7 @@ impl From<NodeId> for u32 {
 
 // TODO: maybe researh cleaner way to share the connections
 // hashmap between two async tasks on the client
+#[derive(Clone)]
 enum PeerTx {
     // clients need shared access to the hashmap; the `Arc` on the second
     // lock allows us to take ownership of a copy of the socket, so we
@@ -305,6 +306,16 @@ where
     /// Reports the id of this `Node`.
     pub fn id(&self) -> NodeId {
         self.id
+    }
+
+    /// Returns a `SendNode` sharing the same handles as this `Node`.
+    pub fn send_node(&self) -> SendNode<D> {
+        SendNode {
+            id: self.id,
+            shared: Arc::clone(&self.shared),
+            peer_tx: self.peer_tx.clone(),
+            my_tx: self.my_tx.clone(),
+        }
     }
 
     /// Send a `SystemMessage` to a single destination.
@@ -729,15 +740,15 @@ where
     }
 }
 
-/// Represents a client node, with only sending capabilities.
-pub struct ClientNode<D: SharedData> {
+/// Represents a node with sending capabilities only.
+pub struct SendNode<D: SharedData> {
     id: NodeId,
     shared: Arc<NodeShared>,
     peer_tx: PeerTx,
     my_tx: MessageChannelTx<D::Request, D::Reply>,
 }
 
-impl<D> ClientNode<D>
+impl<D> SendNode<D>
 where
     D: SharedData + 'static,
     D::Request: Send + 'static,
@@ -778,7 +789,7 @@ where
 }
 
 // helper type used when either a `send()` or a `broadcast()`
-// is called by a `Node` or `ClientNode`.
+// is called by a `Node` or `SendNode`.
 //
 // holds some data that can be shared between threads, relevant
 // to a network write operation, or channel write operation,
