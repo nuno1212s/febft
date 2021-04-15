@@ -45,7 +45,7 @@ pub struct Header {
     pub(crate) version: u32,
     // origin of the message
     pub(crate) from: u32,
-    // destiny of the message
+    // destination of the message
     pub(crate) to: u32,
     // length of the payload
     pub(crate) length: u64,
@@ -272,7 +272,7 @@ impl Header {
         self.from.into()
     }
 
-    /// The destiny `NodeId`.
+    /// The destination `NodeId`.
     pub fn to(&self) -> NodeId {
         self.to.into()
     }
