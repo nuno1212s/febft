@@ -414,7 +414,6 @@ where
             },
         };
 
-
         (my_send_to, other_send_tos)
     }
 
@@ -423,8 +422,8 @@ where
         &self,
         map: &HashMap<NodeId, Arc<Mutex<TlsStreamCli<Socket>>>>,
         targets: impl Iterator<Item = NodeId>,
-        my: &mut Option<SendTo<D>>,
-        other: &mut SendTos<D>,
+        mine: &mut Option<SendTo<D>>,
+        others: &mut SendTos<D>,
     ) {
         for id in targets {
             if id == self.id {
@@ -433,7 +432,7 @@ where
                     tx: self.my_tx.clone(),
                     shared: Arc::clone(&self.shared),
                 };
-                *my = Some(s);
+                *mine = Some(s);
             } else {
                 let sock = Arc::clone(&map[&id]);
                 let s = SendTo::Peers {
@@ -443,7 +442,7 @@ where
                     tx: self.my_tx.clone(),
                     shared: Arc::clone(&self.shared),
                 };
-                other.push(s);
+                others.push(s);
             }
         }
     }
