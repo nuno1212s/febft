@@ -521,6 +521,9 @@ where
                 let header = Header::deserialize_from(&buf[..Header::LENGTH]).unwrap();
 
                 // reserve space for message
+                //
+                // FIXME: add a max bound on the message payload length;
+                // if the length is exceeded, reject connection
                 buf.clear();
                 buf.reserve(header.payload_length());
                 buf.resize(header.payload_length(), 0);
