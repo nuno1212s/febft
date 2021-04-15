@@ -727,6 +727,13 @@ pub struct ClientNode<D: SharedData> {
 //    }
 //}
 
+// helper type used when either a `send()` or a `broadcast()`
+// is called by a `Node` or `ClientNode`.
+//
+// holds some data that can be shared between threads, relevant
+// to a network write operation, or channel write operation,
+// depending on whether we're sending a message to a peer node
+// or ourselves
 enum SendTo<D: SharedData> {
     Me {
         // our id
