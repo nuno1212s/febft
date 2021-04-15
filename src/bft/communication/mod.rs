@@ -189,6 +189,31 @@ const NODE_VIEWSIZ: usize = 8;
 
 type SendTos<D> = SmallVec<[SendTo<D>; NODE_VIEWSIZ]>;
 
+macro_rules! create_send_tos {
+    ($s:expr, $m:expr, $t:expr, $my:expr, $other:expr) => {
+        for id in $t {
+            if id == $s.id {
+                let s = SendTo::Me {
+                    my_id: $s.id,
+                    tx: $s.my_tx.clone(),
+                    shared: Arc::clone(&$s.shared),
+                };
+                $my = Some(s);
+            } else {
+                let sock = Arc::clone(&$m[&id]);
+                let s = SendTo::Peers {
+                    sock,
+                    peer_id: id,
+                    my_id: $s.id,
+                    tx: $s.my_tx.clone(),
+                    shared: Arc::clone(&$s.shared),
+                };
+                $other.push(s);
+            }
+        }
+    }
+}
+
 impl<D> Node<D>
 where
     D: SharedData + 'static,
@@ -345,21 +370,8 @@ where
         message: SystemMessage<D::Request, D::Reply>,
         targets: impl Iterator<Item = NodeId>,
     ) {
-        let mut my_send_to = None;
-        let mut other_send_tos = SendTos::new();
-
-        // create SendTo's for ourselves and
-        // our peer nodes
-        for id in targets {
-            let s = self.send_to(id);
-            if id == self.id {
-                my_send_to = Some(s);
-            } else {
-                other_send_tos.push(s);
-            }
-        }
-
-        Self::broadcast_impl(message, my_send_to, other_send_tos)
+        let (mine, others) = self.send_tos(targets);
+        Self::broadcast_impl(message, mine, others)
     }
 
     #[inline]
@@ -397,36 +409,44 @@ where
         });
     }
 
+    #[inline]
     fn send_tos(
         &self,
         targets: impl Iterator<Item = NodeId>,
-    ) -> (SendTo<D>, SendTos<D>) {
+    ) -> (Option<SendTo<D>>, SendTos<D>) {
         let mut my_send_to = None;
         let mut other_send_tos = SendTos::new();
 
-        let peer_tx = match &self.peer_tx {
+        match &self.peer_tx {
             PeerTx::Client(ref lock) => {
                 let map = lock.read();
-                Left(ManuallyDrop::new(map))
+                create_send_tos!(self,
+                    map, targets, my_send_to, other_send_tos);
             },
-            PeerTx::Server(ref map) => Right(map),
+            PeerTx::Server(ref map) => {
+                create_send_tos!(self,
+                    map, targets, my_send_to, other_send_tos);
+            },
         };
 
-        for id in targets {
-            if id == self.id {
-                my_send_to = Some(s);
-            } else {
-                other_send_tos.push(s);
-            }
-        }
 
         (my_send_to, other_send_tos)
     }
 
+    #[inline]
     fn send_to(&self, peer_id: NodeId) -> SendTo<D> {
         let my_id = self.id;
         let tx = self.my_tx.clone();
         let shared = Arc::clone(&self.shared);
+        let sock = match &self.peer_tx {
+            PeerTx::Client(ref lock) => {
+                let map = lock.read();
+                Arc::clone(&map[&peer_id])
+            },
+            PeerTx::Server(ref map) => {
+                Arc::clone(&map[&peer_id])
+            },
+        };
         if my_id == peer_id {
             SendTo::Me {
                 shared,
@@ -435,6 +455,7 @@ where
             }
         } else {
             SendTo::Peers {
+                sock,
                 shared,
                 peer_id,
                 my_id,
@@ -452,7 +473,7 @@ where
     pub fn handle_connected_tx(&mut self, peer_id: NodeId, sock: TlsStreamCli<Socket>) {
         match &mut self.peer_tx {
             PeerTx::Server(ref mut peer_tx) => {
-                peer_tx.insert(peer_id, Mutex::new(sock));
+                peer_tx.insert(peer_id, Arc::new(Mutex::new(sock)));
             },
             PeerTx::Client(ref lock) => {
                 let mut peer_tx = lock.write();
