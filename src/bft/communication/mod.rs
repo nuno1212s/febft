@@ -119,6 +119,8 @@ impl From<NodeId> for u32 {
     }
 }
 
+// TODO: maybe researh cleaner way to share the connections
+// hashmap between two async tasks on the client
 enum PeerTx {
     // clients need shared access to the hashmap; the `Arc` on the second
     // lock allows us to take ownership of a copy of the socket, so we
