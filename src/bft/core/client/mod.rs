@@ -51,6 +51,9 @@ pub struct ClientRequestFut<'a, P> {
 impl<'a, P> Future for ClientRequestFut<'a, P> {
     type Output = P;
 
+    // TODO: maybe make this impl more efficient;
+    // if we have a lot of requests being done in parallel,
+    // the mutexes are going to have a fair bit of contention
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<P> {
         // check if response is ready
         {
@@ -76,7 +79,7 @@ where
     D::Reply: Send + 'static,
 {
     async fn message_recv_task(
-        //map: Arc<Mutex<HashMap<Signature, Waker>>>,
+        map: Arc<ClientData<D::Reply>>,
         mut node: Node<D>,
     ) {
         let mut count: HashMap<Signature, i32> = collections::hash_map();
