@@ -737,31 +737,45 @@ pub struct ClientNode<D: SharedData> {
     my_tx: MessageChannelTx<D::Request, D::Reply>,
 }
 
-//impl<D> ClientNode<D>
-//where
-//    D: SharedData + 'static,
-//    D::Request: Send + 'static,
-//    D::Reply: Send + 'static,
-//{
-//    fn send_to(&self, peer_id: NodeId) -> SendTo<D> {
-//        let my_id = self.id;
-//        let tx = self.my_tx.clone();
-//        if my_id != peer_id {
-//            SendTo::Peers {
-//                tx,
-//                my_id,
-//                peer_id,
-//                data: Arc::clone(&self.peer_tx[&peer_id]),
-//            }
-//        } else {
-//            SendTo::Me {
-//                tx,
-//                my_id,
-//                sk: Arc::clone(&self.my_key),
-//            }
-//        }
-//    }
-//}
+impl<D> ClientNode<D>
+where
+    D: SharedData + 'static,
+    D::Request: Send + 'static,
+    D::Reply: Send + 'static,
+{
+    /// Check the `send()` documentation for `Node`.
+    pub fn send(
+        &self,
+        message: SystemMessage<D::Request, D::Reply>,
+        target: NodeId,
+    ) {
+        let send_to = <Node<D>>::send_to(
+            self.id,
+            target,
+            &self.shared,
+            &self.my_tx,
+            &self.peer_tx,
+        );
+        let my_id = self.id;
+        <Node<D>>::send_impl(message, send_to, my_id, target)
+    }
+
+    /// Check the `broadcast()` documentation for `Node`.
+    pub fn broadcast(
+        &self,
+        message: SystemMessage<D::Request, D::Reply>,
+        targets: impl Iterator<Item = NodeId>,
+    ) {
+        let (mine, others) = <Node<D>>::send_tos(
+            self.id,
+            &self.peer_tx,
+            &self.my_tx,
+            &self.shared,
+            targets,
+        );
+        <Node<D>>::broadcast_impl(message, mine, others)
+    }
+}
 
 // helper type used when either a `send()` or a `broadcast()`
 // is called by a `Node` or `ClientNode`.
