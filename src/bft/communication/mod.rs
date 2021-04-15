@@ -748,6 +748,17 @@ pub struct SendNode<D: SharedData> {
     my_tx: MessageChannelTx<D::Request, D::Reply>,
 }
 
+impl<D: SharedData> Clone for SendNode<D> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            shared: Arc::clone(&self.shared),
+            peer_tx: self.peer_tx.clone(),
+            my_tx: self.my_tx.clone(),
+        }
+    }
+}
+
 impl<D> SendNode<D>
 where
     D: SharedData + 'static,
