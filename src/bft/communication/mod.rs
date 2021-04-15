@@ -190,8 +190,8 @@ const NODE_VIEWSIZ: usize = 8;
 type SendTos<D> = SmallVec<[SendTo<D>; NODE_VIEWSIZ]>;
 
 macro_rules! create_send_tos {
-    ($s:expr, $m:expr, $t:expr, $my:expr, $other:expr) => {
-        for id in $t {
+    ($s:expr, $map:expr, $targets:expr, $my:expr, $other:expr) => {
+        for id in $targets {
             if id == $s.id {
                 let s = SendTo::Me {
                     my_id: $s.id,
@@ -200,7 +200,7 @@ macro_rules! create_send_tos {
                 };
                 $my = Some(s);
             } else {
-                let sock = Arc::clone(&$m[&id]);
+                let sock = Arc::clone(&$map[&id]);
                 let s = SendTo::Peers {
                     sock,
                     peer_id: id,
@@ -754,9 +754,9 @@ where
                     unreachable!()
                 }
             },
-            SendTo::Peers { my_id, peer_id, shared: ref sh, ref mut tx } => {
+            SendTo::Peers { my_id, peer_id, shared: ref sh, ref sock, ref mut tx } => {
                 if let Left(b) = m {
-                    Self::peers(*my_id, *peer_id, b, &sh.my_key, &sh.peer_tx, tx).await
+                    Self::peers(*my_id, *peer_id, b, &sh.my_key, &*sock, tx).await
                 } else {
                     // optimize code path
                     unreachable!()
@@ -789,7 +789,7 @@ where
         peer_id: NodeId,
         b: Buf,
         sk: &KeyPair,
-        peer_tx: &PeerTx,
+        lock: &Mutex<TlsStreamCli<Socket>>,
         tx: &mut MessageChannelTx<D::Request, D::Reply>,
     ) {
         // create wire msg
@@ -804,26 +804,10 @@ where
         //
         // FIXME: sending may hang forever, because of network
         // problems; add a timeout
-        match peer_tx {
-            PeerTx::Client(ref lock) => {
-                let lock = {
-                    let map = lock.read();
-                    Arc::clone(&map[&peer_id])
-                };
-                let mut sock = lock.lock().await;
-                if let Err(_) = wm.write_to(&mut *sock).await {
-                    // error sending, drop connection
-                    tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
-                }
-            },
-            PeerTx::Server(ref map) => {
-                let lock = &map[&peer_id];
-                let mut sock = lock.lock().await;
-                if let Err(_) = wm.write_to(&mut *sock).await {
-                    // error sending, drop connection
-                    tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
-                }
-            },
+        let mut sock = lock.lock().await;
+        if let Err(_) = wm.write_to(&mut *sock).await {
+            // error sending, drop connection
+            tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
         }
     }
 }
