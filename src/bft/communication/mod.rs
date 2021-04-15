@@ -189,31 +189,6 @@ const NODE_VIEWSIZ: usize = 8;
 
 type SendTos<D> = SmallVec<[SendTo<D>; NODE_VIEWSIZ]>;
 
-macro_rules! create_send_tos {
-    ($s:expr, $map:expr, $targets:expr, $my:expr, $other:expr) => {
-        for id in $targets {
-            if id == $s.id {
-                let s = SendTo::Me {
-                    my_id: $s.id,
-                    tx: $s.my_tx.clone(),
-                    shared: Arc::clone(&$s.shared),
-                };
-                $my = Some(s);
-            } else {
-                let sock = Arc::clone(&$map[&id]);
-                let s = SendTo::Peers {
-                    sock,
-                    peer_id: id,
-                    my_id: $s.id,
-                    tx: $s.my_tx.clone(),
-                    shared: Arc::clone(&$s.shared),
-                };
-                $other.push(s);
-            }
-        }
-    }
-}
-
 impl<D> Node<D>
 where
     D: SharedData + 'static,
@@ -420,17 +395,55 @@ where
         match &self.peer_tx {
             PeerTx::Client(ref lock) => {
                 let map = lock.read();
-                create_send_tos!(self,
-                    map, targets, my_send_to, other_send_tos);
+                self.create_send_tos(
+                    &*map,
+                    targets,
+                    &mut my_send_to,
+                    &mut other_send_tos,
+                );
             },
             PeerTx::Server(ref map) => {
-                create_send_tos!(self,
-                    map, targets, my_send_to, other_send_tos);
+                self.create_send_tos(
+                    map,
+                    targets,
+                    &mut my_send_to,
+                    &mut other_send_tos,
+                );
             },
         };
 
 
         (my_send_to, other_send_tos)
+    }
+
+    #[inline]
+    fn create_send_tos(
+        &self,
+        map: &HashMap<NodeId, Arc<Mutex<TlsStreamCli<Socket>>>>,
+        targets: impl Iterator<Item = NodeId>,
+        my: &mut Option<SendTo<D>>,
+        other: &mut SendTos<D>,
+    ) {
+        for id in targets {
+            if id == self.id {
+                let s = SendTo::Me {
+                    my_id: self.id,
+                    tx: self.my_tx.clone(),
+                    shared: Arc::clone(&self.shared),
+                };
+                *my = Some(s);
+            } else {
+                let sock = Arc::clone(&map[&id]);
+                let s = SendTo::Peers {
+                    sock,
+                    peer_id: id,
+                    my_id: self.id,
+                    tx: self.my_tx.clone(),
+                    shared: Arc::clone(&self.shared),
+                };
+                other.push(s);
+            }
+        }
     }
 
     #[inline]
