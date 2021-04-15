@@ -350,7 +350,13 @@ where
         message: SystemMessage<D::Request, D::Reply>,
         targets: impl Iterator<Item = NodeId>,
     ) {
-        let (mine, others) = self.send_tos(targets);
+        let (mine, others) = Self::send_tos(
+            self.id,
+            &self.peer_tx,
+            &self.my_tx,
+            &self.shared,
+            targets,
+        );
         Self::broadcast_impl(message, mine, others)
     }
 
@@ -391,16 +397,22 @@ where
 
     #[inline]
     fn send_tos(
-        &self,
+        my_id: NodeId,
+        peer_tx: &PeerTx,
+        tx: &MessageChannelTx<D::Request, D::Reply>,
+        shared: &Arc<NodeShared>,
         targets: impl Iterator<Item = NodeId>,
     ) -> (Option<SendTo<D>>, SendTos<D>) {
         let mut my_send_to = None;
         let mut other_send_tos = SendTos::new();
 
-        match &self.peer_tx {
+        match peer_tx {
             PeerTx::Client(ref lock) => {
                 let map = lock.read();
-                self.create_send_tos(
+                Self::create_send_tos(
+                    my_id,
+                    tx,
+                    shared,
                     &*map,
                     targets,
                     &mut my_send_to,
@@ -408,7 +420,10 @@ where
                 );
             },
             PeerTx::Server(ref map) => {
-                self.create_send_tos(
+                Self::create_send_tos(
+                    my_id,
+                    tx,
+                    shared,
                     map,
                     targets,
                     &mut my_send_to,
@@ -422,28 +437,30 @@ where
 
     #[inline]
     fn create_send_tos(
-        &self,
+        my_id: NodeId,
+        tx: &MessageChannelTx<D::Request, D::Reply>,
+        shared: &Arc<NodeShared>,
         map: &HashMap<NodeId, Arc<Mutex<TlsStreamCli<Socket>>>>,
         targets: impl Iterator<Item = NodeId>,
         mine: &mut Option<SendTo<D>>,
         others: &mut SendTos<D>,
     ) {
         for id in targets {
-            if id == self.id {
+            if id == my_id {
                 let s = SendTo::Me {
-                    my_id: self.id,
-                    tx: self.my_tx.clone(),
-                    shared: Arc::clone(&self.shared),
+                    my_id,
+                    tx: tx.clone(),
+                    shared: Arc::clone(shared),
                 };
                 *mine = Some(s);
             } else {
                 let sock = Arc::clone(&map[&id]);
                 let s = SendTo::Peers {
                     sock,
+                    my_id,
                     peer_id: id,
-                    my_id: self.id,
-                    tx: self.my_tx.clone(),
-                    shared: Arc::clone(&self.shared),
+                    tx: tx.clone(),
+                    shared: Arc::clone(shared),
                 };
                 others.push(s);
             }
