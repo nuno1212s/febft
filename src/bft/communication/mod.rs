@@ -316,7 +316,13 @@ where
         message: SystemMessage<D::Request, D::Reply>,
         target: NodeId,
     ) {
-        let send_to = self.send_to(target);
+        let send_to = Self::send_to(
+            self.id,
+            target,
+            &self.shared,
+            &self.my_tx,
+            &self.peer_tx,
+        );
         let my_id = self.id;
         Self::send_impl(message, send_to, my_id, target)
     }
@@ -468,11 +474,16 @@ where
     }
 
     #[inline]
-    fn send_to(&self, peer_id: NodeId) -> SendTo<D> {
-        let my_id = self.id;
-        let tx = self.my_tx.clone();
-        let shared = Arc::clone(&self.shared);
-        let sock = match &self.peer_tx {
+    fn send_to(
+        my_id: NodeId,
+        peer_id: NodeId,
+        shared: &Arc<NodeShared>,
+        tx: &MessageChannelTx<D::Request, D::Reply>,
+        peer_tx: &PeerTx,
+    ) -> SendTo<D> {
+        let tx = tx.clone();
+        let shared = Arc::clone(shared);
+        let sock = match peer_tx {
             PeerTx::Client(ref lock) => {
                 let map = lock.read();
                 Arc::clone(&map[&peer_id])
