@@ -59,6 +59,7 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
         {
             let mut ready = self.data.ready.lock();
             if let Some(payload) = ready.remove(&self.signature) {
+                // FIXME: should you remove wakers here?
                 return Poll::Ready(payload);
             }
         }
@@ -79,15 +80,43 @@ where
     D::Reply: Send + 'static,
 {
     async fn message_recv_task(
-        map: Arc<ClientData<D::Reply>>,
+        params: SystemParams,
+        data: Arc<ClientData<D::Reply>>,
         mut node: Node<D>,
     ) {
-        let mut count: HashMap<Signature, i32> = collections::hash_map();
+        let mut count: HashMap<Signature, usize> = collections::hash_map();
         while let Ok(message) = node.receive().await {
             match message {
-                Message::System(header, message) => {
+                Message::System(_, message) => {
                     match message {
                         SystemMessage::Reply(message) => {
+                            let (signature, payload) = message.into_inner();
+                            let q = count.entry(signature).or_insert(0);
+
+                            // register new reply received
+                            *q += 1;
+
+                            // TODO: check if we got equivalent responses by
+                            // verifying the signature
+
+                            if *q == params.quorum() {
+                                // remove this counter
+                                count.remove(&signature);
+
+                                // register response
+                                {
+                                    let mut ready = data.ready.lock();
+                                    ready.insert(signature, payload);
+                                }
+
+                                // try to wake up a waiting task
+                                {
+                                    let mut wakers = data.wakers.lock();
+                                    if let Some(waker) = wakers.remove(&signature) {
+                                        waker.wake();
+                                    }
+                                }
+                            }
                         },
                         // FIXME: handle rogue messages on clients
                         _ => panic!("rogue message detected"),

@@ -184,6 +184,11 @@ impl<P> ReplyMessage<P> {
     pub fn signature(&self) -> &Signature {
         &self.signature
     }
+
+    /// Unwraps this `ReplyMessage`.
+    pub fn into_inner(self) -> (Signature, P) {
+        (self.signature, self.payload)
+    }
 }
 
 impl ConsensusMessage {
