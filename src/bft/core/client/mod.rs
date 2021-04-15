@@ -18,6 +18,7 @@ use crate::bft::communication::message::{
 };
 use crate::bft::communication::{
     Node,
+    NodeId,
     SendNode,
 };
 
@@ -44,8 +45,7 @@ impl<D: SharedData> Clone for Client<D> {
     }
 }
 
-/// A future for a client request in progress.
-pub struct ClientRequestFut<'a, P> {
+struct ClientRequestFut<'a, P> {
     signature: Signature,
     data: &'a ClientData<P>,
 }
@@ -56,7 +56,7 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
     // TODO: maybe make this impl more efficient;
     // if we have a lot of requests being done in parallel,
     // the mutexes are going to have a fair bit of contention
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<P> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<P> {
         // check if response is ready
         {
             let mut ready = self.data.ready.lock();
@@ -81,6 +81,17 @@ where
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
+//    /// Updates the replicated state of the application running
+//    /// on top of `febft`.
+//    pub async fn update(&self, operation: D::Request) -> D::Reply {
+//        // broadcast our request to the node group
+//        let message = SystemMessage::Request(RequestMessage::new(
+//            operation,
+//        ));
+//        let targets = NodeId::targets(0..self.params.n());
+//        self.node.broadcast(operation
+//    }
+
     async fn message_recv_task(
         params: SystemParams,
         data: Arc<ClientData<D::Reply>>,
