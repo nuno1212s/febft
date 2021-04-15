@@ -733,7 +733,7 @@ where
 pub struct ClientNode<D: SharedData> {
     id: NodeId,
     shared: Arc<NodeShared>,
-    peer_tx: Arc<RwLock<HashMap<NodeId, Arc<Mutex<TlsStreamCli<Socket>>>>>>,
+    peer_tx: PeerTx,
     my_tx: MessageChannelTx<D::Request, D::Reply>,
 }
 
