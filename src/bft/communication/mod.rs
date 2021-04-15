@@ -523,7 +523,9 @@ where
                 // reserve space for message
                 //
                 // FIXME: add a max bound on the message payload length;
-                // if the length is exceeded, reject connection
+                // if the length is exceeded, reject connection;
+                // the bound can be application defined, i.e.
+                // returned by `SharedData`
                 buf.clear();
                 buf.reserve(header.payload_length());
                 buf.resize(header.payload_length(), 0);
