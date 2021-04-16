@@ -9,12 +9,19 @@ use parking_lot::Mutex;
 
 use super::SystemParams;
 
-use crate::bft::crypto::hash::Digest;
 use crate::bft::collections::{self, HashMap};
-use crate::bft::communication::serialize::SharedData;
+use crate::bft::communication::serialize::{
+    Buf,
+    SharedData,
+};
+use crate::bft::crypto::hash::{
+    Digest,
+    Context as HashContext,
+};
 use crate::bft::communication::message::{
     Message,
     SystemMessage,
+    RequestMessage,
 };
 use crate::bft::communication::{
     Node,
@@ -81,16 +88,35 @@ where
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
-//    /// Updates the replicated state of the application running
-//    /// on top of `febft`.
-//    pub async fn update(&self, operation: D::Request) -> D::Reply {
-//        // broadcast our request to the node group
-//        let message = SystemMessage::Request(RequestMessage::new(
-//            operation,
-//        ));
-//        let targets = NodeId::targets(0..self.params.n());
-//        self.node.broadcast(operation
-//    }
+    /// Updates the replicated state of the application running
+    /// on top of `febft`.
+    pub async fn update(&self, operation: D::Request) -> D::Reply {
+        // create message and obtain its digest
+        //
+        // TODO: avoid serializing twice? :(
+        // this extra step takes around 100ns on average,
+        // on my machine, which isn't a lot on its own,
+        // but can add up with lots of concurrent requests
+        let message = SystemMessage::Request(RequestMessage::new(
+            operation,
+        ));
+        let digest = {
+            let mut buf = Buf::new();
+            D::serialize_message(&mut buf, &message).unwrap();
+
+            let mut ctx = HashContext::new();
+            ctx.update(&buf[..]);
+            ctx.finish()
+        };
+
+        // broadcast our request to the node group
+        let targets = NodeId::targets(0..self.params.n());
+        self.node.broadcast(message, targets);
+
+        // await response
+        let data = &*self.data;
+        ClientRequestFut { digest, data }.await
+    }
 
     async fn message_recv_task(
         params: SystemParams,
