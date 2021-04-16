@@ -88,6 +88,10 @@ where
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
+    // FIXME: can the client receive rogue reply messages?
+    // perhaps when it reconnects to a replica after experiencing
+    // network problems!
+
     /// Updates the replicated state of the application running
     /// on top of `febft`.
     pub async fn update(&self, operation: D::Request) -> D::Reply {
