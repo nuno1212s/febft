@@ -289,6 +289,8 @@ where
         _log: &mut LoggerHandle<Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) -> ConsensusStatus {
+        // FIXME: use order imposed by leader
+        // FIXME: check if the pre-prepare is from the leader
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just
         // the amount of votes received
