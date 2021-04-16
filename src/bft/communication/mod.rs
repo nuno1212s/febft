@@ -349,7 +349,7 @@ where
     ) {
         rt::spawn(async move {
             // serialize
-            let mut buf: Buf = SmallVec::new();
+            let mut buf: Buf = Buf::new();
             D::serialize_message(&mut buf, &message).unwrap();
 
             // send
@@ -387,7 +387,7 @@ where
     ) {
         rt::spawn(async move {
             // serialize
-            let mut buf: Buf = SmallVec::new();
+            let mut buf: Buf = Buf::new();
             D::serialize_message(&mut buf, &message).unwrap();
 
             // send to ourselves
@@ -544,7 +544,7 @@ where
     pub fn handle_connected_rx(&self, peer_id: NodeId, mut sock: TlsStreamSrv<Socket>) {
         let mut tx = self.my_tx.clone();
         rt::spawn(async move {
-            let mut buf: Buf = SmallVec::new();
+            let mut buf: Buf = Buf::new();
 
             // TODO
             //  - verify signatures???
