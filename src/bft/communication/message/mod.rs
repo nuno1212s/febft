@@ -91,7 +91,7 @@ pub enum Message<O, P> {
     /// The request of a client with id `NodeId` has finished executing.
     ///
     /// The payload delivered to the client is `P`.
-    ExecutionFinished(NodeId, Signature, P),
+    ExecutionFinished(NodeId, Digest, P),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
@@ -123,7 +123,7 @@ pub struct RequestMessage<O> {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct ReplyMessage<P> {
-    signature: Signature,
+    digest: Digest,
     payload: P,
 }
 
@@ -143,9 +143,8 @@ pub struct ConsensusMessage {
 #[derive(Copy, Clone)]
 pub enum ConsensusMessageKind {
     /// Pre-prepare a request, according to the BFT protocol.
-    /// The `Signature` represens the signed hash of the
-    /// serialized request payload and respective header.
-    PrePrepare(Signature),
+    /// The `Digest` represens the hash of the serialized request payload.
+    PrePrepare(Digest),
     /// Prepare a request.
     Prepare,
     /// Commit a request, signaling the system is almost ready
@@ -172,8 +171,8 @@ impl<O> RequestMessage<O> {
 
 impl<P> ReplyMessage<P> {
     /// Creates a new `ReplyMessage`.
-    pub fn new(signature: Signature, payload: P) -> Self {
-        Self { signature, payload }
+    pub fn new(digest: Digest, payload: P) -> Self {
+        Self { digest, payload }
     }
 
     /// Returns a reference to the payload of type `P`.
@@ -181,15 +180,15 @@ impl<P> ReplyMessage<P> {
         &self.payload
     }
 
-    /// The signature if the request associated with
+    /// The hash digest of the request associated with
     /// this reply.
-    pub fn signature(&self) -> &Signature {
-        &self.signature
+    pub fn signature(&self) -> &Digest {
+        &self.digest
     }
 
     /// Unwraps this `ReplyMessage`.
-    pub fn into_inner(self) -> (Signature, P) {
-        (self.signature, self.payload)
+    pub fn into_inner(self) -> (Digest, P) {
+        (self.digest, self.payload)
     }
 }
 
