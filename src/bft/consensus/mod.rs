@@ -159,6 +159,16 @@ impl TBOQueue {
         Self::advance_message_queue(&mut self.commits);
     }
 
+    /// Queues a consensus message for later processing, or drops it
+    /// immediately if it pertains to an older consensus instance.
+    pub fn queue(&mut self, h: Header, m: ConsensusMessage) {
+        match m.kind() {
+            ConsensusMessageKind::PrePrepare(_) => self.queue_pre_prepare(h, m),
+            ConsensusMessageKind::Prepare => self.queue_prepare(h, m),
+            ConsensusMessageKind::Commit => self.queue_commit(h, m),
+        }
+    }
+
     /// Queues a `PRE-PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
     fn queue_pre_prepare(&mut self, h: Header, m: ConsensusMessage) {

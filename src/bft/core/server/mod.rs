@@ -27,6 +27,7 @@ use crate::bft::executable::{
 use crate::bft::communication::{
     Node,
     NodeId,
+    NodeConfig,
 };
 use crate::bft::communication::message::{
     SystemMessage,
@@ -77,6 +78,20 @@ pub struct Replica<S: Service> {
     node: Node<S::Data>,
 }
 
+/// Represents a configuration used to bootstrap a `Replica`.
+// TODO: load files from persistent storage
+pub struct ReplicaConfig<S> {
+    /// The application logic.
+    pub service: S,
+    /// The leader for the current view.
+    pub leader: NodeId,
+    /// Next sequence number attributed to a request by
+    /// the consensus layer.
+    pub next_consensus_seq: i32,
+    /// Check out the docs on `NodeConfig`.
+    pub node: NodeConfig,
+}
+
 impl<S> Replica<S>
 where
     S: Service + Send + 'static,
@@ -84,6 +99,67 @@ where
     Request<S>: Send + 'static,
     Reply<S>: Send + 'static,
 {
+    /// Bootstrap a replica in `febft`.
+    pub async fn bootstrap(cfg: ReplicaConfig<S>) -> Result<Self> {
+        let ReplicaConfig {
+            next_consensus_seq,
+            node: node_config,
+            service,
+            leader,
+        } = cfg;
+
+        // system params
+        let n = node_config.n;
+        let f = node_config.f;
+        let view = ViewInfo::new(leader, n, f)?;
+
+        // connect to peer nodes
+        let (node, rogue) = Node::bootstrap(node_config).await?;
+
+        // start executor
+        let executor = Executor::new(
+            node.master_channel(),
+            service,
+        )?;
+
+        // start logger
+        let log = Logger::new(node.master_channel());
+
+        let mut replica = Replica {
+            consensus: Consensus::new(next_consensus_seq),
+            deciding: collections::hash_map(),
+            decided: collections::hash_set(),
+            requests: VecDeque::new(),
+            executor,
+            node,
+            view,
+            log,
+        };
+
+        // handle rogue messages
+        for message in rogue {
+            match message {
+                Message::System(header, message) => {
+                    match message {
+                        SystemMessage::Request(r) => {
+                            let op = r.into_inner();
+                            replica.requests.push_back((header, op));
+                        },
+                        SystemMessage::Consensus(message) => {
+                            replica.consensus.queue(header, message);
+                        },
+                        // FIXME: handle rogue reply messages
+                        SystemMessage::Reply(_) => panic!("rogue reply message detected"),
+                    }
+                },
+                // ignore other messages for now
+                _ => (),
+            }
+        }
+
+        Ok(replica)
+    }
+
     /// The main loop of a replica.
     pub async fn run(&mut self) -> Result<()> {
         // TODO: exit condition?
