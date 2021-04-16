@@ -49,7 +49,9 @@ pub struct Header {
     pub(crate) to: u32,
     // length of the payload
     pub(crate) length: u64,
-    // sign(hash(le(version) + le(from) + le(to) + le(length) + serialize(payload)))
+    // the digest of the serialized payload
+    pub(crate) digest: [u8; Digest::LENGTH],
+    // sign(hash(le(version) + le(from) + le(to) + le(length) + hash(serialize(payload))))
     pub(crate) signature: [u8; Signature::LENGTH],
 }
 
@@ -286,6 +288,11 @@ impl Header {
     pub fn signature(&self) -> &Signature {
         unsafe { std::mem::transmute(&self.signature) }
     }
+
+    /// The digest of the associated payload serialized data.
+    pub fn digest(&self) -> &Digest {
+        unsafe { std::mem::transmute(&self.digest) }
+    }
 }
 
 impl From<WireMessage<'_>> for OwnedWireMessage<Box<[u8]>> {
@@ -340,13 +347,21 @@ impl<'a> WireMessage<'a> {
 
     /// Constructs a new message to be sent over the wire.
     pub fn new(from: NodeId, to: NodeId, payload: &'a [u8], sk: Option<&KeyPair>) -> Self {
+        let digest = if payload.len() > 0 {
+            let mut ctx = Context::new();
+            ctx.update(payload);
+            // safety: digests have repr(transparent)
+            unsafe { std::mem::transmute(ctx.finish()) }
+        } else {
+            [0; Digest::LENGTH]
+        };
         let signature = sk
             .map(|sk| {
                 let signature = Self::sign_parts(
                     sk,
                     from.into(),
                     to.into(),
-                    payload,
+                    &digest[..],
                 );
                 // safety: signatures have repr(transparent)
                 unsafe { std::mem::transmute(signature) }
@@ -357,6 +372,7 @@ impl<'a> WireMessage<'a> {
             version: Self::CURRENT_VERSION,
             length: payload.len() as u64,
             signature,
+            digest,
             from,
             to,
         };
@@ -379,9 +395,7 @@ impl<'a> WireMessage<'a> {
         let buf = (payload.len() as u64).to_le_bytes();
         ctx.update(&buf[..]);
 
-        if payload.len() > 0 {
-            ctx.update(payload);
-        }
+        ctx.update(payload);
         ctx.finish()
     }
 
@@ -435,7 +449,7 @@ impl<'a> WireMessage<'a> {
                     self.header.signature(),
                     self.header.from,
                     self.header.to,
-                    self.payload,
+                    &self.header.digest[..],
                 ).is_ok()
             })
             .unwrap_or(true)
