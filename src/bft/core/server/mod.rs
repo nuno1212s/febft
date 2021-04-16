@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use super::SystemParams;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
-use crate::bft::crypto::signature::Signature;
+use crate::bft::crypto::hash::Digest;
 use crate::bft::collections::{self, HashMap, HashSet};
 use crate::bft::consensus::{
     Consensus,
@@ -71,8 +71,8 @@ pub struct Replica<S: Service> {
     log: LoggerHandle<Request<S>, Reply<S>>,
     view: ViewInfo,
     requests: VecDeque<(Header, Request<S>)>,
-    deciding: HashMap<Signature, (Header, Request<S>)>,
-    decided: HashSet<Signature>,
+    deciding: HashMap<Digest, (Header, Request<S>)>,
+    decided: HashSet<Digest>,
     consensus: Consensus<S>,
     node: Node<S::Data>,
 }
@@ -97,20 +97,20 @@ where
                 PollStatus::NextMessage(h, m) => Message::System(h, SystemMessage::Consensus(m)),
                 PollStatus::TryProposeAndRecv => {
                     match self.requests.pop_front() {
-                        Some((h, r)) if self.decided.remove(h.signature()) => {
+                        Some((h, r)) if self.decided.remove(h.digest()) => {
                             // FIXME: is this correct? should we store a consensus
                             // id to execute in order..?
                             self.executor.queue(
                                 h.from(),
-                                h.signature().clone(),
+                                h.digest().clone(),
                                 r,
                             ).await?;
                             continue;
                         },
                         Some((h, r)) => {
-                            let sig = h.signature().clone();
-                            self.consensus.propose(sig, self.view, &mut self.node);
-                            self.deciding.insert(sig, (h, r));
+                            let dig = h.digest().clone();
+                            self.consensus.propose(dig, self.view, &mut self.node);
+                            self.deciding.insert(dig, (h, r));
                         },
                         None => (),
                     }
@@ -139,17 +139,17 @@ where
                                 // FIXME: implement this
                                 ConsensusStatus::VotedTwice(_) => unimplemented!(),
                                 // reached agreement, execute request
-                                ConsensusStatus::Decided(signature) => {
-                                    if let Some((header, request)) = self.deciding.remove(&signature) {
+                                ConsensusStatus::Decided(digest) => {
+                                    if let Some((header, request)) = self.deciding.remove(&digest) {
                                         self.executor.queue(
                                             header.from(),
-                                            signature,
+                                            digest,
                                             request,
                                         ).await?;
                                     } else {
                                         // we haven't processed this request yet,
                                         // store it as decided
-                                        self.decided.insert(header.signature().clone());
+                                        self.decided.insert(header.digest().clone());
                                     }
                                     self.consensus.next_instance();
                                 },
@@ -162,10 +162,10 @@ where
                         SystemMessage::Reply(_) => panic!("rogue reply message detected"),
                     }
                 },
-                Message::ExecutionFinished(peer_id, signature, payload) => {
+                Message::ExecutionFinished(peer_id, digest, payload) => {
                     // deliver reply to client
                     let message = SystemMessage::Reply(ReplyMessage::new(
-                        signature,
+                        digest,
                         payload,
                     ));
                     self.node.send(message, peer_id);

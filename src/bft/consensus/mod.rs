@@ -4,8 +4,8 @@ use std::marker::PhantomData;
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 
+use crate::bft::crypto::hash::Digest;
 use crate::bft::core::server::ViewInfo;
-use crate::bft::crypto::signature::Signature;
 use crate::bft::history::LoggerHandle;
 use crate::bft::communication::message::{
     Header,
@@ -198,7 +198,7 @@ pub enum ProtoPhase {
 pub struct Consensus<S: Service> {
     phase: ProtoPhase,
     tbo: TBOQueue,
-    current: Option<Signature>,
+    current: Option<Digest>,
     //voted: HashSet<NodeId>,
     _phantom: PhantomData<S>,
 }
@@ -211,8 +211,8 @@ pub enum ConsensusStatus {
     /// on a client request to be executed.
     Deciding,
     /// A `febft` quorum decided on the execution of
-    /// the request with the given `Signature`.
-    Decided(Signature),
+    /// the request with the given `Digest`.
+    Decided(Digest),
 }
 
 impl<S> Consensus<S>
@@ -233,12 +233,12 @@ where
         }
     }
 
-    /// Proposes a new request with signature `sig`.
+    /// Proposes a new request with digest `dig`.
     ///
     /// This function will only succeed if the `node` is
     /// the leader of the current `view` and the `node` is
     /// in the phase `ProtoPhase::Init`.
-    pub fn propose(&mut self, sig: Signature, view: ViewInfo, node: &mut Node<S::Data>) {
+    pub fn propose(&mut self, dig: Digest, view: ViewInfo, node: &mut Node<S::Data>) {
         match self.phase {
             ProtoPhase::Init => self.phase = ProtoPhase::PrePreparing,
             _ => return,
@@ -248,7 +248,7 @@ where
         }
         let message = SystemMessage::Consensus(ConsensusMessage::new(
             self.sequence_number(),
-            ConsensusMessageKind::PrePrepare(sig),
+            ConsensusMessageKind::PrePrepare(dig),
         ));
         let targets = NodeId::targets(0..view.params().n());
         node.broadcast(message, targets);
@@ -310,8 +310,8 @@ where
                         self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     },
-                    ConsensusMessageKind::PrePrepare(sig) => {
-                        Some(sig.clone())
+                    ConsensusMessageKind::PrePrepare(dig) => {
+                        Some(dig.clone())
                     },
                     ConsensusMessageKind::Prepare => {
                         self.queue_prepare(header, message);
@@ -392,8 +392,8 @@ where
                     // we have reached a decision,
                     // notify core protocol
                     self.phase = ProtoPhase::Init;
-                    let sig = self.current.take().unwrap();
-                    ConsensusStatus::Decided(sig)
+                    let dig = self.current.take().unwrap();
+                    ConsensusStatus::Decided(dig)
                 } else {
                     self.phase = ProtoPhase::Committing(i);
                     ConsensusStatus::Deciding
