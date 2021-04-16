@@ -516,12 +516,14 @@ impl<O, P> Message<O, P> {
 mod tests {
     use crate::bft::communication::message::{WireMessage, Header};
     use crate::bft::crypto::signature::Signature;
+    use crate::bft::crypto::hash::Digest;
 
     #[test]
     fn test_header_serialize() {
         let old_header = Header {
             version: WireMessage::CURRENT_VERSION,
             signature: [0; Signature::LENGTH],
+            digest: [0; Digest::LENGTH],
             from: 0,
             to: 3,
             length: 0,
