@@ -13,7 +13,7 @@ pub struct Context {
     inner: digest::Context,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 #[repr(transparent)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct Digest([u8; Digest::LENGTH]);

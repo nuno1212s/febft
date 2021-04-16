@@ -5,8 +5,8 @@ use std::sync::mpsc;
 
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
+use crate::bft::crypto::hash::Digest;
 use crate::bft::communication::NodeId;
-use crate::bft::crypto::signature::Signature;
 use crate::bft::communication::message::Message;
 use crate::bft::communication::serialize::{
     ReplicaData,
@@ -21,7 +21,7 @@ use crate::bft::communication::channel::{
 
 enum ExecutionRequest<O> {
     // process the state of the service
-    ReadWrite(NodeId, Signature, O),
+    ReadWrite(NodeId, Digest, O),
     // read the state of the service
     //
     // TODO: the current api can't handle sending the application state;
@@ -87,11 +87,11 @@ where
 {
     /// Queues a particular request `req` for execution.
     ///
-    /// The client `from` signed its request `req`, resulting in the
-    /// signature `sig`. This value is used to notify `from` of the
-    /// completion of the related request `req`.
-    pub async fn queue(&mut self, from: NodeId, sig: Signature, req: Request<S>) -> Result<()> {
-        self.my_tx.send(ExecutionRequest::ReadWrite(from, sig, req)).await
+    /// The value `dig` represents the hash digest of the
+    /// serialized `req`, which is used to notify `from` of
+    /// the completion of this request.
+    pub async fn queue(&mut self, from: NodeId, dig: Digest, req: Request<S>) -> Result<()> {
+        self.my_tx.send(ExecutionRequest::ReadWrite(from, dig, req)).await
     }
 }
 
@@ -147,7 +147,7 @@ where
             // FIXME: exit condition
             while let Ok(exec_req) = exec.my_rx.recv().await {
                 match exec_req {
-                    ExecutionRequest::ReadWrite(peer_id, sig, req) => {
+                    ExecutionRequest::ReadWrite(peer_id, dig, req) => {
                         // spawn execution task
                         let (finish, wait) = oneshot::channel();
                         exec.e_tx.send(Task {
@@ -159,7 +159,7 @@ where
                         let reply = wait.await.unwrap();
 
                         // deliver reply
-                        let m = Message::ExecutionFinished(peer_id, sig, reply);
+                        let m = Message::ExecutionFinished(peer_id, dig, reply);
                         exec.system_tx.send(m).await.unwrap();
                     },
                     ExecutionRequest::Read(_peer_id) => {

@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 
 use super::SystemParams;
 
-use crate::bft::crypto::signature::Signature;
+use crate::bft::crypto::hash::Digest;
 use crate::bft::collections::{self, HashMap};
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::message::{
@@ -23,8 +23,8 @@ use crate::bft::communication::{
 };
 
 struct ClientData<P> {
-    wakers: Mutex<HashMap<Signature, Waker>>,
-    ready: Mutex<HashMap<Signature, P>>,
+    wakers: Mutex<HashMap<Digest, Waker>>,
+    ready: Mutex<HashMap<Digest, P>>,
 }
 
 /// Represents a client node in `febft`.
@@ -46,7 +46,7 @@ impl<D: SharedData> Clone for Client<D> {
 }
 
 struct ClientRequestFut<'a, P> {
-    signature: Signature,
+    digest: Digest,
     data: &'a ClientData<P>,
 }
 
@@ -60,7 +60,7 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
         // check if response is ready
         {
             let mut ready = self.data.ready.lock();
-            if let Some(payload) = ready.remove(&self.signature) {
+            if let Some(payload) = ready.remove(&self.digest) {
                 // FIXME: should you remove wakers here?
                 return Poll::Ready(payload);
             }
@@ -69,7 +69,7 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
         // the response is ready
         {
             let mut wakers = self.data.wakers.lock();
-            wakers.insert(self.signature, cx.waker().clone());
+            wakers.insert(self.digest, cx.waker().clone());
         }
         Poll::Pending
     }
@@ -97,35 +97,35 @@ where
         data: Arc<ClientData<D::Reply>>,
         mut node: Node<D>,
     ) {
-        let mut count: HashMap<Signature, usize> = collections::hash_map();
+        let mut count: HashMap<Digest, usize> = collections::hash_map();
         while let Ok(message) = node.receive().await {
             match message {
                 Message::System(_, message) => {
                     match message {
                         SystemMessage::Reply(message) => {
-                            let (signature, payload) = message.into_inner();
-                            let q = count.entry(signature).or_insert(0);
+                            let (digest, payload) = message.into_inner();
+                            let q = count.entry(digest).or_insert(0);
 
                             // register new reply received
                             *q += 1;
 
                             // TODO: check if we got equivalent responses by
-                            // verifying the signature
+                            // verifying the digest
 
                             if *q == params.quorum() {
                                 // remove this counter
-                                count.remove(&signature);
+                                count.remove(&digest);
 
                                 // register response
                                 {
                                     let mut ready = data.ready.lock();
-                                    ready.insert(signature, payload);
+                                    ready.insert(digest, payload);
                                 }
 
                                 // try to wake up a waiting task
                                 {
                                     let mut wakers = data.wakers.lock();
-                                    if let Some(waker) = wakers.remove(&signature) {
+                                    if let Some(waker) = wakers.remove(&digest) {
                                         waker.wake();
                                     }
                                 }

@@ -21,7 +21,7 @@ pub struct Context {
 }
 
 /// Represents a hash digest.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 #[repr(transparent)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct Digest {
