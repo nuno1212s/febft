@@ -8,6 +8,8 @@
 
 use std::io::{Read, Write};
 
+use smallvec::SmallVec;
+
 use crate::bft::error::*;
 use crate::bft::communication::message::SystemMessage;
 
@@ -50,3 +52,9 @@ pub trait ReplicaData: SharedData {
 pub trait ClientData: SharedData {}
 
 impl<D: SharedData> ClientData for D {}
+
+/// The buffer type used to serialize messages into.
+pub type Buf = SmallVec<[u8; NODE_BUFSIZ]>;
+
+// max no. of bytes to inline before doing a heap alloc
+const NODE_BUFSIZ: usize = 16384;

@@ -44,7 +44,10 @@ use smallvec::SmallVec;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
 use crate::bft::collections::{self, HashMap};
-use crate::bft::communication::serialize::SharedData;
+use crate::bft::communication::serialize::{
+    Buf,
+    SharedData,
+};
 use crate::bft::communication::socket::{
     Socket,
     Listener,
@@ -188,13 +191,8 @@ pub struct NodeConfig {
 // max no. of messages allowed in the channel
 const NODE_CHAN_BOUND: usize = 128;
 
-// max no. of bytes to inline before doing a heap alloc
-const NODE_BUFSIZ: usize = 16384;
-
 // max no. of SendTo's to inline before doing a heap alloc
 const NODE_VIEWSIZ: usize = 8;
-
-type Buf = SmallVec<[u8; NODE_BUFSIZ]>;
 
 type SendTos<D> = SmallVec<[SendTo<D>; NODE_VIEWSIZ]>;
 
