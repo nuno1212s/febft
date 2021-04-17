@@ -125,13 +125,11 @@ where
         let send_node = node.send_node();
 
         // spawn receiving task
-        rt::spawn(async move {
-            Self::message_recv_task(
-                params,
-                task_data,
-                node,
-            ).await;
-        });
+        rt::spawn(Self::message_recv_task(
+            params,
+            task_data,
+            node,
+        ));
 
         Ok(Client {
             data,
