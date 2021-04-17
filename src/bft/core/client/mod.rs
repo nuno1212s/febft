@@ -142,6 +142,7 @@ where
 
     /// Updates the replicated state of the application running
     /// on top of `febft`.
+    // TODO: request timeout
     pub async fn update(&self, operation: D::Request) -> D::Reply {
         // create message and obtain its digest
         //
