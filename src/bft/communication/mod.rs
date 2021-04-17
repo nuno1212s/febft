@@ -1,11 +1,6 @@
 //! Communication primitives for `febft`, such as wire message formats.
 
-#[cfg(not(feature = "expose_impl"))]
-mod socket;
-
-#[cfg(feature = "expose_impl")]
 pub mod socket;
-
 pub mod serialize;
 pub mod message;
 pub mod channel;
