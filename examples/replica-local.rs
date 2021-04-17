@@ -65,7 +65,7 @@ async fn async_main() {
             replica.run().await.unwrap();
         });
     }
-    drop(pool);
+    drop((pool, secret_keys, public_keys));
 
     // run forever
     std::future::pending().await
