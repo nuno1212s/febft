@@ -653,7 +653,8 @@ where
         mut tx: MessageChannelTx<D::Request, D::Reply>,
         (addr, hostname): (SocketAddr, String),
     ) {
-        const RETRY: usize = 10;
+        const SECS: u64 = 1;
+        const RETRY: usize = 3 * 60;
         // notes
         // ========
         //
@@ -694,8 +695,8 @@ where
                 tx.send(Message::ConnectedTx(peer_id, sock)).await.unwrap_or(());
                 return;
             }
-            // sleep for 1 second and retry
-            Delay::new(Duration::from_secs(1)).await;
+            // sleep for `SECS` seconds and retry
+            Delay::new(Duration::from_secs(SECS)).await;
         }
         // announce we have failed to connect to the peer node
         tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
