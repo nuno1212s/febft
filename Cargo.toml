@@ -64,6 +64,7 @@ futures-timer = "3"
 async-tls = "0.11"
 rustls = "0.19"
 parking_lot = "0.11"
+#subtle = "2"
 smallvec = { version = "1", features = ["union", "write"] }
 async-std = { version = "1", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
