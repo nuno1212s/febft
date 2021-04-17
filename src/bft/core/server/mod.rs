@@ -249,9 +249,9 @@ where
                 Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
                 Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
                 // TODO: node disconnected on send side
-                Message::DisconnectedTx(_id) => unimplemented!(),
+                Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
                 // TODO: node disconnected on receive side
-                Message::DisconnectedRx(_some_id) => unimplemented!(),
+                Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
             }
 
             // loop end
