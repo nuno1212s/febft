@@ -176,12 +176,20 @@ async fn get_server_config(t: &ThreadPool, id: NodeId) -> ServerConfig {
 
         // configure our cert chain and secret key
         let sk = {
-            let mut file = open_file(&format!("./ca-root/cop0{}/cop0{}.key", id, id));
+            let mut file = if id <= 4 {
+                open_file(&format!("./ca-root/cop0{}/cop0{}.key", id, id))
+            } else {
+                open_file(&format!("./ca-root/cli{}/cli{}.key", id, id))
+            };
             let mut sk = pemfile::rsa_private_keys(&mut file).expect("secret key");
             sk.remove(0)
         };
         let chain = {
-            let mut file = open_file(&format!("./ca-root/cop0{}/cop0{}.crt", id, id));
+            let mut file = if id <= 4 {
+                open_file(&format!("./ca-root/cop0{}/cop0{}.crt", id, id))
+            } else {
+                open_file(&format!("./ca-root/cli{}/cli{}.crt", id, id))
+            };
             let mut c = pemfile::certs(&mut file).expect("cop cert");
             c.extend(certs);
             c
@@ -208,12 +216,20 @@ async fn get_client_config(t: &ThreadPool, id: NodeId) -> ClientConfig {
 
         // configure our cert chain and secret key
         let sk = {
-            let mut file = open_file(&format!("./ca-root/cop0{}/cop0{}.key", id, id));
+            let mut file = if id <= 4 {
+                open_file(&format!("./ca-root/cop0{}/cop0{}.key", id, id))
+            } else {
+                open_file(&format!("./ca-root/cli{}/cli{}.key", id, id))
+            };
             let mut sk = pemfile::rsa_private_keys(&mut file).expect("secret key");
             sk.remove(0)
         };
         let chain = {
-            let mut file = open_file(&format!("./ca-root/cop0{}/cop0{}.crt", id, id));
+            let mut file = if id <= 4 {
+                open_file(&format!("./ca-root/cop0{}/cop0{}.crt", id, id))
+            } else {
+                open_file(&format!("./ca-root/cli{}/cli{}.crt", id, id))
+            };
             let mut c = pemfile::certs(&mut file).expect("cop cert");
             c.extend(certs);
             c
