@@ -138,7 +138,6 @@ enum PeerTx {
 
 struct NodeShared {
     my_key: KeyPair,
-    peer_addrs: HashMap<NodeId, (SocketAddr, String)>,
     peer_keys: HashMap<NodeId, PublicKey>,
 }
 
@@ -148,11 +147,13 @@ struct NodeShared {
 /// communication between processes.
 pub struct Node<D: SharedData> {
     id: NodeId,
+    first_cli: NodeId,
     my_tx: MessageChannelTx<D::Request, D::Reply>,
     my_rx: MessageChannelRx<D::Request, D::Reply>,
     shared: Arc<NodeShared>,
     peer_tx: PeerTx,
     connector: TlsConnector,
+    peer_addrs: HashMap<NodeId, (SocketAddr, String)>,
 }
 
 /// Represents a configuration used to bootstrap a `Node`.
@@ -244,7 +245,6 @@ where
         let shared = Arc::new(NodeShared{
             my_key: cfg.sk,
             peer_keys: cfg.pk,
-            peer_addrs: cfg.addrs,
         });
         let mut node = Node {
             id,
@@ -253,6 +253,8 @@ where
             my_tx: tx,
             my_rx: rx,
             connector,
+            peer_addrs: cfg.addrs,
+            first_cli: cfg.first_cli,
         };
 
         // receive peer connections from channel
@@ -545,9 +547,30 @@ where
 
     /// Method called upon a `Message::ConnectedRx`.
     pub fn handle_connected_rx(&self, peer_id: NodeId, mut sock: TlsStreamSrv<Socket>) {
-        // TODO: connect to node if it is a client
-        //rt::spawn(Self::tx_side_connect_task(my_id, peer_id, connector, tx, addr));
+        // we are a server node
+        if let PeerTx::Server(ref peer_tx) = &self.peer_tx {
+            // the node whose conn we accepted is a client
+            // and we aren't connected to it yet
+            if peer_id >= self.first_cli && !peer_tx.contains_key(&peer_id) {
+                // fetch client address
+                //
+                // FIXME: this line can crash the program if the user
+                // provides an invalid HashMap
+                let addr = self.peer_addrs[&peer_id].clone();
+
+                // connect
+                rt::spawn(Self::tx_side_connect_task(
+                    self.id,
+                    peer_id,
+                    self.connector.clone(),
+                    self.my_tx.clone(),
+                    addr,
+                ));
+            }
+        }
+
         let mut tx = self.my_tx.clone();
+
         rt::spawn(async move {
             let mut buf: Buf = Buf::new();
 
