@@ -2,9 +2,6 @@ mod common;
 
 use common::*;
 
-use std::time::Duration;
-
-use futures_timer::Delay;
 use rand_core::{
     OsRng,
     RngCore,
@@ -17,10 +14,6 @@ use febft::bft::async_runtime as rt;
 use febft::bft::{
     init,
     InitConfig,
-};
-use febft::bft::communication::message::{
-    SystemMessage,
-    RequestMessage,
 };
 use febft::bft::crypto::signature::{
     KeyPair,
@@ -58,7 +51,7 @@ async fn async_main() {
             NodeId::from(3u32) => addr!("cop04" => "127.0.0.1:10004")
         };
         let sk = secret_keys.remove(&id).unwrap();
-        let fut = setup_node(
+        let fut = setup_replica(
             pool.clone(),
             id,
             sk,
@@ -66,35 +59,16 @@ async fn async_main() {
             public_keys.clone(),
         );
         rt::spawn(async move {
-            println!("Bootstrapping node #{}", u32::from(id));
-            let (mut node, rogue) = fut.await.unwrap();
-            println!("Spawned node #{}", u32::from(id));
-            println!("Rogue on node #{} => {}", u32::from(id), debug_rogue(rogue));
-            let m = SystemMessage::Request(RequestMessage::new(()));
-            node.broadcast(m, NodeId::targets(0..4));
-            for _ in 0..4 {
-                let m = node
-                    .receive()
-                    .await
-                    .unwrap();
-                let peer: u32 = m
-                    .header()
-                    .expect(&format!("on node {}", u32::from(id)))
-                    .from()
-                    .into();
-                println!("Node #{} received message {} from #{}", u32::from(id), debug_msg(m), peer);
-            }
-            // avoid early drop of node
-            rt::spawn(async move {
-                let _node = node;
-                let () = std::future::pending().await;
-            });
+            println!("Bootstrapping replica #{}", u32::from(id));
+            let mut replica = fut.await.unwrap();
+            println!("Running replica #{}", u32::from(id));
+            replica.run().await.unwrap();
         });
     }
     drop(pool);
 
-    // wait 3 seconds then exit
-    Delay::new(Duration::from_secs(3)).await;
+    // run forever
+    std::future::pending().await
 }
 
 fn sk_stream() -> impl Iterator<Item = KeyPair> {
