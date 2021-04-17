@@ -40,10 +40,14 @@ async fn async_main() {
 
     for id in NodeId::targets(0..4) {
         let addrs= map! {
+            // replicas
             NodeId::from(0u32) => addr!("cop01" => "127.0.0.1:10001"),
             NodeId::from(1u32) => addr!("cop02" => "127.0.0.1:10002"),
             NodeId::from(2u32) => addr!("cop03" => "127.0.0.1:10003"),
-            NodeId::from(3u32) => addr!("cop04" => "127.0.0.1:10004")
+            NodeId::from(3u32) => addr!("cop04" => "127.0.0.1:10004"),
+
+            // clients
+            NodeId::from(1000u32) => addr!("cli1000" => "127.0.0.1:11000")
         };
         let sk = secret_keys.remove(&id).unwrap();
         let fut = setup_replica(
