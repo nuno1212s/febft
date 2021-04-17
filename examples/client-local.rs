@@ -26,10 +26,10 @@ fn main() {
 async fn async_main() {
     let id = NodeId::from(1000u32);
 
-    let mut secret_keys: HashMap<NodeId, KeyPair> = sk_stream()
-        .take(4)
-        .enumerate()
-        .map(|(id, sk)| (NodeId::from(id), sk))
+    let mut secret_keys: HashMap<NodeId, KeyPair> = [0u32, 1, 2, 3, 1000]
+        .iter()
+        .zip(sk_stream())
+        .map(|(&id, sk)| (NodeId::from(id), sk))
         .collect();
     let public_keys: HashMap<NodeId, PublicKey> = secret_keys
         .iter()
