@@ -2,11 +2,6 @@ mod common;
 
 use common::*;
 
-use rand_core::{
-    OsRng,
-    RngCore,
-};
-
 use febft::bft::threadpool;
 use febft::bft::collections::HashMap;
 use febft::bft::communication::NodeId;
@@ -74,10 +69,7 @@ async fn async_main() {
 fn sk_stream() -> impl Iterator<Item = KeyPair> {
     std::iter::repeat_with(|| {
         // only valid for ed25519!
-        let mut buf = [0; 32];
-
-        // gen key
-        OsRng.fill_bytes(&mut buf[..]);
+        let buf = [0; 32];
         KeyPair::from_bytes(&buf[..]).unwrap()
     })
 }
