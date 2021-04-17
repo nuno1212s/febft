@@ -160,7 +160,7 @@ pub async fn setup_node(
 async fn get_server_config(t: &ThreadPool, id: NodeId) -> ServerConfig {
     let (tx, rx) = oneshot::channel();
     t.execute(move || {
-        let id = usize::from(id) + 1;
+        let id = usize::from(id);
         let mut root_store = RootCertStore::empty();
 
         // read ca file
@@ -176,8 +176,8 @@ async fn get_server_config(t: &ThreadPool, id: NodeId) -> ServerConfig {
 
         // configure our cert chain and secret key
         let sk = {
-            let mut file = if id <= 4 {
-                open_file(&format!("./ca-root/cop0{}/cop0{}.key", id, id))
+            let mut file = if id < 4 {
+                open_file(&format!("./ca-root/cop0{}/cop0{}.key", id+1, id+1))
             } else {
                 open_file(&format!("./ca-root/cli{}/cli{}.key", id, id))
             };
@@ -185,8 +185,8 @@ async fn get_server_config(t: &ThreadPool, id: NodeId) -> ServerConfig {
             sk.remove(0)
         };
         let chain = {
-            let mut file = if id <= 4 {
-                open_file(&format!("./ca-root/cop0{}/cop0{}.crt", id, id))
+            let mut file = if id < 4 {
+                open_file(&format!("./ca-root/cop0{}/cop0{}.crt", id+1, id+1))
             } else {
                 open_file(&format!("./ca-root/cli{}/cli{}.crt", id, id))
             };
@@ -204,7 +204,7 @@ async fn get_server_config(t: &ThreadPool, id: NodeId) -> ServerConfig {
 async fn get_client_config(t: &ThreadPool, id: NodeId) -> ClientConfig {
     let (tx, rx) = oneshot::channel();
     t.execute(move || {
-        let id = usize::from(id) + 1;
+        let id = usize::from(id);
         let mut cfg = ClientConfig::new();
 
         // configure ca file
@@ -216,8 +216,8 @@ async fn get_client_config(t: &ThreadPool, id: NodeId) -> ClientConfig {
 
         // configure our cert chain and secret key
         let sk = {
-            let mut file = if id <= 4 {
-                open_file(&format!("./ca-root/cop0{}/cop0{}.key", id, id))
+            let mut file = if id < 4 {
+                open_file(&format!("./ca-root/cop0{}/cop0{}.key", id+1, id+1))
             } else {
                 open_file(&format!("./ca-root/cli{}/cli{}.key", id, id))
             };
@@ -225,8 +225,8 @@ async fn get_client_config(t: &ThreadPool, id: NodeId) -> ClientConfig {
             sk.remove(0)
         };
         let chain = {
-            let mut file = if id <= 4 {
-                open_file(&format!("./ca-root/cop0{}/cop0{}.crt", id, id))
+            let mut file = if id < 4 {
+                open_file(&format!("./ca-root/cop0{}/cop0{}.crt", id+1, id+1))
             } else {
                 open_file(&format!("./ca-root/cli{}/cli{}.crt", id, id))
             };
