@@ -217,7 +217,7 @@ where
             return Err("Invalid number of replicas")
                 .wrapped(ErrorKind::Communication);
         }
-        if usize::from(id) >= cfg.n {
+        if id >= NodeId::from(cfg.n) && id < cfg.first_cli {
             return Err("Invalid node ID")
                 .wrapped(ErrorKind::Communication);
         }
