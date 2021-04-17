@@ -33,6 +33,10 @@ use febft::bft::crypto::signature::{
     KeyPair,
     PublicKey,
 };
+use febft::bft::core::client::{
+    self,
+    Client,
+};
 use febft::bft::core::server::{
     Replica,
     ReplicaConfig,
@@ -109,6 +113,20 @@ async fn node_config(
         server_config,
         first_cli: NodeId::from(1000u32),
     }
+}
+
+pub async fn setup_client(
+    t: ThreadPool,
+    id: NodeId,
+    sk: KeyPair,
+    addrs: HashMap<NodeId, (SocketAddr, String)>,
+    pk: HashMap<NodeId, PublicKey>,
+) -> Result<Client<CounterData>> {
+    let node = node_config(&t, id, sk, addrs, pk).await;
+    let conf = client::ClientConfig {
+        node,
+    };
+    Client::bootstrap(conf).await
 }
 
 pub async fn setup_replica(
