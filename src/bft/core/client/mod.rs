@@ -9,6 +9,8 @@ use parking_lot::Mutex;
 
 use super::SystemParams;
 
+use crate::bft::error::*;
+use crate::bft::async_runtime as rt;
 use crate::bft::collections::{self, HashMap};
 use crate::bft::communication::serialize::{
     Buf,
@@ -27,6 +29,7 @@ use crate::bft::communication::{
     Node,
     NodeId,
     SendNode,
+    NodeConfig,
 };
 
 struct ClientData<P> {
@@ -82,15 +85,60 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
     }
 }
 
+/// Represents a configuration used to bootstrap a `Client`.
+pub struct ClientConfig {
+    /// Check out the docs on `NodeConfig`.
+    pub node: NodeConfig,
+}
+
 impl<D> Client<D>
 where
     D: SharedData + 'static,
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
-    // FIXME: can the client receive rogue reply messages?
-    // perhaps when it reconnects to a replica after experiencing
-    // network problems!
+
+    /// Bootstrap a client in `febft`.
+    pub async fn bootstrap(cfg: ClientConfig) -> Result<Self> {
+        let ClientConfig { node: node_config } = cfg;
+
+        // system params
+        let n = node_config.n;
+        let f = node_config.f;
+        let params = SystemParams::new(n, f)?;
+
+        // connect to peer nodes
+        //
+        // FIXME: can the client receive rogue reply messages?
+        // perhaps when it reconnects to a replica after experiencing
+        // network problems? for now ignore rogue messages...
+        let (node, _rogue) = Node::bootstrap(node_config).await?;
+
+        // create shared data
+        let data = Arc::new(ClientData {
+            wakers: Mutex::new(collections::hash_map()),
+            ready: Mutex::new(collections::hash_map()),
+        });
+        let task_data = Arc::clone(&data);
+
+        // get `SendNode` before giving up ownership on the `Node`
+        let send_node = node.send_node();
+
+        // spawn receiving task
+        rt::spawn(async move {
+            Self::message_recv_task(
+                params,
+                task_data,
+                node,
+            ).await;
+        });
+
+        Ok(Client {
+            data,
+            params,
+            node: send_node,
+        })
+    }
 
     /// Updates the replicated state of the application running
     /// on top of `febft`.
