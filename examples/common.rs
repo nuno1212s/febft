@@ -13,9 +13,13 @@ use rustls::{
 };
 
 use febft::bft::error::*;
+use febft::bft::executable::Service;
 use febft::bft::collections::HashMap;
 use febft::bft::threadpool::ThreadPool;
-use febft::bft::communication::serialize::SharedData;
+use febft::bft::communication::serialize::{
+    SharedData,
+    ReplicaData,
+};
 use febft::bft::communication::message::{
     Message,
     SystemMessage,
@@ -28,6 +32,10 @@ use febft::bft::communication::{
 use febft::bft::crypto::signature::{
     KeyPair,
     PublicKey,
+};
+use febft::bft::core::server::{
+    Replica,
+    ReplicaConfig,
 };
 
 #[macro_export]
@@ -49,7 +57,7 @@ macro_rules! map {
      }};
 }
 
-pub fn debug_rogue(rogue: Vec<Message<(), ()>>) -> String {
+pub fn debug_rogue(rogue: Vec<Message<(), i32>>) -> String {
     let mut buf = String::new();
     buf.push_str("[ ");
     for m in rogue {
@@ -61,7 +69,7 @@ pub fn debug_rogue(rogue: Vec<Message<(), ()>>) -> String {
     buf
 }
 
-pub fn debug_msg(m: Message<(), ()>) -> &'static str {
+pub fn debug_msg(m: Message<(), i32>) -> &'static str {
     match m {
         Message::System(_, m) => match m {
             SystemMessage::Request(_) => "Req",
@@ -75,22 +83,22 @@ pub fn debug_msg(m: Message<(), ()>) -> &'static str {
     }
 }
 
-pub async fn setup_node(
-    t: ThreadPool,
+async fn node_config(
+    t: &ThreadPool,
     id: NodeId,
     sk: KeyPair,
     addrs: HashMap<NodeId, (SocketAddr, String)>,
     pk: HashMap<NodeId, PublicKey>,
-) -> Result<(Node<NullData>, Vec<Message<(), ()>>)> {
+) -> NodeConfig {
     // read TLS configs concurrently
     let (client_config, server_config) = {
-        let cli = get_client_config(&t, id);
-        let srv = get_server_config(&t, id);
+        let cli = get_client_config(t, id);
+        let srv = get_server_config(t, id);
         futures::join!(cli, srv)
     };
 
     // build the node conf
-    let conf = NodeConfig {
+    NodeConfig {
         id,
         n: 4,
         f: 1,
@@ -100,8 +108,34 @@ pub async fn setup_node(
         client_config,
         server_config,
         first_cli: NodeId::from(1000u32),
-    };
+    }
+}
 
+pub async fn setup_replica(
+    t: ThreadPool,
+    id: NodeId,
+    sk: KeyPair,
+    addrs: HashMap<NodeId, (SocketAddr, String)>,
+    pk: HashMap<NodeId, PublicKey>,
+) -> Result<Replica<CounterService>> {
+    let node = node_config(&t, id, sk, addrs, pk).await;
+    let conf = ReplicaConfig {
+        node,
+        next_consensus_seq: 0,
+        leader: NodeId::from(0u32),
+        service: CounterService,
+    };
+    Replica::bootstrap(conf).await
+}
+
+pub async fn setup_node(
+    t: ThreadPool,
+    id: NodeId,
+    sk: KeyPair,
+    addrs: HashMap<NodeId, (SocketAddr, String)>,
+    pk: HashMap<NodeId, PublicKey>,
+) -> Result<(Node<CounterData>, Vec<Message<(), i32>>)> {
+    let conf = node_config(&t, id, sk, addrs, pk).await;
     Node::bootstrap(conf).await
 }
 
@@ -178,13 +212,13 @@ fn open_file(path: &str) -> BufReader<File> {
     BufReader::new(file)
 }
 
-pub struct NullData;
+pub struct CounterData;
 
-impl SharedData for NullData {
+impl SharedData for CounterData {
     type Request = ();
-    type Reply = ();
+    type Reply = i32;
 
-    fn serialize_message<W>(w: W, m: &SystemMessage<(), ()>) -> Result<()>
+    fn serialize_message<W>(w: W, m: &SystemMessage<(), i32>) -> Result<()>
     where
         W: Write
     {
@@ -192,12 +226,32 @@ impl SharedData for NullData {
             .wrapped(ErrorKind::Communication)
     }
 
-    fn deserialize_message<R>(r: R) -> Result<SystemMessage<(), ()>>
+    fn deserialize_message<R>(r: R) -> Result<SystemMessage<(), i32>>
     where
         R: Read
     {
         bincode::deserialize_from(r)
             .wrapped(ErrorKind::Communication)
+    }
+}
+
+impl ReplicaData for CounterData {
+    type State = i32;
+}
+
+pub struct CounterService;
+
+impl Service for CounterService {
+    type Data = CounterData;
+
+    fn initial_state(&mut self) -> Result<i32> {
+        Ok(0)
+    }
+
+    fn process(&mut self, state: &mut i32, _request: ()) -> i32 {
+        let next = *state;
+        *state += 1;
+        next
     }
 }
 
