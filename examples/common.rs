@@ -123,7 +123,7 @@ pub async fn setup_replica(
         node,
         next_consensus_seq: 0,
         leader: NodeId::from(0u32),
-        service: CounterService,
+        service: CounterService(id),
     };
     Replica::bootstrap(conf).await
 }
@@ -239,7 +239,7 @@ impl ReplicaData for CounterData {
     type State = i32;
 }
 
-pub struct CounterService;
+pub struct CounterService(NodeId);
 
 impl Service for CounterService {
     type Data = CounterData;
@@ -250,6 +250,8 @@ impl Service for CounterService {
 
     fn process(&mut self, state: &mut i32, _request: ()) -> i32 {
         let next = *state;
+        let id = u32::from(self.0);
+        println!("Processed request {} on node #{}", next, id);
         *state += 1;
         next
     }
