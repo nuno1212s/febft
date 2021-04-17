@@ -251,7 +251,7 @@ impl Service for CounterService {
     fn process(&mut self, state: &mut i32, _request: ()) -> i32 {
         let next = *state;
         let id = u32::from(self.0);
-        println!("Processed request {} on node #{}", next, id);
+        println!("Processed request {} on replica #{}", next, id);
         *state += 1;
         next
     }
