@@ -354,17 +354,19 @@ impl<'a> WireMessage<'a> {
     }
 
     /// Constructs a new message to be sent over the wire.
-    pub fn new(from: NodeId, to: NodeId, payload: &'a [u8], nonce: u32, sk: Option<&KeyPair>) -> Self {
-        let digest = if payload.len() > 0 {
-            let mut ctx = Context::new();
-            let nonce = nonce.to_le_bytes();
-            ctx.update(&nonce[..]);
-            ctx.update(payload);
+    pub fn new(
+        from: NodeId,
+        to: NodeId,
+        payload: &'a [u8],
+        nonce: u32,
+        digest: Option<Digest>,
+        sk: Option<&KeyPair>,
+    ) -> Self {
+        let digest = digest
             // safety: digests have repr(transparent)
-            unsafe { std::mem::transmute(ctx.finish()) }
-        } else {
-            [0; Digest::LENGTH]
-        };
+            .map(|d| unsafe {std::mem::transmute(d) })
+            // if payload length is 0
+            .unwrap_or([0; Digest::LENGTH]);
         let signature = sk
             .map(|sk| {
                 let signature = Self::sign_parts(
@@ -534,6 +536,7 @@ mod tests {
             version: WireMessage::CURRENT_VERSION,
             signature: [0; Signature::LENGTH],
             digest: [0; Digest::LENGTH],
+            nonce: 0,
             from: 0,
             to: 3,
             length: 0,

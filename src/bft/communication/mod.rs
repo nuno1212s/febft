@@ -36,12 +36,15 @@ use futures_timer::Delay;
 use futures::lock::Mutex;
 use smallvec::SmallVec;
 
+use crate::bft::prng;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
+use crate::bft::crypto::hash::Digest;
 use crate::bft::collections::{self, HashMap};
 use crate::bft::communication::serialize::{
     Buf,
     SharedData,
+    DigestData,
 };
 use crate::bft::communication::socket::{
     Socket,
@@ -145,6 +148,7 @@ pub struct Node<D: SharedData> {
     first_cli: NodeId,
     my_tx: MessageChannelTx<D::Request, D::Reply>,
     my_rx: MessageChannelRx<D::Request, D::Reply>,
+    rng: prng::State,
     shared: Arc<NodeShared>,
     peer_tx: PeerTx,
     connector: TlsConnector,
@@ -250,6 +254,7 @@ where
             connector,
             peer_addrs: cfg.addrs,
             first_cli: cfg.first_cli,
+            rng: prng::State::new(),
         };
 
         // receive peer connections from channel
@@ -309,6 +314,7 @@ where
     pub fn send_node(&self) -> SendNode<D> {
         SendNode {
             id: self.id,
+            rng: prng::State::new(),
             shared: Arc::clone(&self.shared),
             peer_tx: self.peer_tx.clone(),
             my_tx: self.my_tx.clone(),
@@ -325,7 +331,7 @@ where
     /// This method is somewhat more efficient than calling `broadcast()`
     /// on a single target id.
     pub fn send(
-        &self,
+        &mut self,
         message: SystemMessage<D::Request, D::Reply>,
         target: NodeId,
     ) {
@@ -337,7 +343,8 @@ where
             &self.peer_tx,
         );
         let my_id = self.id;
-        Self::send_impl(message, send_to, my_id, target)
+        let nonce = self.rng.next_state();
+        Self::send_impl(message, send_to, my_id, target, nonce)
     }
 
     #[inline]
@@ -346,21 +353,28 @@ where
         mut send_to: SendTo<D>,
         my_id: NodeId,
         target: NodeId,
-    ) {
-        rt::spawn(async move {
-            // serialize
-            let mut buf: Buf = Buf::new();
-            D::serialize_message(&mut buf, &message).unwrap();
+        nonce: u32,
+    ) -> Digest {
+        // serialize
+        let mut buf: Buf = Buf::new();
+        let digest = <D as DigestData>::serialize_digest(
+            nonce,
+            &message,
+            &mut buf,
+        ).unwrap();
 
+        rt::spawn(async move {
             // send
             if my_id == target {
                 // Right -> our turn
-                send_to.value(Right((message, buf))).await;
+                send_to.value(Right((message, nonce, digest ,buf))).await;
             } else {
                 // Left -> peer turn
-                send_to.value(Left(buf)).await;
+                send_to.value(Left((nonce, digest, buf))).await;
             }
         });
+
+        digest
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -770,6 +784,7 @@ where
 pub struct SendNode<D: SharedData> {
     id: NodeId,
     shared: Arc<NodeShared>,
+    rng: prng::State,
     peer_tx: PeerTx,
     my_tx: MessageChannelTx<D::Request, D::Reply>,
 }
@@ -778,6 +793,7 @@ impl<D: SharedData> Clone for SendNode<D> {
     fn clone(&self) -> Self {
         Self {
             id: self.id,
+            rng: prng::State::new(),
             shared: Arc::clone(&self.shared),
             peer_tx: self.peer_tx.clone(),
             my_tx: self.my_tx.clone(),

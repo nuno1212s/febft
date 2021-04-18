@@ -11,6 +11,7 @@ use std::io::{Read, Write};
 use smallvec::SmallVec;
 
 use crate::bft::error::*;
+use crate::bft::crypto::hash::{Context, Digest};
 use crate::bft::communication::message::SystemMessage;
 
 /// Marker trait containing the types used by the application,
@@ -48,13 +49,28 @@ pub trait ReplicaData: SharedData {
     // state transfer protocol
 }
 
-/// Extension of `SharedData`, pertaining solely to clients.
-pub trait ClientData: SharedData {}
-
-impl<D: SharedData> ClientData for D {}
+// max no. of bytes to inline before doing a heap alloc
+const NODE_BUFSIZ: usize = 16384;
 
 /// The buffer type used to serialize messages into.
 pub type Buf = SmallVec<[u8; NODE_BUFSIZ]>;
 
-// max no. of bytes to inline before doing a heap alloc
-const NODE_BUFSIZ: usize = 16384;
+/// Extension of `SharedData` to obtain hash digests.
+pub trait DigestData: SharedData {
+    /// Convenience function to obtain the digest of a request upon
+    /// serialization.
+    fn serialize_digest<W: Write + AsRef<[u8]>>(
+        nonce: u32,
+        message: &SystemMessage<Self::Request, Self::Reply>,
+        w: &mut W,
+    ) -> Result<Digest> {
+        Self::serialize_message(w, message)?;
+        let mut ctx = Context::new();
+        let nonce = nonce.to_le_bytes();
+        ctx.update(&nonce[..]);
+        ctx.update(w.as_ref());
+        Ok(ctx.finish())
+    }
+}
+
+impl<D: SharedData> DigestData for D {}
