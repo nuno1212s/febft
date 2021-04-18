@@ -77,10 +77,20 @@ async fn async_main() {
         ).await.unwrap()
     };
 
-    loop {
-        let counter = client.update(()).await;
-        println!("Counter value: {:08}", counter);
+    // use `N` concurrent clients
+    const N: usize = 100;
+
+    for i in 0..N {
+        let client = client.clone();
+        rt::spawn(async move {
+            loop {
+                let counter = client.update(()).await;
+                println!("#{:3} -> Counter value: {:08}", i, counter);
+            }
+        });
     }
+
+    std::future::pending().await
 }
 
 fn sk_stream() -> impl Iterator<Item = KeyPair> {
