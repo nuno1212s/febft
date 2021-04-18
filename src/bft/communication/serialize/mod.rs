@@ -60,7 +60,7 @@ pub trait DigestData: SharedData {
     /// Convenience function to obtain the digest of a request upon
     /// serialization.
     fn serialize_digest<W: Write + AsRef<[u8]>>(
-        nonce: u32,
+        nonce: u64,
         message: &SystemMessage<Self::Request, Self::Reply>,
         w: &mut W,
     ) -> Result<Digest> {

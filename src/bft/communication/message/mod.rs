@@ -43,12 +43,12 @@ use crate::bft::error::*;
 pub struct Header {
     // the protocol version
     pub(crate) version: u32,
-    // a random number
-    pub(crate) nonce: u32,
     // origin of the message
     pub(crate) from: u32,
     // destination of the message
     pub(crate) to: u32,
+    // a random number
+    pub(crate) nonce: u64,
     // length of the payload
     pub(crate) length: u64,
     // the digest of the serialized payload + nonce
@@ -298,7 +298,7 @@ impl Header {
     }
 
     /// Returns the nonce associated with this `Header`.
-    pub fn nonce(&self) -> u32 {
+    pub fn nonce(&self) -> u64 {
         self.nonce
     }
 }
@@ -358,7 +358,7 @@ impl<'a> WireMessage<'a> {
         from: NodeId,
         to: NodeId,
         payload: &'a [u8],
-        nonce: u32,
+        nonce: u64,
         digest: Option<Digest>,
         sk: Option<&KeyPair>,
     ) -> Self {
