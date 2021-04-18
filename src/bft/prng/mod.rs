@@ -1,7 +1,7 @@
 //! Pseudo random number generator.
 //!
 //! The current implementation is based on [xoshiro128**](https://prng.di.unimi.it/xoshiro128starstar.c),
-//! from David Blackman and Sebastiano Vigna. This source code is a one to one translation of their
+//! from David Blackman and Sebastiano Vigna. This source code is a one-to-one translation of their
 //! C code, released to the public domain.
 
 use rand_core::{RngCore, OsRng};
