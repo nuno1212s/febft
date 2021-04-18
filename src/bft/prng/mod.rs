@@ -20,9 +20,7 @@ impl State {
         let s = unsafe { std::mem::transmute(seed) };
         let mut s = State { s };
 
-        // the first random number is very predictable
-        s.next();
-
+        s.long_jump();
         s
     }
 
@@ -42,6 +40,33 @@ impl State {
         self.s[3] = rotl(self.s[3], 11);
 
         result
+    }
+
+    #[inline]
+    fn long_jump(&mut self) {
+        const LONG_JUMP: [u32; 4] = [0xb523952e, 0x0b6f099f, 0xccf5a0ef, 0x1c580662];
+
+        let mut s0 = 0;
+        let mut s1 = 0;
+        let mut s2 = 0;
+        let mut s3 = 0;
+
+        for &jmp_val in LONG_JUMP.iter() {
+            for b in 0..32 {
+                if jmp_val & 1 << b != 0 {
+                    s0 ^= self.s[0];
+                    s1 ^= self.s[1];
+                    s2 ^= self.s[2];
+                    s3 ^= self.s[3];
+                }
+                self.next_state();
+            }
+        }
+
+        self.s[0] = s0;
+        self.s[1] = s1;
+        self.s[2] = s2;
+        self.s[3] = s3;
     }
 }
 
