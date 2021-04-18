@@ -33,6 +33,7 @@ use crate::bft::communication::{
 };
 
 struct ClientData<P> {
+    //id_counter: AtomicI32,
     wakers: Mutex<HashMap<Digest, Waker>>,
     ready: Mutex<HashMap<Digest, P>>,
 }
@@ -40,9 +41,10 @@ struct ClientData<P> {
 /// Represents a client node in `febft`.
 // TODO: maybe make the clone impl more efficient
 pub struct Client<D: SharedData> {
+    //id: i32,
+    data: Arc<ClientData<D::Reply>>,
     params: SystemParams,
     node: SendNode<D>,
-    data: Arc<ClientData<D::Reply>>,
 }
 
 impl<D: SharedData> Clone for Client<D> {
@@ -150,6 +152,8 @@ where
     // hash, the hashmap will overwrite one of the handle's request)
     // XXX: possible solution - hashmap of `NodeId` to a (hashmap of
     // handle id to a payload/waker); not that efficient...
+    // XXX: `fetch_add` +1 on an `Arc<AtomicU32>` with `SeqCst` or
+    // `Relaxed` order, to get a unique client handle id
     pub async fn update(&self, operation: D::Request) -> D::Reply {
         // create message and obtain its digest
         //
