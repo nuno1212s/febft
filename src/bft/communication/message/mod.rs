@@ -379,7 +379,7 @@ impl<'a> WireMessage<'a> {
     }
 
     fn digest_parts(from: u32, to: u32, payload: &[u8]) -> Digest {
-        // sign(hash(le(version) + le(from) + le(to) + le(length) + serialize(payload)))
+        // sign(hash(le(version) + le(from) + le(to) + le(length) + hash(serialize(payload))))
         let mut ctx = Context::new();
 
         let buf = Self::CURRENT_VERSION.to_le_bytes();
