@@ -41,17 +41,19 @@ use crate::bft::error::*;
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(C)]
 pub struct Header {
-    // the protocol version.
+    // the protocol version
     pub(crate) version: u32,
+    // a random number
+    pub(crate) nonce: u32,
     // origin of the message
     pub(crate) from: u32,
     // destination of the message
     pub(crate) to: u32,
     // length of the payload
     pub(crate) length: u64,
-    // the digest of the serialized payload
+    // the digest of the serialized payload + nonce
     pub(crate) digest: [u8; Digest::LENGTH],
-    // sign(hash(le(version) + le(from) + le(to) + le(length) + hash(serialize(payload))))
+    // sign(hash(le(version) + le(from) + le(to) + le(length) + hash(le(nonce) + serialize(payload))))
     pub(crate) signature: [u8; Signature::LENGTH],
 }
 
@@ -220,6 +222,7 @@ impl Header {
         #[cfg(target_endian = "big")]
         {
             self.version = self.version.to_le();
+            self.nonce = self.nonce.to_le();
             self.from = self.from.to_le();
             self.to = self.to.to_le();
             self.length = self.length.to_le();
@@ -246,6 +249,7 @@ impl Header {
         #[cfg(target_endian = "big")]
         {
             hdr.version = hdr.version.to_be();
+            hdr.nonce = hdr.nonce.to_be();
             hdr.from = hdr.from.to_be();
             hdr.to = hdr.to.to_le();
             hdr.length = hdr.length.to_be();
@@ -291,6 +295,11 @@ impl Header {
     /// The digest of the associated payload serialized data.
     pub fn digest(&self) -> &Digest {
         unsafe { std::mem::transmute(&self.digest) }
+    }
+
+    /// Returns the nonce associated with this `Header`.
+    pub fn nonce(&self) -> u32 {
+        self.nonce
     }
 }
 
@@ -345,9 +354,11 @@ impl<'a> WireMessage<'a> {
     }
 
     /// Constructs a new message to be sent over the wire.
-    pub fn new(from: NodeId, to: NodeId, payload: &'a [u8], sk: Option<&KeyPair>) -> Self {
+    pub fn new(from: NodeId, to: NodeId, payload: &'a [u8], nonce: u32, sk: Option<&KeyPair>) -> Self {
         let digest = if payload.len() > 0 {
             let mut ctx = Context::new();
+            let nonce = nonce.to_le_bytes();
+            ctx.update(&nonce[..]);
             ctx.update(payload);
             // safety: digests have repr(transparent)
             unsafe { std::mem::transmute(ctx.finish()) }
@@ -372,6 +383,7 @@ impl<'a> WireMessage<'a> {
             length: payload.len() as u64,
             signature,
             digest,
+            nonce,
             from,
             to,
         };
@@ -379,7 +391,6 @@ impl<'a> WireMessage<'a> {
     }
 
     fn digest_parts(from: u32, to: u32, payload: &[u8]) -> Digest {
-        // sign(hash(le(version) + le(from) + le(to) + le(length) + hash(serialize(payload))))
         let mut ctx = Context::new();
 
         let buf = Self::CURRENT_VERSION.to_le_bytes();
