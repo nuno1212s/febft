@@ -140,7 +140,16 @@ where
 
     /// Updates the replicated state of the application running
     /// on top of `febft`.
+    //
     // TODO: request timeout
+    //
+    // FIXME: if two different handles of the same client (e.g.
+    // a cloned handle and the original handle) request the same
+    // opeartion, the current implementation can't disambiguate
+    // between the two (i.e. since both requests will have the same
+    // hash, the hashmap will overwrite one of the handle's request)
+    // XXX: possible solution - hashmap of `NodeId` to a (hashmap of
+    // handle id to a payload/waker); not that efficient...
     pub async fn update(&self, operation: D::Request) -> D::Reply {
         // create message and obtain its digest
         //
