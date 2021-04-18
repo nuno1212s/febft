@@ -54,7 +54,7 @@ async fn async_main() {
             .num_threads(4)
             .build();
 
-        let t = (0..3).chain(std::iter::once(1000));
+        let t = (0..4).chain(std::iter::once(1000));
         let peers: Vec<_> = NodeId::targets(t).collect();
         let addrs = map! {
             // replicas
