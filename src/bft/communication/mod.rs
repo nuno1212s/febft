@@ -233,7 +233,15 @@ where
         rt::spawn(Self::rx_side_accept(cfg.first_cli, id, listener, acceptor, tx.clone()));
 
         // tx side (connect to replica)
-        Self::tx_side_connect(cfg.n as u32, id, connector.clone(), tx.clone(), &cfg.addrs);
+        let mut rng = prng::State::new();
+        Self::tx_side_connect(
+            cfg.n as u32,
+            id,
+            connector.clone(),
+            tx.clone(),
+            &cfg.addrs,
+            &mut rng,
+        );
 
         // node def
         let peer_tx = if id >= cfg.first_cli {
@@ -247,6 +255,7 @@ where
         });
         let mut node = Node {
             id,
+            rng,
             shared,
             peer_tx,
             my_tx: tx,
@@ -254,7 +263,6 @@ where
             connector,
             peer_addrs: cfg.addrs,
             first_cli: cfg.first_cli,
-            rng: prng::State::new(),
         };
 
         // receive peer connections from channel
@@ -334,7 +342,7 @@ where
         &mut self,
         message: SystemMessage<D::Request, D::Reply>,
         target: NodeId,
-    ) {
+    ) -> Digest {
         let send_to = Self::send_to(
             self.id,
             target,
@@ -353,7 +361,7 @@ where
         mut send_to: SendTo<D>,
         my_id: NodeId,
         target: NodeId,
-        nonce: u32,
+        nonce: u64,
     ) -> Digest {
         // serialize
         let mut buf: Buf = Buf::new();
@@ -379,10 +387,10 @@ where
 
     /// Broadcast a `SystemMessage` to a group of nodes.
     pub fn broadcast(
-        &self,
+        &mut self,
         message: SystemMessage<D::Request, D::Reply>,
         targets: impl Iterator<Item = NodeId>,
-    ) {
+    ) -> Digest {
         let (mine, others) = Self::send_tos(
             self.id,
             &self.peer_tx,
@@ -390,7 +398,8 @@ where
             &self.shared,
             targets,
         );
-        Self::broadcast_impl(message, mine, others)
+        let nonce = self.rng.next_state();
+        Self::broadcast_impl(message, mine, others, nonce)
     }
 
     #[inline]
@@ -398,18 +407,23 @@ where
         message: SystemMessage<D::Request, D::Reply>,
         my_send_to: Option<SendTo<D>>,
         other_send_tos: SendTos<D>,
-    ) {
-        rt::spawn(async move {
-            // serialize
-            let mut buf: Buf = Buf::new();
-            D::serialize_message(&mut buf, &message).unwrap();
+        nonce: u64,
+    ) -> Digest {
+        // serialize
+        let mut buf: Buf = Buf::new();
+        let digest = <D as DigestData>::serialize_digest(
+            nonce,
+            &message,
+            &mut buf,
+        ).unwrap();
 
+        rt::spawn(async move {
             // send to ourselves
             if let Some(mut send_to) = my_send_to {
                 let buf = buf.clone();
                 rt::spawn(async move {
                     // Right -> our turn
-                    send_to.value(Right((message, buf))).await;
+                    send_to.value(Right((message, nonce, digest, buf))).await;
                 });
             }
 
@@ -418,7 +432,7 @@ where
                 let buf = buf.clone();
                 rt::spawn(async move {
                     // Left -> peer turn
-                    send_to.value(Left(buf)).await;
+                    send_to.value(Left((nonce, digest, buf))).await;
                 });
             }
 
@@ -426,6 +440,8 @@ where
             // rustc to prove only one task gets ownership
             // of the `message`, i.e. `Right` = ourselves
         });
+
+        digest
     }
 
     #[inline]
@@ -555,7 +571,7 @@ where
     }
 
     /// Method called upon a `Message::ConnectedRx`.
-    pub fn handle_connected_rx(&self, peer_id: NodeId, mut sock: TlsStreamSrv<Socket>) {
+    pub fn handle_connected_rx(&mut self, peer_id: NodeId, mut sock: TlsStreamSrv<Socket>) {
         // we are a server node
         if let PeerTx::Server(ref peer_tx) = &self.peer_tx {
             // the node whose conn we accepted is a client
@@ -568,9 +584,11 @@ where
                 let addr = self.peer_addrs[&peer_id].clone();
 
                 // connect
+                let nonce = self.rng.next_state();
                 rt::spawn(Self::tx_side_connect_task(
                     self.id,
                     peer_id,
+                    nonce,
                     self.connector.clone(),
                     self.my_tx.clone(),
                     addr,
@@ -643,6 +661,7 @@ where
         connector: TlsConnector,
         tx: MessageChannelTx<D::Request, D::Reply>,
         addrs: &HashMap<NodeId, (SocketAddr, String)>,
+        rng: &mut prng::State,
     ) {
         for peer_id in NodeId::targets_u32(0..n).filter(|&id| id != my_id) {
             let tx = tx.clone();
@@ -651,13 +670,15 @@ where
             // from this function
             let addr = addrs[&peer_id].clone();
             let connector = connector.clone();
-            rt::spawn(Self::tx_side_connect_task(my_id, peer_id, connector, tx, addr));
+            let nonce = rng.next_state();
+            rt::spawn(Self::tx_side_connect_task(my_id, peer_id, nonce, connector, tx, addr));
         }
     }
 
     async fn tx_side_connect_task(
         my_id: NodeId,
         peer_id: NodeId,
+        nonce: u64,
         connector: TlsConnector,
         mut tx: MessageChannelTx<D::Request, D::Reply>,
         (addr, hostname): (SocketAddr, String),
@@ -686,6 +707,8 @@ where
                     my_id,
                     peer_id,
                     &[],
+                    nonce,
+                    None,
                     None,
                 ).into_inner();
 
@@ -809,10 +832,10 @@ where
 {
     /// Check the `send()` documentation for `Node`.
     pub fn send(
-        &self,
+        &mut self,
         message: SystemMessage<D::Request, D::Reply>,
         target: NodeId,
-    ) {
+    ) -> Digest {
         let send_to = <Node<D>>::send_to(
             self.id,
             target,
@@ -821,15 +844,16 @@ where
             &self.peer_tx,
         );
         let my_id = self.id;
-        <Node<D>>::send_impl(message, send_to, my_id, target)
+        let nonce = self.rng.next_state();
+        <Node<D>>::send_impl(message, send_to, my_id, target, nonce)
     }
 
     /// Check the `broadcast()` documentation for `Node`.
     pub fn broadcast(
-        &self,
+        &mut self,
         message: SystemMessage<D::Request, D::Reply>,
         targets: impl Iterator<Item = NodeId>,
-    ) {
+    ) -> Digest {
         let (mine, others) = <Node<D>>::send_tos(
             self.id,
             &self.peer_tx,
@@ -837,7 +861,8 @@ where
             &self.shared,
             targets,
         );
-        <Node<D>>::broadcast_impl(message, mine, others)
+        let nonce = self.rng.next_state();
+        <Node<D>>::broadcast_impl(message, mine, others, nonce)
     }
 }
 
@@ -877,19 +902,22 @@ where
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
-    async fn value(&mut self, m: Either<Buf, (SystemMessage<D::Request, D::Reply>, Buf)>) {
+    async fn value(
+        &mut self,
+        m: Either<(u64, Digest, Buf), (SystemMessage<D::Request, D::Reply>, u64, Digest, Buf)>,
+    ) {
         match self {
             SendTo::Me { my_id, shared: ref sh, ref mut tx } => {
-                if let Right((m, b)) = m {
-                    Self::me(*my_id, m, b, &sh.my_key, tx).await
+                if let Right((m, n, d, b)) = m {
+                    Self::me(*my_id, m, n, d, b, &sh.my_key, tx).await
                 } else {
                     // optimize code path
                     unreachable!()
                 }
             },
             SendTo::Peers { my_id, peer_id, shared: ref sh, ref sock, ref mut tx } => {
-                if let Left(b) = m {
-                    Self::peers(*my_id, *peer_id, b, &sh.my_key, &*sock, tx).await
+                if let Left((n, d, b)) = m {
+                    Self::peers(*my_id, *peer_id, n, d, b, &sh.my_key, &*sock, tx).await
                 } else {
                     // optimize code path
                     unreachable!()
@@ -901,6 +929,8 @@ where
     async fn me(
         my_id: NodeId,
         m: SystemMessage<D::Request, D::Reply>,
+        n: u64,
+        d: Digest,
         b: Buf,
         sk: &KeyPair,
         tx: &mut MessageChannelTx<D::Request, D::Reply>,
@@ -910,6 +940,8 @@ where
             my_id,
             my_id,
             &b[..],
+            n,
+            Some(d),
             Some(sk),
         ).into_inner();
 
@@ -920,6 +952,8 @@ where
     async fn peers(
         my_id: NodeId,
         peer_id: NodeId,
+        n: u64,
+        d: Digest,
         b: Buf,
         sk: &KeyPair,
         lock: &Mutex<TlsStreamCli<Socket>>,
@@ -930,6 +964,8 @@ where
             my_id,
             peer_id,
             &b[..],
+            n,
+            Some(d),
             Some(sk),
         );
 

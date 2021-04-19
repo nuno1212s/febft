@@ -11,15 +11,9 @@ use super::SystemParams;
 
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
+use crate::bft::crypto::hash::Digest;
 use crate::bft::collections::{self, HashMap};
-use crate::bft::communication::serialize::{
-    Buf,
-    SharedData,
-};
-use crate::bft::crypto::hash::{
-    Digest,
-    Context as HashContext,
-};
+use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::message::{
     Message,
     SystemMessage,
@@ -33,7 +27,6 @@ use crate::bft::communication::{
 };
 
 struct ClientData<P> {
-    //id_counter: AtomicI32,
     wakers: Mutex<HashMap<Digest, Waker>>,
     ready: Mutex<HashMap<Digest, P>>,
 }
@@ -41,7 +34,6 @@ struct ClientData<P> {
 /// Represents a client node in `febft`.
 // TODO: maybe make the clone impl more efficient
 pub struct Client<D: SharedData> {
-    //id: i32,
     data: Arc<ClientData<D::Reply>>,
     params: SystemParams,
     node: SendNode<D>,
@@ -144,38 +136,14 @@ where
     /// on top of `febft`.
     //
     // TODO: request timeout
-    //
-    // FIXME: if two different handles of the same client (e.g.
-    // a cloned handle and the original handle) request the same
-    // opeartion, the current implementation can't disambiguate
-    // between the two (i.e. since both requests will have the same
-    // hash, the hashmap will overwrite one of the handle's request)
-    // XXX: possible solution - hashmap of `NodeId` to a (hashmap of
-    // handle id to a payload/waker); not that efficient...
-    // XXX: `fetch_add` +1 on an `Arc<AtomicU32>` with `SeqCst` or
-    // `Relaxed` order, to get a unique client handle id
-    pub async fn update(&self, operation: D::Request) -> D::Reply {
-        // create message and obtain its digest
-        //
-        // TODO: avoid serializing twice? :(
-        // this extra step takes around 100ns on average,
-        // on my machine, which isn't a lot on its own,
-        // but can add up with lots of concurrent requests
+    pub async fn update(&mut self, operation: D::Request) -> D::Reply {
         let message = SystemMessage::Request(RequestMessage::new(
             operation,
         ));
-        let digest = {
-            let mut buf = Buf::new();
-            D::serialize_message(&mut buf, &message).unwrap();
-
-            let mut ctx = HashContext::new();
-            ctx.update(&buf[..]);
-            ctx.finish()
-        };
 
         // broadcast our request to the node group
         let targets = NodeId::targets(0..self.params.n());
-        self.node.broadcast(message, targets);
+        let digest = self.node.broadcast(message, targets);
 
         // await response
         let data = &*self.data;

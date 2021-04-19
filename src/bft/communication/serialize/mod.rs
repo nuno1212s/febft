@@ -62,9 +62,9 @@ pub trait DigestData: SharedData {
     fn serialize_digest<W: Write + AsRef<[u8]>>(
         nonce: u64,
         message: &SystemMessage<Self::Request, Self::Reply>,
-        w: &mut W,
+        mut w: W,
     ) -> Result<Digest> {
-        Self::serialize_message(w, message)?;
+        Self::serialize_message(&mut w, message)?;
         let mut ctx = Context::new();
         let nonce = nonce.to_le_bytes();
         ctx.update(&nonce[..]);

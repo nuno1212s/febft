@@ -26,7 +26,7 @@ impl State {
 
     /// Returns a new 32-bit random number.
     #[inline]
-    fn next_state(&mut self) -> u64 {
+    pub fn next_state(&mut self) -> u64 {
         let result = rotl(self.s[1] * 5, 7) * 9;
         let t = self.s[1] << 17;
 
