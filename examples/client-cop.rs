@@ -81,7 +81,7 @@ async fn async_main() {
     const N: usize = 100;
 
     for i in 0..N {
-        let client = client.clone();
+        let mut client = client.clone();
         rt::spawn(async move {
             loop {
                 let counter = client.update(()).await;

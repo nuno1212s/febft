@@ -53,7 +53,7 @@ async fn async_main() {
         // clients
         NodeId::from(1000u32) => addr!("cli1000" => "127.0.0.1:11000")
     };
-    let client = setup_client(
+    let mut client = setup_client(
         pool,
         id,
         sk,
