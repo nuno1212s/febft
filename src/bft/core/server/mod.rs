@@ -222,13 +222,19 @@ where
                                         header.from(),
                                         digest,
                                         request,
-                                    ).await?;
+                                    )?;
                                     self.consensus.next_instance();
                                 },
                             }
+
                             // we processed a consensus message,
                             // signal the consensus layer of this event
                             self.consensus.signal();
+
+                            // yield execution since `signal()`
+                            // will probably force a value from the
+                            // TBO queue in the consensus layer
+                            rt::yield_now().await;
                         },
                         // FIXME: handle rogue reply messages
                         SystemMessage::Reply(_) => panic!("rogue reply message detected"),

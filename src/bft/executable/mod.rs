@@ -8,15 +8,10 @@ use crate::bft::async_runtime as rt;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::communication::NodeId;
 use crate::bft::communication::message::Message;
+use crate::bft::communication::channel::MessageChannelTx;
 use crate::bft::communication::serialize::{
     ReplicaData,
     SharedData,
-};
-use crate::bft::communication::channel::{
-    self,
-    ChannelRx,
-    ChannelTx,
-    MessageChannelTx,
 };
 
 enum ExecutionRequest<O> {
@@ -61,22 +56,18 @@ pub trait Service {
     ) -> Reply<Self>;
 }
 
-struct Task<S: Service> {
-    finish: oneshot::Sender<Reply<S>>,
-    req: Request<S>,
-}
-
 /// Stateful data of the task responsible for executing
 /// client requests.
 pub struct Executor<S: Service> {
-    e_tx: mpsc::Sender<Task<S>>,
-    my_rx: ChannelRx<ExecutionRequest<Request<S>>>,
+    service: S,
+    state: State<S>,
+    e_rx: mpsc::Receiver<ExecutionRequest<Request<S>>>,
     system_tx: MessageChannelTx<Request<S>, Reply<S>>,
 }
 
 /// Represents a handle to the client request executor.
 pub struct ExecutorHandle<S: Service> {
-    my_tx: ChannelTx<ExecutionRequest<Request<S>>>,
+    e_tx: mpsc::Sender<ExecutionRequest<Request<S>>>,
 }
 
 impl<S: Service> ExecutorHandle<S>
@@ -90,15 +81,16 @@ where
     /// The value `dig` represents the hash digest of the
     /// serialized `req`, which is used to notify `from` of
     /// the completion of this request.
-    pub async fn queue(&mut self, from: NodeId, dig: Digest, req: Request<S>) -> Result<()> {
-        self.my_tx.send(ExecutionRequest::ReadWrite(from, dig, req)).await
+    pub fn queue(&mut self, from: NodeId, dig: Digest, req: Request<S>) -> Result<()> {
+        self.e_tx.send(ExecutionRequest::ReadWrite(from, dig, req))
+            .simple(ErrorKind::Executable)
     }
 }
 
 impl<S: Service> Clone for ExecutorHandle<S> {
     fn clone(&self) -> Self {
-        let my_tx = self.my_tx.clone();
-        Self { my_tx }
+        let e_tx = self.e_tx.clone();
+        Self { e_tx }
     }
 }
 
@@ -109,9 +101,6 @@ where
     Request<S>: Send + 'static,
     Reply<S>: Send + 'static,
 {
-    // max no. of messages allowed in the channel
-    const CHAN_BOUND: usize = 128;
-
     /// Spawns a new service executor into the async runtime.
     ///
     /// A handle to the master message channel, `system_tx`, should be provided.
@@ -119,9 +108,15 @@ where
         system_tx: MessageChannelTx<Request<S>, Reply<S>>,
         mut service: S,
     ) -> Result<ExecutorHandle<S>> {
+        let (e_tx, e_rx) = mpsc::channel();
+
         let state = service.initial_state()?;
-        let (my_tx, my_rx) = channel::new_bounded(Self::CHAN_BOUND);
-        let (e_tx, e_rx) = mpsc::channel::<Task<S>>();
+        let mut exec = Executor {
+            e_rx,
+            system_tx,
+            service,
+            state,
+        };
 
         // this thread is responsible for actually executing
         // requests, avoiding blocking the async runtime
@@ -129,38 +124,17 @@ where
         // FIXME: maybe use threadpool to execute instead
         // FIXME: serialize data on exit
         thread::spawn(move || {
-            let mut service = service;
-            let mut state = state;
-            while let Ok(Task { finish, req }) = e_rx.recv() {
-                let reply = service.process(&mut state, req);
-                finish.send(reply).unwrap();
-            }
-        });
-
-        let mut exec = Executor {
-            e_tx,
-            my_rx,
-            system_tx,
-        };
-
-        rt::spawn(async move {
-            // FIXME: exit condition
-            while let Ok(exec_req) = exec.my_rx.recv().await {
+            while let Ok(exec_req) = exec.e_rx.recv() {
                 match exec_req {
                     ExecutionRequest::ReadWrite(peer_id, dig, req) => {
-                        // spawn execution task
-                        let (finish, wait) = oneshot::channel();
-                        exec.e_tx.send(Task {
-                            req,
-                            finish,
-                        }).unwrap();
-
-                        // wait for executor response
-                        let reply = wait.await.unwrap();
+                        let reply = exec.service.process(&mut exec.state, req);
 
                         // deliver reply
-                        let m = Message::ExecutionFinished(peer_id, dig, reply);
-                        exec.system_tx.send(m).await.unwrap();
+                        let mut system_tx = exec.system_tx.clone();
+                        rt::spawn(async move {
+                            let m = Message::ExecutionFinished(peer_id, dig, reply);
+                            system_tx.send(m).await.unwrap();
+                        });
                     },
                     ExecutionRequest::Read(_peer_id) => {
                         unimplemented!()
@@ -169,6 +143,6 @@ where
             }
         });
 
-        Ok(ExecutorHandle { my_tx })
+        Ok(ExecutorHandle { e_tx })
     }
 }
