@@ -1,12 +1,14 @@
 //! Contains the server side core protocol logic of `febft`.
 
-use std::collections::VecDeque;
-
 use super::SystemParams;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
 use crate::bft::crypto::hash::Digest;
-use crate::bft::collections::{self, HashMap, HashSet};
+use crate::bft::collections::{
+    self,
+    HashMap,
+    OrderedMap,
+};
 use crate::bft::consensus::{
     Consensus,
     PollStatus,
@@ -71,9 +73,8 @@ pub struct Replica<S: Service> {
     executor: ExecutorHandle<S>,
     log: LoggerHandle<Request<S>, Reply<S>>,
     view: ViewInfo,
-    requests: VecDeque<(Header, Request<S>)>,
+    requests: OrderedMap<Digest, (Header, Request<S>)>,
     deciding: HashMap<Digest, (Header, Request<S>)>,
-    decided: HashSet<Digest>,
     consensus: Consensus<S>,
     node: Node<S::Data>,
 }
@@ -128,8 +129,7 @@ where
         let mut replica = Replica {
             consensus: Consensus::new(next_consensus_seq),
             deciding: collections::hash_map(),
-            decided: collections::hash_set(),
-            requests: VecDeque::new(),
+            requests: collections::ordered_map(),
             executor,
             node,
             view,
@@ -143,7 +143,8 @@ where
                     match message {
                         SystemMessage::Request(r) => {
                             let op = r.into_inner();
-                            replica.requests.push_back((header, op));
+                            let dig = header.digest().clone();
+                            replica.requests.insert(dig, (header, op));
                         },
                         SystemMessage::Consensus(message) => {
                             replica.consensus.queue(header, message);
@@ -172,23 +173,9 @@ where
                 PollStatus::Recv => self.node.receive().await?,
                 PollStatus::NextMessage(h, m) => Message::System(h, SystemMessage::Consensus(m)),
                 PollStatus::TryProposeAndRecv => {
-                    match self.requests.pop_front() {
-                        Some((h, r)) if self.decided.remove(h.digest()) => {
-                            // FIXME: is this correct? should we store a consensus
-                            // id to execute in order..?
-                            self.executor.queue(
-                                h.from(),
-                                h.digest().clone(),
-                                r,
-                            ).await?;
-                            continue;
-                        },
-                        Some((h, r)) => {
-                            let dig = h.digest().clone();
-                            self.consensus.propose(dig, self.view, &mut self.node);
-                            self.deciding.insert(dig, (h, r));
-                        },
-                        None => (),
+                    if let Some((dig, (h, r))) = self.requests.pop_front() {
+                        self.consensus.propose(dig, self.view, &mut self.node);
+                        self.deciding.insert(dig, (h, r));
                     }
                     self.node.receive().await?
                 },
@@ -197,9 +184,11 @@ where
             match message {
                 Message::System(header, message) => {
                     match message {
-                        SystemMessage::Request(m) => {
+                        SystemMessage::Request(r) => {
                             // queue request header and payload
-                            self.requests.push_back((header, m.into_inner()));
+                            let op = r.into_inner();
+                            let dig = header.digest().clone();
+                            self.requests.insert(dig, (header, op));
                         },
                         SystemMessage::Consensus(message) => {
                             let status = self.consensus.process_message(
@@ -215,18 +204,25 @@ where
                                 // FIXME: implement this
                                 ConsensusStatus::VotedTwice(_) => unimplemented!(),
                                 // reached agreement, execute request
+                                //
+                                // FIXME: execution layer needs to receive the id
+                                // attributed by the consensus layer to each op,
+                                // to execute in order
                                 ConsensusStatus::Decided(digest) => {
-                                    if let Some((header, request)) = self.deciding.remove(&digest) {
-                                        self.executor.queue(
-                                            header.from(),
-                                            digest,
-                                            request,
-                                        ).await?;
+                                    let (header, request) = if let Some((h, r)) = self.deciding.remove(&digest) {
+                                        (h, r)
+                                    } else if let Some((h, r)) = self.requests.remove(&digest) {
+                                        (h, r)
                                     } else {
-                                        // we haven't processed this request yet,
-                                        // store it as decided
-                                        self.decided.insert(header.digest().clone());
-                                    }
+                                        // FIXME: we haven't received this request yet... wtf?
+                                        // how do we approach this scenario?
+                                        panic!("Request hasn't been received yet?");
+                                    };
+                                    self.executor.queue(
+                                        header.from(),
+                                        digest,
+                                        request,
+                                    ).await?;
                                     self.consensus.next_instance();
                                 },
                             }
