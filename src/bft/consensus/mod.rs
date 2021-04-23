@@ -106,17 +106,6 @@ impl TBOQueue {
     }
 }
 
-macro_rules! extract_msg {
-    ($g:expr, $q:expr) => {
-        if let Some((header, message)) = Self::pop_message($q) {
-            PollStatus::NextMessage(header, message)
-        } else {
-            *$g = false;
-            PollStatus::Recv
-        }
-    }
-}
-
 // XXX: api
 impl TBOQueue {
     fn new(curr_seq: i32) -> Self {
@@ -127,23 +116,6 @@ impl TBOQueue {
     /// consensus messages from its internal storage.
     pub fn signal(&mut self) {
         self.get_queue = true;
-    }
-
-    /// Poll this `TBOQueue` for new consensus messages.
-    fn poll_queue(&mut self, phase: ProtoPhase) -> PollStatus {
-        match phase {
-            ProtoPhase::Init => PollStatus::TryProposeAndRecv,
-            ProtoPhase::PrePreparing if self.get_queue => {
-                extract_msg!(&mut self.get_queue, &mut self.pre_prepares)
-            },
-            ProtoPhase::Preparing(_) if self.get_queue => {
-                extract_msg!(&mut self.get_queue, &mut self.prepares)
-            },
-            ProtoPhase::Committing(_) if self.get_queue => {
-                extract_msg!(&mut self.get_queue, &mut self.commits)
-            },
-            _ => PollStatus::Recv,
-        }
     }
 
     /// Reports the id of the consensus this `TBOQueue` is tracking.
@@ -225,6 +197,17 @@ pub enum ConsensusStatus {
     Decided(Digest),
 }
 
+macro_rules! extract_msg {
+    ($g:expr, $q:expr) => {
+        if let Some((header, message)) = TBOQueue::pop_message($q) {
+            PollStatus::NextMessage(header, message)
+        } else {
+            *$g = false;
+            PollStatus::Recv
+        }
+    }
+}
+
 impl<S> Consensus<S>
 where
     S: Service + Send + 'static,
@@ -271,7 +254,30 @@ where
 
     /// Check if we can process new consensus messages.
     pub fn poll(&mut self) -> PollStatus {
-        self.tbo.poll_queue(self.phase)
+        match self.phase {
+            ProtoPhase::Init if self.tbo.get_queue => {
+                if let Some((header, message)) = TBOQueue::pop_message(&mut self.tbo.pre_prepares) {
+                    self.phase = ProtoPhase::PrePreparing;
+                    PollStatus::NextMessage(header, message)
+                } else {
+                    self.tbo.get_queue = false;
+                    PollStatus::Recv
+                }
+            },
+            ProtoPhase::Init => {
+                PollStatus::TryProposeAndRecv
+            },
+            ProtoPhase::PrePreparing if self.tbo.get_queue => {
+                extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.pre_prepares)
+            },
+            ProtoPhase::Preparing(_) if self.tbo.get_queue => {
+                extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.prepares)
+            },
+            ProtoPhase::Committing(_) if self.tbo.get_queue => {
+                extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.commits)
+            },
+            _ => PollStatus::Recv,
+        }
     }
 
     /// Starts a new consensus instance.
