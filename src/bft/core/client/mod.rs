@@ -88,7 +88,6 @@ pub struct ClientConfig {
 
 struct ReplicaVotes {
     count: usize,
-    last: Instant,
 }
 
 impl<D> Client<D>
@@ -170,7 +169,9 @@ where
         data: Arc<ClientData<D::Reply>>,
         mut node: Node<D>,
     ) {
-        let mut count: HashMap<Digest, ReplicaVotes> = collections::hash_map();
+        let mut earlier = Instant::now();
+        let mut votes: HashMap<Digest, ReplicaVotes> = collections::hash_map();
+
         while let Ok(message) = node.receive().await {
             match message {
                 Message::System(_, message) => {
@@ -178,14 +179,32 @@ where
                         SystemMessage::Reply(message) => {
                             let now = Instant::now();
 
+                            // garbage collect old votes
+                            //
+                            // TODO: switch to `HashMap::drain_filter` when
+                            // this API reaches stable Rust
+                            if now.duration_since(earlier) > Self::GC_DUR {
+                                let mut to_remove = Vec::new();
+
+                                for (dig, v) in votes.iter() {
+                                    if v.count >= params.quorum() {
+                                        to_remove.push(dig.clone());
+                                    }
+                                }
+
+                                for dig in to_remove {
+                                    votes.remove(&dig);
+                                }
+                            }
+                            earlier = now;
+
                             let (digest, payload) = message.into_inner();
-                            let votes = count
+                            let votes = votes
                                 .entry(digest)
-                                .or_insert(ReplicaVotes { count: 0, last: None });
+                                .or_insert(ReplicaVotes { count: 0 });
 
                             // register new reply received
                             votes.count += 1;
-                            votes.last = Some(now);
 
                             // TODO: check if we got equivalent responses by
                             // verifying the digest; furthermore, check if
