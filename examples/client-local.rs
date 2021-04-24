@@ -73,9 +73,10 @@ async fn async_main() {
             .collect();
 
         let reply = client.update(requests).await;
+        let n = reply.len();
         println!(
-            "State: {}, {}, {}, ...",
-            reply[0], reply[1], reply[2],
+            "State: ..., {}, {}, {}",
+            reply[n-3], reply[n-2], reply[n-1],
         );
     }
 }

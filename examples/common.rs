@@ -296,12 +296,11 @@ impl Service for CalcService {
         let reply = requests
             .into_iter()
             .map(|r| {
-                let next = *state;
                 match r {
                     Action::Sqrt => *state = state.sqrt(),
                     Action::MultiplyByTwo => *state *= 2.0,
                 }
-                next
+                *state
             })
             .collect();
         let id = u32::from(self.0);
