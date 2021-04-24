@@ -2,6 +2,7 @@ mod common;
 
 use common::*;
 
+use febft::bft::prng;
 use febft::bft::threadpool;
 use febft::bft::collections::HashMap;
 use febft::bft::communication::NodeId;
@@ -80,7 +81,7 @@ async fn async_main() {
     // use `N` concurrent clients
     const N: usize = 100;
 
-    for i in 0..N {
+    for _i in 0..N {
         let mut client = client.clone();
         rt::spawn(async move {
             let mut rng = prng::State::new();
