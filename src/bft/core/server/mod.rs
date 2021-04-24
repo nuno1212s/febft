@@ -215,7 +215,9 @@ where
                                         (h, r)
                                     } else {
                                         // FIXME: we haven't received this request yet... wtf?
-                                        // how do we approach this scenario?
+                                        // how do we approach this scenario? maybe we need to
+                                        // wait until we implement some state transfer mechanism
+                                        // to viably handle these scenarios?
                                         panic!("Request hasn't been received yet?");
                                     };
                                     self.executor.queue(
