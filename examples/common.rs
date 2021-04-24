@@ -11,6 +11,10 @@ use rustls::{
     RootCertStore,
     AllowAnyAuthenticatedClient,
 };
+use serde::{
+    Serialize,
+    Deserialize,
+};
 
 use febft::bft::error::*;
 use febft::bft::executable::Service;
@@ -61,7 +65,7 @@ macro_rules! map {
      }};
 }
 
-pub fn debug_rogue(rogue: Vec<Message<(), i32>>) -> String {
+pub fn debug_rogue(rogue: Vec<Message<Vec<Action>, Vec<f32>>>) -> String {
     let mut buf = String::new();
     buf.push_str("[ ");
     for m in rogue {
@@ -73,7 +77,7 @@ pub fn debug_rogue(rogue: Vec<Message<(), i32>>) -> String {
     buf
 }
 
-pub fn debug_msg(m: Message<(), i32>) -> &'static str {
+pub fn debug_msg(m: Message<Vec<Action>, Vec<f32>>) -> &'static str {
     match m {
         Message::System(_, m) => match m {
             SystemMessage::Request(_) => "Req",
@@ -141,7 +145,7 @@ pub async fn setup_replica(
         node,
         next_consensus_seq: 0,
         leader: NodeId::from(0u32),
-        service: CounterService(id),
+        service: CounterService(id, 0),
     };
     Replica::bootstrap(conf).await
 }
@@ -152,7 +156,7 @@ pub async fn setup_node(
     sk: KeyPair,
     addrs: HashMap<NodeId, (SocketAddr, String)>,
     pk: HashMap<NodeId, PublicKey>,
-) -> Result<(Node<CounterData>, Vec<Message<(), i32>>)> {
+) -> Result<(Node<CounterData>, Vec<Message<Vec<Action>, Vec<f32>>>)> {
     let conf = node_config(&t, id, sk, addrs, pk).await;
     Node::bootstrap(conf).await
 }
@@ -248,11 +252,17 @@ fn open_file(path: &str) -> BufReader<File> {
 
 pub struct CounterData;
 
-impl SharedData for CounterData {
-    type Request = ();
-    type Reply = i32;
+#[derive(Serialize, Deserialize)]
+pub enum Action {
+    Sqrt,
+    MultiplyByTwo,
+}
 
-    fn serialize_message<W>(w: W, m: &SystemMessage<(), i32>) -> Result<()>
+impl SharedData for CounterData {
+    type Request = Vec<Action>;
+    type Reply = Vec<f32>;
+
+    fn serialize_message<W>(w: W, m: &SystemMessage<Vec<Action>, Vec<f32>>) -> Result<()>
     where
         W: Write
     {
@@ -260,7 +270,7 @@ impl SharedData for CounterData {
             .wrapped(ErrorKind::Communication)
     }
 
-    fn deserialize_message<R>(r: R) -> Result<SystemMessage<(), i32>>
+    fn deserialize_message<R>(r: R) -> Result<SystemMessage<Vec<Action>, Vec<f32>>>
     where
         R: Read
     {
@@ -270,24 +280,34 @@ impl SharedData for CounterData {
 }
 
 impl ReplicaData for CounterData {
-    type State = i32;
+    type State = f32;
 }
 
-pub struct CounterService(NodeId);
+pub struct CounterService(NodeId, i32);
 
 impl Service for CounterService {
     type Data = CounterData;
 
-    fn initial_state(&mut self) -> Result<i32> {
-        Ok(0)
+    fn initial_state(&mut self) -> Result<f32> {
+        Ok(1.0)
     }
 
-    fn process(&mut self, state: &mut i32, _request: ()) -> i32 {
-        let next = *state;
+    fn process(&mut self, state: &mut f32, requests: Vec<Action>) -> Vec<f32> {
+        let reply = requests
+            .into_iter()
+            .map(|r| {
+                let next = *state;
+                match r {
+                    Action::Sqrt => *state = state.sqrt(),
+                    Action::MultiplyByTwo => *state *= 2.0,
+                }
+                next
+            })
+            .collect();
         let id = u32::from(self.0);
-        println!("Processed request {:08} on replica #{}", next, id);
-        *state += 1;
-        next
+        println!("{:08}: state on replica #{}: {:?}", self.1, id, *state);
+        self.1 += 1;
+        reply
     }
 }
 

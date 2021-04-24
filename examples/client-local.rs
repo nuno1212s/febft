@@ -2,6 +2,7 @@ mod common;
 
 use common::*;
 
+use febft::bft::prng;
 use febft::bft::threadpool;
 use febft::bft::collections::HashMap;
 use febft::bft::communication::NodeId;
@@ -61,9 +62,18 @@ async fn async_main() {
         public_keys,
     ).await.unwrap();
 
+    let mut rng = prng::State::new();
+
     loop {
-        let counter = client.update(()).await;
-        println!("Counter value: {:08}", counter);
+        let requests = (0..1024)
+            .map(|_| {
+                let i = rng.next_state();
+                if i & 1 == 0 { Action::Sqrt } else { Action::MultiplyByTwo }
+            })
+            .collect();
+        let value = client.update(requests).await;
+
+        println!("State: {:?}", value);
     }
 }
 
