@@ -71,9 +71,12 @@ async fn async_main() {
                 if i & 1 == 0 { Action::Sqrt } else { Action::MultiplyByTwo }
             })
             .collect();
-        let value = client.update(requests).await;
 
-        println!("State: {:?}", value);
+        let reply = client.update(requests).await;
+        println!(
+            "State: {}, {}, {}, ...",
+            reply[0], reply[1], reply[2],
+        );
     }
 }
 

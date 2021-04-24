@@ -125,7 +125,7 @@ pub async fn setup_client(
     sk: KeyPair,
     addrs: HashMap<NodeId, (SocketAddr, String)>,
     pk: HashMap<NodeId, PublicKey>,
-) -> Result<Client<CounterData>> {
+) -> Result<Client<CalcData>> {
     let node = node_config(&t, id, sk, addrs, pk).await;
     let conf = client::ClientConfig {
         node,
@@ -139,13 +139,13 @@ pub async fn setup_replica(
     sk: KeyPair,
     addrs: HashMap<NodeId, (SocketAddr, String)>,
     pk: HashMap<NodeId, PublicKey>,
-) -> Result<Replica<CounterService>> {
+) -> Result<Replica<CalcService>> {
     let node = node_config(&t, id, sk, addrs, pk).await;
     let conf = ReplicaConfig {
         node,
         next_consensus_seq: 0,
         leader: NodeId::from(0u32),
-        service: CounterService(id, 0),
+        service: CalcService(id, 0),
     };
     Replica::bootstrap(conf).await
 }
@@ -156,7 +156,7 @@ pub async fn setup_node(
     sk: KeyPair,
     addrs: HashMap<NodeId, (SocketAddr, String)>,
     pk: HashMap<NodeId, PublicKey>,
-) -> Result<(Node<CounterData>, Vec<Message<Vec<Action>, Vec<f32>>>)> {
+) -> Result<(Node<CalcData>, Vec<Message<Vec<Action>, Vec<f32>>>)> {
     let conf = node_config(&t, id, sk, addrs, pk).await;
     Node::bootstrap(conf).await
 }
@@ -250,7 +250,7 @@ fn open_file(path: &str) -> BufReader<File> {
     BufReader::new(file)
 }
 
-pub struct CounterData;
+pub struct CalcData;
 
 #[derive(Serialize, Deserialize)]
 pub enum Action {
@@ -258,7 +258,7 @@ pub enum Action {
     MultiplyByTwo,
 }
 
-impl SharedData for CounterData {
+impl SharedData for CalcData {
     type Request = Vec<Action>;
     type Reply = Vec<f32>;
 
@@ -279,14 +279,14 @@ impl SharedData for CounterData {
     }
 }
 
-impl ReplicaData for CounterData {
+impl ReplicaData for CalcData {
     type State = f32;
 }
 
-pub struct CounterService(NodeId, i32);
+pub struct CalcService(NodeId, i32);
 
-impl Service for CounterService {
-    type Data = CounterData;
+impl Service for CalcService {
+    type Data = CalcData;
 
     fn initial_state(&mut self) -> Result<f32> {
         Ok(1.0)
