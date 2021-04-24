@@ -150,7 +150,7 @@ where
                             replica.consensus.queue(header, message);
                         },
                         // FIXME: handle rogue reply messages
-                        SystemMessage::Reply(_) => panic!("rogue reply message detected"),
+                        SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
                     }
                 },
                 // ignore other messages for now
@@ -218,7 +218,7 @@ where
                                         // how do we approach this scenario? maybe we need to
                                         // wait until we implement some state transfer mechanism
                                         // to viably handle these scenarios?
-                                        panic!("Request hasn't been received yet?");
+                                        panic!("Request hasn't been received yet");
                                     };
                                     self.executor.queue(
                                         header.from(),
@@ -239,7 +239,7 @@ where
                             rt::yield_now().await;
                         },
                         // FIXME: handle rogue reply messages
-                        SystemMessage::Reply(_) => panic!("rogue reply message detected"),
+                        SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
                     }
                 },
                 Message::ExecutionFinished(peer_id, digest, payload) => {
