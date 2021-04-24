@@ -83,9 +83,21 @@ async fn async_main() {
     for i in 0..N {
         let mut client = client.clone();
         rt::spawn(async move {
+            let mut rng = prng::State::new();
+
             loop {
-                let counter = client.update(()).await;
-                println!("#{:3} -> Counter value: {:08}", i, counter);
+                let requests = (0..1024)
+                    .map(|_| {
+                        let i = rng.next_state();
+                        if i & 1 == 0 { Action::Sqrt } else { Action::MultiplyByTwo }
+                    })
+                    .collect();
+
+                let reply = client.update(requests).await;
+                println!(
+                    "State: {}, {}, {}, ...",
+                    reply[0], reply[1], reply[2],
+                );
             }
         });
     }
