@@ -436,7 +436,7 @@ where
                 });
             }
 
-            // XXX: an either enum is used, which allows
+            // NOTE: an either enum is used, which allows
             // rustc to prove only one task gets ownership
             // of the `message`, i.e. `Right` = ourselves
         });
@@ -685,7 +685,7 @@ where
     ) {
         const SECS: u64 = 1;
         const RETRY: usize = 3 * 60;
-        // notes
+        // NOTE:
         // ========
         //
         // 1) not an issue if `tx` is closed, this is not a

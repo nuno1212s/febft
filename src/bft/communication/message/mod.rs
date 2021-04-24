@@ -413,7 +413,7 @@ impl<'a> WireMessage<'a> {
 
     fn sign_parts(sk: &KeyPair, from: u32, to: u32, payload: &[u8]) -> Signature {
         let digest = Self::digest_parts(from, to, payload);
-        // XXX: unwrap() should always work, much like heap allocs
+        // NOTE: unwrap() should always work, much like heap allocs
         // should always work
         sk.sign(digest.as_ref()).unwrap()
     }

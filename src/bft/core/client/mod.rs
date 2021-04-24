@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::future::Future;
 use std::task::{Poll, Waker, Context};
+use std::time::{Instant, Duration};
 
 use parking_lot::Mutex;
 
@@ -85,12 +86,26 @@ pub struct ClientConfig {
     pub node: NodeConfig,
 }
 
+struct ReplicaVotes {
+    count: usize,
+    last: Instant,
+}
+
 impl<D> Client<D>
 where
     D: SharedData + 'static,
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
+    // elapsed time since last garbage collection
+    // of the replica vote counts hashmap;
+    //
+    // NOTE: garbage collection is needed because we only
+    // need a quorum of votes, but the remaining nodes
+    // may also vote, populating the hashmap
+    //
+    // TODO: tune this value, e.g. maybe change to 3mins?
+    const GC_DUR: Duration = Duration::from_secs(30);
 
     /// Bootstrap a client in `febft`.
     pub async fn bootstrap(cfg: ClientConfig) -> Result<Self> {
@@ -155,25 +170,29 @@ where
         data: Arc<ClientData<D::Reply>>,
         mut node: Node<D>,
     ) {
-        let mut count: HashMap<Digest, usize> = collections::hash_map();
+        let mut count: HashMap<Digest, ReplicaVotes> = collections::hash_map();
         while let Ok(message) = node.receive().await {
             match message {
                 Message::System(_, message) => {
                     match message {
                         SystemMessage::Reply(message) => {
+                            let now = Instant::now();
+
                             let (digest, payload) = message.into_inner();
-                            let q = count.entry(digest).or_insert(0);
+                            let votes = count
+                                .entry(digest)
+                                .or_insert(ReplicaVotes { count: 0, last: None });
 
                             // register new reply received
-                            *q += 1;
+                            votes.count += 1;
+                            votes.last = Some(now);
 
                             // TODO: check if we got equivalent responses by
-                            // verifying the digest
+                            // verifying the digest; furthermore, check if
+                            // a replica hasn't voted twice for the same
+                            // digest
 
-                            if *q == params.quorum() {
-                                // remove this counter
-                                count.remove(&digest);
-
+                            if votes.count == params.quorum() {
                                 // register response
                                 {
                                     let mut ready = data.ready.lock();
