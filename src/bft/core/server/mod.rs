@@ -220,7 +220,7 @@ where
                                         // to viably handle these scenarios?
                                         panic!("Request hasn't been received yet");
                                     };
-                                    self.executor.queue(
+                                    self.executor.queue_update(
                                         header.from(),
                                         digest,
                                         request,

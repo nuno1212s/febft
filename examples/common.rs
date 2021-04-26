@@ -292,7 +292,7 @@ impl Service for CalcService {
         Ok(1.0)
     }
 
-    fn process(&mut self, state: &mut f32, requests: Vec<Action>) -> Vec<f32> {
+    fn update(&mut self, state: &mut f32, requests: Vec<Action>) -> Vec<f32> {
         let reply = requests
             .into_iter()
             .map(|r| {

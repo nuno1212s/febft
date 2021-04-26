@@ -15,8 +15,8 @@ use crate::bft::communication::serialize::{
 };
 
 enum ExecutionRequest<O> {
-    // process the state of the service
-    ReadWrite(NodeId, Digest, O),
+    // update the state of the service
+    Update(NodeId, Digest, O),
     // read the state of the service
     //
     // TODO: the current api can't handle sending the application state;
@@ -49,7 +49,7 @@ pub trait Service {
 
     /// Process a user request, producing a matching reply,
     /// meanwhile updating the application state.
-    fn process(
+    fn update(
         &mut self,
         state: &mut State<Self>,
         request: Request<Self>,
@@ -81,8 +81,8 @@ where
     /// The value `dig` represents the hash digest of the
     /// serialized `req`, which is used to notify `from` of
     /// the completion of this request.
-    pub fn queue(&mut self, from: NodeId, dig: Digest, req: Request<S>) -> Result<()> {
-        self.e_tx.send(ExecutionRequest::ReadWrite(from, dig, req))
+    pub fn queue_update(&mut self, from: NodeId, dig: Digest, req: Request<S>) -> Result<()> {
+        self.e_tx.send(ExecutionRequest::Update(from, dig, req))
             .simple(ErrorKind::Executable)
     }
 }
@@ -126,8 +126,8 @@ where
         thread::spawn(move || {
             while let Ok(exec_req) = exec.e_rx.recv() {
                 match exec_req {
-                    ExecutionRequest::ReadWrite(peer_id, dig, req) => {
-                        let reply = exec.service.process(&mut exec.state, req);
+                    ExecutionRequest::Update(peer_id, dig, req) => {
+                        let reply = exec.service.update(&mut exec.state, req);
 
                         // deliver reply
                         let mut system_tx = exec.system_tx.clone();
