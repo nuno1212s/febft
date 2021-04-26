@@ -104,6 +104,7 @@ pub enum Message<O, P> {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub enum SystemMessage<O, P> {
+    // TODO: ReadRequest,
     Request(RequestMessage<O>),
     Reply(ReplyMessage<P>),
     Consensus(ConsensusMessage),
