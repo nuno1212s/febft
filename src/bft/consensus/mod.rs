@@ -86,7 +86,19 @@ impl TBOQueue {
         h: Header,
         m: ConsensusMessage,
     ) {
-        let index = m.sequence_number() - curr_seq;
+        const OVERFLOW_THRES_POS: i32 = 10000;
+        const OVERFLOW_THRES_NEG: i32 = -OVERFLOW_THRES_POS;
+        let index = {
+            let index = m.sequence_number().wrapping_sub(curr_seq);
+            if index < OVERFLOW_THRES_NEG || index > OVERFLOW_THRES_POS {
+                // guard against overflows
+                i32::MAX
+                    .wrapping_add(index)
+                    .wrapping_add(1)
+            } else {
+                index
+            }
+        };
         if index < 0 {
             // drop old messages
             return;
@@ -125,7 +137,8 @@ impl TBOQueue {
 
     /// Advances the message queue, and updates the consensus instance id.
     fn next_instance_queue(&mut self) {
-        self.curr_seq += 1;
+        let (next, overflow) = self.curr_seq.overflowing_add(1);
+        self.curr_seq = if overflow { 0 } else { next };
         Self::advance_message_queue(&mut self.pre_prepares);
         Self::advance_message_queue(&mut self.prepares);
         Self::advance_message_queue(&mut self.commits);
