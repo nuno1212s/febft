@@ -101,7 +101,7 @@ impl<O, P> Log<O, P> {
     }
 
     /// Checks if this `Log` has a particular request with the given `digest`.
-    pub fn has_request(&mut self, digest: &Digest) -> bool {
+    pub fn has_request(&self, digest: &Digest) -> bool {
         match () {
             _ if self.deciding.contains_key(digest) => true,
             _ if self.requests.contains_key(digest) => true,
