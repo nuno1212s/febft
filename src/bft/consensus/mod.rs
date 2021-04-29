@@ -180,7 +180,7 @@ pub enum ProtoPhase {
 pub struct Consensus<S: Service> {
     phase: ProtoPhase,
     tbo: TBOQueue,
-    current: Option<Digest>,
+    current: Digest,
     //voted: HashSet<NodeId>,
     _phantom: PhantomData<S>,
 }
@@ -227,7 +227,7 @@ where
             phase: ProtoPhase::Init,
             tbo: TBOQueue::new(initial_seq_no),
             //voted: collections::hash_set(),
-            current: None,
+            current: Digest::from_bytes(&[0; Digest::LENGTH][..]).unwrap(),
         }
     }
 
@@ -258,7 +258,7 @@ where
     }
 
     /// Check if we can process new consensus messages.
-    pub fn poll(&mut self/*, log: &Log<Request<S>, Reply<S>>*/) -> PollStatus {
+    pub fn poll(&mut self, log: &Log<Request<S>, Reply<S>>) -> PollStatus {
         match self.phase {
             ProtoPhase::Init if self.tbo.get_queue => {
                 extract_msg!(
@@ -272,6 +272,10 @@ where
             },
             ProtoPhase::PrePreparing if self.tbo.get_queue => {
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.pre_prepares)
+            },
+            ProtoPhase::Preparing(_) if !log.has_request(&self.current) => {
+                self.tbo.get_queue = false;
+                PollStatus::Recv
             },
             ProtoPhase::Preparing(_) if self.tbo.get_queue => {
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.prepares)
@@ -295,7 +299,7 @@ where
         header: Header,
         message: ConsensusMessage,
         view: ViewInfo,
-        _log: &mut Log<Request<S>, Reply<S>>,
+        log: &mut Log<Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) -> ConsensusStatus {
         // FIXME: use order imposed by leader
@@ -332,7 +336,7 @@ where
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::PrePrepare(dig) => {
-                        Some(dig.clone())
+                        dig.clone()
                     },
                     ConsensusMessageKind::Prepare => {
                         self.queue_prepare(header, message);
@@ -374,6 +378,12 @@ where
                         return ConsensusStatus::Deciding;
                     },
                 };
+                // wait for the request to arrive before
+                // proceeding with the protocol
+                if node.id() != view.leader() && !log.has_request(&self.current) {
+                    self.queue(header, message);
+                    return ConsensusStatus::Deciding;
+                }
                 // check if we have gathered enough votes,
                 // and transition to a new phase
                 self.phase = if i == view.params().quorum() {
@@ -413,8 +423,7 @@ where
                     // we have reached a decision,
                     // notify core protocol
                     self.phase = ProtoPhase::Init;
-                    let dig = self.current.take().unwrap();
-                    ConsensusStatus::Decided(dig)
+                    ConsensusStatus::Decided(self.current)
                 } else {
                     self.phase = ProtoPhase::Committing(i);
                     ConsensusStatus::Deciding
