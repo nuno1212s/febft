@@ -273,6 +273,8 @@ where
             ProtoPhase::PrePreparing if self.tbo.get_queue => {
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.pre_prepares)
             },
+            // TODO: maybe optimize this for leaders,
+            // e.g. `node.id() != view.leader() && ...`
             ProtoPhase::Preparing(_) if !log.has_request(&self.current) => {
                 self.tbo.get_queue = false;
                 PollStatus::Recv
