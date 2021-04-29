@@ -86,6 +86,7 @@ impl TBOQueue {
         h: Header,
         m: ConsensusMessage,
     ) {
+        const DROP_SEQNO_THRES: i32 = 100;
         const OVERFLOW_THRES_POS: i32 = 10000;
         const OVERFLOW_THRES_NEG: i32 = -OVERFLOW_THRES_POS;
         let index = {
@@ -99,15 +100,16 @@ impl TBOQueue {
                 index
             }
         };
-        if index < 0 {
-            // drop old messages
+        if index < 0 || index > DROP_SEQNO_THRES {
+            // drop old messages or messages whose seq no. is too
+            // large, which may be due to a DoS attack of
+            // a malicious node
+            //
+            // FIXME: maybe notify peers if we detect a message
+            // with an invalid (too large) seq no? return the
+            // `NodeId` of the offending node.
             return;
         }
-        // FIXME: if the index is too large, we will
-        // end up allocating a lot of extra memory;
-        // malicious nodes can use this fact to DOS us;
-        // add a threshold and drop messages with seq
-        // no. higher than this value
         let index = index as usize;
         if index >= tbo.len() {
             let len = index - tbo.len() + 1;
