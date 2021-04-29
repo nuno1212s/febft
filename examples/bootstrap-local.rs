@@ -70,7 +70,7 @@ async fn async_main() {
             let (mut node, rogue) = fut.await.unwrap();
             println!("Spawned node #{}", u32::from(id));
             println!("Rogue on node #{} => {}", u32::from(id), debug_rogue(rogue));
-            let m = SystemMessage::Request(RequestMessage::new(()));
+            let m = SystemMessage::Request(RequestMessage::new(Vec::new()));
             node.broadcast(m, NodeId::targets(0..4));
             for _ in 0..4 {
                 let m = node

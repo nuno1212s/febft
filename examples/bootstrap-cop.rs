@@ -87,7 +87,7 @@ async fn async_main(id: NodeId) {
     };
 
     // broadcast message
-    let m = SystemMessage::Request(RequestMessage::new(()));
+    let m = SystemMessage::Request(RequestMessage::new(Vec::new()));
     node.broadcast(m, NodeId::targets(0..4));
 
     // receive peer messages
