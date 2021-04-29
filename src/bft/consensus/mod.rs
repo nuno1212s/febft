@@ -198,6 +198,10 @@ pub enum ConsensusStatus {
 }
 
 macro_rules! extract_msg {
+    ($g:expr, $q:expr) => {
+        extract_msg!({}, $g, $q)
+    };
+
     ($opt:block, $g:expr, $q:expr) => {
         if let Some((header, message)) = TBOQueue::pop_message($q) {
             $opt
@@ -206,7 +210,7 @@ macro_rules! extract_msg {
             *$g = false;
             PollStatus::Recv
         }
-    }
+    };
 }
 
 impl<S> Consensus<S>
@@ -267,13 +271,13 @@ where
                 PollStatus::TryProposeAndRecv
             },
             ProtoPhase::PrePreparing if self.tbo.get_queue => {
-                extract_msg!({}, &mut self.tbo.get_queue, &mut self.tbo.pre_prepares)
+                extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.pre_prepares)
             },
             ProtoPhase::Preparing(_) if self.tbo.get_queue => {
-                extract_msg!({}, &mut self.tbo.get_queue, &mut self.tbo.prepares)
+                extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.prepares)
             },
             ProtoPhase::Committing(_) if self.tbo.get_queue => {
-                extract_msg!({}, &mut self.tbo.get_queue, &mut self.tbo.commits)
+                extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.commits)
             },
             _ => PollStatus::Recv,
         }
