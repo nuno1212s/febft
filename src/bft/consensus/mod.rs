@@ -103,6 +103,11 @@ impl TBOQueue {
             // drop old messages
             return;
         }
+        // FIXME: if the index is too large, we will
+        // end up allocating a lot of extra memory;
+        // malicious nodes can use this fact to DOS us;
+        // add a threshold and drop messages with seq
+        // no. higher than this value
         let index = index as usize;
         if index >= tbo.len() {
             let len = index - tbo.len() + 1;
