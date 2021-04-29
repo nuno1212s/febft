@@ -3,7 +3,6 @@
 use std::marker::PhantomData;
 use std::collections::VecDeque;
 
-use crate::bft::error::*;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::communication::message::{
     Header,
@@ -74,11 +73,13 @@ impl<O, P> Log<O, P> {
 
     /// Adds a new `message` and its respective `header` to the log.
     pub fn insert(&mut self, header: Header, message: SystemMessage<O, P>) -> Info {
-        match &message {
-            SystemMessage::Request(_) => {
-                let message = StoredRequest { header, message };
+        match message {
+            SystemMessage::Request(message) => {
+                let digest = header.digest().clone();
+                let stored = StoredRequest { header, message };
+                self.requests.insert(digest, stored);
             },
-            SystemMessage::Consensus(_) => {
+            SystemMessage::Consensus(message) => {
                 let stored = StoredConsensus { header, message };
                 match stored.message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => self.pre_prepares.push_back(stored),
@@ -94,8 +95,7 @@ impl<O, P> Log<O, P> {
 
     /// Retrieves the next request available for proposing, if any.
     pub fn next_request(&mut self) -> Option<Digest> {
-        let stored = self.requests.pop_front()?;
-        let digest = stored.message.header().digest().clone();
+        let (digest, stored) = self.requests.pop_front()?;
         self.deciding.insert(digest, stored);
         Some(digest)
     }

@@ -2,16 +2,12 @@
 
 use super::SystemParams;
 use crate::bft::error::*;
+use crate::bft::history::Log;
 use crate::bft::async_runtime as rt;
-use crate::bft::crypto::hash::Digest;
 use crate::bft::consensus::{
     Consensus,
     PollStatus,
     ConsensusStatus,
-};
-use crate::bft::history::{
-    Logger,
-    LoggerHandle,
 };
 use crate::bft::executable::{
     Service,
@@ -30,7 +26,6 @@ use crate::bft::communication::message::{
     SystemMessage,
     ReplyMessage,
     Message,
-    Header,
 };
 
 /// This struct contains information related with an
@@ -66,9 +61,9 @@ impl ViewInfo {
 /// Represents a replica in `febft`.
 pub struct Replica<S: Service> {
     executor: ExecutorHandle<S>,
-    log: LoggerHandle<Request<S>, Reply<S>>,
     view: ViewInfo,
     consensus: Consensus<S>,
+    log: Log<Request<S>, Reply<S>>,
     node: Node<S::Data>,
 }
 
@@ -132,10 +127,11 @@ where
             match message {
                 Message::System(header, message) => {
                     match message {
-                        SystemMessage::Request(r) => {
-                            let op = r.into_inner();
-                            let dig = header.digest().clone();
-                            replica.requests.insert(dig, (header, op));
+                        request @ SystemMessage::Request(_) => {
+                            // NOTE: requests aren't susceptible to
+                            // garbage collection log operations,
+                            // so ignoring the return value is fine
+                            replica.log.insert(header, request);
                         },
                         SystemMessage::Consensus(message) => {
                             replica.consensus.queue(header, message);
@@ -164,9 +160,8 @@ where
                 PollStatus::Recv => self.node.receive().await?,
                 PollStatus::NextMessage(h, m) => Message::System(h, SystemMessage::Consensus(m)),
                 PollStatus::TryProposeAndRecv => {
-                    if let Some((dig, (h, r))) = self.requests.pop_front() {
-                        self.consensus.propose(dig, self.view, &mut self.node);
-                        self.deciding.insert(dig, (h, r));
+                    if let Some(digest) = self.log.next_request() {
+                        self.consensus.propose(digest, self.view, &mut self.node);
                     }
                     self.node.receive().await?
                 },
@@ -175,11 +170,10 @@ where
             match message {
                 Message::System(header, message) => {
                     match message {
-                        SystemMessage::Request(r) => {
-                            // queue request header and payload
-                            let op = r.into_inner();
-                            let dig = header.digest().clone();
-                            self.requests.insert(dig, (header, op));
+                        request @ SystemMessage::Request(_) => {
+                            // NOTE: check note above on the handling
+                            // of rogue messages during bootstrap
+                            self.log.insert(header, request);
                         },
                         SystemMessage::Consensus(message) => {
                             let status = self.consensus.process_message(
@@ -200,16 +194,9 @@ where
                                 // attributed by the consensus layer to each op,
                                 // to execute in order
                                 ConsensusStatus::Decided(digest) => {
-                                    let (header, request) = if let Some((h, r)) = self.deciding.remove(&digest) {
-                                        (h, r)
-                                    } else if let Some((h, r)) = self.requests.remove(&digest) {
-                                        (h, r)
-                                    } else {
-                                        // FIXME: we haven't received this request yet... wtf?
-                                        // how do we approach this scenario? maybe we need to
-                                        // wait until we implement some state transfer mechanism
-                                        // to viably handle these scenarios?
-                                        panic!("Request hasn't been received yet");
+                                    let (header, request) = match self.log.request_payload(&digest) {
+                                        Some((h, r)) => (h, r.into_inner()),
+                                        None => unreachable!(),
                                     };
                                     self.executor.queue_update(
                                         header.from(),

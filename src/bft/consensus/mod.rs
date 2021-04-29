@@ -4,9 +4,9 @@ use std::marker::PhantomData;
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 
+use crate::bft::history::Log;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::core::server::ViewInfo;
-use crate::bft::history::LoggerHandle;
 use crate::bft::communication::message::{
     Header,
     SystemMessage,
@@ -292,7 +292,7 @@ where
         header: Header,
         message: ConsensusMessage,
         view: ViewInfo,
-        _log: &mut LoggerHandle<Request<S>, Reply<S>>,
+        _log: &mut Log<Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) -> ConsensusStatus {
         // FIXME: use order imposed by leader
