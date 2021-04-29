@@ -4,11 +4,6 @@ use super::SystemParams;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
 use crate::bft::crypto::hash::Digest;
-use crate::bft::collections::{
-    self,
-    HashMap,
-    OrderedMap,
-};
 use crate::bft::consensus::{
     Consensus,
     PollStatus,
@@ -73,8 +68,6 @@ pub struct Replica<S: Service> {
     executor: ExecutorHandle<S>,
     log: LoggerHandle<Request<S>, Reply<S>>,
     view: ViewInfo,
-    requests: OrderedMap<Digest, (Header, Request<S>)>,
-    deciding: HashMap<Digest, (Header, Request<S>)>,
     consensus: Consensus<S>,
     node: Node<S::Data>,
 }
@@ -123,13 +116,11 @@ where
             service,
         )?;
 
-        // start logger
-        let log = Logger::new(node.master_channel());
+        // TODO: get log from persistent storage
+        let log = Log::new();
 
         let mut replica = Replica {
             consensus: Consensus::new(next_consensus_seq),
-            deciding: collections::hash_map(),
-            requests: collections::ordered_map(),
             executor,
             node,
             view,

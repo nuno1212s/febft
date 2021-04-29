@@ -1,19 +1,21 @@
 //! Message history log and tools to make it persistent.
 
+use std::marker::PhantomData;
 use std::collections::VecDeque;
 
 use crate::bft::error::*;
-use crate::bft::async_runtime as rt;
-use crate::bft::communication::channel::{
-    self,
-    ChannelRx,
-    ChannelTx,
-    MessageChannelTx,
-};
+use crate::bft::crypto::hash::Digest;
 use crate::bft::communication::message::{
     Header,
     SystemMessage,
+    RequestMessage,
+    ConsensusMessage,
     ConsensusMessageKind,
+};
+use crate::bft::collections::{
+    self,
+    HashMap,
+    OrderedMap,
 };
 
 /// Information reported after a logging operation.
@@ -25,21 +27,25 @@ pub enum Info {
     Full,
 }
 
-enum LogOperation<O, P> {
-    Insert(Header, SystemMessage<O, P>),
+struct StoredConsensus {
+    header: Header,
+    message: ConsensusMessage,
 }
 
-struct StoredMessage<O, P> {
+struct StoredRequest<O> {
     header: Header,
-    message: SystemMessage<O, P>,
+    message: RequestMessage<O>
 }
 
 /// Represents a log of messages received by the BFT system.
 pub struct Log<O, P> {
-    pre_prepares: VecDeque<StoredMessage<O, P>>,
-    prepares: VecDeque<StoredMessage<O, P>>,
-    commits: VecDeque<StoredMessage<O, P>>,
-    // others: ...
+    pre_prepares: VecDeque<StoredConsensus>,
+    prepares: VecDeque<StoredConsensus>,
+    commits: VecDeque<StoredConsensus>,
+    // TODO: view change stuff
+    requests: OrderedMap<Digest, StoredRequest<O>>,
+    deciding: HashMap<Digest, StoredRequest<O>>,
+    _marker: PhantomData<P>,
 }
 
 // TODO:
@@ -52,88 +58,69 @@ impl<O, P> Log<O, P> {
             pre_prepares: VecDeque::new(),
             prepares: VecDeque::new(),
             commits: VecDeque::new(),
+            deciding: collections::hash_map(),
+            requests: collections::ordered_map(),
+            _marker: PhantomData,
         }
     }
 
+/*
     /// Replaces the current `Log` with an empty one, and returns
     /// the replaced instance.
     pub fn take(&mut self) -> Self {
         std::mem::replace(self, Log::new())
     }
+*/
 
     /// Adds a new `message` and its respective `header` to the log.
     pub fn insert(&mut self, header: Header, message: SystemMessage<O, P>) -> Info {
-        let message = StoredMessage { header, message };
-        if let SystemMessage::Consensus(ref m) = &message.message {
-            match m.kind() {
-                ConsensusMessageKind::PrePrepare(_) => self.pre_prepares.push_back(message),
-                ConsensusMessageKind::Prepare => self.prepares.push_back(message),
-                ConsensusMessageKind::Commit => self.commits.push_back(message),
-            }
+        match &message {
+            SystemMessage::Request(_) => {
+                let message = StoredRequest { header, message };
+            },
+            SystemMessage::Consensus(_) => {
+                let stored = StoredConsensus { header, message };
+                match stored.message.kind() {
+                    ConsensusMessageKind::PrePrepare(_) => self.pre_prepares.push_back(stored),
+                    ConsensusMessageKind::Prepare => self.prepares.push_back(stored),
+                    ConsensusMessageKind::Commit => self.commits.push_back(stored),
+                }
+            },
+            // rest are not handled by the log
+            _ => (),
         }
         Info::Nil
     }
-}
 
-/// Represents a handle to the logger.
-pub struct LoggerHandle<O, P> {
-    my_tx: ChannelTx<LogOperation<O, P>>,
-}
+    /// Retrieves the next request available for proposing, if any.
+    pub fn next_request(&mut self) -> Option<Digest> {
+        let stored = self.requests.pop_front()?;
+        let digest = stored.message.header().digest().clone();
+        self.deciding.insert(digest, stored);
+        Some(digest)
+    }
 
-impl<O, P> LoggerHandle<O, P> {
-    /// Adds a new `message` and its respective `header` to the log.
-    pub async fn insert(&mut self, header: Header, message: SystemMessage<O, P>) -> Result<()> {
-        self.my_tx.send(LogOperation::Insert(header, message)).await
+    /// Checks if this `Log` has a particular request with the given `digest`.
+    pub fn has_request(&mut self, digest: &Digest) -> bool {
+        match () {
+            _ if self.deciding.contains_key(digest) => true,
+            _ if self.requests.contains_key(digest) => true,
+            _ => false,
+        }
+    }
+
+    /// Retrieves the payload associated with the given request `digest`,
+    /// when it is available in this `Log`.
+    pub fn request_payload(&mut self, digest: &Digest) -> Option<(Header, RequestMessage<O>)> {
+        self.deciding
+            .remove(digest)
+            .or_else(|| self.requests.remove(digest))
+            .map(StoredRequest::into_inner)
     }
 }
 
-impl<O, P> Clone for LoggerHandle<O, P> {
-    fn clone(&self) -> Self {
-        let my_tx = self.my_tx.clone();
-        Self { my_tx }
-    }
-}
-
-/// Represents an async message logging task.
-pub struct Logger<O, P> {
-    // handle used to receive messages to be logged
-    my_rx: ChannelRx<LogOperation<O, P>>,
-    // handle to the master channel used by the `Replica`;
-    // signals checkpoint messages
-    system_tx: MessageChannelTx<O, P>,
-    // the message log itself
-    log: Log<O, P>,
-}
-
-impl<O, P> Logger<O, P> {
-    // max no. of messages allowed in the channel
-    const CHAN_BOUND: usize = 128;
-
-    /// Spawns a new logging task into the async runtime.
-    ///
-    /// A handle to the master message channel, `system_tx`, should be provided.
-    pub fn new(system_tx: MessageChannelTx<O, P>) -> LoggerHandle<O, P>
-    where
-        O: Send + 'static,
-        P: Send + 'static,
-    {
-        let log = Log::new();
-        let (my_tx, my_rx) = channel::new_bounded(Self::CHAN_BOUND);
-        let mut logger = Logger {
-            my_rx,
-            system_tx,
-            log,
-        };
-        rt::spawn(async move {
-            while let Ok(log_op) = logger.my_rx.recv().await {
-                // TODO: add other log operations, namely garbage collection
-                match log_op {
-                    LogOperation::Insert(header, message) => {
-                        logger.log.insert(header, message);
-                    },
-                }
-            }
-        });
-        LoggerHandle { my_tx }
+impl<O> StoredRequest<O> {
+    fn into_inner(self) -> (Header, RequestMessage<O>) {
+        (self.header, self.message)
     }
 }
