@@ -48,14 +48,14 @@ impl From<u32> for SeqNo {
 impl SeqNo {
     /// Returns the following sequence number.
     #[inline]
-    fn next(&self) -> SeqNo {
+    fn next(self) -> SeqNo {
         let (next, overflow) = (self.0).overflowing_add(1);
         SeqNo(if overflow { 0 } else { next })
     }
 
     /// Return an appropriate value to index the `TBOQueue`.
     #[inline]
-    fn index(&self, other: SeqNo) -> Option<usize> {
+    fn index(self, other: SeqNo) -> Option<usize> {
         // FIXME: probably swap this logic out for
         // low and high water marks, like in PBFT
         const DROP_SEQNO_THRES: i32 = 100;
