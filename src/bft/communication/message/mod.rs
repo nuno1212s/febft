@@ -31,6 +31,7 @@ use crate::bft::crypto::hash::{
 };
 use crate::bft::communication::socket::Socket;
 use crate::bft::communication::NodeId;
+use crate::bft::consensus::SeqNo;
 use crate::bft::error::*;
 
 /// A header that is sent before a message in transit in the wire.
@@ -137,7 +138,7 @@ pub struct ReplyMessage<P> {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Copy, Clone)]
 pub struct ConsensusMessage {
-    seq: i32,
+    seq: SeqNo,
     kind: ConsensusMessageKind,
 }
 
@@ -198,12 +199,12 @@ impl<P> ReplyMessage<P> {
 impl ConsensusMessage {
     /// Creates a new `ConsensusMessage` with sequence number `seq`,
     /// and of the kind `kind`.
-    pub fn new(seq: i32, kind: ConsensusMessageKind) -> Self {
+    pub fn new(seq: SeqNo, kind: ConsensusMessageKind) -> Self {
         Self { seq, kind }
     }
 
     /// Returns the sequence number of this consensus message.
-    pub fn sequence_number(&self) -> i32 {
+    pub fn sequence_number(&self) -> SeqNo {
         self.seq
     }
 

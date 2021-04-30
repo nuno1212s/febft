@@ -17,6 +17,7 @@ use serde::{
 };
 
 use febft::bft::error::*;
+use febft::bft::consensus::SeqNo;
 use febft::bft::executable::Service;
 use febft::bft::collections::HashMap;
 use febft::bft::threadpool::ThreadPool;
@@ -143,7 +144,7 @@ pub async fn setup_replica(
     let node = node_config(&t, id, sk, addrs, pk).await;
     let conf = ReplicaConfig {
         node,
-        next_consensus_seq: 0,
+        next_consensus_seq: SeqNo::from(0),
         leader: NodeId::from(0u32),
         service: CalcService(id, 0),
     };

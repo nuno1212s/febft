@@ -4,6 +4,9 @@ use std::marker::PhantomData;
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
+
 use crate::bft::history::Log;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::core::server::ViewInfo;
@@ -28,6 +31,60 @@ use crate::bft::executable::{
     State,
 };
 
+/// Represents a sequence number attributed to a client request
+/// during a `Consensus` instance.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub struct SeqNo(i32);
+
+impl From<u32> for SeqNo {
+    #[inline]
+    fn from(sequence_number: u32) -> SeqNo {
+        // FIXME: is this correct?
+        SeqNo(sequence_number as i32)
+    }
+}
+
+impl SeqNo {
+    /// Returns the following sequence number.
+    #[inline]
+    fn next(&self) -> SeqNo {
+        let (next, overflow) = (self.0).overflowing_add(1);
+        SeqNo(if overflow { 0 } else { next })
+    }
+
+    /// Return an appropriate value to index the `TBOQueue`.
+    #[inline]
+    fn index(&self, other: SeqNo) -> Option<usize> {
+        // FIXME: probably swap this logic out for
+        // low and high water marks, like in PBFT
+        const DROP_SEQNO_THRES: i32 = 100;
+        const OVERFLOW_THRES_POS: i32 = 10000;
+        const OVERFLOW_THRES_NEG: i32 = -OVERFLOW_THRES_POS;
+
+        let index = {
+            let index = (self.0).wrapping_sub(other.0);
+            if index < OVERFLOW_THRES_NEG || index > OVERFLOW_THRES_POS {
+                // guard against overflows
+                i32::MAX
+                    .wrapping_add(index)
+                    .wrapping_add(1)
+            } else {
+                index
+            }
+        };
+
+        if index < 0 || index > DROP_SEQNO_THRES {
+            // drop old messages or messages whose seq no. is too
+            // large, which may be due to a DoS attack of
+            // a malicious node
+            None
+        } else {
+            Some(index as usize)
+        }
+    }
+}
+
 /// Represents the status of calling `poll()` on a `TBOQueue`.
 pub enum PollStatus {
     /// The `Replica` associated with this `TBOQueue` should
@@ -51,7 +108,7 @@ pub enum PollStatus {
 /// a node after a `PREPARE`. A `TBOQueue` arranges these messages to be
 /// processed in the correct order.
 pub struct TBOQueue {
-    curr_seq: i32,
+    curr_seq: SeqNo,
     get_queue: bool,
     pre_prepares: VecDeque<VecDeque<(Header, ConsensusMessage)>>,
     prepares: VecDeque<VecDeque<(Header, ConsensusMessage)>>,
@@ -60,7 +117,7 @@ pub struct TBOQueue {
 
 // XXX: details
 impl TBOQueue {
-    fn new_impl(curr_seq: i32) -> Self {
+    fn new_impl(curr_seq: SeqNo) -> Self {
         Self {
             curr_seq,
             get_queue: false,
@@ -81,36 +138,20 @@ impl TBOQueue {
     }
 
     fn queue_message(
-        curr_seq: i32,
+        curr_seq: SeqNo,
         tbo: &mut VecDeque<VecDeque<(Header, ConsensusMessage)>>,
         h: Header,
         m: ConsensusMessage,
     ) {
-        const DROP_SEQNO_THRES: i32 = 100;
-        const OVERFLOW_THRES_POS: i32 = 10000;
-        const OVERFLOW_THRES_NEG: i32 = -OVERFLOW_THRES_POS;
-        let index = {
-            let index = m.sequence_number().wrapping_sub(curr_seq);
-            if index < OVERFLOW_THRES_NEG || index > OVERFLOW_THRES_POS {
-                // guard against overflows
-                i32::MAX
-                    .wrapping_add(index)
-                    .wrapping_add(1)
-            } else {
-                index
-            }
+        let index = match m.sequence_number().index(curr_seq) {
+            Some(i) => i,
+            None => {
+                // FIXME: maybe notify peers if we detect a message
+                // with an invalid (too large) seq no? return the
+                // `NodeId` of the offending node.
+                return;
+            },
         };
-        if index < 0 || index > DROP_SEQNO_THRES {
-            // drop old messages or messages whose seq no. is too
-            // large, which may be due to a DoS attack of
-            // a malicious node
-            //
-            // FIXME: maybe notify peers if we detect a message
-            // with an invalid (too large) seq no? return the
-            // `NodeId` of the offending node.
-            return;
-        }
-        let index = index as usize;
         if index >= tbo.len() {
             let len = index - tbo.len() + 1;
             tbo.extend(std::iter::repeat_with(VecDeque::new).take(len));
@@ -127,7 +168,7 @@ impl TBOQueue {
 
 // XXX: api
 impl TBOQueue {
-    fn new(curr_seq: i32) -> Self {
+    fn new(curr_seq: SeqNo) -> Self {
         Self::new_impl(curr_seq)
     }
 
@@ -138,14 +179,13 @@ impl TBOQueue {
     }
 
     /// Reports the id of the consensus this `TBOQueue` is tracking.
-    pub fn sequence_number(&self) -> i32 {
+    pub fn sequence_number(&self) -> SeqNo {
         self.curr_seq
     }
 
     /// Advances the message queue, and updates the consensus instance id.
     fn next_instance_queue(&mut self) {
-        let (next, overflow) = self.curr_seq.overflowing_add(1);
-        self.curr_seq = if overflow { 0 } else { next };
+        self.curr_seq = self.curr_seq.next();
         Self::advance_message_queue(&mut self.pre_prepares);
         Self::advance_message_queue(&mut self.prepares);
         Self::advance_message_queue(&mut self.commits);
@@ -241,7 +281,7 @@ where
     Reply<S>: Send + 'static,
 {
     /// Starts a new consensus protocol tracker.
-    pub fn new(initial_seq_no: i32) -> Self {
+    pub fn new(initial_seq_no: SeqNo) -> Self {
         Self {
             _phantom: PhantomData,
             phase: ProtoPhase::Init,

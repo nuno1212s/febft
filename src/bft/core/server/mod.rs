@@ -5,6 +5,7 @@ use crate::bft::error::*;
 use crate::bft::history::Log;
 use crate::bft::async_runtime as rt;
 use crate::bft::consensus::{
+    SeqNo,
     Consensus,
     PollStatus,
     ConsensusStatus,
@@ -76,7 +77,7 @@ pub struct ReplicaConfig<S> {
     pub leader: NodeId,
     /// Next sequence number attributed to a request by
     /// the consensus layer.
-    pub next_consensus_seq: i32,
+    pub next_consensus_seq: SeqNo,
     /// Check out the docs on `NodeConfig`.
     pub node: NodeConfig,
 }
