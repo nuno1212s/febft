@@ -45,6 +45,13 @@ impl From<u32> for SeqNo {
     }
 }
 
+impl From<SeqNo> for u32 {
+    #[inline]
+    fn from(sequence_number: SeqNo) -> u32 {
+        sequence_number.0 as u32
+    }
+}
+
 impl SeqNo {
     /// Returns the following sequence number.
     #[inline]
