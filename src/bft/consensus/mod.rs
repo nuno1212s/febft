@@ -169,7 +169,14 @@ impl TBOQueue {
     fn advance_message_queue(
         tbo: &mut VecDeque<VecDeque<(Header, ConsensusMessage)>>,
     ) {
-        tbo.pop_front();
+        match tbo.pop_front() {
+            Some(mut vec) => {
+                // recycle memory
+                vec.clear();
+                tbo.push_back(vec);
+            },
+            None => (),
+        }
     }
 }
 
