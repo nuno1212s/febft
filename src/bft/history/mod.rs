@@ -17,6 +17,12 @@ use crate::bft::collections::{
     OrderedMap,
 };
 
+/// Checkpoint period.
+///
+/// Every `PERIOD` messages, the message log is cleared,
+/// and a new log checkpoint is initiated.
+pub const PERIOD: usize = 1000;
+
 /// Information reported after a logging operation.
 pub enum Info {
     /// Nothing to report.
