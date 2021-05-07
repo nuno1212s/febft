@@ -40,8 +40,10 @@ use crate::bft::error::*;
 /// a message is read. Contains the protocol version, message
 /// length, as well as other metadata.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-#[repr(C)]
+#[repr(C, packed)]
 pub struct Header {
+    // manually align memory for cross platform compat
+    pub(crate) _align: u32,
     // the protocol version
     pub(crate) version: u32,
     // origin of the message
@@ -383,6 +385,7 @@ impl<'a> WireMessage<'a> {
             .unwrap_or([0; Signature::LENGTH]);
         let (from, to) = (from.into(), to.into());
         let header = Header {
+            _align: 0,
             version: Self::CURRENT_VERSION,
             length: payload.len() as u64,
             signature,
@@ -535,6 +538,7 @@ mod tests {
     #[test]
     fn test_header_serialize() {
         let old_header = Header {
+            _align: 0,
             version: WireMessage::CURRENT_VERSION,
             signature: [0; Signature::LENGTH],
             digest: [0; Digest::LENGTH],
