@@ -318,6 +318,11 @@ where
         self.id
     }
 
+    /// Reports the id of the first client.
+    pub fn first_client_id(&self) -> NodeId {
+        self.first_cli
+    }
+
     /// Returns a `SendNode` sharing the same handles as this `Node`.
     pub fn send_node(&self) -> SendNode<D> {
         SendNode {
@@ -576,7 +581,7 @@ where
         if let PeerTx::Server(ref peer_tx) = &self.peer_tx {
             // the node whose conn we accepted is a client
             // and we aren't connected to it yet
-            if peer_id >= self.first_cli && !peer_tx.contains_key(&peer_id) {
+            if peer_id >= self.first_cli {
                 // fetch client address
                 //
                 // FIXME: this line can crash the program if the user
