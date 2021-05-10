@@ -188,7 +188,7 @@ impl<P> ReplyMessage<P> {
 
     /// The hash digest of the request associated with
     /// this reply.
-    pub fn signature(&self) -> &Digest {
+    pub fn digest(&self) -> &Digest {
         &self.digest
     }
 
