@@ -231,8 +231,8 @@ where
                 },
                 Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
                 Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
-                Message::DisconnectedTx(id) if id < self.node.firt_client_id() => (),
-                Message::DisconnectedRx(Some(id)) if id < self.node.firt_client_id() => (),
+                Message::DisconnectedTx(id) if id < self.node.first_client_id() => (),
+                Message::DisconnectedRx(Some(id)) if id < self.node.first_client_id() => (),
                 // TODO: node disconnected on send side
                 Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
                 // TODO: node disconnected on receive side
