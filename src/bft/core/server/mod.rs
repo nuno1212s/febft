@@ -129,6 +129,7 @@ where
                 Message::System(header, message) => {
                     match message {
                         request @ SystemMessage::Request(_) => {
+                            println!("Received request on #{}", u32::from(replica.node.id()));
                             // NOTE: requests aren't susceptible to
                             // garbage collection log operations,
                             // so ignoring the return value is fine
@@ -172,6 +173,7 @@ where
                 Message::System(header, message) => {
                     match message {
                         request @ SystemMessage::Request(_) => {
+                            println!("Received request on #{}", u32::from(self.node.id()));
                             // NOTE: check note above on the handling
                             // of rogue messages during bootstrap
                             self.log.insert(header, request);
@@ -228,6 +230,7 @@ where
                         payload,
                     ));
                     self.node.send(message, peer_id);
+                    println!("Delivered reply to #{} from #{}", u32::from(peer_id), u32::from(self.node.id()));
                 },
                 Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
                 Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
