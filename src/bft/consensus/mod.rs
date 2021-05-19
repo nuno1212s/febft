@@ -350,7 +350,7 @@ where
             ProtoPhase::PrePreparing if self.tbo.get_queue => {
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.pre_prepares)
             },
-            ProtoPhase::PreparingRequest {
+            ProtoPhase::PreparingRequest => {
                 if log.has_request(&self.current) {
                     extract_msg!(
                         { self.phase = ProtoPhase::Preparing(0); },
