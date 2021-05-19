@@ -449,7 +449,8 @@ where
                 ConsensusStatus::Deciding
             },
             ProtoPhase::PreparingRequest => {
-                unreachable!()
+                // do nothing while waiting for client requests
+                ConsensusStatus::Deciding
             },
             ProtoPhase::Preparing(i) => {
                 // queue message if we're not preparing
