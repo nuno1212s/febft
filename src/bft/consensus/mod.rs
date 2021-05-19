@@ -241,6 +241,9 @@ pub enum ProtoPhase {
     Init,
     /// Running the `PRE-PREPARE` phase.
     PrePreparing,
+    /// A replica has accepted a `PRE-PREPARE` message, but
+    /// it doesn't have the request it references in its log.
+    PreparingRequest,
     /// Running the `PREPARE` phase. The integer represents
     /// the number of votes received.
     Preparing(usize),
@@ -347,11 +350,16 @@ where
             ProtoPhase::PrePreparing if self.tbo.get_queue => {
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.pre_prepares)
             },
-            // TODO: maybe optimize this for leaders,
-            // e.g. `node.id() != view.leader() && ...`
-            ProtoPhase::Preparing(_) if !log.has_request(&self.current) => {
-                self.tbo.get_queue = false;
-                PollStatus::Recv
+            ProtoPhase::PreparingRequest {
+                if log.has_request(&self.current) {
+                    extract_msg!(
+                        { self.phase = ProtoPhase::Preparing(0); },
+                        &mut self.tbo.get_queue,
+                        &mut self.tbo.prepares
+                    )
+                } else {
+                    PollStatus::Recv
+                }
             },
             ProtoPhase::Preparing(_) if self.tbo.get_queue => {
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.prepares)
@@ -432,9 +440,16 @@ where
                     let targets = NodeId::targets(0..view.params().n());
                     node.broadcast(message, targets);
                 }
-                // enter preparing phase
-                self.phase = ProtoPhase::Preparing(0);
+                // try entering preparing phase
+                if log.has_request(&self.current) {
+                    self.phase = ProtoPhase::Preparing(0);
+                } else {
+                    self.phase = ProtoPhase::PreparingRequest;
+                }
                 ConsensusStatus::Deciding
+            },
+            ProtoPhase::PreparingRequest => {
+                unreachable!()
             },
             ProtoPhase::Preparing(i) => {
                 // queue message if we're not preparing
@@ -454,12 +469,6 @@ where
                         return ConsensusStatus::Deciding;
                     },
                 };
-                // wait for the request to arrive before
-                // proceeding with the protocol
-                if node.id() != view.leader() && !log.has_request(&self.current) {
-                    self.queue(header, message);
-                    return ConsensusStatus::Deciding;
-                }
                 // check if we have gathered enough votes,
                 // and transition to a new phase
                 self.phase = if i == view.params().quorum() {
