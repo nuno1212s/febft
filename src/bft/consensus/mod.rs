@@ -449,8 +449,22 @@ where
                 ConsensusStatus::Deciding
             },
             ProtoPhase::PreparingRequest => {
-                // do nothing while waiting for client requests
-                ConsensusStatus::Deciding
+                // can't do anything while waiting for client requests,
+                // queue the message for later
+                match message.kind() {
+                    ConsensusMessageKind::PrePrepare(_) => {
+                        self.queue_pre_prepare(header, message);
+                        return ConsensusStatus::Deciding;
+                    },
+                    ConsensusMessageKind::Prepare => {
+                        self.queue_prepare(header, message);
+                        return ConsensusStatus::Deciding;
+                    },
+                    ConsensusMessageKind::Commit => {
+                        self.queue_commit(header, message);
+                        return ConsensusStatus::Deciding;
+                    },
+                }
             },
             ProtoPhase::Preparing(i) => {
                 // queue message if we're not preparing
