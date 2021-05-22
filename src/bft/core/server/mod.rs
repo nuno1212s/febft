@@ -139,6 +139,8 @@ where
                         },
                         // FIXME: handle rogue reply messages
                         SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
+                        // FIXME: handle checkpoint messages
+                        SystemMessage::Checkpoint(_) => panic!("Rogue checkpoint message detected"),
                     }
                 },
                 // ignore other messages for now
@@ -219,6 +221,8 @@ where
                         },
                         // FIXME: handle rogue reply messages
                         SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
+                        // FIXME: handle checkpoint messages
+                        SystemMessage::Checkpoint(_) => panic!("Rogue checkpoint message detected"),
                     }
                 },
                 Message::ExecutionFinished(peer_id, digest, payload) => {
