@@ -225,6 +225,28 @@ pub struct CheckpointMessage {
     digest: Digest,
 }
 
+impl CheckpointMessage {
+    /// Creates a new `CheckpointMessage`.
+    ///
+    /// This message contains the sequence number `seq` of
+    /// the last executed client request and hash digest
+    /// `digest` of the application state.
+    pub fn new(seq: SeqNo, digest: Digest) -> Self {
+        Self { seq, digest }
+    }
+
+    /// Returns the sequence number of the last executed client request.
+    pub fn sequence_number(&self) -> SeqNo {
+        self.seq
+    }
+
+    /// Returns the digest of the application state at the
+    /// moment of the checkpoint creation.
+    pub fn digest(&self) -> &Digest {
+        &self.digest
+    }
+}
+
 // FIXME: perhaps use references for serializing and deserializing,
 // to save a stack allocation? probably overkill
 impl Header {
