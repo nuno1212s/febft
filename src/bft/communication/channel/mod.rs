@@ -185,6 +185,9 @@ impl<O, P> MessageChannelTx<O, P> {
                     SystemMessage::Consensus(message) => {
                         self.consensus.send((header, message)).await
                     },
+                    SystemMessage::Checkpoint(m) => {
+                        self.other.send(Message::System(header, SystemMessage::Checkpoint(m))).await
+                    },
                 }
             },
             _ => {
