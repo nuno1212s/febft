@@ -111,6 +111,7 @@ pub enum SystemMessage<O, P> {
     Request(RequestMessage<O>),
     Reply(ReplyMessage<P>),
     Consensus(ConsensusMessage),
+    Checkpoint(CheckpointMessage),
 }
 
 /// Represents a request from a client.
@@ -214,6 +215,14 @@ impl ConsensusMessage {
     pub fn kind(&self) -> &ConsensusMessageKind {
         &self.kind
     }
+}
+
+/// Represents a message from the checkpoint sub-protocol.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Copy, Clone)]
+pub struct CheckpointMessage {
+    seq: SeqNo,
+    digest: Digest,
 }
 
 // FIXME: perhaps use references for serializing and deserializing,
