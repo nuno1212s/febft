@@ -2,6 +2,7 @@
 
 use std::marker::PhantomData;
 
+use crate::bft::consensus::SeqNo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::communication::NodeId;
 use crate::bft::communication::message::{
@@ -22,15 +23,16 @@ use crate::bft::collections::{
 ///
 /// Every `PERIOD` messages, the message log is cleared,
 /// and a new log checkpoint is initiated.
-pub const PERIOD: usize = 1000;
+pub const PERIOD: u32 = 1000;
 
 /// Information reported after a logging operation.
 pub enum Info {
     /// Nothing to report.
     Nil,
-    /// The log is full. We are ready to perform a
-    /// garbage collection operation.
-    Full,
+    /// The log became full and thus has been garbage collected.
+    /// The sequence number of the last executed request is
+    /// retrieved, to broadcast a new `CheckpointMessage`.
+    Gc(SeqNo),
 }
 
 struct StoredCheckpoint {
@@ -86,7 +88,7 @@ impl<O, P> Log<O, P> {
 */
 
     /// Adds a new `message` and its respective `header` to the log.
-    pub fn insert(&mut self, header: Header, message: SystemMessage<O, P>) -> Info {
+    pub fn insert(&mut self, header: Header, message: SystemMessage<O, P>) {
         match message {
             SystemMessage::Request(message) => {
                 let digest = header.digest().clone();
@@ -109,7 +111,6 @@ impl<O, P> Log<O, P> {
             // rest are not handled by the log
             _ => (),
         }
-        Info::Nil
     }
 
     /// Retrieves the next request available for proposing, if any.
@@ -130,11 +131,54 @@ impl<O, P> Log<O, P> {
 
     /// Retrieves the payload associated with the given request `digest`,
     /// when it is available in this `Log`.
-    pub fn request_payload(&mut self, digest: &Digest) -> Option<(Header, RequestMessage<O>)> {
-        self.deciding
+    pub fn finalize_request(&mut self, digest: &Digest) -> Option<(Info, Header, RequestMessage<O>)> {
+        let (header, message) = self.deciding
             .remove(digest)
             .or_else(|| self.requests.remove(digest))
-            .map(StoredRequest::into_inner)
+            .map(StoredRequest::into_inner)?;
+
+        // assert the digest `digest` matches the last one in the log
+        //
+        // no need to worry about index out of bounds stuff, because
+        // the statement above guarantees we have received the corresponding
+        // PRE-PREPARE for the request with digest `digest`, namely it should be
+        // the last one in the `Vec`
+        let stored_pre_prepare = &self.pre_prepares[self.pre_prepares.len()-1].message;
+
+        match stored_pre_prepare.kind() {
+            ConsensusMessageKind::PrePrepare(ref other) if other == digest => {
+                // nothing to do! we are set
+            },
+            // NOTE: this should be an impossible scenario, but either way
+            // it gets catched by the `unreachable!()` expression at
+            // `febft::bft::core::server`, generating a runtime panic
+            _ => return None,
+        }
+
+        // retrive the sequence number of the stored PRE-PREPARE message,
+        // meanwhile dropping its reference in case we need to clear the log
+        let last_seq_no = {
+            let seq_no = stored_pre_prepare.sequence_number();
+            drop(stored_pre_prepare);
+            seq_no
+        };
+
+        // add one so we don't start a checkpoint if the sequence number
+        // is zero (e.g. during a system bootstrap)
+        let last_seq_no_u32 = u32::from(last_seq_no) + 1;
+
+        let info = if last_seq_no_u32 % PERIOD == 0 {
+            // clear the log
+            self.pre_prepares.clear();
+            self.prepares.clear();
+            self.commits.clear();
+
+            Info::Gc(last_seq_no)
+        } else {
+            Info::Nil
+        };
+
+        Some((info, header, message))
     }
 }
 
