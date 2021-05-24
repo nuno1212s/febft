@@ -378,6 +378,8 @@ where
     }
 
     /// Process a message for a particular consensus instance.
+    //
+    // TODO: ADD MESSAGES TO THE LOG!!!!!
     pub fn process_message(
         &mut self,
         header: Header,
