@@ -2,8 +2,11 @@
 
 use super::SystemParams;
 use crate::bft::error::*;
-use crate::bft::history::Log;
 use crate::bft::async_runtime as rt;
+use crate::bft::history::{
+    Info,
+    Log,
+};
 use crate::bft::consensus::{
     SeqNo,
     Consensus,
@@ -61,6 +64,7 @@ impl ViewInfo {
 
 /// Represents a replica in `febft`.
 pub struct Replica<S: Service> {
+    ongoing_checkpoint: Option<SeqNo>,
     executor: ExecutorHandle<S>,
     view: ViewInfo,
     consensus: Consensus<S>,
@@ -117,6 +121,7 @@ where
 
         let mut replica = Replica {
             consensus: Consensus::new(next_consensus_seq),
+            ongoing_checkpoint: None,
             executor,
             node,
             view,
@@ -197,10 +202,21 @@ where
                                 // attributed by the consensus layer to each op,
                                 // to execute in order
                                 ConsensusStatus::Decided(digest) => {
-                                    let (header, request) = match self.log.request_payload(&digest) {
-                                        Some((h, r)) => (h, r.into_inner()),
+                                    let (info, header, request) = match self.log.finalize_request(&digest) {
+                                        Some((i, h, r)) => (i, h, r.into_inner()),
                                         None => unreachable!(),
                                     };
+                                    match info {
+                                        Info::Nil => (),
+                                        Info::Gc(seq_no) => {
+                                            // request the digest of the serialized state
+                                            // from the execution layer
+
+                                            // save the sequence no. for when we receive the
+                                            // state digest
+                                            self.ongoing_checkpoint = Some(seq_no);
+                                        },
+                                    }
                                     self.executor.queue_update(
                                         header.from(),
                                         digest,
