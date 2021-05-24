@@ -129,8 +129,11 @@ impl<O, P> Log<O, P> {
         }
     }
 
-    /// Retrieves the payload associated with the given request `digest`,
-    /// when it is available in this `Log`.
+    /// Finalize a client request, retrieving the payload associated with its given
+    /// digest `digest`.
+    ///
+    /// The log may be cleared resulting from this operation. Check the enum variant of
+    /// `Info`, to broadcast a `CheckpointMessage` when adequate.
     pub fn finalize_request(&mut self, digest: &Digest) -> Option<(Info, Header, RequestMessage<O>)> {
         let (header, message) = self.deciding
             .remove(digest)
