@@ -4,11 +4,13 @@ use std::marker::PhantomData;
 use std::collections::VecDeque;
 
 use crate::bft::crypto::hash::Digest;
+use crate::bft::communication::NodeId;
 use crate::bft::communication::message::{
     Header,
     SystemMessage,
     RequestMessage,
     ConsensusMessage,
+    CheckpointMessage,
     ConsensusMessageKind,
 };
 use crate::bft::collections::{
@@ -32,6 +34,11 @@ pub enum Info {
     Full,
 }
 
+struct StoredCheckpoint {
+    header: Header,
+    message: CheckpointMessage,
+}
+
 struct StoredConsensus {
     header: Header,
     message: ConsensusMessage,
@@ -50,6 +57,7 @@ pub struct Log<O, P> {
     // TODO: view change stuff
     requests: OrderedMap<Digest, StoredRequest<O>>,
     deciding: HashMap<Digest, StoredRequest<O>>,
+    checkpoints: HashMap<NodeId, StoredCheckpoint>,
     _marker: PhantomData<P>,
 }
 
@@ -65,6 +73,7 @@ impl<O, P> Log<O, P> {
             commits: VecDeque::new(),
             deciding: collections::hash_map(),
             requests: collections::ordered_map(),
+            checkpoints: collections::hash_map(),
             _marker: PhantomData,
         }
     }
@@ -92,6 +101,11 @@ impl<O, P> Log<O, P> {
                     ConsensusMessageKind::Prepare => self.prepares.push_back(stored),
                     ConsensusMessageKind::Commit => self.commits.push_back(stored),
                 }
+            },
+            SystemMessage::Checkpoint(message) => {
+                let stored = StoredCheckpoint { header, message };
+                // override last checkpoint
+                self.checkpoints.insert(stored.header.from(), stored);
             },
             // rest are not handled by the log
             _ => (),
