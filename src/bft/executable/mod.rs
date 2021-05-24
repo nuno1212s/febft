@@ -18,13 +18,6 @@ enum ExecutionRequest<O> {
     // update the state of the service
     Update(NodeId, Digest, O),
     // read the state of the service
-    //
-    // TODO: the current api can't handle sending the application state;
-    // maybe resort to a ReadRequestMessage that returns a ReplyMessage,
-    // but where we only give the user a shared (&, not &mut) reference
-    // to the state of the application. it isn't guaranteed the user
-    // won't mutate the state because of the interior mutability
-    // semantics of rust, though.
     Read(NodeId),
 }
 
