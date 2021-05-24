@@ -23,7 +23,7 @@ use crate::bft::collections::{
 ///
 /// Every `PERIOD` messages, the message log is cleared,
 /// and a new log checkpoint is initiated.
-pub const PERIOD: u32 = 1000;
+pub const PERIOD: u32 = 1000 + 1;
 
 /// Information reported after a logging operation.
 pub enum Info {
