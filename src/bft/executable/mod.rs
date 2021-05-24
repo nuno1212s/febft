@@ -5,13 +5,17 @@ use std::sync::mpsc;
 
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
-use crate::bft::crypto::hash::Digest;
 use crate::bft::communication::NodeId;
 use crate::bft::communication::message::Message;
 use crate::bft::communication::channel::MessageChannelTx;
+use crate::bft::crypto::hash::{
+    Digest,
+    Context,
+};
 use crate::bft::communication::serialize::{
     ReplicaData,
     SharedData,
+    Buf,
 };
 
 enum ExecutionRequest<O> {
@@ -23,6 +27,22 @@ enum ExecutionRequest<O> {
     // used for local checkpoints
     AppStateDigest,
 }
+
+macro_rules! serialize_st {
+    ($S:ty, $w:expr, $s:expr) => {
+        <<$S as Service>::Data as ReplicaData>::serialize_state($w, $s)
+    }
+}
+
+/* NOTE: unused for now
+
+macro_rules! deserialize_st {
+    ($S:ty, $r:expr) => {
+        <<$S as Service>::Data as ReplicaData>::deserialize_state($r)
+    }
+}
+
+*/
 
 /// State type of the `Service`.
 pub type State<S> = <<S as Service>::Data as ReplicaData>::State;
@@ -144,7 +164,24 @@ where
                         unimplemented!()
                     },
                     ExecutionRequest::AppStateDigest => {
-                        asd
+                        // calc digest of the application state
+                        let digest = {
+                            let serialized_appstate = {
+                                let mut buf = Buf::new();
+                                serialize_st!(S, &mut buf, &exec.state).unwrap();
+                                buf
+                            };
+                            let mut ctx = Context::new();
+                            ctx.update(&serialized_appstate[..]);
+                            ctx.finish()
+                        };
+
+                        // deliver digest to the core server task
+                        let mut system_tx = exec.system_tx.clone();
+                        rt::spawn(async move {
+                            let m = Message::AppStateDigest(digest);
+                            system_tx.send(m).await.unwrap();
+                        });
                     },
                 }
             }
