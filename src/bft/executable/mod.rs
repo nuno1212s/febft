@@ -19,6 +19,9 @@ enum ExecutionRequest<O> {
     Update(NodeId, Digest, O),
     // read the state of the service
     Read(NodeId),
+    // request the digest of the application state,
+    // used for local checkpoints
+    AppStateDigest,
 }
 
 /// State type of the `Service`.
@@ -78,6 +81,14 @@ where
         self.e_tx.send(ExecutionRequest::Update(from, dig, req))
             .simple(ErrorKind::Executable)
     }
+
+    /// Request the digest of the application state.
+    ///
+    /// This is useful during checkpoints.
+    pub fn request_appstate_digest(&mut self) -> Result<()> {
+        self.e_tx.send(ExecutionRequest::AppStateDigest)
+            .simple(ErrorKind::Executable)
+    }
 }
 
 impl<S: Service> Clone for ExecutorHandle<S> {
@@ -131,6 +142,9 @@ where
                     },
                     ExecutionRequest::Read(_peer_id) => {
                         unimplemented!()
+                    },
+                    ExecutionRequest::AppStateDigest => {
+                        asd
                     },
                 }
             }
