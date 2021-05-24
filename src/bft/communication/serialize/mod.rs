@@ -45,8 +45,15 @@ pub trait ReplicaData: SharedData {
     /// requests.
     type State;
 
-    // TODO: state serialization for the
-    // state transfer protocol
+    /// Serialize the application state into the writer `W`.
+    fn serialize_state<W>(w: W, s: &Self::State) -> Result<()>
+    where
+        W: Write;
+
+    /// Deserialize the application state from a reader `R`.
+    fn deserialize_state<R>(r: R) -> Result<Self::State>
+    where
+        R: Read;
 }
 
 // max no. of bytes to inline before doing a heap alloc
