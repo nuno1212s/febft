@@ -89,6 +89,7 @@ pub fn debug_msg(m: Message<Vec<Action>, Vec<f32>>) -> &'static str {
         Message::DisconnectedTx(_) => "DTx",
         Message::DisconnectedRx(_) => "DRx",
         Message::ExecutionFinished(_, _, _) => "Exe",
+        Message::AppStateDigest(_) => "AsD",
     }
 }
 
@@ -282,6 +283,22 @@ impl SharedData for CalcData {
 
 impl ReplicaData for CalcData {
     type State = f32;
+
+    fn serialize_state<W>(w: W, s: &f32) -> Result<()>
+    where
+        W: Write
+    {
+        bincode::serialize_into(w, s)
+            .wrapped(ErrorKind::Communication)
+    }
+
+    fn deserialize_state<R>(r: R) -> Result<f32>
+    where
+        R: Read
+    {
+        bincode::deserialize_from(r)
+            .wrapped(ErrorKind::Communication)
+    }
 }
 
 pub struct CalcService(NodeId, i32);
