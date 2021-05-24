@@ -97,6 +97,9 @@ pub enum Message<O, P> {
     ///
     /// The payload delivered to the client is `P`.
     ExecutionFinished(NodeId, Digest, P),
+    /// The execution layer finished the delivery of the digest
+    /// of the application state.
+    AppStateDigest(Digest),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
