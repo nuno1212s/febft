@@ -133,6 +133,9 @@ where
             match message {
                 Message::System(header, message) => {
                     match message {
+                        checkpoint @ SystemMessage::Checkpoint(_) => {
+                            replica.log.insert(header, checkpoint);
+                        },
                         request @ SystemMessage::Request(_) => {
                             // NOTE: requests aren't susceptible to
                             // garbage collection log operations,
@@ -144,8 +147,6 @@ where
                         },
                         // FIXME: handle rogue reply messages
                         SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
-                        // FIXME: handle checkpoint messages
-                        SystemMessage::Checkpoint(_) => panic!("Rogue checkpoint message detected"),
                     }
                 },
                 // ignore other messages for now
@@ -178,6 +179,9 @@ where
             match message {
                 Message::System(header, message) => {
                     match message {
+                        checkpoint @ SystemMessage::Checkpoint(_) => {
+                            self.log.insert(header, checkpoint);
+                        },
                         request @ SystemMessage::Request(_) => {
                             // NOTE: check note above on the handling
                             // of rogue messages during bootstrap
@@ -237,8 +241,6 @@ where
                         },
                         // FIXME: handle rogue reply messages
                         SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
-                        // FIXME: handle checkpoint messages
-                        SystemMessage::Checkpoint(_) => panic!("Rogue checkpoint message detected"),
                     }
                 },
                 Message::ExecutionFinished(peer_id, digest, payload) => {
