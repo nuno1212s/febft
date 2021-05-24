@@ -137,9 +137,6 @@ where
                             replica.log.insert(header, checkpoint);
                         },
                         request @ SystemMessage::Request(_) => {
-                            // NOTE: requests aren't susceptible to
-                            // garbage collection log operations,
-                            // so ignoring the return value is fine
                             replica.log.insert(header, request);
                         },
                         SystemMessage::Consensus(message) => {
@@ -183,8 +180,6 @@ where
                             self.log.insert(header, checkpoint);
                         },
                         request @ SystemMessage::Request(_) => {
-                            // NOTE: check note above on the handling
-                            // of rogue messages during bootstrap
                             self.log.insert(header, request);
                         },
                         SystemMessage::Consensus(message) => {
