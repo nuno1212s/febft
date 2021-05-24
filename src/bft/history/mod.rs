@@ -1,7 +1,6 @@
 //! Message history log and tools to make it persistent.
 
 use std::marker::PhantomData;
-use std::collections::VecDeque;
 
 use crate::bft::crypto::hash::Digest;
 use crate::bft::communication::NodeId;
@@ -51,9 +50,9 @@ struct StoredRequest<O> {
 
 /// Represents a log of messages received by the BFT system.
 pub struct Log<O, P> {
-    pre_prepares: VecDeque<StoredConsensus>,
-    prepares: VecDeque<StoredConsensus>,
-    commits: VecDeque<StoredConsensus>,
+    pre_prepares: Vec<StoredConsensus>,
+    prepares: Vec<StoredConsensus>,
+    commits: Vec<StoredConsensus>,
     // TODO: view change stuff
     requests: OrderedMap<Digest, StoredRequest<O>>,
     deciding: HashMap<Digest, StoredRequest<O>>,
@@ -68,9 +67,9 @@ impl<O, P> Log<O, P> {
     /// Creates a new message log.
     pub fn new() -> Self {
         Self {
-            pre_prepares: VecDeque::new(),
-            prepares: VecDeque::new(),
-            commits: VecDeque::new(),
+            pre_prepares: Vec::new(),
+            prepares: Vec::new(),
+            commits: Vec::new(),
             deciding: collections::hash_map(),
             requests: collections::ordered_map(),
             checkpoints: collections::hash_map(),
@@ -97,9 +96,9 @@ impl<O, P> Log<O, P> {
             SystemMessage::Consensus(message) => {
                 let stored = StoredConsensus { header, message };
                 match stored.message.kind() {
-                    ConsensusMessageKind::PrePrepare(_) => self.pre_prepares.push_back(stored),
-                    ConsensusMessageKind::Prepare => self.prepares.push_back(stored),
-                    ConsensusMessageKind::Commit => self.commits.push_back(stored),
+                    ConsensusMessageKind::PrePrepare(_) => self.pre_prepares.push(stored),
+                    ConsensusMessageKind::Prepare => self.prepares.push(stored),
+                    ConsensusMessageKind::Commit => self.commits.push(stored),
                 }
             },
             SystemMessage::Checkpoint(message) => {
