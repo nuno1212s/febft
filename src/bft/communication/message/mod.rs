@@ -559,6 +559,9 @@ impl<O, P> Message<O, P> {
             Message::ExecutionFinished(_, _, _) =>
                 Err("Expected System found ExecutionFinished")
                     .wrapped(ErrorKind::CommunicationMessage),
+            Message::AppStateDigest(_) =>
+                Err("Expected System found AppStateDigest")
+                    .wrapped(ErrorKind::CommunicationMessage),
         }
     }
 }

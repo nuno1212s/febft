@@ -27,6 +27,7 @@ use crate::bft::communication::{
     NodeConfig,
 };
 use crate::bft::communication::message::{
+    CheckpointMessage,
     SystemMessage,
     ReplyMessage,
     Message,
@@ -245,6 +246,16 @@ where
                         payload,
                     ));
                     self.node.send(message, peer_id);
+                },
+                Message::AppStateDigest(digest) => {
+                    // NOTE: this is safe because we can only receive these kind
+                    // of messages after we store a value in the `Option`
+                    let seq_no = self.ongoing_checkpoint.take().unwrap();
+
+                    // broadcast checkpoint message
+                    let message = SystemMessage::Checkpoint(CheckpointMessage::new(seq_no, digest));
+                    let targets = NodeId::targets(0..self.view.params().n());
+                    self.node.broadcast(message, targets);
                 },
                 Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
                 Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
