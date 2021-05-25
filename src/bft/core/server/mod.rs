@@ -211,6 +211,7 @@ where
                                         Info::Gc(seq_no) => {
                                             // request the digest of the serialized state
                                             // from the execution layer
+                                            self.executor.request_appstate_digest()?;
 
                                             // save the sequence no. for when we receive the
                                             // state digest
