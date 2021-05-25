@@ -206,6 +206,11 @@ where
                                         Some((i, h, r)) => (i, h, r.into_inner()),
                                         None => unreachable!(),
                                     };
+                                    self.executor.queue_update(
+                                        header.from(),
+                                        digest,
+                                        request,
+                                    )?;
                                     match info {
                                         Info::Nil => (),
                                         Info::Gc(seq_no) => {
@@ -218,11 +223,6 @@ where
                                             self.ongoing_checkpoint = Some(seq_no);
                                         },
                                     }
-                                    self.executor.queue_update(
-                                        header.from(),
-                                        digest,
-                                        request,
-                                    )?;
                                     self.consensus.next_instance();
                                 },
                             }
