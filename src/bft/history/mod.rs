@@ -23,7 +23,7 @@ use crate::bft::collections::{
 ///
 /// Every `PERIOD` messages, the message log is cleared,
 /// and a new log checkpoint is initiated.
-pub const PERIOD: u32 = 1000 + 1;
+pub const PERIOD: u32 = 1000;
 
 /// Information reported after a logging operation.
 pub enum Info {
@@ -170,9 +170,9 @@ impl<O, P> Log<O, P> {
         // is zero (e.g. during a system bootstrap)
         //
         // TODO: find a better solution for this
-        let last_seq_no_u32 = u32::from(last_seq_no) + 1;
+        let last_seq_no_u32 = u32::from(last_seq_no);
 
-        let info = if last_seq_no_u32 % PERIOD == 0 {
+        let info = if last_seq_no_u32 > 0 && last_seq_no_u32 % PERIOD == 0 {
             // clear the log
             self.pre_prepares.clear();
             self.prepares.clear();
