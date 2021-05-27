@@ -190,6 +190,8 @@ impl<O, P> Log<O, P> {
     }
 
     fn begin_checkpoint(&mut self, seq: SeqNo) -> Info {
+        // FIXME: is it safe to clear the log already?
+        // maybe wait for `finalize_checkpoint()`...
         self.pre_prepares.clear();
         self.prepares.clear();
         self.commits.clear();
