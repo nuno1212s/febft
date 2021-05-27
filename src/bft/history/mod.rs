@@ -165,11 +165,6 @@ impl<O, P> Log<O, P> {
             drop(stored_pre_prepare);
             seq_no
         };
-
-        // add one so we don't start a checkpoint if the sequence number
-        // is zero (e.g. during a system bootstrap)
-        //
-        // TODO: find a better solution for this
         let last_seq_no_u32 = u32::from(last_seq_no);
 
         let info = if last_seq_no_u32 > 0 && last_seq_no_u32 % PERIOD == 0 {
