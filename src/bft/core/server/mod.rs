@@ -27,7 +27,6 @@ use crate::bft::communication::{
     NodeConfig,
 };
 use crate::bft::communication::message::{
-    CheckpointMessage,
     SystemMessage,
     ReplyMessage,
     Message,
@@ -65,7 +64,6 @@ impl ViewInfo {
 
 /// Represents a replica in `febft`.
 pub struct Replica<S: Service> {
-    ongoing_checkpoint: Option<SeqNo>,
     executor: ExecutorHandle<S>,
     view: ViewInfo,
     consensus: Consensus<S>,
@@ -122,7 +120,6 @@ where
 
         let mut replica = Replica {
             consensus: Consensus::new(next_consensus_seq),
-            ongoing_checkpoint: None,
             executor,
             node,
             view,
@@ -134,9 +131,6 @@ where
             match message {
                 Message::System(header, message) => {
                     match message {
-                        checkpoint @ SystemMessage::Checkpoint(_) => {
-                            replica.log.insert(header, checkpoint);
-                        },
                         request @ SystemMessage::Request(_) => {
                             replica.log.insert(header, request);
                         },
@@ -177,9 +171,6 @@ where
             match message {
                 Message::System(header, message) => {
                     match message {
-                        checkpoint @ SystemMessage::Checkpoint(_) => {
-                            self.log.insert(header, checkpoint);
-                        },
                         request @ SystemMessage::Request(_) => {
                             self.log.insert(header, request);
                         },
@@ -211,16 +202,15 @@ where
                                         digest,
                                         request,
                                     )?;
+                                    // NOTE: requesting the appstate is done after queuing a
+                                    // client request, to ensure we use the new value resulting
+                                    // from its execution!
                                     match info {
+                                        // nothing to report
                                         Info::Nil => (),
-                                        Info::Gc(seq_no) => {
-                                            // request the digest of the serialized state
-                                            // from the execution layer
-                                            self.executor.request_appstate_digest()?;
-
-                                            // save the sequence no. for when we receive the
-                                            // state digest
-                                            self.ongoing_checkpoint = Some(seq_no);
+                                        // request the serialized state from the execution layer
+                                        Info::BeginCheckpoint => {
+                                            self.executor.request_appstate()?;
                                         },
                                     }
                                     self.consensus.next_instance();
@@ -248,15 +238,9 @@ where
                     ));
                     self.node.send(message, peer_id);
                 },
-                Message::AppStateDigest(digest) => {
-                    // NOTE: this is safe because we can only receive these kind
-                    // of messages after we store a value in the `Option`
-                    let seq_no = self.ongoing_checkpoint.take().unwrap();
-
-                    // broadcast checkpoint message
-                    let message = SystemMessage::Checkpoint(CheckpointMessage::new(seq_no, digest));
-                    let targets = NodeId::targets(0..self.view.params().n());
-                    self.node.broadcast(message, targets);
+                Message::AppState(appstate) => {
+                    // store the application state in the checkpoint
+                    self.log.finalize_checkpoint(appstate)?;
                 },
                 Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
                 Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),

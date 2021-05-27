@@ -5,17 +5,13 @@ use std::sync::mpsc;
 
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
+use crate::bft::crypto::hash::Digest;
 use crate::bft::communication::NodeId;
 use crate::bft::communication::message::Message;
 use crate::bft::communication::channel::MessageChannelTx;
-use crate::bft::crypto::hash::{
-    Digest,
-    Context,
-};
 use crate::bft::communication::serialize::{
     ReplicaData,
     SharedData,
-    Buf,
 };
 
 enum ExecutionRequest<O> {
@@ -23,13 +19,13 @@ enum ExecutionRequest<O> {
     Update(NodeId, Digest, O),
     // read the state of the service
     Read(NodeId),
-    // request the digest of the application state,
+    // request the application state,
     // used for local checkpoints
-    AppStateDigest,
+    AppState,
 }
 
 macro_rules! serialize_st {
-    ($S:ty, $w:expr, $s:expr) => {
+    (Service: $S:ty, $w:expr, $s:expr) => {
         <<$S as Service>::Data as ReplicaData>::serialize_state($w, $s)
     }
 }
@@ -102,11 +98,11 @@ where
             .simple(ErrorKind::Executable)
     }
 
-    /// Request the digest of the application state.
+    /// Request the application state.
     ///
     /// This is useful during checkpoints.
-    pub fn request_appstate_digest(&mut self) -> Result<()> {
-        self.e_tx.send(ExecutionRequest::AppStateDigest)
+    pub fn request_appstate(&mut self) -> Result<()> {
+        self.e_tx.send(ExecutionRequest::AppState)
             .simple(ErrorKind::Executable)
     }
 }
@@ -163,23 +159,18 @@ where
                     ExecutionRequest::Read(_peer_id) => {
                         unimplemented!()
                     },
-                    ExecutionRequest::AppStateDigest => {
-                        // calc digest of the application state
-                        let digest = {
-                            let serialized_appstate = {
-                                let mut buf = Buf::new();
-                                serialize_st!(S, &mut buf, &exec.state).unwrap();
-                                buf
-                            };
-                            let mut ctx = Context::new();
-                            ctx.update(&serialized_appstate[..]);
-                            ctx.finish()
+                    ExecutionRequest::AppState => {
+                        let serialized_appstate = {
+                            const SERIALIZED_APPSTATE_BUFSIZ: usize = 8192;
+                            let mut b = Vec::with_capacity(SERIALIZED_APPSTATE_BUFSIZ);
+                            serialize_st!(Service: S, &mut b, &exec.state).unwrap();
+                            b
                         };
 
-                        // deliver digest to the core server task
+                        // deliver appstate
                         let mut system_tx = exec.system_tx.clone();
                         rt::spawn(async move {
-                            let m = Message::AppStateDigest(digest);
+                            let m = Message::AppState(serialized_appstate);
                             system_tx.send(m).await.unwrap();
                         });
                     },

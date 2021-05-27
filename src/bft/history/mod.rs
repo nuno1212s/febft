@@ -2,21 +2,23 @@
 
 use std::marker::PhantomData;
 
+use crate::bft::error::*;
 use crate::bft::consensus::SeqNo;
-use crate::bft::crypto::hash::Digest;
-use crate::bft::communication::NodeId;
 use crate::bft::communication::message::{
     Header,
     SystemMessage,
     RequestMessage,
     ConsensusMessage,
-    CheckpointMessage,
     ConsensusMessageKind,
 };
 use crate::bft::collections::{
     self,
     HashMap,
     OrderedMap,
+};
+use crate::bft::crypto::hash::{
+    Digest,
+    Context,
 };
 
 /// Checkpoint period.
@@ -29,15 +31,31 @@ pub const PERIOD: u32 = 1000;
 pub enum Info {
     /// Nothing to report.
     Nil,
-    /// The log became full and thus has been garbage collected.
-    /// The sequence number of the last executed request is
-    /// retrieved, to broadcast a new `CheckpointMessage`.
-    Gc(SeqNo),
+    /// The log became full. We are waiting for the execution layer
+    /// to provide the current serialized application state, so we can
+    /// complete the log's garbage collection and eventually its
+    /// checkpoint.
+    BeginCheckpoint,
 }
 
-struct StoredCheckpoint {
-    header: Header,
-    message: CheckpointMessage,
+enum Checkpoint {
+    // no checkpoint has been performed yet
+    None,
+    // we are calling this a partial checkpoint because we are
+    // waiting for the application state from the execution layer
+    Partial {
+        // sequence number of the last executed request
+        seq: SeqNo,
+    },
+    // application state received, the checkpoint state is finalized
+    Complete {
+        // sequence number of the last executed request
+        seq: SeqNo,
+        // digest of the serialized application state
+        digest: Digest,
+        // serialized application state
+        appstate: Vec<u8>,
+    },
 }
 
 struct StoredConsensus {
@@ -58,7 +76,7 @@ pub struct Log<O, P> {
     // TODO: view change stuff
     requests: OrderedMap<Digest, StoredRequest<O>>,
     deciding: HashMap<Digest, StoredRequest<O>>,
-    checkpoints: HashMap<NodeId, StoredCheckpoint>,
+    last_checkpoint: Checkpoint,
     _marker: PhantomData<P>,
 }
 
@@ -74,7 +92,7 @@ impl<O, P> Log<O, P> {
             commits: Vec::new(),
             deciding: collections::hash_map(),
             requests: collections::ordered_map(),
-            checkpoints: collections::hash_map(),
+            last_checkpoint: Checkpoint::None,
             _marker: PhantomData,
         }
     }
@@ -102,11 +120,6 @@ impl<O, P> Log<O, P> {
                     ConsensusMessageKind::Prepare => self.prepares.push(stored),
                     ConsensusMessageKind::Commit => self.commits.push(stored),
                 }
-            },
-            SystemMessage::Checkpoint(message) => {
-                let stored = StoredCheckpoint { header, message };
-                // override last checkpoint
-                self.checkpoints.insert(stored.header.from(), stored);
             },
             // rest are not handled by the log
             _ => (),
@@ -168,17 +181,46 @@ impl<O, P> Log<O, P> {
         let last_seq_no_u32 = u32::from(last_seq_no);
 
         let info = if last_seq_no_u32 > 0 && last_seq_no_u32 % PERIOD == 0 {
-            // clear the log
-            self.pre_prepares.clear();
-            self.prepares.clear();
-            self.commits.clear();
-
-            Info::Gc(last_seq_no)
+            self.begin_checkpoint(last_seq_no)
         } else {
             Info::Nil
         };
 
         Some((info, header, message))
+    }
+
+    fn begin_checkpoint(&mut self, seq: SeqNo) -> Info {
+        self.pre_prepares.clear();
+        self.prepares.clear();
+        self.commits.clear();
+        self.last_checkpoint = Checkpoint::Partial { seq };
+        Info::BeginCheckpoint
+    }
+
+    /// End the state of an ongoing checkpoint.
+    ///
+    /// This method should only be called when `finalize_request()` reports
+    /// `Info::BeginCheckpoint`, and the requested application state is received
+    /// on the core server task's master channel.
+    pub fn finalize_checkpoint(&mut self, appstate: Vec<u8>) -> Result<()> {
+        match self.last_checkpoint {
+            Checkpoint::None => Err("No checkpoint has been initiated yet").wrapped(ErrorKind::History),
+            Checkpoint::Complete { .. } => Err("Checkpoint already finalized").wrapped(ErrorKind::History),
+            Checkpoint::Partial { ref seq } => {
+                let seq = *seq;
+                let digest = {
+                    let mut ctx = Context::new();
+                    ctx.update(&appstate[..]);
+                    ctx.finish()
+                };
+                self.last_checkpoint = Checkpoint::Complete {
+                    seq,
+                    digest,
+                    appstate,
+                };
+                Ok(())
+            },
+        }
     }
 }
 

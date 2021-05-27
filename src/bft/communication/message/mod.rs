@@ -97,9 +97,9 @@ pub enum Message<O, P> {
     ///
     /// The payload delivered to the client is `P`.
     ExecutionFinished(NodeId, Digest, P),
-    /// The execution layer finished the delivery of the digest
-    /// of the application state.
-    AppStateDigest(Digest),
+    /// The execution layer finished the delivery of the
+    /// serialized application state.
+    AppState(Vec<u8>),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
@@ -114,7 +114,6 @@ pub enum SystemMessage<O, P> {
     Request(RequestMessage<O>),
     Reply(ReplyMessage<P>),
     Consensus(ConsensusMessage),
-    Checkpoint(CheckpointMessage),
 }
 
 /// Represents a request from a client.
@@ -217,36 +216,6 @@ impl ConsensusMessage {
     /// Returns a reference to the consensus message kind.
     pub fn kind(&self) -> &ConsensusMessageKind {
         &self.kind
-    }
-}
-
-/// Represents a message from the checkpoint sub-protocol.
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Copy, Clone)]
-pub struct CheckpointMessage {
-    seq: SeqNo,
-    digest: Digest,
-}
-
-impl CheckpointMessage {
-    /// Creates a new `CheckpointMessage`.
-    ///
-    /// This message contains the sequence number `seq` of
-    /// the last executed client request and hash digest
-    /// `digest` of the application state.
-    pub fn new(seq: SeqNo, digest: Digest) -> Self {
-        Self { seq, digest }
-    }
-
-    /// Returns the sequence number of the last executed client request.
-    pub fn sequence_number(&self) -> SeqNo {
-        self.seq
-    }
-
-    /// Returns the digest of the application state at the
-    /// moment of the checkpoint creation.
-    pub fn digest(&self) -> &Digest {
-        &self.digest
     }
 }
 
@@ -559,8 +528,8 @@ impl<O, P> Message<O, P> {
             Message::ExecutionFinished(_, _, _) =>
                 Err("Expected System found ExecutionFinished")
                     .wrapped(ErrorKind::CommunicationMessage),
-            Message::AppStateDigest(_) =>
-                Err("Expected System found AppStateDigest")
+            Message::AppState(_) =>
+                Err("Expected System found AppState")
                     .wrapped(ErrorKind::CommunicationMessage),
         }
     }
