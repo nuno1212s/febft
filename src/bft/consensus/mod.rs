@@ -34,7 +34,7 @@ use crate::bft::executable::{
 /// Represents a sequence number attributed to a client request
 /// during a `Consensus` instance.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub struct SeqNo(i32);
 
 impl From<u32> for SeqNo {
