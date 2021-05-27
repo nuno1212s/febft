@@ -54,6 +54,7 @@ itertools = "0.9"
 
 [dev-dependencies]
 bincode = "1"
+num_cpus = "1"
 
 [dependencies]
 either = "1"
