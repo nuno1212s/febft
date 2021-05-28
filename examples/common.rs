@@ -89,7 +89,7 @@ pub fn debug_msg(m: Message<Vec<Action>, Vec<f32>>) -> &'static str {
         Message::DisconnectedTx(_) => "DTx",
         Message::DisconnectedRx(_) => "DRx",
         Message::ExecutionFinished(_, _, _) => "Exe",
-        Message::AppState(_) => "ApS",
+        Message::ExecutionFinishedWithAppstate(_, _, _, _) => "ExA",
     }
 }
 
