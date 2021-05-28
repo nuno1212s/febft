@@ -197,21 +197,19 @@ where
                                         Some((i, h, r)) => (i, h, r.into_inner()),
                                         None => unreachable!(),
                                     };
-                                    self.executor.queue_update(
-                                        header.from(),
-                                        digest,
-                                        request,
-                                    )?;
-                                    // NOTE: requesting the appstate is done after queuing a
-                                    // client request, to ensure we use the new value resulting
-                                    // from its execution!
                                     match info {
-                                        // nothing to report
-                                        Info::Nil => (),
-                                        // request the serialized state from the execution layer
-                                        Info::BeginCheckpoint => {
-                                            self.executor.request_appstate()?;
-                                        },
+                                        // normal execution
+                                        Info::Nil => self.executor.queue_update(
+                                            header.from(),
+                                            digest,
+                                            request,
+                                        )?,
+                                        // execute and begin local checkpoint
+                                        Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
+                                            header.from(),
+                                            digest,
+                                            request,
+                                        )?,
                                     }
                                     self.consensus.next_instance();
                                 },
@@ -238,9 +236,16 @@ where
                     ));
                     self.node.send(message, peer_id);
                 },
-                Message::AppState(appstate) => {
+                Message::ExecutionFinishedWithAppstate(peer_id, digest, payload, appstate) => {
                     // store the application state in the checkpoint
                     self.log.finalize_checkpoint(appstate)?;
+
+                    // deliver reply to client
+                    let message = SystemMessage::Reply(ReplyMessage::new(
+                        digest,
+                        payload,
+                    ));
+                    self.node.send(message, peer_id);
                 },
                 Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
                 Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),

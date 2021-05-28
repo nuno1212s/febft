@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 
 use crate::bft::error::*;
 use crate::bft::consensus::SeqNo;
+use crate::bft::crypto::hash::Digest;
 use crate::bft::communication::message::{
     Header,
     SystemMessage,
@@ -15,10 +16,6 @@ use crate::bft::collections::{
     self,
     HashMap,
     OrderedMap,
-};
-use crate::bft::crypto::hash::{
-    Digest,
-    Context,
 };
 
 /// Checkpoint period.
@@ -38,7 +35,7 @@ pub enum Info {
     BeginCheckpoint,
 }
 
-enum Checkpoint {
+enum CheckpointState {
     // no checkpoint has been performed yet
     None,
     // we are calling this a partial checkpoint because we are
@@ -47,15 +44,21 @@ enum Checkpoint {
         // sequence number of the last executed request
         seq: SeqNo,
     },
-    // application state received, the checkpoint state is finalized
-    Complete {
+    PartialWithEarlier {
         // sequence number of the last executed request
         seq: SeqNo,
-        // digest of the serialized application state
-        digest: Digest,
-        // serialized application state
-        appstate: Vec<u8>,
+        // save the earlier checkpoint, in case corruption takes place
+        earlier: Checkpoint,
     },
+    // application state received, the checkpoint state is finalized
+    Complete(Checkpoint),
+}
+
+struct Checkpoint {
+    // sequence number of the last executed request
+    seq: SeqNo,
+    // serialized application state
+    appstate: Vec<u8>,
 }
 
 struct StoredConsensus {
@@ -76,7 +79,7 @@ pub struct Log<O, P> {
     // TODO: view change stuff
     requests: OrderedMap<Digest, StoredRequest<O>>,
     deciding: HashMap<Digest, StoredRequest<O>>,
-    last_checkpoint: Checkpoint,
+    checkpoint: CheckpointState,
     _marker: PhantomData<P>,
 }
 
@@ -92,7 +95,7 @@ impl<O, P> Log<O, P> {
             commits: Vec::new(),
             deciding: collections::hash_map(),
             requests: collections::ordered_map(),
-            last_checkpoint: Checkpoint::None,
+            checkpoint: CheckpointState::None,
             _marker: PhantomData,
         }
     }
@@ -190,12 +193,13 @@ impl<O, P> Log<O, P> {
     }
 
     fn begin_checkpoint(&mut self, seq: SeqNo) -> Info {
-        // FIXME: is it safe to clear the log already?
-        // maybe wait for `finalize_checkpoint()`...
-        self.pre_prepares.clear();
-        self.prepares.clear();
-        self.commits.clear();
-        self.last_checkpoint = Checkpoint::Partial { seq };
+        let earlier = std::mem::replace(&mut self.checkpoint, CheckpointState::None);
+        self.checkpoint = match earlier {
+            CheckpointState::None => CheckpointState::Partial { seq },
+            CheckpointState::Complete(earlier) => CheckpointState::PartialWithEarlier { seq, earlier },
+            // TODO: maybe return Result with the error
+            _ => panic!("Invalid checkpoint state detected!"),
+        };
         Info::BeginCheckpoint
     }
 
@@ -205,21 +209,18 @@ impl<O, P> Log<O, P> {
     /// `Info::BeginCheckpoint`, and the requested application state is received
     /// on the core server task's master channel.
     pub fn finalize_checkpoint(&mut self, appstate: Vec<u8>) -> Result<()> {
-        match self.last_checkpoint {
-            Checkpoint::None => Err("No checkpoint has been initiated yet").wrapped(ErrorKind::History),
-            Checkpoint::Complete { .. } => Err("Checkpoint already finalized").wrapped(ErrorKind::History),
-            Checkpoint::Partial { ref seq } => {
+        match self.checkpoint {
+            CheckpointState::None => Err("No checkpoint has been initiated yet").wrapped(ErrorKind::History),
+            CheckpointState::Complete(_) => Err("Checkpoint already finalized").wrapped(ErrorKind::History),
+            CheckpointState::Partial { ref seq } | CheckpointState::PartialWithEarlier { ref seq, .. } => {
                 let seq = *seq;
-                let digest = {
-                    let mut ctx = Context::new();
-                    ctx.update(&appstate[..]);
-                    ctx.finish()
-                };
-                self.last_checkpoint = Checkpoint::Complete {
+                self.checkpoint = CheckpointState::Complete(Checkpoint {
                     seq,
-                    digest,
                     appstate,
-                };
+                });
+                self.pre_prepares.clear();
+                self.prepares.clear();
+                self.commits.clear();
                 Ok(())
             },
         }

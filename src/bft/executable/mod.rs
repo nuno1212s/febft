@@ -18,11 +18,11 @@ use crate::bft::communication::serialize::{
 enum ExecutionRequest<O> {
     // update the state of the service
     Update(NodeId, Digest, O),
+    // same as above, and include the application state
+    // in the reply, used for local checkpoints
+    UpdateAndGetAppstate(NodeId, Digest, O),
     // read the state of the service
     Read(NodeId),
-    // request the application state,
-    // used for local checkpoints
-    AppState,
 }
 
 macro_rules! serialize_st {
@@ -105,11 +105,17 @@ where
             .simple(ErrorKind::Executable)
     }
 
-    /// Request the application state.
+    /// Same as `queue_update()`, additionally reporting the serialized
+    /// application state.
     ///
     /// This is useful during checkpoints.
-    pub fn request_appstate(&mut self) -> Result<()> {
-        self.e_tx.send(ExecutionRequest::AppState)
+    pub fn queue_update_and_get_appstate(
+        &mut self,
+        from: NodeId,
+        dig: Digest,
+        req: Request<S>,
+    ) -> Result<()> {
+        self.e_tx.send(ExecutionRequest::UpdateAndGetAppstate(from, dig, req))
             .simple(ErrorKind::Executable)
     }
 }
@@ -163,10 +169,8 @@ where
                             system_tx.send(m).await.unwrap();
                         });
                     },
-                    ExecutionRequest::Read(_peer_id) => {
-                        unimplemented!()
-                    },
-                    ExecutionRequest::AppState => {
+                    ExecutionRequest::UpdateAndGetAppstate(peer_id, dig, req) => {
+                        let reply = exec.service.update(&mut exec.state, req);
                         let serialized_appstate = {
                             const SERIALIZED_APPSTATE_BUFSIZ: usize = 8192;
                             let mut b = Vec::with_capacity(SERIALIZED_APPSTATE_BUFSIZ);
@@ -174,12 +178,20 @@ where
                             b
                         };
 
-                        // deliver appstate
+                        // deliver reply
                         let mut system_tx = exec.system_tx.clone();
                         rt::spawn(async move {
-                            let m = Message::AppState(serialized_appstate);
+                            let m = Message::ExecutionFinishedWithAppstate(
+                                peer_id,
+                                dig,
+                                reply,
+                                serialized_appstate,
+                            );
                             system_tx.send(m).await.unwrap();
                         });
+                    },
+                    ExecutionRequest::Read(_peer_id) => {
+                        unimplemented!()
                     },
                 }
             }
