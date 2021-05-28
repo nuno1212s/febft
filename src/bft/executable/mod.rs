@@ -10,6 +10,7 @@ use crate::bft::communication::NodeId;
 use crate::bft::communication::message::Message;
 use crate::bft::communication::channel::MessageChannelTx;
 use crate::bft::communication::serialize::{
+    //ReplicaDurability,
     ReplicaData,
     SharedData,
 };
@@ -53,8 +54,14 @@ pub type Reply<S> = <<S as Service>::Data as SharedData>::Reply;
 ///
 /// Application logic is implemented by this trait.
 pub trait Service {
-    /// The types used by the application.
+    /// The data types used by the application and the SMR protocol.
+    ///
+    /// This includes their respective serialization routines.
     type Data: ReplicaData;
+
+    ///// Routines used by replicas to persist data into permanent
+    ///// storage.
+    //type Durability: ReplicaDurability;
 
     /// Returns the initial state of the application.
     fn initial_state(&mut self) -> Result<State<Self>>;
