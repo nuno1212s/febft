@@ -97,6 +97,11 @@ pub enum Message<O, P> {
     ///
     /// The payload delivered to the client is `P`.
     ExecutionFinished(NodeId, Digest, P),
+    /// Same as `Message::ExecutionFinished`, but includes a snapshot of
+    /// the serialized application state.
+    ///
+    /// This is useful for local checkpoints.
+    ExecutionFinishedWithAppstate(NodeId, Digest, P, Vec<u8>),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
@@ -524,6 +529,9 @@ impl<O, P> Message<O, P> {
                     .wrapped(ErrorKind::CommunicationMessage),
             Message::ExecutionFinished(_, _, _) =>
                 Err("Expected System found ExecutionFinished")
+                    .wrapped(ErrorKind::CommunicationMessage),
+            Message::ExecutionFinishedWithAppstate(_, _, _, _) =>
+                Err("Expected System found ExecutionFinishedWithAppstate")
                     .wrapped(ErrorKind::CommunicationMessage),
         }
     }

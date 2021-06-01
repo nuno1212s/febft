@@ -34,7 +34,7 @@ use crate::bft::executable::{
 /// Represents a sequence number attributed to a client request
 /// during a `Consensus` instance.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub struct SeqNo(i32);
 
 impl From<u32> for SeqNo {
@@ -391,7 +391,6 @@ where
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just
         // the amount of votes received
-        // FIXME: log the message
         match self.phase {
             ProtoPhase::Init => {
                 // in the init phase, we can't do anything,
@@ -440,6 +439,8 @@ where
                     let targets = NodeId::targets(0..view.params().n());
                     node.broadcast(message, targets);
                 }
+                // add message to the log
+                log.insert(header, SystemMessage::Consensus(message));
                 // try entering preparing phase
                 if log.has_request(&self.current) {
                     self.phase = ProtoPhase::Preparing(0);
@@ -484,6 +485,8 @@ where
                         return ConsensusStatus::Deciding;
                     },
                 };
+                // add message to the log
+                log.insert(header, SystemMessage::Consensus(message));
                 // check if we have gathered enough votes,
                 // and transition to a new phase
                 self.phase = if i == view.params().quorum() {
@@ -517,6 +520,8 @@ where
                     },
                     ConsensusMessageKind::Commit => i + 1,
                 };
+                // add message to the log
+                log.insert(header, SystemMessage::Consensus(message));
                 // check if we have gathered enough votes,
                 // and transition to a new phase
                 if i == view.params().quorum() {

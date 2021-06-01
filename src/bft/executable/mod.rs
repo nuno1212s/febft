@@ -10,6 +10,7 @@ use crate::bft::communication::NodeId;
 use crate::bft::communication::message::Message;
 use crate::bft::communication::channel::MessageChannelTx;
 use crate::bft::communication::serialize::{
+    //ReplicaDurability,
     ReplicaData,
     SharedData,
 };
@@ -17,16 +18,28 @@ use crate::bft::communication::serialize::{
 enum ExecutionRequest<O> {
     // update the state of the service
     Update(NodeId, Digest, O),
+    // same as above, and include the application state
+    // in the reply, used for local checkpoints
+    UpdateAndGetAppstate(NodeId, Digest, O),
     // read the state of the service
-    //
-    // TODO: the current api can't handle sending the application state;
-    // maybe resort to a ReadRequestMessage that returns a ReplyMessage,
-    // but where we only give the user a shared (&, not &mut) reference
-    // to the state of the application. it isn't guaranteed the user
-    // won't mutate the state because of the interior mutability
-    // semantics of rust, though.
     Read(NodeId),
 }
+
+macro_rules! serialize_st {
+    (Service: $S:ty, $w:expr, $s:expr) => {
+        <<$S as Service>::Data as ReplicaData>::serialize_state($w, $s)
+    }
+}
+
+/* NOTE: unused for now
+
+macro_rules! deserialize_st {
+    ($S:ty, $r:expr) => {
+        <<$S as Service>::Data as ReplicaData>::deserialize_state($r)
+    }
+}
+
+*/
 
 /// State type of the `Service`.
 pub type State<S> = <<S as Service>::Data as ReplicaData>::State;
@@ -41,8 +54,14 @@ pub type Reply<S> = <<S as Service>::Data as SharedData>::Reply;
 ///
 /// Application logic is implemented by this trait.
 pub trait Service {
-    /// The types used by the application.
+    /// The data types used by the application and the SMR protocol.
+    ///
+    /// This includes their respective serialization routines.
     type Data: ReplicaData;
+
+    ///// Routines used by replicas to persist data into permanent
+    ///// storage.
+    //type Durability: ReplicaDurability;
 
     /// Returns the initial state of the application.
     fn initial_state(&mut self) -> Result<State<Self>>;
@@ -83,6 +102,20 @@ where
     /// the completion of this request.
     pub fn queue_update(&mut self, from: NodeId, dig: Digest, req: Request<S>) -> Result<()> {
         self.e_tx.send(ExecutionRequest::Update(from, dig, req))
+            .simple(ErrorKind::Executable)
+    }
+
+    /// Same as `queue_update()`, additionally reporting the serialized
+    /// application state.
+    ///
+    /// This is useful during checkpoints.
+    pub fn queue_update_and_get_appstate(
+        &mut self,
+        from: NodeId,
+        dig: Digest,
+        req: Request<S>,
+    ) -> Result<()> {
+        self.e_tx.send(ExecutionRequest::UpdateAndGetAppstate(from, dig, req))
             .simple(ErrorKind::Executable)
     }
 }
@@ -133,6 +166,27 @@ where
                         let mut system_tx = exec.system_tx.clone();
                         rt::spawn(async move {
                             let m = Message::ExecutionFinished(peer_id, dig, reply);
+                            system_tx.send(m).await.unwrap();
+                        });
+                    },
+                    ExecutionRequest::UpdateAndGetAppstate(peer_id, dig, req) => {
+                        let reply = exec.service.update(&mut exec.state, req);
+                        let serialized_appstate = {
+                            const SERIALIZED_APPSTATE_BUFSIZ: usize = 8192;
+                            let mut b = Vec::with_capacity(SERIALIZED_APPSTATE_BUFSIZ);
+                            serialize_st!(Service: S, &mut b, &exec.state).unwrap();
+                            b
+                        };
+
+                        // deliver reply
+                        let mut system_tx = exec.system_tx.clone();
+                        rt::spawn(async move {
+                            let m = Message::ExecutionFinishedWithAppstate(
+                                peer_id,
+                                dig,
+                                reply,
+                                serialized_appstate,
+                            );
                             system_tx.send(m).await.unwrap();
                         });
                     },

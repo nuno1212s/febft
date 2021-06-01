@@ -2,8 +2,11 @@
 
 use super::SystemParams;
 use crate::bft::error::*;
-use crate::bft::history::Log;
 use crate::bft::async_runtime as rt;
+use crate::bft::history::{
+    Info,
+    Log,
+};
 use crate::bft::consensus::{
     SeqNo,
     Consensus,
@@ -129,10 +132,6 @@ where
                 Message::System(header, message) => {
                     match message {
                         request @ SystemMessage::Request(_) => {
-                            println!("Received request on #{}", u32::from(replica.node.id()));
-                            // NOTE: requests aren't susceptible to
-                            // garbage collection log operations,
-                            // so ignoring the return value is fine
                             replica.log.insert(header, request);
                         },
                         SystemMessage::Consensus(message) => {
@@ -173,9 +172,6 @@ where
                 Message::System(header, message) => {
                     match message {
                         request @ SystemMessage::Request(_) => {
-                            println!("Received request on #{}", u32::from(self.node.id()));
-                            // NOTE: check note above on the handling
-                            // of rogue messages during bootstrap
                             self.log.insert(header, request);
                         },
                         SystemMessage::Consensus(message) => {
@@ -197,15 +193,24 @@ where
                                 // attributed by the consensus layer to each op,
                                 // to execute in order
                                 ConsensusStatus::Decided(digest) => {
-                                    let (header, request) = match self.log.request_payload(&digest) {
-                                        Some((h, r)) => (h, r.into_inner()),
+                                    let (info, header, request) = match self.log.finalize_request(&digest) {
+                                        Some((i, h, r)) => (i, h, r.into_inner()),
                                         None => unreachable!(),
                                     };
-                                    self.executor.queue_update(
-                                        header.from(),
-                                        digest,
-                                        request,
-                                    )?;
+                                    match info {
+                                        // normal execution
+                                        Info::Nil => self.executor.queue_update(
+                                            header.from(),
+                                            digest,
+                                            request,
+                                        )?,
+                                        // execute and begin local checkpoint
+                                        Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
+                                            header.from(),
+                                            digest,
+                                            request,
+                                        )?,
+                                    }
                                     self.consensus.next_instance();
                                 },
                             }
@@ -231,6 +236,17 @@ where
                     ));
                     self.node.send(message, peer_id);
                     println!("Delivered reply to #{} from #{}", u32::from(peer_id), u32::from(self.node.id()));
+                },
+                Message::ExecutionFinishedWithAppstate(peer_id, digest, payload, appstate) => {
+                    // store the application state in the checkpoint
+                    self.log.finalize_checkpoint(appstate)?;
+
+                    // deliver reply to client
+                    let message = SystemMessage::Reply(ReplyMessage::new(
+                        digest,
+                        payload,
+                    ));
+                    self.node.send(message, peer_id);
                 },
                 Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
                 Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
