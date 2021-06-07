@@ -172,6 +172,7 @@ where
                 Message::System(header, message) => {
                     match message {
                         request @ SystemMessage::Request(_) => {
+                            println!("Received request from #{}", u32::from(header.from()));
                             self.log.insert(header, request);
                         },
                         SystemMessage::Consensus(message) => {
