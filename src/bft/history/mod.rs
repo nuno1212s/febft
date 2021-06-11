@@ -218,7 +218,26 @@ impl<O, P> Log<O, P> {
                     seq,
                     appstate,
                 });
-                self.pre_prepares.clear();
+                //
+                // NOTE: workaround bug where we clear the log,
+                // deleting the digest of an on-going request; the log
+                // entries are synchronized between all nodes, thanks
+                // to the consensus layer
+                //
+                // FIXME: find a better solution for this
+                //
+                match self.pre_prepares.pop() {
+                    Some(last_pre_prepare) => {
+                        // store the last received pre-prepare, which
+                        // corresponds to the request currently being
+                        // processed
+                        self.pre_prepares.clear();
+                        self.pre_prepares.push(last_pre_prepare);
+                    },
+                    None => {
+                        self.pre_prepares.clear();
+                    },
+                }
                 self.prepares.clear();
                 self.commits.clear();
                 Ok(())
