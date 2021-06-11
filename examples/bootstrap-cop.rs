@@ -86,6 +86,10 @@ async fn async_main(id: NodeId) {
         node
     };
 
+    // wait a few seconds
+    println!("Waiting 10 seconds...");
+    Delay::new(Duration::from_secs(10)).await;
+
     // broadcast message
     let m = SystemMessage::Request(RequestMessage::new(Vec::new()));
     node.broadcast(m, NodeId::targets(0..4));
