@@ -487,6 +487,7 @@ impl<'a> WireMessage<'a> {
         if self.payload.len() > 0 {
             w.write_all(&self.payload).await?;
         }
+        w.flush().await?;
 
         Ok(())
     }
