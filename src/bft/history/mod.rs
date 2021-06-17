@@ -152,12 +152,14 @@ impl<O, P> Log<O, P> {
         }
     }
 
-    /// Finalize a client request, retrieving the payload associated with its given
-    /// digest `digest`.
+    /// Finalize a batch of client requests, retrieving the payload associated with their
+    /// given digests `digests`.
     ///
     /// The log may be cleared resulting from this operation. Check the enum variant of
-    /// `Info`, to broadcast a `CheckpointMessage` when adequate.
-    pub fn finalize_request(&mut self, digest: &Digest) -> Option<(Info, Header, RequestMessage<O>)> {
+    /// `Info`, to perform a local checkpoint when appropriate.
+    pub fn finalize_batch(&mut self, digests: &[Digest]) -> Option<(Info, Header, RequestMessage<O>)> {
+        // TODO: finish this
+
         let (header, message) = self.deciding
             .remove(digest)
             .or_else(|| self.requests.remove(digest))

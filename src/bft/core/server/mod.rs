@@ -187,13 +187,13 @@ where
                                 ConsensusStatus::Deciding => rt::yield_now().await,
                                 // FIXME: implement this
                                 ConsensusStatus::VotedTwice(_) => unimplemented!(),
-                                // reached agreement, execute request
+                                // reached agreement, execute requests
                                 //
                                 // FIXME: execution layer needs to receive the id
                                 // attributed by the consensus layer to each op,
                                 // to execute in order
-                                ConsensusStatus::Decided(digest) => {
-                                    let (info, header, request) = match self.log.finalize_request(&digest) {
+                                ConsensusStatus::Decided(digests) => {
+                                    let (info, header, request) = match self.log.finalize_batch(&digests[..) {
                                         Some((i, h, r)) => (i, h, r.into_inner()),
                                         None => unreachable!(),
                                     };
@@ -201,13 +201,13 @@ where
                                         // normal execution
                                         Info::Nil => self.executor.queue_update(
                                             header.from(),
-                                            digest,
+                                            digests,
                                             request,
                                         )?,
                                         // execute and begin local checkpoint
                                         Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
                                             header.from(),
-                                            digest,
+                                            digests,
                                             request,
                                         )?,
                                     }
