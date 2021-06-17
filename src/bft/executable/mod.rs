@@ -15,12 +15,24 @@ use crate::bft::communication::serialize::{
     SharedData,
 };
 
+/// Represents a single client update request, to be executed.
+pub struct Update<O> {
+    from: NodeId,
+    digest: Digest,
+    operation: O,
+}
+
+/// Storage for a batch of client update requests to be executed.
+pub struct UpdateBatch<O> {
+    inner: Vec<Update<O>>,
+}
+
 enum ExecutionRequest<O> {
     // update the state of the service
-    Update(NodeId, Digest, O),
+    Update(UpdateBatch<O>),
     // same as above, and include the application state
     // in the reply, used for local checkpoints
-    UpdateAndGetAppstate(NodeId, Digest, O),
+    UpdateAndGetAppstate(UpdateBatch<O>),
     // read the state of the service
     Read(NodeId),
 }
@@ -95,27 +107,21 @@ where
     Request<S>: Send + 'static,
     Reply<S>: Send + 'static,
 {
-    /// Queues a particular request `req` for execution.
-    ///
-    /// The value `dig` represents the hash digest of the
-    /// serialized `req`, which is used to notify `from` of
-    /// the completion of this request.
-    pub fn queue_update(&mut self, from: NodeId, dig: Digest, req: Request<S>) -> Result<()> {
-        self.e_tx.send(ExecutionRequest::Update(from, dig, req))
+    /// Queues a batch of requests `batch` for execution.
+    pub fn queue_update(&mut self, batch: UpdateBatch<Request<S>>) -> Result<()> {
+        self.e_tx.send(ExecutionRequest::Update(batch))
             .simple(ErrorKind::Executable)
     }
 
     /// Same as `queue_update()`, additionally reporting the serialized
     /// application state.
     ///
-    /// This is useful during checkpoints.
+    /// This is useful during local checkpoints.
     pub fn queue_update_and_get_appstate(
         &mut self,
-        from: NodeId,
-        dig: Digest,
-        req: Request<S>,
+        batch: UpdateBatch<Request<S>>,
     ) -> Result<()> {
-        self.e_tx.send(ExecutionRequest::UpdateAndGetAppstate(from, dig, req))
+        self.e_tx.send(ExecutionRequest::UpdateAndGetAppstate(batch))
             .simple(ErrorKind::Executable)
     }
 }
@@ -198,5 +204,40 @@ where
         });
 
         Ok(ExecutorHandle { e_tx })
+    }
+}
+
+impl<O> UpdateBatch<O> {
+    /// Retrieves the batch of requests to be executed,
+    /// stored within this struct.
+    pub fn get(&self) -> &[Update<O>] {
+        &self.inner[..]
+    }
+
+    /// Adds a new update request to the batch.
+    pub fn add(&mut self, from: NodeId, digest: Digest, operation: O) {
+        self.inner.push(Update { from, digest, operation });
+    }
+}
+
+impl<O> Update<O> {
+    /// Returns a reference to the update request's client id.
+    pub fn from(&self) -> NodeId {
+        self.from
+    }
+
+    /// Returns a reference to the update request's digest.
+    pub fn digest(&self) -> &Digest {
+        &self.digest
+    }
+
+    /// Returns a reference to the update request's operation.
+    pub fn operation(&self) -> &O {
+        &self.operation
+    }
+
+    /// Returns the inner types stored in this `Update`.
+    pub fn into_inner(self) -> (NodeId, Digest, O) {
+        (self.from, self.digest, self.operation)
     }
 }

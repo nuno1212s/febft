@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 use crate::bft::error::*;
 use crate::bft::consensus::SeqNo;
 use crate::bft::crypto::hash::Digest;
+use crate::bft::executable::UpdateBatch;
 use crate::bft::communication::message::{
     Header,
     SystemMessage,
@@ -157,13 +158,16 @@ impl<O, P> Log<O, P> {
     ///
     /// The log may be cleared resulting from this operation. Check the enum variant of
     /// `Info`, to perform a local checkpoint when appropriate.
-    pub fn finalize_batch(&mut self, digests: &[Digest]) -> Option<(Info, Header, RequestMessage<O>)> {
-        // TODO: finish this
+    pub fn finalize_batch(&mut self, digests: Vec<Digest>) -> Option<(Info, UpdateBatch<O>)> {
+        let mut batch = UpdateBatch { inner: Vec::new() };
 
-        let (header, message) = self.deciding
-            .remove(digest)
-            .or_else(|| self.requests.remove(digest))
-            .map(StoredRequest::into_inner)?;
+        for digest in digests {
+            let (header, message) = self.deciding
+                .remove(digest)
+                .or_else(|| self.requests.remove(digest))
+                .map(StoredRequest::into_inner)?;
+            batch.push((header.from(), digest.clone(), message.into_inner()));
+        }
 
         // assert the digest `digest` matches the last one in the log
         //

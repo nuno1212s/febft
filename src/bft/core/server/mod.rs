@@ -193,22 +193,18 @@ where
                                 // attributed by the consensus layer to each op,
                                 // to execute in order
                                 ConsensusStatus::Decided(digests) => {
-                                    let (info, header, request) = match self.log.finalize_batch(&digests[..) {
-                                        Some((i, h, r)) => (i, h, r.into_inner()),
+                                    let (info, batch) = match self.log.finalize_batch(digests) {
+                                        Some((i, b)) => (i, b),
                                         None => unreachable!(),
                                     };
                                     match info {
                                         // normal execution
                                         Info::Nil => self.executor.queue_update(
-                                            header.from(),
-                                            digests,
-                                            request,
+                                            batch,
                                         )?,
                                         // execute and begin local checkpoint
                                         Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
-                                            header.from(),
-                                            digests,
-                                            request,
+                                            batch,
                                         )?,
                                     }
                                     self.consensus.next_instance();
