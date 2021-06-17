@@ -155,7 +155,7 @@ pub struct ConsensusMessage {
 pub enum ConsensusMessageKind {
     /// Pre-prepare a request, according to the BFT protocol.
     /// The `Digest` represens the hash of the serialized request payload.
-    PrePrepare(Digest),
+    PrePrepare(Vec<Digest>),
     /// Prepare a request.
     Prepare,
     /// Commit a request, signaling the system is almost ready

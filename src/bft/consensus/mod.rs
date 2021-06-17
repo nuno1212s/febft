@@ -257,7 +257,7 @@ pub enum ProtoPhase {
 pub struct Consensus<S: Service> {
     phase: ProtoPhase,
     tbo: TBOQueue,
-    current: Digest,
+    current: Vec<Digest>,
     //voted: HashSet<NodeId>,
     _phantom: PhantomData<S>,
 }
@@ -271,7 +271,7 @@ pub enum ConsensusStatus {
     Deciding,
     /// A `febft` quorum decided on the execution of
     /// the request with the given `Digest`.
-    Decided(Digest),
+    Decided(Vec<Digest>),
 }
 
 macro_rules! extract_msg {
