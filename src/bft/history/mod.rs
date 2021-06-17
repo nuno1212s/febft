@@ -129,11 +129,18 @@ impl<O, P> Log<O, P> {
         }
     }
 
-    /// Retrieves the next request available for proposing, if any.
-    pub fn next_request(&mut self) -> Option<Digest> {
+    /// Retrieves the next batch of requests available for proposing, if any.
+    pub fn next_batch(&mut self, batch_size: usize) -> Option<Vec<Digest>> {
+        //if self.deciding.len() == batch_size {
+        //    return None;
+        //}
         let (digest, stored) = self.requests.pop_front()?;
         self.deciding.insert(digest, stored);
-        Some(digest)
+        if self.deciding.len() == batch_size {
+            Some(self.deciding.keys().collect())
+        } else {
+            None
+        }
     }
 
     /// Checks if this `Log` has a particular request with the given `digest`.
