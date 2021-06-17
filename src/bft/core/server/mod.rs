@@ -81,6 +81,9 @@ pub struct ReplicaConfig<S> {
     /// Next sequence number attributed to a request by
     /// the consensus layer.
     pub next_consensus_seq: SeqNo,
+    /// The maximum number of client requests to queue
+    /// before executing the consensus algorithm.
+    pub batch_size: usize,
     /// Check out the docs on `NodeConfig`.
     pub node: NodeConfig,
 }

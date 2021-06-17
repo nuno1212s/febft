@@ -74,6 +74,7 @@ struct StoredRequest<O> {
 
 /// Represents a log of messages received by the BFT system.
 pub struct Log<O, P> {
+    batch_size: usize,
     pre_prepares: Vec<StoredConsensus>,
     prepares: Vec<StoredConsensus>,
     commits: Vec<StoredConsensus>,
@@ -89,8 +90,12 @@ pub struct Log<O, P> {
 // - save the log to persistent storage
 impl<O, P> Log<O, P> {
     /// Creates a new message log.
-    pub fn new() -> Self {
+    ///
+    /// The value `batch_size` represents the maximum number of
+    /// client requests to queue before executing a consensus instance.
+    pub fn new(batch_size: usize) -> Self {
         Self {
+            batch_size,
             pre_prepares: Vec::new(),
             prepares: Vec::new(),
             commits: Vec::new(),
@@ -131,14 +136,14 @@ impl<O, P> Log<O, P> {
     }
 
     /// Retrieves the next batch of requests available for proposing, if any.
-    pub fn next_batch(&mut self, batch_size: usize) -> Option<Vec<Digest>> {
-        //if self.deciding.len() == batch_size {
-        //    return None;
-        //}
+    pub fn next_batch(&mut self) -> Option<Vec<Digest>> {
         let (digest, stored) = self.requests.pop_front()?;
         self.deciding.insert(digest, stored);
-        if self.deciding.len() == batch_size {
-            Some(self.deciding.keys().collect())
+        if self.deciding.len() >= self.batch_size {
+            Some(self.deciding
+                .keys()
+                .take(self.batch_size)
+                .collect())
         } else {
             None
         }
@@ -159,40 +164,30 @@ impl<O, P> Log<O, P> {
     /// The log may be cleared resulting from this operation. Check the enum variant of
     /// `Info`, to perform a local checkpoint when appropriate.
     pub fn finalize_batch(&mut self, digests: Vec<Digest>) -> Option<(Info, UpdateBatch<O>)> {
-        let mut batch = UpdateBatch { inner: Vec::new() };
+        // ensure we have the same batch size...
+        // probably not necessary, but always nice to make sure
+        if digests.len() != self.batch_size {
+            return None;
+        }
 
+        let mut batch = UpdateBatch::new();
         for digest in digests {
             let (header, message) = self.deciding
                 .remove(digest)
                 .or_else(|| self.requests.remove(digest))
                 .map(StoredRequest::into_inner)?;
-            batch.push((header.from(), digest.clone(), message.into_inner()));
+            batch.add(header.from(), digest.clone(), message.into_inner());
         }
 
-        // assert the digest `digest` matches the last one in the log
-        //
-        // no need to worry about index out of bounds stuff, because
-        // the statement above guarantees we have received the corresponding
-        // PRE-PREPARE for the request with digest `digest`, namely it should be
-        // the last one in the `Vec`
-        let stored_pre_prepare = &self.pre_prepares[self.pre_prepares.len()-1].message;
-
-        match stored_pre_prepare.kind() {
-            ConsensusMessageKind::PrePrepare(ref other) if other == digest => {
-                // nothing to do! we are set
-            },
-            // NOTE: this should be an impossible scenario, but either way
-            // it gets catched by the `unreachable!()` expression at
-            // `febft::bft::core::server`, generating a runtime panic
-            _ => return None,
-        }
-
-        // retrive the sequence number of the stored PRE-PREPARE message,
-        // meanwhile dropping its reference in case we need to clear the log
-        let last_seq_no = {
-            let seq_no = stored_pre_prepare.sequence_number();
-            drop(stored_pre_prepare);
-            seq_no
+        // retrive the sequence number stored within the PRE-PREPARE message
+        // pertaining to the current request being executed
+        let last_seq_no = if self.pre_prepares.len() > 0 {
+            let stored_pre_prepare = &self.pre_prepares[self.pre_prepares.len()-1].message;
+            stored_pre_prepare.sequence_number()
+        } else {
+            // the log was cleared concurrently, retrieve
+            // the seq number stored before the log was cleared
+            self.curr_seq
         };
         let last_seq_no_u32 = u32::from(last_seq_no);
 
@@ -232,23 +227,22 @@ impl<O, P> Log<O, P> {
                     appstate,
                 });
                 //
-                // NOTE: workaround bug where we clear the log,
-                // deleting the digest of an on-going request; the log
-                // entries are synchronized between all nodes, thanks
-                // to the consensus layer
+                // NOTE: workaround bug where when we clear the log,
+                // we remove the PRE-PREPARE of an on-going request
                 //
-                // FIXME: find a better solution for this
+                // FIXME: the log should not be cleared until a request is over
                 //
                 match self.pre_prepares.pop() {
                     Some(last_pre_prepare) => {
-                        // store the last received pre-prepare, which
-                        // corresponds to the request currently being
-                        // processed
                         self.pre_prepares.clear();
-                        self.pre_prepares.push(last_pre_prepare);
+
+                        // store the id of the last received pre-prepare,
+                        // which corresponds to the request currently being
+                        // processed
+                        self.curr_seq = last_pre_prepare.sequence_number();
                     },
                     None => {
-                        self.pre_prepares.clear();
+                        // no stored PRE-PREPARE messages, NOOP
                     },
                 }
                 self.prepares.clear();

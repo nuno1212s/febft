@@ -208,6 +208,11 @@ where
 }
 
 impl<O> UpdateBatch<O> {
+    /// Returns a new, empty batch of requests.
+    pub fn new() -> Self {
+        Self { inner: Vec::new() }
+    }
+
     /// Retrieves the batch of requests to be executed,
     /// stored within this struct.
     pub fn get(&self) -> &[Update<O>] {
