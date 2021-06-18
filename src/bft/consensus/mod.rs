@@ -242,8 +242,9 @@ pub enum ProtoPhase {
     /// Running the `PRE-PREPARE` phase.
     PrePreparing,
     /// A replica has accepted a `PRE-PREPARE` message, but
-    /// it doesn't have the request it references in its log.
-    PreparingRequest,
+    /// it doesn't have the entirety of the requests it references
+    /// in its log.
+    PreparingRequests,
     /// Running the `PREPARE` phase. The integer represents
     /// the number of votes received.
     Preparing(usize),
@@ -262,8 +263,8 @@ pub struct Consensus<S: Service> {
     tbo: TBOQueue,
     current: Vec<Digest>,
     //voted: HashSet<NodeId>,
-    missing_requests: Vec<Digest>,
-    missing_swapbuf: Vec<Digest>,
+    missing_requests: VecDeque<Digest>,
+    missing_swapbuf: Vec<usize>,
     _phantom: PhantomData<S>,
 }
 
@@ -309,14 +310,14 @@ where
             _phantom: PhantomData,
             phase: ProtoPhase::Init,
             missing_swapbuf: Vec::new(),
-            missing_requests: Vec::new(),
+            missing_requests: VecDeque::new(),
             //voted: collections::hash_set(),
             tbo: TBOQueue::new(initial_seq_no),
             current: std::iter::repeat_with(|| Digest::from_bytes(&[0; Digest::LENGTH][..]))
                 .flat_map(|d| d) // unwrap
                 .take(batch_size)
                 .collect(),
-        }
+    }
     }
 
     /// Proposes a new request with digest `dig`.
@@ -361,8 +362,19 @@ where
             ProtoPhase::PrePreparing if self.tbo.get_queue => {
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.pre_prepares)
             },
-            ProtoPhase::PreparingRequest => {
-                if log.has_request(&self.current) {
+            ProtoPhase::PreparingRequests => {
+                let iterator = self.missing_requests
+                    .iter()
+                    .enumerate()
+                    .filter(|(_index, digest)| log.has_request(digest));
+                for (index, _) in iterator {
+                    self.missing_swapbuf.push(index);
+                }
+                for &index in self.missing_swapbuf {
+                    self.missing_requests.swap_remove_back(index);
+                }
+                self.missing_swapbuf.clear();
+                if self.missing_requests.is_empty() {
                     extract_msg!(
                         { self.phase = ProtoPhase::Preparing(0); },
                         &mut self.tbo.get_queue,
@@ -454,24 +466,17 @@ where
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
                 // try entering preparing phase
-                for digest in self.current {
-                    match self.phase {
-                        ProtoPhase::PreparingRequest if !log.has_request(digest) => {
-                            self.missing_requests.push(digest.clone());
-                        },
-                        _ if !log.has_request(digest) => {
-                            self.phase = ProtoPhase::PreparingRequest;
-                            self.missing_requests.push(digest.clone());
-                        },
-                        _ => (),
-                    }
+                for digest in self.current.iter().filter(|d| !log.has_request(d)) {
+                    self.missing_requests.push_back(digest.clone());
                 }
-                if let ProtoPhase::PrePreparing = self.phase {
-                    self.phase = ProtoPhase::Preparing(0);
-                }
+                self.phase = if missing_requests.is_empty() {
+                    ProtoPhase::Preparing(0)
+                } else {
+                    ProtoPhase::PreparingRequests;
+                };
                 ConsensusStatus::Deciding
             },
-            ProtoPhase::PreparingRequest => {
+            ProtoPhase::PreparingRequests => {
                 // can't do anything while waiting for client requests,
                 // queue the message for later
                 match message.kind() {
