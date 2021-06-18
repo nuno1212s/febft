@@ -65,19 +65,12 @@ async fn async_main() {
     let mut rng = prng::State::new();
 
     loop {
-        let requests = (0..1024)
-            .map(|_| {
-                let i = rng.next_state();
-                if i & 1 == 0 { Action::Sqrt } else { Action::MultiplyByTwo }
-            })
-            .collect();
-
-        let reply = client.update(requests).await;
-        let n = reply.len();
-        println!(
-            "State: ..., {}, {}, {}",
-            reply[n-3], reply[n-2], reply[n-1],
-        );
+        let request = {
+            let i = rng.next_state();
+            if i & 1 == 0 { Action::Sqrt } else { Action::MultiplyByTwo }
+        };
+        let reply = client.update(request).await;
+        println!("State: {}", reply);
     }
 }
 

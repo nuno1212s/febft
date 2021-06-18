@@ -66,7 +66,7 @@ macro_rules! map {
      }};
 }
 
-pub fn debug_rogue(rogue: Vec<Message<Vec<Action>, Vec<f32>>>) -> String {
+pub fn debug_rogue(rogue: Vec<Message<Action, f32>>) -> String {
     let mut buf = String::new();
     buf.push_str("[ ");
     for m in rogue {
@@ -78,7 +78,7 @@ pub fn debug_rogue(rogue: Vec<Message<Vec<Action>, Vec<f32>>>) -> String {
     buf
 }
 
-pub fn debug_msg(m: Message<Vec<Action>, Vec<f32>>) -> &'static str {
+pub fn debug_msg(m: Message<Action, f32>) -> &'static str {
     match m {
         Message::System(_, m) => match m {
             SystemMessage::Request(_) => "Req",
@@ -88,8 +88,8 @@ pub fn debug_msg(m: Message<Vec<Action>, Vec<f32>>) -> &'static str {
         Message::ConnectedRx(_, _) => "CRx",
         Message::DisconnectedTx(_) => "DTx",
         Message::DisconnectedRx(_) => "DRx",
-        Message::ExecutionFinished(_, _, _) => "Exe",
-        Message::ExecutionFinishedWithAppstate(_, _, _, _) => "ExA",
+        Message::ExecutionFinished(_) => "Exe",
+        Message::ExecutionFinishedWithAppstate(_, _) => "ExA",
     }
 }
 
@@ -145,6 +145,7 @@ pub async fn setup_replica(
     let node = node_config(&t, id, sk, addrs, pk).await;
     let conf = ReplicaConfig {
         node,
+        batch_size: 1024,
         next_consensus_seq: SeqNo::from(0),
         leader: NodeId::from(0u32),
         service: CalcService(id, 0),
@@ -158,7 +159,7 @@ pub async fn setup_node(
     sk: KeyPair,
     addrs: HashMap<NodeId, (SocketAddr, String)>,
     pk: HashMap<NodeId, PublicKey>,
-) -> Result<(Node<CalcData>, Vec<Message<Vec<Action>, Vec<f32>>>)> {
+) -> Result<(Node<CalcData>, Vec<Message<Action, f32>>)> {
     let conf = node_config(&t, id, sk, addrs, pk).await;
     Node::bootstrap(conf).await
 }
@@ -261,10 +262,10 @@ pub enum Action {
 }
 
 impl SharedData for CalcData {
-    type Request = Vec<Action>;
-    type Reply = Vec<f32>;
+    type Request = Action;
+    type Reply = f32;
 
-    fn serialize_message<W>(w: W, m: &SystemMessage<Vec<Action>, Vec<f32>>) -> Result<()>
+    fn serialize_message<W>(w: W, m: &SystemMessage<Action, f32>) -> Result<()>
     where
         W: Write
     {
@@ -272,7 +273,7 @@ impl SharedData for CalcData {
             .wrapped(ErrorKind::Communication)
     }
 
-    fn deserialize_message<R>(r: R) -> Result<SystemMessage<Vec<Action>, Vec<f32>>>
+    fn deserialize_message<R>(r: R) -> Result<SystemMessage<Action, f32>>
     where
         R: Read
     {
@@ -310,21 +311,15 @@ impl Service for CalcService {
         Ok(1.0)
     }
 
-    fn update(&mut self, state: &mut f32, requests: Vec<Action>) -> Vec<f32> {
-        let reply = requests
-            .into_iter()
-            .map(|r| {
-                match r {
-                    Action::Sqrt => *state = state.sqrt(),
-                    Action::MultiplyByTwo => *state *= 2.0,
-                }
-                *state
-            })
-            .collect();
+    fn update(&mut self, state: &mut f32, request: Action) -> f32 {
+        match request {
+            Action::Sqrt => *state = state.sqrt(),
+            Action::MultiplyByTwo => *state *= 2.0,
+        }
         let id = u32::from(self.0);
         println!("{:08}: state on replica #{}: {:?}", self.1, id, *state);
         self.1 += 1;
-        reply
+        *state
     }
 }
 
