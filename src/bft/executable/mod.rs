@@ -22,9 +22,21 @@ pub struct Update<O> {
     operation: O,
 }
 
+/// Represents a single client update reply.
+pub struct UpdateReply<P> {
+    to: NodeId,
+    digest: Digest,
+    payload: P,
+}
+
 /// Storage for a batch of client update requests to be executed.
 pub struct UpdateBatch<O> {
     inner: Vec<Update<O>>,
+}
+
+/// Storage for a batch of client update replies.
+pub struct UpdateBatchReplies<P> {
+    inner: Vec<UpdateReply<P>>,
 }
 
 enum ExecutionRequest<O> {
@@ -165,32 +177,43 @@ where
         thread::spawn(move || {
             while let Ok(exec_req) = exec.e_rx.recv() {
                 match exec_req {
-                    ExecutionRequest::Update(peer_id, dig, req) => {
-                        let reply = exec.service.update(&mut exec.state, req);
+                    ExecutionRequest::Update(batch) => {
+                        let reply_batch = UpdateBatchReplies::with_capacity(batch.len());
 
-                        // deliver reply
+                        for update in batch.into_inner() {
+                            let (peer_id, dig, req) = update.into_inner();
+                            let reply = exec.service.update(&mut exec.state, req);
+                            reply_batch.add(peer_id, dig, reply);
+                        }
+
+                        // deliver replies
                         let mut system_tx = exec.system_tx.clone();
                         rt::spawn(async move {
-                            let m = Message::ExecutionFinished(peer_id, dig, reply);
+                            let m = Message::ExecutionFinished(reply_batch);
                             system_tx.send(m).await.unwrap();
                         });
                     },
                     ExecutionRequest::UpdateAndGetAppstate(peer_id, dig, req) => {
-                        let reply = exec.service.update(&mut exec.state, req);
+                        let reply_batch = UpdateBatchReplies::with_capacity(batch.len());
+
+                        for update in batch.into_inner() {
+                            let (peer_id, dig, req) = update.into_inner();
+                            let reply = exec.service.update(&mut exec.state, req);
+                            reply_batch.add(peer_id, dig, reply);
+                        }
                         let serialized_appstate = {
+                            // TODO: make this a config param?
                             const SERIALIZED_APPSTATE_BUFSIZ: usize = 8192;
                             let mut b = Vec::with_capacity(SERIALIZED_APPSTATE_BUFSIZ);
                             serialize_st!(Service: S, &mut b, &exec.state).unwrap();
                             b
                         };
 
-                        // deliver reply
+                        // deliver replies
                         let mut system_tx = exec.system_tx.clone();
                         rt::spawn(async move {
                             let m = Message::ExecutionFinishedWithAppstate(
-                                peer_id,
-                                dig,
-                                reply,
+                                reply_batch,
                                 serialized_appstate,
                             );
                             system_tx.send(m).await.unwrap();
@@ -213,36 +236,61 @@ impl<O> UpdateBatch<O> {
         Self { inner: Vec::new() }
     }
 
-    /// Retrieves the batch of requests to be executed,
-    /// stored within this struct.
-    pub fn get(&self) -> &[Update<O>] {
-        &self.inner[..]
-    }
-
     /// Adds a new update request to the batch.
     pub fn add(&mut self, from: NodeId, digest: Digest, operation: O) {
         self.inner.push(Update { from, digest, operation });
     }
+
+    /// Returns the inner storage.
+    pub fn into_inner(self) -> Vec<Update<O>> {
+        self.inner
+    }
+
+    /// Returns the length of the batch.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
 }
 
 impl<O> Update<O> {
-    /// Returns a reference to the update request's client id.
-    pub fn from(&self) -> NodeId {
-        self.from
-    }
-
-    /// Returns a reference to the update request's digest.
-    pub fn digest(&self) -> &Digest {
-        &self.digest
-    }
-
-    /// Returns a reference to the update request's operation.
-    pub fn operation(&self) -> &O {
-        &self.operation
-    }
-
     /// Returns the inner types stored in this `Update`.
     pub fn into_inner(self) -> (NodeId, Digest, O) {
         (self.from, self.digest, self.operation)
+    }
+}
+
+impl<P> UpdateBatchReplies<P> {
+/*
+    /// Returns a new, empty batch of replies.
+    pub fn new() -> Self {
+        Self { inner: Vec::new() }
+    }
+*/
+
+    /// Returns a new, empty batch of replies, with the given capacity.
+    pub fn with_capacity(n: usize) -> Self {
+        Self { inner: Vec::with_capacity(n) }
+    }
+
+    /// Adds a new update reply to the batch.
+    pub fn add(&mut self, to: NodeId, digest: Digest, payload: P) {
+        self.inner.push(UpdateReply { to, digest, payload });
+    }
+
+    /// Returns the inner storage.
+    pub fn into_inner(self) -> Vec<UpdateReply<P>> {
+        self.inner
+    }
+
+    /// Returns the length of the batch.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl<P> UpdateReply<P> {
+    /// Returns the inner types stored in this `UpdateReply`.
+    pub fn into_inner(self) -> (NodeId, Digest, P) {
+        (self.to, self.digest, self.payload)
     }
 }

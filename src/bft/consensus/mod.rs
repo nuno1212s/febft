@@ -325,7 +325,7 @@ where
     /// This function will only succeed if the `node` is
     /// the leader of the current `view` and the `node` is
     /// in the phase `ProtoPhase::Init`.
-    pub fn propose(&mut self, dig: Digest, view: ViewInfo, node: &mut Node<S::Data>) {
+    pub fn propose(&mut self, digests: Vec<Digest>, view: ViewInfo, node: &mut Node<S::Data>) {
         match self.phase {
             ProtoPhase::Init => self.phase = ProtoPhase::PrePreparing,
             _ => return,
@@ -335,7 +335,7 @@ where
         }
         let message = SystemMessage::Consensus(ConsensusMessage::new(
             self.sequence_number(),
-            ConsensusMessageKind::PrePrepare(dig),
+            ConsensusMessageKind::PrePrepare(digests),
         ));
         let targets = NodeId::targets(0..view.params().n());
         node.broadcast(message, targets);

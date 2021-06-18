@@ -30,6 +30,7 @@ use crate::bft::crypto::hash::{
     Digest,
 };
 use crate::bft::communication::socket::Socket;
+use crate::bft::execution::UpdateBatchReplies;
 use crate::bft::communication::NodeId;
 use crate::bft::consensus::SeqNo;
 use crate::bft::error::*;
@@ -93,15 +94,15 @@ pub enum Message<O, P> {
     ///
     /// The id is only equal to `None` during a `Node` bootstrap process.
     DisconnectedRx(Option<NodeId>),
-    /// The request of a client with id `NodeId` has finished executing.
+    /// A batch of client requests has finished executing.
     ///
-    /// The payload delivered to the client is `P`.
-    ExecutionFinished(NodeId, Digest, P),
+    /// The type of the payload delivered to the clients is `P`.
+    ExecutionFinished(UpdateBatchReplies<P>),
     /// Same as `Message::ExecutionFinished`, but includes a snapshot of
     /// the serialized application state.
     ///
     /// This is useful for local checkpoints.
-    ExecutionFinishedWithAppstate(NodeId, Digest, P, Vec<u8>),
+    ExecutionFinishedWithAppstate(UpdateBatchReplies<P>, Vec<u8>),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
@@ -528,10 +529,10 @@ impl<O, P> Message<O, P> {
             Message::DisconnectedRx(_) =>
                 Err("Expected System found DisconnectedRx")
                     .wrapped(ErrorKind::CommunicationMessage),
-            Message::ExecutionFinished(_, _, _) =>
+            Message::ExecutionFinished(_) =>
                 Err("Expected System found ExecutionFinished")
                     .wrapped(ErrorKind::CommunicationMessage),
-            Message::ExecutionFinishedWithAppstate(_, _, _, _) =>
+            Message::ExecutionFinishedWithAppstate(_, _) =>
                 Err("Expected System found ExecutionFinishedWithAppstate")
                     .wrapped(ErrorKind::CommunicationMessage),
         }

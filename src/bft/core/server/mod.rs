@@ -164,8 +164,8 @@ where
                 PollStatus::Recv => self.node.receive().await?,
                 PollStatus::NextMessage(h, m) => Message::System(h, SystemMessage::Consensus(m)),
                 PollStatus::TryProposeAndRecv => {
-                    if let Some(digest) = self.log.next_request() {
-                        self.consensus.propose(digest, self.view, &mut self.node);
+                    if let Some(digests) = self.log.next_batch() {
+                        self.consensus.propose(digests, self.view, &mut self.node);
                     }
                     self.node.receive().await?
                 },
@@ -196,10 +196,7 @@ where
                                 // attributed by the consensus layer to each op,
                                 // to execute in order
                                 ConsensusStatus::Decided(digests) => {
-                                    let (info, batch) = match self.log.finalize_batch(digests) {
-                                        Some((i, b)) => (i, b),
-                                        None => unreachable!(),
-                                    };
+                                    let (info, batch) = self.log.finalize_batch(digests)?;
                                     match info {
                                         // normal execution
                                         Info::Nil => self.executor.queue_update(
@@ -227,15 +224,15 @@ where
                         SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
                     }
                 },
-                Message::ExecutionFinished(peer_id, digest, payload) => {
-                    // deliver reply to client
+                Message::ExecutionFinished(batch) => {
+                    // deliver replies to clients
                     let message = SystemMessage::Reply(ReplyMessage::new(
                         digest,
                         payload,
                     ));
                     self.node.send(message, peer_id);
                 },
-                Message::ExecutionFinishedWithAppstate(peer_id, digest, payload, appstate) => {
+                Message::ExecutionFinishedWithAppstate(batch, appstate) => {
                     // store the application state in the checkpoint
                     self.log.finalize_checkpoint(appstate)?;
 
