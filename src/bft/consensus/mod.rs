@@ -255,23 +255,28 @@ pub enum ProtoPhase {
 /// Contains the state of an active consensus instance, as well
 /// as future instances.
 pub struct Consensus<S: Service> {
+    // can be smaller than the config's max batch size,
+    // but never longer
+    batch_size: usize,
     phase: ProtoPhase,
     tbo: TBOQueue,
     current: Vec<Digest>,
     //voted: HashSet<NodeId>,
+    missing_requests: Vec<Digest>,
+    missing_swapbuf: Vec<Digest>,
     _phantom: PhantomData<S>,
 }
 
 /// Status returned from processing a consensus message.
-pub enum ConsensusStatus {
+pub enum ConsensusStatus<'a> {
     /// A particular node tried voting twice.
     VotedTwice(NodeId),
     /// A `febft` quorum still hasn't made a decision
     /// on a client request to be executed.
     Deciding,
     /// A `febft` quorum decided on the execution of
-    /// the request with the given `Digest`.
-    Decided(Vec<Digest>),
+    /// the batch of requests with the given digests.
+    Decided(&'a [Digest]),
 }
 
 macro_rules! extract_msg {
@@ -298,13 +303,19 @@ where
     Reply<S>: Send + 'static,
 {
     /// Starts a new consensus protocol tracker.
-    pub fn new(initial_seq_no: SeqNo) -> Self {
+    pub fn new(initial_seq_no: SeqNo, batch_size: usize) -> Self {
         Self {
+            batch_size: 0,
             _phantom: PhantomData,
             phase: ProtoPhase::Init,
-            tbo: TBOQueue::new(initial_seq_no),
+            missing_swapbuf: Vec::new(),
+            missing_requests: Vec::new(),
             //voted: collections::hash_set(),
-            current: Digest::from_bytes(&[0; Digest::LENGTH][..]).unwrap(),
+            tbo: TBOQueue::new(initial_seq_no),
+            current: std::iter::repeat_with(|| Digest::from_bytes(&[0; Digest::LENGTH][..]))
+                .flat_map(|d| d) // unwrap
+                .take(batch_size)
+                .collect(),
         }
     }
 
@@ -378,14 +389,14 @@ where
     }
 
     /// Process a message for a particular consensus instance.
-    pub fn process_message(
-        &mut self,
+    pub fn process_message<'a>(
+        &'a mut self,
         header: Header,
         message: ConsensusMessage,
         view: ViewInfo,
         log: &mut Log<Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
-    ) -> ConsensusStatus {
+    ) -> ConsensusStatus<'a> {
         // FIXME: use order imposed by leader
         // FIXME: check if the pre-prepare is from the leader
         // FIXME: make sure a replica doesn't vote twice
@@ -413,13 +424,14 @@ where
             ProtoPhase::PrePreparing => {
                 // queue message if we're not pre-preparing
                 // or in the same seq as the message
-                self.current = match message.kind() {
+                match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) if message.sequence_number() != self.sequence_number() => {
                         self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     },
-                    ConsensusMessageKind::PrePrepare(dig) => {
-                        dig.clone()
+                    ConsensusMessageKind::PrePrepare(digests) => {
+                        self.batch_size = digests.len();
+                        (&mut self.current[..digests.len()]).copy_from_slice(&digests[..]);
                     },
                     ConsensusMessageKind::Prepare => {
                         self.queue_prepare(header, message);
@@ -429,7 +441,7 @@ where
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
                     },
-                };
+                }
                 // leader can't vote for a prepare
                 if node.id() != view.leader() {
                     let message = SystemMessage::Consensus(ConsensusMessage::new(
@@ -442,10 +454,20 @@ where
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
                 // try entering preparing phase
-                if log.has_request(&self.current) {
+                for digest in self.current {
+                    match self.phase {
+                        ProtoPhase::PreparingRequest if !log.has_request(digest) => {
+                            self.missing_requests.push(digest.clone());
+                        },
+                        _ if !log.has_request(digest) => {
+                            self.phase = ProtoPhase::PreparingRequest;
+                            self.missing_requests.push(digest.clone());
+                        },
+                        _ => (),
+                    }
+                }
+                if let ProtoPhase::PrePreparing = self.phase {
                     self.phase = ProtoPhase::Preparing(0);
-                } else {
-                    self.phase = ProtoPhase::PreparingRequest;
                 }
                 ConsensusStatus::Deciding
             },
@@ -528,7 +550,7 @@ where
                     // we have reached a decision,
                     // notify core protocol
                     self.phase = ProtoPhase::Init;
-                    ConsensusStatus::Decided(self.current)
+                    ConsensusStatus::Decided(&self.current[..self.batch_size])
                 } else {
                     self.phase = ProtoPhase::Committing(i);
                     ConsensusStatus::Deciding
