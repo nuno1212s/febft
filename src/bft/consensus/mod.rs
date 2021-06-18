@@ -317,7 +317,7 @@ where
                 .flat_map(|d| d) // unwrap
                 .take(batch_size)
                 .collect(),
-    }
+        }
     }
 
     /// Proposes a new request with digest `dig`.
@@ -370,10 +370,9 @@ where
                 for (index, _) in iterator {
                     self.missing_swapbuf.push(index);
                 }
-                for index in self.missing_swapbuf {
+                for index in self.missing_swapbuf.drain(..) {
                     self.missing_requests.swap_remove_back(index);
                 }
-                self.missing_swapbuf.clear();
                 if self.missing_requests.is_empty() {
                     extract_msg!(
                         { self.phase = ProtoPhase::Preparing(0); },

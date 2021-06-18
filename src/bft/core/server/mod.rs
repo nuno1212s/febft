@@ -100,6 +100,7 @@ where
         let ReplicaConfig {
             next_consensus_seq,
             node: node_config,
+            batch_size,
             service,
             leader,
         } = cfg;
@@ -119,10 +120,10 @@ where
         )?;
 
         // TODO: get log from persistent storage
-        let log = Log::new();
+        let log = Log::new(batch_size);
 
         let mut replica = Replica {
-            consensus: Consensus::new(next_consensus_seq),
+            consensus: Consensus::new(next_consensus_seq, batch_size),
             executor,
             node,
             view,

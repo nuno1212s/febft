@@ -178,7 +178,7 @@ where
             while let Ok(exec_req) = exec.e_rx.recv() {
                 match exec_req {
                     ExecutionRequest::Update(batch) => {
-                        let reply_batch = UpdateBatchReplies::with_capacity(batch.len());
+                        let mut reply_batch = UpdateBatchReplies::with_capacity(batch.len());
 
                         for update in batch.into_inner() {
                             let (peer_id, dig, req) = update.into_inner();
@@ -194,7 +194,7 @@ where
                         });
                     },
                     ExecutionRequest::UpdateAndGetAppstate(batch) => {
-                        let reply_batch = UpdateBatchReplies::with_capacity(batch.len());
+                        let mut reply_batch = UpdateBatchReplies::with_capacity(batch.len());
 
                         for update in batch.into_inner() {
                             let (peer_id, dig, req) = update.into_inner();
