@@ -370,7 +370,7 @@ where
                 for (index, _) in iterator {
                     self.missing_swapbuf.push(index);
                 }
-                for &index in self.missing_swapbuf {
+                for index in self.missing_swapbuf {
                     self.missing_requests.swap_remove_back(index);
                 }
                 self.missing_swapbuf.clear();
@@ -472,7 +472,7 @@ where
                 self.phase = if self.missing_requests.is_empty() {
                     ProtoPhase::Preparing(0)
                 } else {
-                    ProtoPhase::PreparingRequests;
+                    ProtoPhase::PreparingRequests
                 };
                 ConsensusStatus::Deciding
             },

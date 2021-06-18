@@ -226,7 +226,7 @@ where
                 },
                 Message::ExecutionFinished(batch) => {
                     // deliver replies to clients
-                    for update_reply in batch {
+                    for update_reply in batch.into_inner() {
                         let (peer_id, digest, payload) = update_reply.into_inner();
                         let message = SystemMessage::Reply(ReplyMessage::new(
                             digest,
@@ -240,7 +240,7 @@ where
                     self.log.finalize_checkpoint(appstate)?;
 
                     // deliver reply to client
-                    for update_reply in batch {
+                    for update_reply in batch.into_inner() {
                         let (peer_id, digest, payload) = update_reply.into_inner();
                         let message = SystemMessage::Reply(ReplyMessage::new(
                             digest,

@@ -74,6 +74,7 @@ struct StoredRequest<O> {
 
 /// Represents a log of messages received by the BFT system.
 pub struct Log<O, P> {
+    curr_seq: SeqNo,
     batch_size: usize,
     pre_prepares: Vec<StoredConsensus>,
     prepares: Vec<StoredConsensus>,
@@ -96,6 +97,7 @@ impl<O, P> Log<O, P> {
     pub fn new(batch_size: usize) -> Self {
         Self {
             batch_size,
+            curr_seq: SeqNo::from(0),
             pre_prepares: Vec::new(),
             prepares: Vec::new(),
             commits: Vec::new(),
@@ -144,6 +146,7 @@ impl<O, P> Log<O, P> {
         if self.deciding.len() >= self.batch_size {
             Some(self.deciding
                 .keys()
+                .copied()
                 .take(self.batch_size)
                 .collect())
         } else {
@@ -171,7 +174,8 @@ impl<O, P> Log<O, P> {
             let (header, message) = self.deciding
                 .remove(digest)
                 .or_else(|| self.requests.remove(digest))
-                .map(StoredRequest::into_inner)?;
+                .map(StoredRequest::into_inner)
+                .ok_or(Error::simple(ErrorKind::History))?;
             batch.add(header.from(), digest.clone(), message.into_inner());
         }
 
@@ -234,7 +238,7 @@ impl<O, P> Log<O, P> {
                         // store the id of the last received pre-prepare,
                         // which corresponds to the request currently being
                         // processed
-                        self.curr_seq = last_pre_prepare.sequence_number();
+                        self.curr_seq = last_pre_prepare.message.sequence_number();
                     },
                     None => {
                         // no stored PRE-PREPARE messages, NOOP
