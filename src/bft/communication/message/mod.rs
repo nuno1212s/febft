@@ -30,7 +30,7 @@ use crate::bft::crypto::hash::{
     Digest,
 };
 use crate::bft::communication::socket::Socket;
-use crate::bft::execution::UpdateBatchReplies;
+use crate::bft::executable::UpdateBatchReplies;
 use crate::bft::communication::NodeId;
 use crate::bft::consensus::SeqNo;
 use crate::bft::error::*;
@@ -144,7 +144,7 @@ pub struct ReplyMessage<P> {
 /// Different types of consensus messages are represented in the `ConsensusMessageKind`
 /// type.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct ConsensusMessage {
     seq: SeqNo,
     kind: ConsensusMessageKind,
@@ -152,7 +152,7 @@ pub struct ConsensusMessage {
 
 /// Represents one of many different consensus stages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub enum ConsensusMessageKind {
     /// Pre-prepare a request, according to the BFT protocol.
     /// The `Digest` represens the hash of the serialized request payload.

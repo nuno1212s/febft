@@ -469,7 +469,7 @@ where
                 for digest in self.current.iter().filter(|d| !log.has_request(d)) {
                     self.missing_requests.push_back(digest.clone());
                 }
-                self.phase = if missing_requests.is_empty() {
+                self.phase = if self.missing_requests.is_empty() {
                     ProtoPhase::Preparing(0)
                 } else {
                     ProtoPhase::PreparingRequests;

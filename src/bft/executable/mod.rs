@@ -193,7 +193,7 @@ where
                             system_tx.send(m).await.unwrap();
                         });
                     },
-                    ExecutionRequest::UpdateAndGetAppstate(peer_id, dig, req) => {
+                    ExecutionRequest::UpdateAndGetAppstate(batch) => {
                         let reply_batch = UpdateBatchReplies::with_capacity(batch.len());
 
                         for update in batch.into_inner() {

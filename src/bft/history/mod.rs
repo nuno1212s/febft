@@ -193,7 +193,7 @@ impl<O, P> Log<O, P> {
             Info::Nil
         };
 
-        Ok((info, header, message))
+        Ok((info, batch))
     }
 
     fn begin_checkpoint(&mut self, seq: SeqNo) -> Result<Info> {

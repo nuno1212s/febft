@@ -226,22 +226,28 @@ where
                 },
                 Message::ExecutionFinished(batch) => {
                     // deliver replies to clients
-                    let message = SystemMessage::Reply(ReplyMessage::new(
-                        digest,
-                        payload,
-                    ));
-                    self.node.send(message, peer_id);
+                    for update_reply in batch {
+                        let (peer_id, digest, payload) = update_reply.into_inner();
+                        let message = SystemMessage::Reply(ReplyMessage::new(
+                            digest,
+                            payload,
+                        ));
+                        self.node.send(message, peer_id);
+                    }
                 },
                 Message::ExecutionFinishedWithAppstate(batch, appstate) => {
                     // store the application state in the checkpoint
                     self.log.finalize_checkpoint(appstate)?;
 
                     // deliver reply to client
-                    let message = SystemMessage::Reply(ReplyMessage::new(
-                        digest,
-                        payload,
-                    ));
-                    self.node.send(message, peer_id);
+                    for update_reply in batch {
+                        let (peer_id, digest, payload) = update_reply.into_inner();
+                        let message = SystemMessage::Reply(ReplyMessage::new(
+                            digest,
+                            payload,
+                        ));
+                        self.node.send(message, peer_id);
+                    }
                 },
                 Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
                 Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
