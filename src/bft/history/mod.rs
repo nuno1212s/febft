@@ -139,6 +139,8 @@ impl<O, P> Log<O, P> {
     pub fn next_batch(&mut self) -> Option<Vec<Digest>> {
         let (digest, stored) = self.requests.pop_front()?;
         self.deciding.insert(digest, stored);
+        // TODO: we may include another condition here to decide on a
+        // smaller batch size, so that client request latency is lower
         if self.deciding.len() >= self.batch_size {
             Some(self.deciding
                 .keys()
@@ -163,7 +165,7 @@ impl<O, P> Log<O, P> {
     ///
     /// The log may be cleared resulting from this operation. Check the enum variant of
     /// `Info`, to perform a local checkpoint when appropriate.
-    pub fn finalize_batch(&mut self, digests: &[Digest]) -> Option<(Info, UpdateBatch<O>)> {
+    pub fn finalize_batch(&mut self, digests: &[Digest]) -> Result<(Info, UpdateBatch<O>)> {
         let mut batch = UpdateBatch::new();
         for digest in digests {
             let (header, message) = self.deciding
@@ -186,23 +188,22 @@ impl<O, P> Log<O, P> {
         let last_seq_no_u32 = u32::from(last_seq_no);
 
         let info = if last_seq_no_u32 > 0 && last_seq_no_u32 % PERIOD == 0 {
-            self.begin_checkpoint(last_seq_no)
+            self.begin_checkpoint(last_seq_no)?
         } else {
             Info::Nil
         };
 
-        Some((info, header, message))
+        Ok((info, header, message))
     }
 
-    fn begin_checkpoint(&mut self, seq: SeqNo) -> Info {
+    fn begin_checkpoint(&mut self, seq: SeqNo) -> Result<Info> {
         let earlier = std::mem::replace(&mut self.checkpoint, CheckpointState::None);
         self.checkpoint = match earlier {
             CheckpointState::None => CheckpointState::Partial { seq },
             CheckpointState::Complete(earlier) => CheckpointState::PartialWithEarlier { seq, earlier },
-            // TODO: maybe return Result with the error
-            _ => panic!("Invalid checkpoint state detected!"),
+            _ => return Err("Invalid checkpoint state detected").wrapped(ErrorKind::History),
         };
-        Info::BeginCheckpoint
+        Ok(Info::BeginCheckpoint)
     }
 
     /// End the state of an ongoing checkpoint.
