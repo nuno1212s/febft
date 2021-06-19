@@ -11,10 +11,10 @@ case $1 in
     clean)
         rm -rf target/
         ;;
-    build|test|bench|doc|run)
+    build|test|bench|doc|run|clippy)
         cargo_do $@
         ;;
     *)
-        echo Usage: $0 "<build|test|bench|doc|run|clean>"
+        echo Usage: $0 "<build|test|bench|doc|run|clippy|clean>"
         exit 1
 esac
