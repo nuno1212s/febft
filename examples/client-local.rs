@@ -54,7 +54,7 @@ async fn async_main() {
         // clients
         NodeId::from(1000u32) => addr!("cli1000" => "127.0.0.1:11000")
     };
-    let mut client = setup_client(
+    let client = setup_client(
         pool,
         id,
         sk,
@@ -62,16 +62,22 @@ async fn async_main() {
         public_keys,
     ).await.unwrap();
 
-    let mut rng = prng::State::new();
-
-    loop {
-        let request = {
-            let i = rng.next_state();
-            if i & 1 == 0 { Action::Sqrt } else { Action::MultiplyByTwo }
-        };
-        let reply = client.update(request).await;
-        println!("State: {}", reply);
+    for _ in 0..2048 {
+        let mut client = client.clone();
+        rt::spawn(async move {
+            let mut rng = prng::State::new();
+            loop {
+                let request = {
+                    let i = rng.next_state();
+                    if i & 1 == 0 { Action::Sqrt } else { Action::MultiplyByTwo }
+                };
+                let reply = client.update(request).await;
+                println!("State: {}", reply);
+            }
+        });
     }
+
+    std::future::pending().await
 }
 
 fn sk_stream() -> impl Iterator<Item = KeyPair> {
