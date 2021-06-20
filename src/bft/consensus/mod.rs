@@ -60,7 +60,7 @@ impl SeqNo {
         SeqNo(if overflow { 0 } else { next })
     }
 
-    /// Return an appropriate value to index the `TBOQueue`.
+    /// Return an appropriate value to index the `TboQueue`.
     #[inline]
     fn index(self, other: SeqNo) -> Option<usize> {
         // FIXME: probably swap this logic out for
@@ -92,12 +92,12 @@ impl SeqNo {
     }
 }
 
-/// Represents the status of calling `poll()` on a `TBOQueue`.
+/// Represents the status of calling `poll()` on a `TboQueue`.
 pub enum PollStatus {
-    /// The `Replica` associated with this `TBOQueue` should
+    /// The `Replica` associated with this `TboQueue` should
     /// poll its main channel for more messages.
     Recv,
-    /// The `Replica` associated with this `TBOQueue` should
+    /// The `Replica` associated with this `TboQueue` should
     /// propose a new client request to be ordered, if it is
     /// the leader, and then it should poll its main channel
     /// for more messages. Alternatively, if the request has
@@ -112,9 +112,9 @@ pub enum PollStatus {
 ///
 /// Because of the asynchrony of the Internet, messages may arrive out of
 /// context, e.g. for the same consensus instance, a `PRE-PREPARE` reaches
-/// a node after a `PREPARE`. A `TBOQueue` arranges these messages to be
+/// a node after a `PREPARE`. A `TboQueue` arranges these messages to be
 /// processed in the correct order.
-pub struct TBOQueue {
+pub struct TboQueue {
     curr_seq: SeqNo,
     get_queue: bool,
     pre_prepares: VecDeque<VecDeque<(Header, ConsensusMessage)>>,
@@ -123,7 +123,7 @@ pub struct TBOQueue {
 }
 
 // XXX: details
-impl TBOQueue {
+impl TboQueue {
     fn new_impl(curr_seq: SeqNo) -> Self {
         Self {
             curr_seq,
@@ -181,18 +181,18 @@ impl TBOQueue {
 }
 
 // XXX: api
-impl TBOQueue {
+impl TboQueue {
     fn new(curr_seq: SeqNo) -> Self {
         Self::new_impl(curr_seq)
     }
 
-    /// Signal this `TBOQueue` that it may be able to extract new
+    /// Signal this `TboQueue` that it may be able to extract new
     /// consensus messages from its internal storage.
     pub fn signal(&mut self) {
         self.get_queue = true;
     }
 
-    /// Reports the id of the consensus this `TBOQueue` is tracking.
+    /// Reports the id of the consensus this `TboQueue` is tracking.
     pub fn sequence_number(&self) -> SeqNo {
         self.curr_seq
     }
@@ -260,7 +260,7 @@ pub struct Consensus<S: Service> {
     // but never longer
     batch_size: usize,
     phase: ProtoPhase,
-    tbo: TBOQueue,
+    tbo: TboQueue,
     current: Vec<Digest>,
     //voted: HashSet<NodeId>,
     missing_requests: VecDeque<Digest>,
@@ -286,7 +286,7 @@ macro_rules! extract_msg {
     };
 
     ($opt:block, $g:expr, $q:expr) => {
-        if let Some((header, message)) = TBOQueue::pop_message($q) {
+        if let Some((header, message)) = TboQueue::pop_message($q) {
             $opt
             PollStatus::NextMessage(header, message)
         } else {
@@ -312,7 +312,7 @@ where
             missing_swapbuf: Vec::new(),
             missing_requests: VecDeque::new(),
             //voted: collections::hash_set(),
-            tbo: TBOQueue::new(initial_seq_no),
+            tbo: TboQueue::new(initial_seq_no),
             current: std::iter::repeat_with(|| Digest::from_bytes(&[0; Digest::LENGTH][..]))
                 .flat_map(|d| d) // unwrap
                 .take(batch_size)
@@ -571,10 +571,10 @@ where
     Request<S>: Send + 'static,
     Reply<S>: Send + 'static,
 {
-    type Target = TBOQueue;
+    type Target = TboQueue;
 
     #[inline]
-    fn deref(&self) -> &TBOQueue {
+    fn deref(&self) -> &TboQueue {
         &self.tbo
     }
 }
@@ -587,7 +587,7 @@ where
     Reply<S>: Send + 'static,
 {
     #[inline]
-    fn deref_mut(&mut self) -> &mut TBOQueue {
+    fn deref_mut(&mut self) -> &mut TboQueue {
         &mut self.tbo
     }
 }

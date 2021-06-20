@@ -160,7 +160,7 @@ where
             // retrieve the next message to be processed.
             //
             // the order of the next consensus message is guaranteed by
-            // `TBOQueue`, in the consensus module.
+            // `TboQueue`, in the consensus module.
             let message = match self.consensus.poll(&self.log) {
                 PollStatus::Recv => self.node.receive().await?,
                 PollStatus::NextMessage(h, m) => Message::System(h, SystemMessage::Consensus(m)),
