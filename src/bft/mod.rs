@@ -15,6 +15,7 @@ pub mod crypto;
 pub mod error;
 pub mod prng;
 pub mod core;
+pub mod cst;
 
 use std::ops::Drop;
 
