@@ -38,7 +38,7 @@ enum ReplicaState {
     RetrievingAppState,
     // the replica has entered the
     // synchronization phase of mod-smart
-    ChangingView,
+    SyncPhase,
     // the replica is on the normal phase
     // of mod-smart
     NormalPhase,
@@ -173,8 +173,8 @@ where
         loop {
             match self.state {
                 ReplicaState::RetrievingAppState => self.update_retrieving_app_state().await?,
-                ReplicaState::ChangingView => self.update_changing_view().await?,
                 ReplicaState::NormalPhase => self.update_normal_phase().await?,
+                ReplicaState::SyncPhase => self.update_sync_phase().await?,
             }
         }
     }
@@ -183,7 +183,7 @@ where
         unimplemented!()
     }
 
-    async fn update_changing_view(&mut self) -> Result<()> {
+    async fn update_sync_phase(&mut self) -> Result<()> {
         unimplemented!()
     }
 
