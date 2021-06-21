@@ -11,4 +11,6 @@ pub struct CollabStTransfer {
 
 enum ProtoPhase {
     Init,
+    ReceivingCid(usize),
+    ReceivingAppState(usize),
 }
