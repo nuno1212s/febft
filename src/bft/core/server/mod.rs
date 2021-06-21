@@ -32,6 +32,18 @@ use crate::bft::communication::message::{
     Message,
 };
 
+enum ReplicaState {
+    // the replica is retrieving state from
+    // its peer replicas
+    RetrievingAppState,
+    // the replica has entered the
+    // synchronization phase of mod-smart
+    ChangingView,
+    // the replica is on the normal phase
+    // of mod-smart
+    NormalPhase,
+}
+
 /// This struct contains information related with an
 /// active `febft` view.
 #[derive(Copy, Clone)]
@@ -64,6 +76,7 @@ impl ViewInfo {
 
 /// Represents a replica in `febft`.
 pub struct Replica<S: Service> {
+    state: ReplicaState,
     executor: ExecutorHandle<S>,
     view: ViewInfo,
     consensus: Consensus<S>,
@@ -124,6 +137,7 @@ where
 
         let mut replica = Replica {
             consensus: Consensus::new(next_consensus_seq, batch_size),
+            state: ReplicaState::NormalPhase,
             executor,
             node,
             view,
@@ -157,110 +171,123 @@ where
     pub async fn run(&mut self) -> Result<()> {
         // TODO: exit condition?
         loop {
-            // retrieve the next message to be processed.
-            //
-            // the order of the next consensus message is guaranteed by
-            // `TboQueue`, in the consensus module.
-            let message = match self.consensus.poll(&self.log) {
-                PollStatus::Recv => self.node.receive().await?,
-                PollStatus::NextMessage(h, m) => Message::System(h, SystemMessage::Consensus(m)),
-                PollStatus::TryProposeAndRecv => {
-                    if let Some(digests) = self.log.next_batch() {
-                        self.consensus.propose(digests, self.view, &mut self.node);
-                    }
-                    self.node.receive().await?
-                },
-            };
-
-            match message {
-                Message::System(header, message) => {
-                    match message {
-                        request @ SystemMessage::Request(_) => {
-                            self.log.insert(header, request);
-                        },
-                        SystemMessage::Consensus(message) => {
-                            let status = self.consensus.process_message(
-                                header,
-                                message,
-                                self.view,
-                                &mut self.log,
-                                &mut self.node,
-                            );
-                            match status {
-                                // if deciding, nothing to do
-                                ConsensusStatus::Deciding => rt::yield_now().await,
-                                // FIXME: implement this
-                                ConsensusStatus::VotedTwice(_) => unimplemented!(),
-                                // reached agreement, execute requests
-                                //
-                                // FIXME: execution layer needs to receive the id
-                                // attributed by the consensus layer to each op,
-                                // to execute in order
-                                ConsensusStatus::Decided(digests) => {
-                                    let (info, batch) = self.log.finalize_batch(digests)?;
-                                    match info {
-                                        // normal execution
-                                        Info::Nil => self.executor.queue_update(
-                                            batch,
-                                        )?,
-                                        // execute and begin local checkpoint
-                                        Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
-                                            batch,
-                                        )?,
-                                    }
-                                    self.consensus.next_instance();
-                                },
-                            }
-
-                            // we processed a consensus message,
-                            // signal the consensus layer of this event
-                            self.consensus.signal();
-
-                            // yield execution since `signal()`
-                            // will probably force a value from the
-                            // TBO queue in the consensus layer
-                            rt::yield_now().await;
-                        },
-                        // FIXME: handle rogue reply messages
-                        SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
-                    }
-                },
-                Message::ExecutionFinished(batch) => {
-                    // deliver replies to clients
-                    for update_reply in batch.into_inner() {
-                        let (peer_id, digest, payload) = update_reply.into_inner();
-                        let message = SystemMessage::Reply(ReplyMessage::new(
-                            digest,
-                            payload,
-                        ));
-                        self.node.send(message, peer_id);
-                    }
-                },
-                Message::ExecutionFinishedWithAppstate(batch, appstate) => {
-                    // store the application state in the checkpoint
-                    self.log.finalize_checkpoint(appstate)?;
-
-                    // deliver reply to client
-                    for update_reply in batch.into_inner() {
-                        let (peer_id, digest, payload) = update_reply.into_inner();
-                        let message = SystemMessage::Reply(ReplyMessage::new(
-                            digest,
-                            payload,
-                        ));
-                        self.node.send(message, peer_id);
-                    }
-                },
-                Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
-                Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
-                // TODO: node disconnected on send side
-                Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
-                // TODO: node disconnected on receive side
-                Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
+            match self.state {
+                ReplicaState::RetrievingAppState => self.update_retrieving_app_state().await?,
+                ReplicaState::ChangingView => self.update_changing_view().await?,
+                ReplicaState::NormalPhase => self.update_normal_phase().await?,
             }
-
-            // loop end
         }
+    }
 
-        // run end
+    async fn update_retrieving_app_state(&mut self) -> Result<()> {
+        unimplemented!()
+    }
+
+    async fn update_changing_view(&mut self) -> Result<()> {
+        unimplemented!()
+    }
+
+    async fn update_normal_phase(&mut self) -> Result<()> {
+        // retrieve the next message to be processed.
+        //
+        // the order of the next consensus message is guaranteed by
+        // `TboQueue`, in the consensus module.
+        let message = match self.consensus.poll(&self.log) {
+            PollStatus::Recv => self.node.receive().await?,
+            PollStatus::NextMessage(h, m) => Message::System(h, SystemMessage::Consensus(m)),
+            PollStatus::TryProposeAndRecv => {
+                if let Some(digests) = self.log.next_batch() {
+                    self.consensus.propose(digests, self.view, &mut self.node);
+                }
+                self.node.receive().await?
+            },
+        };
+
+        match message {
+            Message::System(header, message) => {
+                match message {
+                    request @ SystemMessage::Request(_) => {
+                        self.log.insert(header, request);
+                    },
+                    SystemMessage::Consensus(message) => {
+                        let status = self.consensus.process_message(
+                            header,
+                            message,
+                            self.view,
+                            &mut self.log,
+                            &mut self.node,
+                        );
+                        match status {
+                            // if deciding, nothing to do
+                            ConsensusStatus::Deciding => rt::yield_now().await,
+                            // FIXME: implement this
+                            ConsensusStatus::VotedTwice(_) => unimplemented!(),
+                            // reached agreement, execute requests
+                            //
+                            // FIXME: execution layer needs to receive the id
+                            // attributed by the consensus layer to each op,
+                            // to execute in order
+                            ConsensusStatus::Decided(digests) => {
+                                let (info, batch) = self.log.finalize_batch(digests)?;
+                                match info {
+                                    // normal execution
+                                    Info::Nil => self.executor.queue_update(
+                                        batch,
+                                    )?,
+                                    // execute and begin local checkpoint
+                                    Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
+                                        batch,
+                                    )?,
+                                }
+                                self.consensus.next_instance();
+                            },
+                        }
+
+                        // we processed a consensus message,
+                        // signal the consensus layer of this event
+                        self.consensus.signal();
+
+                        // yield execution since `signal()`
+                        // will probably force a value from the
+                        // TBO queue in the consensus layer
+                        rt::yield_now().await;
+                    },
+                    // FIXME: handle rogue reply messages
+                    SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
+                }
+            },
+            Message::ExecutionFinished(batch) => {
+                // deliver replies to clients
+                for update_reply in batch.into_inner() {
+                    let (peer_id, digest, payload) = update_reply.into_inner();
+                    let message = SystemMessage::Reply(ReplyMessage::new(
+                        digest,
+                        payload,
+                    ));
+                    self.node.send(message, peer_id);
+                }
+            },
+            Message::ExecutionFinishedWithAppstate(batch, appstate) => {
+                // store the application state in the checkpoint
+                self.log.finalize_checkpoint(appstate)?;
+
+                // deliver reply to client
+                for update_reply in batch.into_inner() {
+                    let (peer_id, digest, payload) = update_reply.into_inner();
+                    let message = SystemMessage::Reply(ReplyMessage::new(
+                        digest,
+                        payload,
+                    ));
+                    self.node.send(message, peer_id);
+                }
+            },
+            Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
+            Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
+            // TODO: node disconnected on send side
+            Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
+            // TODO: node disconnected on receive side
+            Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
+        }
+        Ok(())
     }
 }
