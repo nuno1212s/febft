@@ -7,7 +7,7 @@ use std::ops::{Deref, DerefMut};
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
-use crate::bft::history::{self, Log};
+use crate::bft::log::{self, Log};
 use crate::bft::crypto::hash::Digest;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::communication::message::{
@@ -67,7 +67,7 @@ impl SeqNo {
         // low and high water marks, like in PBFT
         const OVERFLOW_THRES_POS: i32 = 10000;
         const OVERFLOW_THRES_NEG: i32 = -OVERFLOW_THRES_POS;
-        const DROP_SEQNO_THRES: i32 = (history::PERIOD + (history::PERIOD >> 1)) as i32;
+        const DROP_SEQNO_THRES: i32 = (log::PERIOD + (log::PERIOD >> 1)) as i32;
 
         let index = {
             let index = (self.0).wrapping_sub(other.0);

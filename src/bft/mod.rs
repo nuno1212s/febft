@@ -11,12 +11,12 @@ pub mod threadpool;
 pub mod consensus;
 pub mod timeouts;
 pub mod globals;
-pub mod history;
 pub mod crypto;
 pub mod error;
 pub mod prng;
 pub mod core;
 pub mod cst;
+pub mod log;
 
 use std::ops::Drop;
 

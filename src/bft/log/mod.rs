@@ -1,4 +1,4 @@
-//! Message history log and tools to make it persistent.
+//! A module to manage the `febft` message log.
 
 use std::marker::PhantomData;
 
@@ -175,7 +175,7 @@ impl<O, P> Log<O, P> {
                 .remove(digest)
                 .or_else(|| self.requests.remove(digest))
                 .map(StoredRequest::into_inner)
-                .ok_or(Error::simple(ErrorKind::History))?;
+                .ok_or(Error::simple(ErrorKind::Log))?;
             batch.add(header.from(), digest.clone(), message.into_inner());
         }
 
@@ -205,7 +205,7 @@ impl<O, P> Log<O, P> {
         self.checkpoint = match earlier {
             CheckpointState::None => CheckpointState::Partial { seq },
             CheckpointState::Complete(earlier) => CheckpointState::PartialWithEarlier { seq, earlier },
-            _ => return Err("Invalid checkpoint state detected").wrapped(ErrorKind::History),
+            _ => return Err("Invalid checkpoint state detected").wrapped(ErrorKind::Log),
         };
         Ok(Info::BeginCheckpoint)
     }
@@ -217,8 +217,8 @@ impl<O, P> Log<O, P> {
     /// on the core server task's master channel.
     pub fn finalize_checkpoint(&mut self, appstate: Vec<u8>) -> Result<()> {
         match self.checkpoint {
-            CheckpointState::None => Err("No checkpoint has been initiated yet").wrapped(ErrorKind::History),
-            CheckpointState::Complete(_) => Err("Checkpoint already finalized").wrapped(ErrorKind::History),
+            CheckpointState::None => Err("No checkpoint has been initiated yet").wrapped(ErrorKind::Log),
+            CheckpointState::Complete(_) => Err("Checkpoint already finalized").wrapped(ErrorKind::Log),
             CheckpointState::Partial { ref seq } | CheckpointState::PartialWithEarlier { ref seq, .. } => {
                 let seq = *seq;
                 self.checkpoint = CheckpointState::Complete(Checkpoint {

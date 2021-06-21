@@ -753,7 +753,7 @@ where
 
     // performs a cryptographic handshake with a peer node;
     // header doesn't need to be signed, since we won't be
-    // storing this message in the history log
+    // storing this message in the log
     async fn rx_side_accept_task(
         first_cli: NodeId,
         my_id: NodeId,

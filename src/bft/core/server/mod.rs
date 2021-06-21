@@ -3,7 +3,7 @@
 use super::SystemParams;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
-use crate::bft::history::{
+use crate::bft::log::{
     Info,
     Log,
 };
