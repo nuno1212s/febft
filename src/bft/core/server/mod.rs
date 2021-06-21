@@ -10,8 +10,8 @@ use crate::bft::history::{
 use crate::bft::consensus::{
     SeqNo,
     Consensus,
-    PollStatus,
     ConsensusStatus,
+    ConsensusPollStatus,
 };
 use crate::bft::executable::{
     Service,
@@ -193,9 +193,13 @@ where
         // the order of the next consensus message is guaranteed by
         // `TboQueue`, in the consensus module.
         let message = match self.consensus.poll(&self.log) {
-            PollStatus::Recv => self.node.receive().await?,
-            PollStatus::NextMessage(h, m) => Message::System(h, SystemMessage::Consensus(m)),
-            PollStatus::TryProposeAndRecv => {
+            ConsensusPollStatus::Recv => {
+                self.node.receive().await?
+            },
+            ConsensusPollStatus::NextMessage(h, m) => {
+                Message::System(h, SystemMessage::Consensus(m))
+            },
+            ConsensusPollStatus::TryProposeAndRecv => {
                 if let Some(digests) = self.log.next_batch() {
                     self.consensus.propose(digests, self.view, &mut self.node);
                 }

@@ -9,6 +9,7 @@ pub mod collections;
 pub mod executable;
 pub mod threadpool;
 pub mod consensus;
+pub mod timeouts;
 pub mod globals;
 pub mod history;
 pub mod crypto;

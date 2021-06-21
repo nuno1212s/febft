@@ -93,7 +93,7 @@ impl SeqNo {
 }
 
 /// Represents the status of calling `poll()` on a `TboQueue`.
-pub enum PollStatus {
+pub enum ConsensusPollStatus {
     /// The `Replica` associated with this `TboQueue` should
     /// poll its main channel for more messages.
     Recv,
@@ -288,10 +288,10 @@ macro_rules! extract_msg {
     ($opt:block, $g:expr, $q:expr) => {
         if let Some((header, message)) = TboQueue::pop_message($q) {
             $opt
-            PollStatus::NextMessage(header, message)
+            ConsensusPollStatus::NextMessage(header, message)
         } else {
             *$g = false;
-            PollStatus::Recv
+            ConsensusPollStatus::Recv
         }
     };
 }
@@ -347,7 +347,7 @@ where
     }
 
     /// Check if we can process new consensus messages.
-    pub fn poll(&mut self, log: &Log<Request<S>, Reply<S>>) -> PollStatus {
+    pub fn poll(&mut self, log: &Log<Request<S>, Reply<S>>) -> ConsensusPollStatus {
         match self.phase {
             ProtoPhase::Init if self.tbo.get_queue => {
                 extract_msg!(
@@ -357,7 +357,7 @@ where
                 )
             },
             ProtoPhase::Init => {
-                PollStatus::TryProposeAndRecv
+                ConsensusPollStatus::TryProposeAndRecv
             },
             ProtoPhase::PrePreparing if self.tbo.get_queue => {
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.pre_prepares)
@@ -380,7 +380,7 @@ where
                         &mut self.tbo.prepares
                     )
                 } else {
-                    PollStatus::Recv
+                    ConsensusPollStatus::Recv
                 }
             },
             ProtoPhase::Preparing(_) if self.tbo.get_queue => {
@@ -389,7 +389,7 @@ where
             ProtoPhase::Committing(_) if self.tbo.get_queue => {
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.commits)
             },
-            _ => PollStatus::Recv,
+            _ => ConsensusPollStatus::Recv,
         }
     }
 
