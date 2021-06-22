@@ -57,7 +57,7 @@ impl CollabStateTransfer {
     pub fn new() -> Self {
         Self {
             phase: ProtoPhase::Init,
-            latest_cid: SeqNo::from(0),
+            latest_cid: SeqNo::from(0u32),
             latest_cid_node: NodeId::from(0u32),
             seq: SeqNo::from(0),
         }
@@ -120,7 +120,8 @@ impl CollabStateTransfer {
                 let i = i + 1;
 
                 if i == view.params().quorum() {
-                    unimplemented!()
+                    self.phase = ProtoPhase::Init;
+                    CstStatus::SeqNo(self.latest_cid_node, self.latest_cid)
                 } else {
                     self.phase = ProtoPhase::ReceivingCid(i);
                     CstStatus::Running
@@ -138,6 +139,8 @@ impl CollabStateTransfer {
         Request<S>: Send + 'static,
         Reply<S>: Send + 'static,
     {
+        self.latest_cid = SeqNo::from(0u32);
+        self.latest_cid_node = NodeId::from(0u32);
         unimplemented!()
     }
 }
