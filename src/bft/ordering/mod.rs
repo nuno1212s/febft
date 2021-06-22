@@ -46,11 +46,11 @@ impl From<SeqNo> for u32 {
 
 impl PartialOrd for SeqNo {
     fn partial_cmp(&self, other: &SeqNo) -> Option<Ordering> {
-        match self.index(other) {
+        Some(match self.index(*other) {
             Right(0) => Ordering::Equal,
             Left(InvalidSeqNo::Small) => Ordering::Less,
              _ => Ordering::Greater,
-        }
+        })
     }
 }
 
