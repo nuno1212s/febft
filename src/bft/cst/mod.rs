@@ -28,10 +28,12 @@ enum ProtoPhase {
     ReceivingAppState(usize),
 }
 
-// TODO: finish this struct
-struct ReplicaState<S> {
+// TODO:
+// - finish this struct
+// - include request payload
+struct ReplicaState<S: Service> {
     view: ViewInfo,
-    checkpoint_state: S,
+    checkpoint_state: State<S>,
     //pre_prepares: Vec<StoredConsensus>,
     //prepares: Vec<StoredConsensus>,
     //commits: Vec<StoredConsensus>,
