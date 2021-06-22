@@ -138,6 +138,24 @@ pub enum CstMessageKind {
     ReplyApplicationState( (/* TODO: app state type */) ),
 }
 
+impl CstMessage {
+    /// Creates a new `CstMessage` with sequence number `seq`,
+    /// and of the kind `kind`.
+    pub fn new(seq: SeqNo, kind: CstMessageKind) -> Self {
+        Self { seq, kind }
+    }
+
+    /// Returns the sequence number of this state transfer message.
+    pub fn sequence_number(&self) -> SeqNo {
+        self.seq
+    }
+
+    /// Returns a reference to the state transfer message kind.
+    pub fn kind(&self) -> &CstMessageKind {
+        &self.kind
+    }
+}
+
 /// Represents a request from a client.
 ///
 /// The `O` type argument symbolizes the client operation to be performed

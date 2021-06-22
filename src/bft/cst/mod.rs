@@ -12,6 +12,7 @@ use crate::bft::communication::{
 use crate::bft::communication::message::{
     Header,
     CstMessage,
+    CstMessageKind,
     //SystemMessage,
 };
 use crate::bft::executable::{
@@ -104,6 +105,7 @@ impl CollabStateTransfer {
 
                 match message.kind() {
                     CstMessageKind::ReplyLatestConsensusSeq(seq) => {
+                        let seq = *seq;
                         if seq > self.latest_cid {
                             self.latest_cid = seq;
                             self.latest_cid_node = header.from();
