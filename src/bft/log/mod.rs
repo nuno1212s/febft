@@ -210,7 +210,7 @@ impl<O, P> Log<O, P> {
         Ok(Info::BeginCheckpoint)
     }
 
-    /// End the state of an ongoing checkpoint.
+    /// End the state of an on-going checkpoint.
     ///
     /// This method should only be called when `finalize_request()` reports
     /// `Info::BeginCheckpoint`, and the requested application state is received
