@@ -124,6 +124,8 @@ impl CollabStateTransfer {
                     CstStatus::Running
                 }
             },
+            // TODO: implement receiving app state on a replica
+            ProtoPhase::ReceivingAppState(i) => unimplemented!(),
         }
     }
 
