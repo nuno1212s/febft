@@ -122,9 +122,20 @@ pub enum SystemMessage<O, P> {
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-// NOTE: wip
 pub struct CstMessage {
+    // NOTE: not the same sequence number used in the
+    // consensus layer to order client requests!
     seq: SeqNo,
+    kind: CstMessageKind,
+}
+
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub enum CstMessageKind {
+    RequestLatestConsensusSeq,
+    ReplyLatestConsensusSeq(SeqNo),
+    RequestApplicationState,
+    ReplyApplicationState( (/* TODO: app state type */) ),
 }
 
 /// Represents a request from a client.

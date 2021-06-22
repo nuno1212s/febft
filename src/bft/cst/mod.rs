@@ -4,10 +4,11 @@
 //! Durable State Machine Replication», by A. Bessani et al.
 
 use crate::bft::ordering::SeqNo;
+use crate::bft::communication::Node;
 use crate::bft::communication::message::{
     Header,
     CstMessage,
-    SystemMessage,
+    //SystemMessage,
 };
 use crate::bft::executable::{
     Service,
@@ -29,11 +30,10 @@ pub struct CollabStateTransfer {
     seq: SeqNo,
 }
 
-/// Status returned from asking the latest sequence number
-/// the consensus protocol is currently ordering.
-pub enum ConsensusSeqStatus {
-    WaitingFetch,
-    Fetched(SeqNo),
+/// Status returned from processnig a state transfer message.
+pub enum CstStatus {
+    AwaitingReplies,
+    SeqNo(SeqNo),
 }
 
 impl CollabStateTransfer {
@@ -47,9 +47,9 @@ impl CollabStateTransfer {
     pub fn process_message<S>(
         &mut self,
         header: Header,
-        message: CstMessage<State<S>>,
+        message: CstMessage,
         node: &mut Node<S::Data>,
-    ) -> ConsensusStatus
+    ) -> CstStatus
     where
         S: Service + Send + 'static,
         State<S>: Send + 'static,
@@ -59,7 +59,13 @@ impl CollabStateTransfer {
         unimplemented!()
     }
 
-    pub fn ask_latest_consensus_seq_no(&mut self, node: &mut Node<S::Data>) {
-        asd
+    pub fn request_latest_consensus_seq_no<S>(&mut self, node: &mut Node<S::Data>)
+    where
+        S: Service + Send + 'static,
+        State<S>: Send + 'static,
+        Request<S>: Send + 'static,
+        Reply<S>: Send + 'static,
+    {
+        unimplemented!()
     }
 }
