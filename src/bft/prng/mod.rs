@@ -24,7 +24,7 @@ impl State {
         s
     }
 
-    /// Returns a new 32-bit random number.
+    /// Returns a new 64-bit random number.
     #[inline]
     pub fn next_state(&mut self) -> u64 {
         let result = rotl(self.s[1].wrapping_mul(5), 7).wrapping_mul(9);
