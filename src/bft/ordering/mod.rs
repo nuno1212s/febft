@@ -1,6 +1,18 @@
 //! Module to order messages pertaining to sub-protocols other than
 //! consensus.
 
+use std::cmp::{
+    PartialOrd,
+    PartialEq,
+    Ordering,
+};
+
+use either::{
+    Left,
+    Right,
+    Either,
+};
+
 use crate::bft::log;
 
 #[cfg(feature = "serialize_serde")]
@@ -9,8 +21,13 @@ use serde::{Serialize, Deserialize};
 /// Represents a sequence number attributed to a client request
 /// during a `Consensus` instance.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Ord, Eq, PartialEq, Hash)]
 pub struct SeqNo(i32);
+
+pub(crate) enum InvalidSeqNo {
+    Small,
+    Big,
+}
 
 impl From<u32> for SeqNo {
     #[inline]
@@ -27,6 +44,16 @@ impl From<SeqNo> for u32 {
     }
 }
 
+impl PartialOrd for SeqNo {
+    fn partial_cmp(&self, other: &SeqNo) -> Option<Ordering> {
+        match self.index(other) {
+            Right(0) => Ordering::Equal,
+            Left(InvalidSeqNo::Small) => Ordering::Less,
+             _ => Ordering::Greater,
+        }
+    }
+}
+
 impl SeqNo {
     /// Returns the following sequence number.
     #[inline]
@@ -37,7 +64,7 @@ impl SeqNo {
 
     /// Return an appropriate value to index the `TboQueue`.
     #[inline]
-    pub(crate) fn index(self, other: SeqNo) -> Option<usize> {
+    pub(crate) fn index(self, other: SeqNo) -> Either<InvalidSeqNo, usize> {
         // TODO: add config param for these consts
         const OVERFLOW_THRES_POS: i32 = 10000;
         const OVERFLOW_THRES_NEG: i32 = -OVERFLOW_THRES_POS;
@@ -59,9 +86,13 @@ impl SeqNo {
             // drop old messages or messages whose seq no. is too
             // large, which may be due to a DoS attack of
             // a malicious node
-            None
+            Left(if index < 0 {
+                InvalidSeqNo::Small
+            } else {
+                InvalidSeqNo::Big
+            })
         } else {
-            Some(index as usize)
+            Right(index as usize)
         }
     }
 }

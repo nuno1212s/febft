@@ -4,6 +4,11 @@ use std::marker::PhantomData;
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 
+use either::{
+    Left,
+    Right,
+};
+
 use crate::bft::log::Log;
 use crate::bft::ordering::SeqNo;
 use crate::bft::crypto::hash::Digest;
@@ -88,8 +93,8 @@ impl TboQueue {
         m: ConsensusMessage,
     ) {
         let index = match m.sequence_number().index(curr_seq) {
-            Some(i) => i,
-            None => {
+            Right(i) => i,
+            Left(_) => {
                 // FIXME: maybe notify peers if we detect a message
                 // with an invalid (too large) seq no? return the
                 // `NodeId` of the offending node.
