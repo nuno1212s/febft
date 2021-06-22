@@ -3,12 +3,12 @@
 use super::SystemParams;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
+use crate::bft::ordering::SeqNo;
 use crate::bft::log::{
     Info,
     Log,
 };
 use crate::bft::consensus::{
-    SeqNo,
     Consensus,
     ConsensusStatus,
     ConsensusPollStatus,

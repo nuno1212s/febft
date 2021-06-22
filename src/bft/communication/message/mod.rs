@@ -32,7 +32,7 @@ use crate::bft::crypto::hash::{
 use crate::bft::communication::socket::Socket;
 use crate::bft::executable::UpdateBatchReplies;
 use crate::bft::communication::NodeId;
-use crate::bft::consensus::SeqNo;
+use crate::bft::ordering::SeqNo;
 use crate::bft::error::*;
 
 /// A header that is sent before a message in transit in the wire.
@@ -117,9 +117,12 @@ pub enum SystemMessage<O, P> {
     Request(RequestMessage<O>),
     Reply(ReplyMessage<P>),
     Consensus(ConsensusMessage),
-    Cst(CstMessage),
+    //Cst(CstMessage),
 }
 
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+// NOTE: wip
 pub struct CstMessage {
     seq: SeqNo,
 }

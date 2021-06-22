@@ -17,7 +17,7 @@ use serde::{
 };
 
 use febft::bft::error::*;
-use febft::bft::consensus::SeqNo;
+use febft::bft::ordering::SeqNo;
 use febft::bft::executable::Service;
 use febft::bft::collections::HashMap;
 use febft::bft::threadpool::ThreadPool;

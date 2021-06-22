@@ -3,7 +3,7 @@
 use std::marker::PhantomData;
 
 use crate::bft::error::*;
-use crate::bft::consensus::SeqNo;
+use crate::bft::ordering::SeqNo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::executable::UpdateBatch;
 use crate::bft::communication::message::{
