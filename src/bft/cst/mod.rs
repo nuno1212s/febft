@@ -93,7 +93,7 @@ impl CollabStateTransfer {
                 CstStatus::Nil
             },
             ProtoPhase::ReceivingCid(i) => {
-                // drop old messages
+                // drop cst messages with invalid seq no
                 if message.sequence_number() != self.seq {
                     // FIXME: how to handle old or newer messages?
                     // BFT-SMaRt simply ignores messages with a
