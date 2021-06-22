@@ -28,6 +28,15 @@ enum ProtoPhase {
     ReceivingAppState(usize),
 }
 
+// TODO: finish this struct
+struct ReplicaState<S> {
+    view: ViewInfo,
+    checkpoint_state: S,
+    //pre_prepares: Vec<StoredConsensus>,
+    //prepares: Vec<StoredConsensus>,
+    //commits: Vec<StoredConsensus>,
+}
+
 /// Represents the state of an on-going colloborative
 /// state transfer protocol execution.
 pub struct CollabStateTransfer {
@@ -51,6 +60,9 @@ pub enum CstStatus {
     /// We have received the largest consensus sequence number from
     /// the following node.
     SeqNo(NodeId, SeqNo),
+    /// We have received and validated the application state from
+    /// a group of replicas.
+    AppState( (/* TODO: app state type */) )
 }
 
 impl CollabStateTransfer {
@@ -83,7 +95,7 @@ impl CollabStateTransfer {
                         // TODO: send consensus id
                         unimplemented!()
                     },
-                    CstMessageKind::RequestApplicationState => {
+                    CstMessageKind::RequestState => {
                         // TODO: send app state
                         unimplemented!()
                     },

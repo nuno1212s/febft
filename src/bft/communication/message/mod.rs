@@ -134,8 +134,8 @@ pub struct CstMessage {
 pub enum CstMessageKind {
     RequestLatestConsensusSeq,
     ReplyLatestConsensusSeq(SeqNo),
-    RequestApplicationState,
-    ReplyApplicationState( (/* TODO: app state type */) ),
+    RequestState,
+    ReplyState( (/* TODO: app state type */) ),
 }
 
 impl CstMessage {
