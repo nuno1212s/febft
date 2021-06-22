@@ -117,6 +117,11 @@ pub enum SystemMessage<O, P> {
     Request(RequestMessage<O>),
     Reply(ReplyMessage<P>),
     Consensus(ConsensusMessage),
+    Cst(CstMessage),
+}
+
+pub struct CstMessage {
+    seq: SeqNo,
 }
 
 /// Represents a request from a client.
