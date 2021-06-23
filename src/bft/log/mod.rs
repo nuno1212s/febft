@@ -102,8 +102,9 @@ impl<O, P> Log<O, P> {
             pre_prepares: Vec::new(),
             prepares: Vec::new(),
             commits: Vec::new(),
-            deciding: collections::hash_map(),
-            decided: Vec::new(),
+            deciding: collections::hash_map_capacity(batch_size),
+            // TODO: use config value instead of const
+            decided: Vec::with_capacity(PERIOD as usize),
             requests: collections::ordered_map(),
             checkpoint: CheckpointState::None,
             _marker: PhantomData,

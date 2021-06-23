@@ -31,3 +31,13 @@ pub fn hash_map<K, V>() -> HashMap<K, V> {
 pub fn hash_set<T>() -> HashSet<T> {
     HashSet::with_hasher(Default::default())
 }
+
+/// Creates a new `HashMap`, with a custom capacity.
+pub fn hash_map_capacity<K, V>(cap: usize) -> HashMap<K, V> {
+    HashMap::with_capacity_and_hasher(cap, Default::default())
+}
+
+/// Creates a new `HashSet`, with a custom capacity.
+pub fn hash_set_capacity<T>(cap: usize) -> HashSet<T> {
+    HashSet::with_capacity_and_hasher(cap, Default::default())
+}
