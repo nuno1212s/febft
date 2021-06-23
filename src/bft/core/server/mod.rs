@@ -157,6 +157,8 @@ where
                         },
                         // FIXME: handle rogue reply messages
                         SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
+                        // FIXME: handle rogue cst messages
+                        SystemMessage::Cst(_) => panic!("Rogue cst message detected"),
                     }
                 },
                 // ignore other messages for now
@@ -212,6 +214,10 @@ where
                 match message {
                     request @ SystemMessage::Request(_) => {
                         self.log.insert(header, request);
+                    },
+                    SystemMessage::Cst(message) => {
+                        // TODO: update cst state
+                        //self.cst.process_message( ... )
                     },
                     SystemMessage::Consensus(message) => {
                         let status = self.consensus.process_message(

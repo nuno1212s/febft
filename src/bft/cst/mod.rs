@@ -4,6 +4,7 @@
 //! Durable State Machine Replication», by A. Bessani et al.
 
 use crate::bft::ordering::SeqNo;
+use crate::bft::consensus::Consensus;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::executable::UpdateBatch;
 use crate::bft::communication::{
@@ -14,7 +15,7 @@ use crate::bft::communication::message::{
     Header,
     CstMessage,
     CstMessageKind,
-    //SystemMessage,
+    SystemMessage,
 };
 use crate::bft::executable::{
     Service,
@@ -85,6 +86,7 @@ impl CollabStateTransfer {
         message: CstMessage,
         view: ViewInfo,
         node: &mut Node<S::Data>,
+        consensus: &Consensus<S>,
     ) -> CstStatus
     where
         S: Service + Send + 'static,
@@ -96,8 +98,14 @@ impl CollabStateTransfer {
             ProtoPhase::Init => {
                 match message.kind() {
                     CstMessageKind::RequestLatestConsensusSeq => {
-                        // TODO: send consensus id
-                        unimplemented!()
+                        let kind = CstMessageKind::ReplyLatestConsensusSeq(
+                            consensus.sequence_number(),
+                        );
+                        let reply = SystemMessage::Cst(CstMessage::new(
+                            message.sequence_number(),
+                            kind,
+                        ));
+                        node.send(reply, header.from());
                     },
                     CstMessageKind::RequestState => {
                         // TODO: send app state
@@ -144,19 +152,21 @@ impl CollabStateTransfer {
                 }
             },
             // TODO: implement receiving app state on a replica
-            ProtoPhase::ReceivingAppState(i) => unimplemented!(),
+            ProtoPhase::ReceivingAppState(_i) => unimplemented!(),
         }
     }
 
-    pub fn request_latest_consensus_seq_no<S>(&mut self, node: &mut Node<S::Data>)
+    pub fn request_latest_consensus_seq_no<S>(&mut self, _node: &mut Node<S::Data>)
     where
         S: Service + Send + 'static,
         State<S>: Send + 'static,
         Request<S>: Send + 'static,
         Reply<S>: Send + 'static,
     {
+        // reset state of latest seq no
         self.latest_cid = SeqNo::from(0u32);
         self.latest_cid_node = NodeId::from(0u32);
+
         unimplemented!()
     }
 }

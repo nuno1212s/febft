@@ -117,7 +117,7 @@ pub enum SystemMessage<O, P> {
     Request(RequestMessage<O>),
     Reply(ReplyMessage<P>),
     Consensus(ConsensusMessage),
-    //Cst(CstMessage),
+    Cst(CstMessage),
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
