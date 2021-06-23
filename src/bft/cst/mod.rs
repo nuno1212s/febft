@@ -5,6 +5,7 @@
 
 use crate::bft::ordering::SeqNo;
 use crate::bft::core::server::ViewInfo;
+use crate::bft::executable::UpdateBatch;
 use crate::bft::communication::{
     Node,
     NodeId,
@@ -34,6 +35,7 @@ enum ProtoPhase {
 struct ReplicaState<S: Service> {
     view: ViewInfo,
     checkpoint_state: State<S>,
+    requests: Vec<UpdateBatch<Request<S>>>,
     //pre_prepares: Vec<StoredConsensus>,
     //prepares: Vec<StoredConsensus>,
     //commits: Vec<StoredConsensus>,
