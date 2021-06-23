@@ -16,6 +16,7 @@ use crate::bft::communication::serialize::{
 };
 
 /// Represents a single client update request, to be executed.
+#[derive(Clone)]
 pub struct Update<O> {
     from: NodeId,
     digest: Digest,
@@ -23,6 +24,7 @@ pub struct Update<O> {
 }
 
 /// Represents a single client update reply.
+#[derive(Clone)]
 pub struct UpdateReply<P> {
     to: NodeId,
     digest: Digest,
@@ -30,11 +32,13 @@ pub struct UpdateReply<P> {
 }
 
 /// Storage for a batch of client update requests to be executed.
+#[derive(Clone)]
 pub struct UpdateBatch<O> {
     inner: Vec<Update<O>>,
 }
 
 /// Storage for a batch of client update replies.
+#[derive(Clone)]
 pub struct UpdateBatchReplies<P> {
     inner: Vec<UpdateReply<P>>,
 }

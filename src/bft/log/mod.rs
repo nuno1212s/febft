@@ -82,6 +82,7 @@ pub struct Log<O, P> {
     // TODO: view change stuff
     requests: OrderedMap<Digest, StoredRequest<O>>,
     deciding: HashMap<Digest, StoredRequest<O>>,
+    decided: Vec<UpdateBatch<O>>,
     checkpoint: CheckpointState,
     _marker: PhantomData<P>,
 }
@@ -102,6 +103,7 @@ impl<O, P> Log<O, P> {
             prepares: Vec::new(),
             commits: Vec::new(),
             deciding: collections::hash_map(),
+            decided: Vec::new(),
             requests: collections::ordered_map(),
             checkpoint: CheckpointState::None,
             _marker: PhantomData,
@@ -168,7 +170,10 @@ impl<O, P> Log<O, P> {
     ///
     /// The log may be cleared resulting from this operation. Check the enum variant of
     /// `Info`, to perform a local checkpoint when appropriate.
-    pub fn finalize_batch(&mut self, digests: &[Digest]) -> Result<(Info, UpdateBatch<O>)> {
+    pub fn finalize_batch(&mut self, digests: &[Digest]) -> Result<(Info, UpdateBatch<O>)>
+    where
+        O: Clone,
+    {
         let mut batch = UpdateBatch::new();
         for digest in digests {
             let (header, message) = self.deciding
@@ -178,6 +183,7 @@ impl<O, P> Log<O, P> {
                 .ok_or(Error::simple(ErrorKind::Log))?;
             batch.add(header.from(), digest.clone(), message.into_inner());
         }
+        self.decided.push(batch.clone());
 
         // retrive the sequence number stored within the PRE-PREPARE message
         // pertaining to the current request being executed
@@ -225,6 +231,7 @@ impl<O, P> Log<O, P> {
                     seq,
                     appstate,
                 });
+                self.decided.clear();
                 //
                 // NOTE: workaround bug where when we clear the log,
                 // we remove the PRE-PREPARE of an on-going request

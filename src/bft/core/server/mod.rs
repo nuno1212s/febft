@@ -105,7 +105,7 @@ impl<S> Replica<S>
 where
     S: Service + Send + 'static,
     State<S>: Send + 'static,
-    Request<S>: Send + 'static,
+    Request<S>: Send + Clone + 'static,
     Reply<S>: Send + 'static,
 {
     /// Bootstrap a replica in `febft`.
