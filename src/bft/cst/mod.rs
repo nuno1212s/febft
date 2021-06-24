@@ -112,6 +112,9 @@ impl CollabStateTransfer {
                         unimplemented!()
                     },
                     // we are not running cst, so drop any reply msgs
+                    //
+                    // TODO: maybe inspect cid msgs, and passively start
+                    // the state transfer protocol, e.g. CstStatus::StateNeeded
                     _ => (),
                 }
                 CstStatus::Nil

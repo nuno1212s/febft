@@ -184,6 +184,9 @@ impl<O, P> Log<O, P> {
                 .ok_or(Error::simple(ErrorKind::Log))?;
             batch.add(header.from(), digest.clone(), message.into_inner());
         }
+        // TODO: optimize batch cloning, as this can take
+        // several ms if the batch size is large, and each
+        // request also large
         self.decided.push(batch.clone());
 
         // retrive the sequence number stored within the PRE-PREPARE message
