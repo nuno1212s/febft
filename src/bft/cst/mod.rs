@@ -64,10 +64,10 @@ pub enum CstStatus {
     Nil,
     /// The CST protocol is currently running.
     Running,
-    /// We failed to retrieve the latest consensus sequence number.
-    RetryLatestCid,
-    /// We failed to retrieve the latest replica state.
-    RetryReplicaState,
+    /// We should request the latest cid from the view.
+    RequestLatestCid,
+    /// We should request the latest state from the view.
+    RequestReplicaState,
     /// We have received and validated the largest consensus sequence
     /// number available.
     SeqNo(SeqNo),
@@ -120,7 +120,8 @@ impl CollabStateTransfer {
                     // we are not running cst, so drop any reply msgs
                     //
                     // TODO: maybe inspect cid msgs, and passively start
-                    // the state transfer protocol, e.g. CstStatus::StateNeeded
+                    // the state transfer protocol, by returning
+                    // CstStatus::RequestReplicaState
                     _ => (),
                 }
                 CstStatus::Nil
@@ -164,7 +165,7 @@ impl CollabStateTransfer {
                         // f+1 replicas
                         CstStatus::SeqNo(self.latest_cid)
                     } else {
-                        CstStatus::RetryLatestCid
+                        CstStatus::RequestLatestCid
                     }
                 } else {
                     self.phase = ProtoPhase::ReceivingCid(i);
