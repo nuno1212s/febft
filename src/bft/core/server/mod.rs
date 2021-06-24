@@ -35,7 +35,7 @@ use crate::bft::communication::message::{
 enum ReplicaState {
     // the replica is retrieving state from
     // its peer replicas
-    RetrievingAppState,
+    RetrievingState,
     // the replica has entered the
     // synchronization phase of mod-smart
     SyncPhase,
@@ -174,14 +174,14 @@ where
         // TODO: exit condition?
         loop {
             match self.state {
-                ReplicaState::RetrievingAppState => self.update_retrieving_app_state().await?,
+                ReplicaState::RetrievingState => self.update_retrieving_state().await?,
                 ReplicaState::NormalPhase => self.update_normal_phase().await?,
                 ReplicaState::SyncPhase => self.update_sync_phase().await?,
             }
         }
     }
 
-    async fn update_retrieving_app_state(&mut self) -> Result<()> {
+    async fn update_retrieving_state(&mut self) -> Result<()> {
         unimplemented!()
     }
 
@@ -215,7 +215,7 @@ where
                     request @ SystemMessage::Request(_) => {
                         self.log.insert(header, request);
                     },
-                    SystemMessage::Cst(message) => {
+                    SystemMessage::Cst(_message) => {
                         // TODO: update cst state
                         //self.cst.process_message( ... )
                     },

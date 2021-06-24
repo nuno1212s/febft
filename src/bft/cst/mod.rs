@@ -3,13 +3,15 @@
 //! The implementation is based on the paper «On the Efﬁciency of
 //! Durable State Machine Replication», by A. Bessani et al.
 
+use std::cmp::Ordering;
+
 use crate::bft::ordering::SeqNo;
 use crate::bft::consensus::Consensus;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::executable::UpdateBatch;
 use crate::bft::communication::{
     Node,
-    NodeId,
+    //NodeId,
 };
 use crate::bft::communication::message::{
     Header,
@@ -27,7 +29,7 @@ use crate::bft::executable::{
 enum ProtoPhase {
     Init,
     ReceivingCid(usize),
-    ReceivingAppState(usize),
+    ReceivingState(usize),
 }
 
 // TODO:
@@ -47,7 +49,7 @@ struct ReplicaState<S: Service> {
 pub struct CollabStateTransfer {
     phase: ProtoPhase,
     latest_cid: SeqNo,
-    latest_cid_node: NodeId,
+    latest_cid_count: usize,
     seq: SeqNo,
     // NOTE: remembers whose replies we have
     // received already, to avoid replays
@@ -62,12 +64,16 @@ pub enum CstStatus {
     Nil,
     /// The CST protocol is currently running.
     Running,
-    /// We have received the largest consensus sequence number from
-    /// the following node.
-    SeqNo(NodeId, SeqNo),
-    /// We have received and validated the application state from
+    /// We failed to retrieve the latest consensus sequence number.
+    RetryLatestCid,
+    /// We failed to retrieve the latest replica state.
+    RetryReplicaState,
+    /// We have received and validated the largest consensus sequence
+    /// number available.
+    SeqNo(SeqNo),
+    /// We have received and validated the state from
     /// a group of replicas.
-    AppState( (/* TODO: app state type */) )
+    State( (/* TODO: app state type */) )
 }
 
 impl CollabStateTransfer {
@@ -75,7 +81,7 @@ impl CollabStateTransfer {
         Self {
             phase: ProtoPhase::Init,
             latest_cid: SeqNo::from(0u32),
-            latest_cid_node: NodeId::from(0u32),
+            latest_cid_count: 0,
             seq: SeqNo::from(0),
         }
     }
@@ -132,10 +138,15 @@ impl CollabStateTransfer {
 
                 match message.kind() {
                     CstMessageKind::ReplyLatestConsensusSeq(seq) => {
-                        let seq = *seq;
-                        if seq > self.latest_cid {
-                            self.latest_cid = seq;
-                            self.latest_cid_node = header.from();
+                        match seq.cmp(&self.latest_cid) {
+                            Ordering::Greater => {
+                                self.latest_cid = *seq;
+                                self.latest_cid_count = 1;
+                            },
+                            Ordering::Equal => {
+                                self.latest_cid_count += 1;
+                            },
+                            Ordering::Less => (),
                         }
                     },
                     // drop invalid message kinds
@@ -148,14 +159,20 @@ impl CollabStateTransfer {
 
                 if i == view.params().quorum() {
                     self.phase = ProtoPhase::Init;
-                    CstStatus::SeqNo(self.latest_cid_node, self.latest_cid)
+                    if self.latest_cid_count > view.params().f() {
+                        // the latest cid was available in at least
+                        // f+1 replicas
+                        CstStatus::SeqNo(self.latest_cid)
+                    } else {
+                        CstStatus::RetryLatestCid
+                    }
                 } else {
                     self.phase = ProtoPhase::ReceivingCid(i);
                     CstStatus::Running
                 }
             },
             // TODO: implement receiving app state on a replica
-            ProtoPhase::ReceivingAppState(_i) => unimplemented!(),
+            ProtoPhase::ReceivingState(_i) => unimplemented!(),
         }
     }
 
@@ -168,7 +185,12 @@ impl CollabStateTransfer {
     {
         // reset state of latest seq no
         self.latest_cid = SeqNo::from(0u32);
-        self.latest_cid_node = NodeId::from(0u32);
+        self.latest_cid_count = 0;
+
+        // ...
+
+        // update our cst seq no
+        self.seq = self.seq.next();
 
         unimplemented!()
     }
