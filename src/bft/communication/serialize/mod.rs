@@ -45,12 +45,12 @@ pub trait ReplicaData: SharedData {
     /// requests.
     type State;
 
-    /// Serialize the application state into the writer `W`.
+    /// Serialize the replica state into the writer `W`.
     fn serialize_state<W>(w: W, s: &Self::State) -> Result<()>
     where
         W: Write;
 
-    /// Deserialize the application state from a reader `R`.
+    /// Deserialize the replica state from a reader `R`.
     fn deserialize_state<R>(r: R) -> Result<Self::State>
     where
         R: Read;

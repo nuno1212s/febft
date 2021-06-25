@@ -43,7 +43,8 @@ pub struct UpdateBatchReplies<P> {
     inner: Vec<UpdateReply<P>>,
 }
 
-enum ExecutionRequest<O> {
+enum ExecutionRequest<S, O> {
+    InstallState(S),
     // update the state of the service
     Update(UpdateBatch<O>),
     // same as above, and include the application state
@@ -108,13 +109,13 @@ pub trait Service {
 pub struct Executor<S: Service> {
     service: S,
     state: State<S>,
-    e_rx: mpsc::Receiver<ExecutionRequest<Request<S>>>,
+    e_rx: mpsc::Receiver<ExecutionRequest<State<S>, Request<S>>>,
     system_tx: MessageChannelTx<Request<S>, Reply<S>>,
 }
 
 /// Represents a handle to the client request executor.
 pub struct ExecutorHandle<S: Service> {
-    e_tx: mpsc::Sender<ExecutionRequest<Request<S>>>,
+    e_tx: mpsc::Sender<ExecutionRequest<State<S>, Request<S>>>,
 }
 
 impl<S: Service> ExecutorHandle<S>
@@ -181,6 +182,9 @@ where
         thread::spawn(move || {
             while let Ok(exec_req) = exec.e_rx.recv() {
                 match exec_req {
+                    ExecutionRequest::InstallState(state) => {
+                        exec.state = state;
+                    },
                     ExecutionRequest::Update(batch) => {
                         let mut reply_batch = UpdateBatchReplies::with_capacity(batch.len());
 
@@ -256,10 +260,21 @@ impl<O> UpdateBatch<O> {
     }
 }
 
+impl<O> AsRef<[Update<O>]> for UpdateBatch<O> {
+    fn as_ref(&self) -> &[Update<O>] {
+        &self.inner[..]
+    }
+}
+
 impl<O> Update<O> {
     /// Returns the inner types stored in this `Update`.
     pub fn into_inner(self) -> (NodeId, Digest, O) {
         (self.from, self.digest, self.operation)
+    }
+
+    /// Returns a reference to this operation in this `Update`.
+    pub fn operation(&self) -> &O {
+        &self.operation
     }
 }
 

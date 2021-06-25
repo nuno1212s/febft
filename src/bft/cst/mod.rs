@@ -9,7 +9,6 @@ use crate::bft::log::Log;
 use crate::bft::ordering::SeqNo;
 use crate::bft::consensus::Consensus;
 use crate::bft::core::server::ViewInfo;
-use crate::bft::executable::UpdateBatch;
 use crate::bft::communication::{
     Node,
     //NodeId,
@@ -37,11 +36,14 @@ enum ProtoPhase {
 // TODO:
 // - finish this struct
 // - include request payload
-struct ExecutionState<S: Service> {
+pub struct ExecutionState<S: Service> {
+    latest_cid: SeqNo,
     view: ViewInfo,
     checkpoint_state: State<S>,
-    // used to replay log on recovering replicas
-    requests: Vec<UpdateBatch<Request<S>>>,
+    // used to replay log on recovering replicas;
+    // the request batches have been concatenated,
+    // for efficiency
+    requests: Vec<Request<S>>,
     //pre_prepares: Vec<StoredConsensus>,
     //prepares: Vec<StoredConsensus>,
     //commits: Vec<StoredConsensus>,

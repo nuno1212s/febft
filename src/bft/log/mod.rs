@@ -82,7 +82,7 @@ pub struct Log<O, P> {
     // TODO: view change stuff
     requests: OrderedMap<Digest, StoredRequest<O>>,
     deciding: HashMap<Digest, StoredRequest<O>>,
-    decided: Vec<UpdateBatch<O>>,
+    decided: Vec<O>,
     checkpoint: CheckpointState,
     _marker: PhantomData<P>,
 }
@@ -184,10 +184,13 @@ impl<O, P> Log<O, P> {
                 .ok_or(Error::simple(ErrorKind::Log))?;
             batch.add(header.from(), digest.clone(), message.into_inner());
         }
+
         // TODO: optimize batch cloning, as this can take
         // several ms if the batch size is large, and each
         // request also large
-        self.decided.push(batch.clone());
+        for update in batch.as_ref() {
+            self.decided.push(update.operation().clone());
+        }
 
         // retrive the sequence number stored within the PRE-PREPARE message
         // pertaining to the current request being executed
