@@ -36,17 +36,17 @@ enum ProtoPhase {
 // TODO:
 // - finish this struct
 // - include request payload
-pub struct ExecutionState<S: Service> {
+pub struct ExecutionState<S, O> {
     latest_cid: SeqNo,
     view: ViewInfo,
-    checkpoint_state: State<S>,
+    checkpoint_state: S,
     // used to replay log on recovering replicas;
     // the request batches have been concatenated,
     // for efficiency
-    requests: Vec<Request<S>>,
-    //pre_prepares: Vec<StoredConsensus>,
-    //prepares: Vec<StoredConsensus>,
-    //commits: Vec<StoredConsensus>,
+    requests: Vec<O>,
+    pre_prepares: Vec<StoredConsensus>,
+    prepares: Vec<StoredConsensus>,
+    commits: Vec<StoredConsensus>,
 }
 
 /// Represents the state of an on-going colloborative
@@ -55,7 +55,7 @@ pub struct CollabStateTransfer {
     phase: ProtoPhase,
     latest_cid: SeqNo,
     latest_cid_count: usize,
-    seq: SeqNo,
+    cst_seq: SeqNo,
     // NOTE: remembers whose replies we have
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
@@ -116,7 +116,7 @@ impl CollabStateTransfer {
             phase: ProtoPhase::Init,
             latest_cid: SeqNo::from(0u32),
             latest_cid_count: 0,
-            seq: SeqNo::from(0),
+            cst_seq: SeqNo::from(0),
         }
     }
 
@@ -247,7 +247,7 @@ impl CollabStateTransfer {
         // ...
 
         // update our cst seq no
-        self.seq = self.seq.next();
+        self.cst_seq = self.cst_seq.next();
 
         unimplemented!()
     }

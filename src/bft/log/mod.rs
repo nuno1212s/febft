@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
+use crate::bft::cst::ExecutionState;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::executable::UpdateBatch;
 use crate::bft::communication::message::{
@@ -36,7 +37,7 @@ pub enum Info {
     BeginCheckpoint,
 }
 
-enum CheckpointState {
+enum CheckpointState<S> {
     // no checkpoint has been performed yet
     None,
     // we are calling this a partial checkpoint because we are
@@ -49,17 +50,17 @@ enum CheckpointState {
         // sequence number of the last executed request
         seq: SeqNo,
         // save the earlier checkpoint, in case corruption takes place
-        earlier: Checkpoint,
+        earlier: Checkpoint<S>,
     },
     // application state received, the checkpoint state is finalized
-    Complete(Checkpoint),
+    Complete(Checkpoint<S>),
 }
 
-struct Checkpoint {
+struct Checkpoint<S> {
     // sequence number of the last executed request
     seq: SeqNo,
-    // serialized application state
-    appstate: Vec<u8>,
+    // application state
+    appstate: S,
 }
 
 struct StoredConsensus {
@@ -73,7 +74,7 @@ struct StoredRequest<O> {
 }
 
 /// Represents a log of messages received by the BFT system.
-pub struct Log<O, P> {
+pub struct Log<S, O, P> {
     curr_seq: SeqNo,
     batch_size: usize,
     pre_prepares: Vec<StoredConsensus>,
@@ -83,7 +84,7 @@ pub struct Log<O, P> {
     requests: OrderedMap<Digest, StoredRequest<O>>,
     deciding: HashMap<Digest, StoredRequest<O>>,
     decided: Vec<O>,
-    checkpoint: CheckpointState,
+    checkpoint: CheckpointState<S>,
     _marker: PhantomData<P>,
 }
 
@@ -109,6 +110,10 @@ impl<O, P> Log<O, P> {
             checkpoint: CheckpointState::None,
             _marker: PhantomData,
         }
+    }
+
+    pub fn snapshot(&self) -> ExecutionState<> {
+        asd
     }
 
 /*

@@ -79,7 +79,7 @@ pub struct OwnedWireMessage<T> {
 /// The `Message` type encompasses all the messages traded between different
 /// asynchronous tasks in the system.
 ///
-pub enum Message<O, P> {
+pub enum Message<S, O, P> {
     /// Client requests and process sub-protocol messages.
     System(Header, SystemMessage<O, P>),
     /// A client with id `NodeId` has finished connecting to the socket `Socket`.
@@ -99,10 +99,10 @@ pub enum Message<O, P> {
     /// The type of the payload delivered to the clients is `P`.
     ExecutionFinished(UpdateBatchReplies<P>),
     /// Same as `Message::ExecutionFinished`, but includes a snapshot of
-    /// the serialized application state.
+    /// the application state.
     ///
     /// This is useful for local checkpoints.
-    ExecutionFinishedWithAppstate(UpdateBatchReplies<P>, Vec<u8>),
+    ExecutionFinishedWithAppstate(UpdateBatchReplies<P>, S),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
