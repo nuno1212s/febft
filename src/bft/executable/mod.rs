@@ -124,6 +124,12 @@ where
     Request<S>: Send + 'static,
     Reply<S>: Send + 'static,
 {
+    /// Sets the current state of the execution layer to the given value.
+    pub fn install_state(&mut self, state: State<S>) -> Result<()> {
+        self.e_tx.send(ExecutionRequest::InstallState(state))
+            .simple(ErrorKind::Executable)
+    }
+
     /// Queues a batch of requests `batch` for execution.
     pub fn queue_update(&mut self, batch: UpdateBatch<Request<S>>) -> Result<()> {
         self.e_tx.send(ExecutionRequest::Update(batch))
