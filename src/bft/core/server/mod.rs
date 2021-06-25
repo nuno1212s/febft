@@ -281,6 +281,16 @@ where
                 // store the application state in the checkpoint
                 self.log.finalize_checkpoint(appstate)?;
 
+                // deliver replies to clients
+                for update_reply in batch.into_inner() {
+                    let (peer_id, digest, payload) = update_reply.into_inner();
+                    let message = SystemMessage::Reply(ReplyMessage::new(
+                        digest,
+                        payload,
+                    ));
+                    self.node.send(message, peer_id);
+                }
+
 /*
                 // check if the cst layer needs the checkpoint
                 if self.cst.needs_checkpoint() {
@@ -293,15 +303,6 @@ where
                     );
                 }
 */
-                // deliver replies to clients
-                for update_reply in batch.into_inner() {
-                    let (peer_id, digest, payload) = update_reply.into_inner();
-                    let message = SystemMessage::Reply(ReplyMessage::new(
-                        digest,
-                        payload,
-                    ));
-                    self.node.send(message, peer_id);
-                }
             },
             Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
             Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
