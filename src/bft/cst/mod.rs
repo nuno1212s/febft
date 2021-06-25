@@ -115,13 +115,17 @@ impl CollabStateTransfer {
         }
     }
 
+    pub fn needs_checkpoint(&self) -> bool {
+        matches!(self.phase, ProtoPhase::WaitingCheckpoint(_, _))
+    }
+
     pub fn process_message<S>(
         &mut self,
         progress: CstProgress,
         view: ViewInfo,
-        node: &mut Node<S::Data>,
-        log: &mut Log<Request<S>, Reply<S>>,
         consensus: &Consensus<S>,
+        log: &mut Log<Request<S>, Reply<S>>,
+        node: &mut Node<S::Data>,
     ) -> CstStatus
     where
         S: Service + Send + 'static,

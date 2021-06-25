@@ -281,6 +281,18 @@ where
                 // store the application state in the checkpoint
                 self.log.finalize_checkpoint(appstate)?;
 
+/*
+                // check if the cst layer needs the checkpoint
+                if self.cst.needs_checkpoint() {
+                    let status = self.cst.process_message(
+                        CstProgress::Nil,
+                        &self.view,
+                        &self.consensus,
+                        &mut self.log,
+                        &mut self.node,
+                    );
+                }
+*/
                 // deliver replies to clients
                 for update_reply in batch.into_inner() {
                     let (peer_id, digest, payload) = update_reply.into_inner();
