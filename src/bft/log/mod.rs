@@ -220,6 +220,12 @@ impl<O, P> Log<O, P> {
         Ok(Info::BeginCheckpoint)
     }
 
+    /// Check if the log has finished waiting for the execution layer
+    /// to deliver the application state.
+    pub fn has_complete_checkpoint(&self) -> bool {
+        matches!(self.checkpoint, CheckpointState::Complete(_))
+    }
+
     /// End the state of an on-going checkpoint.
     ///
     /// This method should only be called when `finalize_request()` reports

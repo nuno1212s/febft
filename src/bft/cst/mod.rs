@@ -5,6 +5,7 @@
 
 use std::cmp::Ordering;
 
+use crate::bft::log::Log;
 use crate::bft::ordering::SeqNo;
 use crate::bft::consensus::Consensus;
 use crate::bft::core::server::ViewInfo;
@@ -28,6 +29,7 @@ use crate::bft::executable::{
 
 enum ProtoPhase {
     Init,
+    WaitingCheckpoint(Header, CstMessage),
     ReceivingCid(usize),
     ReceivingState(usize),
 }
@@ -35,9 +37,10 @@ enum ProtoPhase {
 // TODO:
 // - finish this struct
 // - include request payload
-struct ReplicaState<S: Service> {
+struct ExecutionState<S: Service> {
     view: ViewInfo,
     checkpoint_state: State<S>,
+    // used to replay log on recovering replicas
     requests: Vec<UpdateBatch<Request<S>>>,
     //pre_prepares: Vec<StoredConsensus>,
     //prepares: Vec<StoredConsensus>,
@@ -67,13 +70,39 @@ pub enum CstStatus {
     /// We should request the latest cid from the view.
     RequestLatestCid,
     /// We should request the latest state from the view.
-    RequestReplicaState,
+    RequestState,
     /// We have received and validated the largest consensus sequence
     /// number available.
     SeqNo(SeqNo),
     /// We have received and validated the state from
     /// a group of replicas.
     State( (/* TODO: app state type */) )
+}
+
+/// Represents progress in the CST state machine.
+pub enum CstProgress {
+    /// This value represents null progress in the CST code's state machine.
+    Nil,
+    /// We have a fresh new message to feed the CST state machine, from
+    /// the communication layer.
+    Message(Header, CstMessage),
+}
+
+macro_rules! getmessage {
+    ($progress:expr, $status:expr) => {
+        match $progress {
+            CstProgress::Nil => return $status,
+            CstProgress::Message(h, m) => (h, m),
+        }
+    };
+    // message queued while waiting for exec layer to deliver app state
+    ($phase:expr) => {{
+        let phase = std::mem::replace($phase, ProtoPhase::Init);
+        match phase {
+            ProtoPhase::WaitingCheckpoint(h, m) => (h, m),
+            _ => return CstStatus::Nil,
+        }
+    }};
 }
 
 impl CollabStateTransfer {
@@ -88,10 +117,10 @@ impl CollabStateTransfer {
 
     pub fn process_message<S>(
         &mut self,
-        header: Header,
-        message: CstMessage,
+        progress: CstProgress,
         view: ViewInfo,
         node: &mut Node<S::Data>,
+        log: &mut Log<Request<S>, Reply<S>>,
         consensus: &Consensus<S>,
     ) -> CstStatus
     where
@@ -101,7 +130,14 @@ impl CollabStateTransfer {
         Reply<S>: Send + 'static,
     {
         match self.phase {
+            ProtoPhase::WaitingCheckpoint(_, _) => {
+                let (header, message) = getmessage!(&mut self.phase);
+
+                // TODO: send app state
+                unimplemented!()
+            },
             ProtoPhase::Init => {
+                let (header, message) = getmessage!(progress, CstStatus::Nil);
                 match message.kind() {
                     CstMessageKind::RequestLatestConsensusSeq => {
                         let kind = CstMessageKind::ReplyLatestConsensusSeq(
@@ -114,6 +150,11 @@ impl CollabStateTransfer {
                         node.send(reply, header.from());
                     },
                     CstMessageKind::RequestState => {
+                        if !log.has_complete_checkpoint() {
+                            self.phase = ProtoPhase::WaitingCheckpoint(header, message);
+                            return CstStatus::Nil;
+                        }
+
                         // TODO: send app state
                         unimplemented!()
                     },
@@ -127,6 +168,8 @@ impl CollabStateTransfer {
                 CstStatus::Nil
             },
             ProtoPhase::ReceivingCid(i) => {
+                let (header, message) = getmessage!(progress, CstStatus::RequestLatestCid);
+
                 // drop cst messages with invalid seq no
                 if message.sequence_number() != self.seq {
                     // FIXME: how to handle old or newer messages?
@@ -172,8 +215,12 @@ impl CollabStateTransfer {
                     CstStatus::Running
                 }
             },
-            // TODO: implement receiving app state on a replica
-            ProtoPhase::ReceivingState(_i) => unimplemented!(),
+            ProtoPhase::ReceivingState(_i) => {
+                let (header, message) = getmessage!(progress, CstStatus::RequestState);
+
+                // TODO: implement receiving app state on a replica
+                unimplemented!()
+            },
         }
     }
 
