@@ -80,6 +80,9 @@ pub enum CstStatus {
 }
 
 /// Represents progress in the CST state machine.
+///
+/// To clarify, the mention of state machine here has nothing to do with the
+/// SMR protocol, but rather the implementation in code of the CST protocol.
 pub enum CstProgress {
     /// This value represents null progress in the CST code's state machine.
     Nil,
