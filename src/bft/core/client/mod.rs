@@ -93,6 +93,7 @@ struct ReplicaVotes {
 impl<D> Client<D>
 where
     D: SharedData + 'static,
+    D::State: Send + Clone + 'static,
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {

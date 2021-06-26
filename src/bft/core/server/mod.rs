@@ -108,7 +108,7 @@ pub struct ReplicaConfig<S> {
 impl<S> Replica<S>
 where
     S: Service + Send + 'static,
-    State<S>: Send + 'static,
+    State<S>: Send + Clone + 'static,
     Request<S>: Send + Clone + 'static,
     Reply<S>: Send + 'static,
 {

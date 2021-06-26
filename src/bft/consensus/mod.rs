@@ -241,7 +241,7 @@ macro_rules! extract_msg {
 impl<S> Consensus<S>
 where
     S: Service + Send + 'static,
-    State<S>: Send + 'static,
+    State<S>: Send + Clone + 'static,
     Request<S>: Send + 'static,
     Reply<S>: Send + 'static,
 {
@@ -509,7 +509,7 @@ where
 impl<S> Deref for Consensus<S>
 where
     S: Service + Send + 'static,
-    State<S>: Send + 'static,
+    State<S>: Send + Clone + 'static,
     Request<S>: Send + 'static,
     Reply<S>: Send + 'static,
 {
@@ -524,7 +524,7 @@ where
 impl<S> DerefMut for Consensus<S>
 where
     S: Service + Send + 'static,
-    State<S>: Send + 'static,
+    State<S>: Send + Clone + 'static,
     Request<S>: Send + 'static,
     Reply<S>: Send + 'static,
 {

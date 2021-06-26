@@ -53,13 +53,14 @@ enum ExecutionRequest<S, O> {
     Read(NodeId),
 }
 
+
+/* NOTE: unused
+
 macro_rules! serialize_st {
     (Service: $S:ty, $w:expr, $s:expr) => {
         <<$S as Service>::Data as SharedData>::serialize_state($w, $s)
     }
 }
-
-/* NOTE: unused for now
 
 macro_rules! deserialize_st {
     ($S:ty, $r:expr) => {
@@ -158,7 +159,7 @@ impl<S: Service> Clone for ExecutorHandle<S> {
 impl<S> Executor<S>
 where
     S: Service + Send + 'static,
-    State<S>: Send + 'static,
+    State<S>: Send + Clone + 'static,
     Request<S>: Send + 'static,
     Reply<S>: Send + 'static,
 {
@@ -214,20 +215,14 @@ where
                             let reply = exec.service.update(&mut exec.state, req);
                             reply_batch.add(peer_id, dig, reply);
                         }
-                        let serialized_appstate = {
-                            // TODO: make this a config param?
-                            const SERIALIZED_APPSTATE_BUFSIZ: usize = 8192;
-                            let mut b = Vec::with_capacity(SERIALIZED_APPSTATE_BUFSIZ);
-                            serialize_st!(Service: S, &mut b, &exec.state).unwrap();
-                            b
-                        };
+                        let cloned_state = exec.state.clone();
 
                         // deliver replies
                         let mut system_tx = exec.system_tx.clone();
                         rt::spawn(async move {
                             let m = Message::ExecutionFinishedWithAppstate(
                                 reply_batch,
-                                serialized_appstate,
+                                cloned_state,
                             );
                             system_tx.send(m).await.unwrap();
                         });

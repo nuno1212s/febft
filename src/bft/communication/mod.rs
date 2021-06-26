@@ -199,6 +199,7 @@ type SendTos<D> = SmallVec<[SendTo<D>; NODE_VIEWSIZ]>;
 impl<D> Node<D>
 where
     D: SharedData + 'static,
+    D::State: Send + Clone + 'static,
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
@@ -209,7 +210,7 @@ where
     /// are returned in a `Vec`.
     pub async fn bootstrap(
         cfg: NodeConfig,
-    ) -> Result<(Self, Vec<Message<D::Request, D::Reply>>)> {
+    ) -> Result<(Self, Vec<Message<D::State, D::Request, D::Reply>>)> {
         let id = cfg.id;
 
         // initial checks of correctness
@@ -225,7 +226,7 @@ where
         let listener = socket::bind(cfg.addrs[&id].0).await
             .wrapped(ErrorKind::Communication)?;
 
-        let (tx, rx) = new_message_channel::<D::Request, D::Reply>(NODE_CHAN_BOUND);
+        let (tx, rx) = new_message_channel::<D::State, D::Request, D::Reply>(NODE_CHAN_BOUND);
         let acceptor: TlsAcceptor = cfg.server_config.into();
         let connector: TlsConnector = cfg.client_config.into();
 
@@ -553,7 +554,7 @@ where
     }
 
     /// Receive one message from peer nodes or ourselves.
-    pub async fn receive(&mut self) -> Result<Message<D::Request, D::Reply>> {
+    pub async fn receive(&mut self) -> Result<Message<D::State, D::Request, D::Reply>> {
         self.my_rx.recv().await
     }
 
@@ -827,6 +828,7 @@ impl<D: SharedData> Clone for SendNode<D> {
 impl<D> SendNode<D>
 where
     D: SharedData + 'static,
+    D::State: Send + Clone + 'static,
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
@@ -899,6 +901,7 @@ enum SendTo<D: SharedData> {
 impl<D> SendTo<D>
 where
     D: SharedData + 'static,
+    D::State: Send + Clone + 'static,
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
