@@ -131,7 +131,7 @@ where
         matches!(self.phase, ProtoPhase::WaitingCheckpoint(_, _))
     }
 
-    pub fn process_message<S>(
+    pub fn process_message(
         &mut self,
         progress: CstProgress,
         view: ViewInfo,
@@ -234,7 +234,7 @@ where
         }
     }
 
-    pub fn request_latest_consensus_seq_no<S>(&mut self, _node: &mut Node<S::Data>) {
+    pub fn request_latest_consensus_seq_no(&mut self, _node: &mut Node<S::Data>) {
         // reset state of latest seq no
         self.latest_cid = SeqNo::from(0u32);
         self.latest_cid_count = 0;
