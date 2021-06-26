@@ -340,7 +340,7 @@ where
     /// on a single target id.
     pub fn send(
         &mut self,
-        message: SystemMessage<D::Request, D::Reply>,
+        message: SystemMessage<D>,
         target: NodeId,
     ) -> Digest {
         let send_to = Self::send_to(
@@ -357,7 +357,7 @@ where
 
     #[inline]
     fn send_impl(
-        message: SystemMessage<D::Request, D::Reply>,
+        message: SystemMessage<D>,
         mut send_to: SendTo<D>,
         my_id: NodeId,
         target: NodeId,
@@ -388,7 +388,7 @@ where
     /// Broadcast a `SystemMessage` to a group of nodes.
     pub fn broadcast(
         &mut self,
-        message: SystemMessage<D::Request, D::Reply>,
+        message: SystemMessage<D>,
         targets: impl Iterator<Item = NodeId>,
     ) -> Digest {
         let (mine, others) = Self::send_tos(
@@ -404,7 +404,7 @@ where
 
     #[inline]
     fn broadcast_impl(
-        message: SystemMessage<D::Request, D::Reply>,
+        message: SystemMessage<D>,
         my_send_to: Option<SendTo<D>>,
         other_send_tos: SendTos<D>,
         nonce: u64,
@@ -833,7 +833,7 @@ where
     /// Check the `send()` documentation for `Node`.
     pub fn send(
         &mut self,
-        message: SystemMessage<D::Request, D::Reply>,
+        message: SystemMessage<D>,
         target: NodeId,
     ) -> Digest {
         let send_to = <Node<D>>::send_to(
@@ -851,7 +851,7 @@ where
     /// Check the `broadcast()` documentation for `Node`.
     pub fn broadcast(
         &mut self,
-        message: SystemMessage<D::Request, D::Reply>,
+        message: SystemMessage<D>,
         targets: impl Iterator<Item = NodeId>,
     ) -> Digest {
         let (mine, others) = <Node<D>>::send_tos(
@@ -904,7 +904,7 @@ where
 {
     async fn value(
         &mut self,
-        m: Either<(u64, Digest, Buf), (SystemMessage<D::Request, D::Reply>, u64, Digest, Buf)>,
+        m: Either<(u64, Digest, Buf), (SystemMessage<D>, u64, Digest, Buf)>,
     ) {
         match self {
             SendTo::Me { my_id, shared: ref sh, ref mut tx } => {
@@ -928,7 +928,7 @@ where
 
     async fn me(
         my_id: NodeId,
-        m: SystemMessage<D::Request, D::Reply>,
+        m: SystemMessage<D>,
         n: u64,
         d: Digest,
         b: Buf,

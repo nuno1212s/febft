@@ -142,7 +142,7 @@ pub enum CstMessageKind<D: SharedData> {
 impl<D: SharedData> CstMessage<D> {
     /// Creates a new `CstMessage` with sequence number `seq`,
     /// and of the kind `kind`.
-    pub fn new(seq: SeqNo, kind: CstMessageKind) -> Self {
+    pub fn new(seq: SeqNo, kind: CstMessageKind<D>) -> Self {
         Self { seq, kind }
     }
 

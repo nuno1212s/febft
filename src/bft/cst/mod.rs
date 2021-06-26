@@ -136,7 +136,7 @@ where
         progress: CstProgress<S::Data>,
         view: ViewInfo,
         consensus: &Consensus<S>,
-        log: &mut Log<Request<S>, Reply<S>>,
+        log: &mut Log<S::Data>,
         node: &mut Node<S::Data>,
     ) -> CstStatus<S::Data> {
         match self.phase {

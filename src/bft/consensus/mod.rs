@@ -289,7 +289,7 @@ where
     }
 
     /// Check if we can process new consensus messages.
-    pub fn poll(&mut self, log: &Log<Request<S>, Reply<S>>) -> ConsensusPollStatus {
+    pub fn poll(&mut self, log: &Log<S::Data>) -> ConsensusPollStatus {
         match self.phase {
             ProtoPhase::Init if self.tbo.get_queue => {
                 extract_msg!(
@@ -347,7 +347,7 @@ where
         header: Header,
         message: ConsensusMessage,
         view: ViewInfo,
-        log: &mut Log<Request<S>, Reply<S>>,
+        log: &mut Log<S::Data>,
         node: &mut Node<S::Data>,
     ) -> ConsensusStatus<'a> {
         // FIXME: use order imposed by leader
