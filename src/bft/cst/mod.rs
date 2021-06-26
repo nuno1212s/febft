@@ -110,7 +110,13 @@ macro_rules! getmessage {
     }};
 }
 
-impl CollabStateTransfer {
+impl<S> CollabStateTransfer<S>
+where
+    S: Service + Send + 'static,
+    State<S>: Send + 'static,
+    Request<S>: Send + 'static,
+    Reply<S>: Send + 'static,
+{
     pub fn new() -> Self {
         Self {
             phase: ProtoPhase::Init,
@@ -124,20 +130,14 @@ impl CollabStateTransfer {
         matches!(self.phase, ProtoPhase::WaitingCheckpoint(_, _))
     }
 
-    pub fn process_message<S>(
+    pub fn process_message(
         &mut self,
-        progress: CstProgress,
+        progress: CstProgress<State<S>, Request<S>>,
         view: ViewInfo,
         consensus: &Consensus<S>,
-        log: &mut Log<Request<S>, Reply<S>>,
+        log: &mut Log<State<S>, Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
-    ) -> CstStatus
-    where
-        S: Service + Send + 'static,
-        State<S>: Send + 'static,
-        Request<S>: Send + 'static,
-        Reply<S>: Send + 'static,
-    {
+    ) -> CstStatus<State<S>> {
         match self.phase {
             ProtoPhase::WaitingCheckpoint(_, _) => {
                 let (header, message) = getmessage!(&mut self.phase);
@@ -233,13 +233,7 @@ impl CollabStateTransfer {
         }
     }
 
-    pub fn request_latest_consensus_seq_no<S>(&mut self, _node: &mut Node<S::Data>)
-    where
-        S: Service + Send + 'static,
-        State<S>: Send + 'static,
-        Request<S>: Send + 'static,
-        Reply<S>: Send + 'static,
-    {
+    pub fn request_latest_consensus_seq_no(&mut self, _node: &mut Node<S::Data>) {
         // reset state of latest seq no
         self.latest_cid = SeqNo::from(0u32);
         self.latest_cid_count = 0;
