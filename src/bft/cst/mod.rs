@@ -36,7 +36,12 @@ enum ProtoPhase<S, O> {
     ReceivingState(usize),
 }
 
-// TODO: finish this struct
+// TODO:
+// - finish this struct
+// - add methods to access this struct's fields
+// - add a constructor
+// - figure out if StoredConsensus should be made public
+/// Contains state used by a recovering node.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct ExecutionState<S, O> {
@@ -55,13 +60,13 @@ pub struct ExecutionState<S, O> {
 /// Represents the state of an on-going colloborative
 /// state transfer protocol execution.
 pub struct CollabStateTransfer<S: Service> {
-    phase: ProtoPhase<State<S>, Request<S>>,
     latest_cid: SeqNo,
     latest_cid_count: usize,
     cst_seq: SeqNo,
     // NOTE: remembers whose replies we have
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
+    phase: ProtoPhase<State<S>, Request<S>>,
 }
 
 /// Status returned from processnig a state transfer message.
@@ -120,6 +125,7 @@ where
     Request<S>: Send + 'static,
     Reply<S>: Send + 'static,
 {
+    /// Craete a new instance of `CollabStateTransfer`.
     pub fn new() -> Self {
         Self {
             phase: ProtoPhase::Init,
@@ -129,10 +135,15 @@ where
         }
     }
 
+    /// Checks if the CST layer is waiting for a local checkpoint to
+    /// complete.
+    ///
+    /// This is used when a node is sending state to a peer.
     pub fn needs_checkpoint(&self) -> bool {
         matches!(self.phase, ProtoPhase::WaitingCheckpoint(_, _))
     }
 
+    /// Advances the state of the CST state machine.
     pub fn process_message(
         &mut self,
         progress: CstProgress<State<S>, Request<S>>,
@@ -236,6 +247,8 @@ where
         }
     }
 
+    /// Used by a recovering node to retrieve the latest sequence number
+    /// attributed to a client request by the consensus layer.
     pub fn request_latest_consensus_seq_no(&mut self, _node: &mut Node<S::Data>) {
         // reset state of latest seq no
         self.latest_cid = SeqNo::from(0u32);
