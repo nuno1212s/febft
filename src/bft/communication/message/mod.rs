@@ -32,6 +32,7 @@ use crate::bft::crypto::hash::{
 use crate::bft::communication::socket::Socket;
 use crate::bft::executable::UpdateBatchReplies;
 use crate::bft::communication::NodeId;
+use crate::bft::cst::ExecutionState;
 use crate::bft::ordering::SeqNo;
 use crate::bft::error::*;
 
@@ -79,9 +80,9 @@ pub struct OwnedWireMessage<T> {
 /// The `Message` type encompasses all the messages traded between different
 /// asynchronous tasks in the system.
 ///
-pub enum Message<O, P> {
+pub enum Message<S, O, P> {
     /// Client requests and process sub-protocol messages.
-    System(Header, SystemMessage<O, P>),
+    System(Header, SystemMessage<S, O, P>),
     /// A client with id `NodeId` has finished connecting to the socket `Socket`.
     /// This socket should only perform write operations.
     ConnectedTx(NodeId, TlsStreamCli<Socket>),
@@ -99,10 +100,10 @@ pub enum Message<O, P> {
     /// The type of the payload delivered to the clients is `P`.
     ExecutionFinished(UpdateBatchReplies<P>),
     /// Same as `Message::ExecutionFinished`, but includes a snapshot of
-    /// the serialized application state.
+    /// the application state.
     ///
     /// This is useful for local checkpoints.
-    ExecutionFinishedWithAppstate(UpdateBatchReplies<P>, Vec<u8>),
+    ExecutionFinishedWithAppstate(UpdateBatchReplies<P>, S),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
@@ -112,36 +113,36 @@ pub enum Message<O, P> {
 /// or even `ViewChange` messages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub enum SystemMessage<O, P> {
+pub enum SystemMessage<S, O, P> {
     // TODO: ReadRequest,
     Request(RequestMessage<O>),
     Reply(ReplyMessage<P>),
     Consensus(ConsensusMessage),
-    Cst(CstMessage),
+    Cst(CstMessage<S, O>),
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct CstMessage {
+pub struct CstMessage<S, O> {
     // NOTE: not the same sequence number used in the
     // consensus layer to order client requests!
     seq: SeqNo,
-    kind: CstMessageKind,
+    kind: CstMessageKind<S, O>,
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub enum CstMessageKind {
+pub enum CstMessageKind<S, O> {
     RequestLatestConsensusSeq,
     ReplyLatestConsensusSeq(SeqNo),
     RequestState,
-    ReplyState( (/* TODO: app state type */) ),
+    ReplyState(ExecutionState<S, O>),
 }
 
-impl CstMessage {
+impl<S, O> CstMessage<S, O> {
     /// Creates a new `CstMessage` with sequence number `seq`,
     /// and of the kind `kind`.
-    pub fn new(seq: SeqNo, kind: CstMessageKind) -> Self {
+    pub fn new(seq: SeqNo, kind: CstMessageKind<S, O>) -> Self {
         Self { seq, kind }
     }
 
@@ -151,7 +152,7 @@ impl CstMessage {
     }
 
     /// Returns a reference to the state transfer message kind.
-    pub fn kind(&self) -> &CstMessageKind {
+    pub fn kind(&self) -> &CstMessageKind<S, O> {
         &self.kind
     }
 }
@@ -547,7 +548,7 @@ impl<'a> WireMessage<'a> {
     }
 }
 
-impl<O, P> Message<O, P> {
+impl<S, O, P> Message<S, O, P> {
     /// Returns the `Header` of this message, if it is
     /// a `SystemMessage`.
     pub fn header(&self) -> Result<&Header> {

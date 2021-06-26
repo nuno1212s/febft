@@ -26,9 +26,9 @@ use crate::bft::executable::{
     State,
 };
 
-enum ProtoPhase {
+enum ProtoPhase<S, O> {
     Init,
-    WaitingCheckpoint(Header, CstMessage),
+    WaitingCheckpoint(Header, CstMessage<S, O>),
     ReceivingCid(usize),
     ReceivingState(usize),
 }
@@ -36,14 +36,14 @@ enum ProtoPhase {
 // TODO:
 // - finish this struct
 // - include request payload
-pub struct ExecutionState<S: Service> {
+pub struct ExecutionState<S, O> {
     latest_cid: SeqNo,
     view: ViewInfo,
-    checkpoint_state: State<S>,
+    checkpoint_state: S,
     // used to replay log on recovering replicas;
     // the request batches have been concatenated,
     // for efficiency
-    requests: Vec<Request<S>>,
+    requests: Vec<O>,
     //pre_prepares: Vec<StoredConsensus>,
     //prepares: Vec<StoredConsensus>,
     //commits: Vec<StoredConsensus>,
@@ -51,8 +51,8 @@ pub struct ExecutionState<S: Service> {
 
 /// Represents the state of an on-going colloborative
 /// state transfer protocol execution.
-pub struct CollabStateTransfer {
-    phase: ProtoPhase,
+pub struct CollabStateTransfer<S: Service> {
+    phase: ProtoPhase<State<S>, Request<S>>,
     latest_cid: SeqNo,
     latest_cid_count: usize,
     seq: SeqNo,
@@ -62,7 +62,7 @@ pub struct CollabStateTransfer {
 }
 
 /// Status returned from processnig a state transfer message.
-pub enum CstStatus {
+pub enum CstStatus<S> {
     /// We are not running the CST protocol.
     ///
     /// Drop any attempt of processing a message in this condition.
@@ -78,19 +78,19 @@ pub enum CstStatus {
     SeqNo(SeqNo),
     /// We have received and validated the state from
     /// a group of replicas.
-    State( (/* TODO: app state type */) )
+    State(S /* TODO: app state type */)
 }
 
 /// Represents progress in the CST state machine.
 ///
 /// To clarify, the mention of state machine here has nothing to do with the
 /// SMR protocol, but rather the implementation in code of the CST protocol.
-pub enum CstProgress {
+pub enum CstProgress<S, O> {
     /// This value represents null progress in the CST code's state machine.
     Nil,
     /// We have a fresh new message to feed the CST state machine, from
     /// the communication layer.
-    Message(Header, CstMessage),
+    Message(Header, CstMessage<S, O>),
 }
 
 macro_rules! getmessage {
