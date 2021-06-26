@@ -36,7 +36,7 @@ pub enum Info {
     BeginCheckpoint,
 }
 
-enum CheckpointState {
+enum CheckpointState<S> {
     // no checkpoint has been performed yet
     None,
     // we are calling this a partial checkpoint because we are
@@ -49,17 +49,17 @@ enum CheckpointState {
         // sequence number of the last executed request
         seq: SeqNo,
         // save the earlier checkpoint, in case corruption takes place
-        earlier: Checkpoint,
+        earlier: Checkpoint<S>,
     },
     // application state received, the checkpoint state is finalized
-    Complete(Checkpoint),
+    Complete(Checkpoint<S>),
 }
 
-struct Checkpoint {
+struct Checkpoint<S> {
     // sequence number of the last executed request
     seq: SeqNo,
-    // serialized application state
-    appstate: Vec<u8>,
+    // application state
+    appstate: S,
 }
 
 struct StoredConsensus {
@@ -73,7 +73,7 @@ struct StoredRequest<O> {
 }
 
 /// Represents a log of messages received by the BFT system.
-pub struct Log<O, P> {
+pub struct Log<S, O, P> {
     curr_seq: SeqNo,
     batch_size: usize,
     pre_prepares: Vec<StoredConsensus>,
@@ -83,14 +83,14 @@ pub struct Log<O, P> {
     requests: OrderedMap<Digest, StoredRequest<O>>,
     deciding: HashMap<Digest, StoredRequest<O>>,
     decided: Vec<O>,
-    checkpoint: CheckpointState,
+    checkpoint: CheckpointState<S>,
     _marker: PhantomData<P>,
 }
 
 // TODO:
 // - garbage collect the log
 // - save the log to persistent storage
-impl<O, P> Log<O, P> {
+impl<S, O, P> Log<S, O, P> {
     /// Creates a new message log.
     ///
     /// The value `batch_size` represents the maximum number of
@@ -234,7 +234,7 @@ impl<O, P> Log<O, P> {
     /// This method should only be called when `finalize_request()` reports
     /// `Info::BeginCheckpoint`, and the requested application state is received
     /// on the core server task's master channel.
-    pub fn finalize_checkpoint(&mut self, appstate: Vec<u8>) -> Result<()> {
+    pub fn finalize_checkpoint(&mut self, appstate: S) -> Result<()> {
         match self.checkpoint {
             CheckpointState::None => Err("No checkpoint has been initiated yet").wrapped(ErrorKind::Log),
             CheckpointState::Complete(_) => Err("Checkpoint already finalized").wrapped(ErrorKind::Log),

@@ -5,6 +5,9 @@
 
 use std::cmp::Ordering;
 
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
+
 use crate::bft::log::Log;
 use crate::bft::ordering::SeqNo;
 use crate::bft::consensus::Consensus;
@@ -33,9 +36,9 @@ enum ProtoPhase<S, O> {
     ReceivingState(usize),
 }
 
-// TODO:
-// - finish this struct
-// - include request payload
+// TODO: finish this struct
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
 pub struct ExecutionState<S, O> {
     latest_cid: SeqNo,
     view: ViewInfo,

@@ -33,12 +33,12 @@ pub trait SharedData {
     type Reply;
 
     /// Serialize a wire message into the writer `W`.
-    fn serialize_message<W>(w: W, m: &SystemMessage<Self::Request, Self::Reply>) -> Result<()>
+    fn serialize_message<W>(w: W, m: &SystemMessage<Self::State, Self::Request, Self::Reply>) -> Result<()>
     where
         W: Write;
 
     /// Deserialize a wire message from a reader `R`.
-    fn deserialize_message<R>(r: R) -> Result<SystemMessage<Self::Request, Self::Reply>>
+    fn deserialize_message<R>(r: R) -> Result<SystemMessage<Self::State, Self::Request, Self::Reply>>
     where
         R: Read;
 
@@ -65,7 +65,7 @@ pub trait DigestData: SharedData {
     /// serialization.
     fn serialize_digest<W: Write + AsRef<[u8]>>(
         nonce: u64,
-        message: &SystemMessage<Self::Request, Self::Reply>,
+        message: &SystemMessage<Self::State, Self::Request, Self::Reply>,
         mut w: W,
     ) -> Result<Digest> {
         Self::serialize_message(&mut w, message)?;

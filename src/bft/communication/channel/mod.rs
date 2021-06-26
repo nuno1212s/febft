@@ -123,16 +123,16 @@ impl<'a, T> FusedFuture for ChannelRxFut<'a, T> {
 /// Represents the sending half of a `Message` channel.
 ///
 /// The handle can be cloned as many times as needed for cheap.
-pub struct MessageChannelTx<O, P> {
-    other: ChannelTx<Message<O, P>>,
+pub struct MessageChannelTx<S, O, P> {
+    other: ChannelTx<Message<S, O, P>>,
     requests: ChannelTx<(Header, RequestMessage<O>)>,
     replies: ChannelTx<(Header, ReplyMessage<P>)>,
     consensus: ChannelTx<(Header, ConsensusMessage)>,
 }
 
 /// Represents the receiving half of a `Message` channel.
-pub struct MessageChannelRx<O, P> {
-    other: ChannelRx<Message<O, P>>,
+pub struct MessageChannelRx<S, O, P> {
+    other: ChannelRx<Message<S, O, P>>,
     requests: ChannelRx<(Header, RequestMessage<O>)>,
     replies: ChannelRx<(Header, ReplyMessage<P>)>,
     consensus: ChannelRx<(Header, ConsensusMessage)>,
@@ -140,7 +140,7 @@ pub struct MessageChannelRx<O, P> {
 
 /// Creates a new channel that can queue up to `bound` messages
 /// from different async senders.
-pub fn new_message_channel<O, P>(bound: usize) -> (MessageChannelTx<O, P>, MessageChannelRx<O, P>) {
+pub fn new_message_channel<S, O, P>(bound: usize) -> (MessageChannelTx<S, O, P>, MessageChannelRx<S, O, P>) {
     let (c_tx, c_rx) = new_bounded(bound);
     let (r_tx, r_rx) = new_bounded(bound);
     let (rr_tx, rr_rx) = new_bounded(bound);
@@ -160,7 +160,7 @@ pub fn new_message_channel<O, P>(bound: usize) -> (MessageChannelTx<O, P>, Messa
     (tx, rx)
 }
 
-impl<O, P> Clone for MessageChannelTx<O, P> {
+impl<S, O, P> Clone for MessageChannelTx<S, O, P> {
     fn clone(&self) -> Self {
         Self {
             consensus: self.consensus.clone(),
@@ -171,8 +171,8 @@ impl<O, P> Clone for MessageChannelTx<O, P> {
     }
 }
 
-impl<O, P> MessageChannelTx<O, P> {
-    pub async fn send(&mut self, message: Message<O, P>) -> Result<()> {
+impl<S, O, P> MessageChannelTx<S, O, P> {
+    pub async fn send(&mut self, message: Message<S, O, P>) -> Result<()> {
         match message {
             Message::System(header, message) => {
                 match message {
@@ -197,8 +197,8 @@ impl<O, P> MessageChannelTx<O, P> {
     }
 }
 
-impl<O, P> MessageChannelRx<O, P> {
-    pub async fn recv(&mut self) -> Result<Message<O, P>> {
+impl<S, O, P> MessageChannelRx<S, O, P> {
+    pub async fn recv(&mut self) -> Result<Message<S, O, P>> {
         let message = select! {
             result = self.consensus.recv() => {
                 let (h, c) = result?;

@@ -146,8 +146,8 @@ struct NodeShared {
 pub struct Node<D: SharedData> {
     id: NodeId,
     first_cli: NodeId,
-    my_tx: MessageChannelTx<D::Request, D::Reply>,
-    my_rx: MessageChannelRx<D::Request, D::Reply>,
+    my_tx: MessageChannelTx<D::State, D::Request, D::Reply>,
+    my_rx: MessageChannelRx<D::State, D::Request, D::Reply>,
     rng: prng::State,
     shared: Arc<NodeShared>,
     peer_tx: PeerTx,
@@ -330,7 +330,7 @@ where
     }
 
     /// Returns a handle to the master channel of this `Node`.
-    pub fn master_channel(&self) -> MessageChannelTx<D::Request, D::Reply> {
+    pub fn master_channel(&self) -> MessageChannelTx<D::State, D::Request, D::Reply> {
         self.my_tx.clone()
     }
 
@@ -340,7 +340,7 @@ where
     /// on a single target id.
     pub fn send(
         &mut self,
-        message: SystemMessage<D::Request, D::Reply>,
+        message: SystemMessage<D::State, D::Request, D::Reply>,
         target: NodeId,
     ) -> Digest {
         let send_to = Self::send_to(
@@ -357,7 +357,7 @@ where
 
     #[inline]
     fn send_impl(
-        message: SystemMessage<D::Request, D::Reply>,
+        message: SystemMessage<D::State, D::Request, D::Reply>,
         mut send_to: SendTo<D>,
         my_id: NodeId,
         target: NodeId,
@@ -388,7 +388,7 @@ where
     /// Broadcast a `SystemMessage` to a group of nodes.
     pub fn broadcast(
         &mut self,
-        message: SystemMessage<D::Request, D::Reply>,
+        message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item = NodeId>,
     ) -> Digest {
         let (mine, others) = Self::send_tos(
@@ -404,7 +404,7 @@ where
 
     #[inline]
     fn broadcast_impl(
-        message: SystemMessage<D::Request, D::Reply>,
+        message: SystemMessage<D::State, D::Request, D::Reply>,
         my_send_to: Option<SendTo<D>>,
         other_send_tos: SendTos<D>,
         nonce: u64,
@@ -448,7 +448,7 @@ where
     fn send_tos(
         my_id: NodeId,
         peer_tx: &PeerTx,
-        tx: &MessageChannelTx<D::Request, D::Reply>,
+        tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
         shared: &Arc<NodeShared>,
         targets: impl Iterator<Item = NodeId>,
     ) -> (Option<SendTo<D>>, SendTos<D>) {
@@ -487,7 +487,7 @@ where
     #[inline]
     fn create_send_tos(
         my_id: NodeId,
-        tx: &MessageChannelTx<D::Request, D::Reply>,
+        tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
         shared: &Arc<NodeShared>,
         map: &HashMap<NodeId, Arc<Mutex<TlsStreamCli<Socket>>>>,
         targets: impl Iterator<Item = NodeId>,
@@ -521,7 +521,7 @@ where
         my_id: NodeId,
         peer_id: NodeId,
         shared: &Arc<NodeShared>,
-        tx: &MessageChannelTx<D::Request, D::Reply>,
+        tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
         peer_tx: &PeerTx,
     ) -> SendTo<D> {
         let tx = tx.clone();
@@ -659,7 +659,7 @@ where
         n: u32,
         my_id: NodeId,
         connector: TlsConnector,
-        tx: MessageChannelTx<D::Request, D::Reply>,
+        tx: MessageChannelTx<D::State, D::Request, D::Reply>,
         addrs: &HashMap<NodeId, (SocketAddr, String)>,
         rng: &mut prng::State,
     ) {
@@ -680,7 +680,7 @@ where
         peer_id: NodeId,
         nonce: u64,
         connector: TlsConnector,
-        mut tx: MessageChannelTx<D::Request, D::Reply>,
+        mut tx: MessageChannelTx<D::State, D::Request, D::Reply>,
         (addr, hostname): (SocketAddr, String),
     ) {
         const SECS: u64 = 1;
@@ -740,7 +740,7 @@ where
         my_id: NodeId,
         listener: Listener,
         acceptor: TlsAcceptor,
-        tx: MessageChannelTx<D::Request, D::Reply>,
+        tx: MessageChannelTx<D::State, D::Request, D::Reply>,
     ) {
         loop {
             if let Ok(sock) = listener.accept().await {
@@ -759,7 +759,7 @@ where
         my_id: NodeId,
         acceptor: TlsAcceptor,
         sock: Socket,
-        mut tx: MessageChannelTx<D::Request, D::Reply>,
+        mut tx: MessageChannelTx<D::State, D::Request, D::Reply>,
     ) {
         let mut buf_header = [0; Header::LENGTH];
 
@@ -809,7 +809,7 @@ pub struct SendNode<D: SharedData> {
     shared: Arc<NodeShared>,
     rng: prng::State,
     peer_tx: PeerTx,
-    my_tx: MessageChannelTx<D::Request, D::Reply>,
+    my_tx: MessageChannelTx<D::State, D::Request, D::Reply>,
 }
 
 impl<D: SharedData> Clone for SendNode<D> {
@@ -833,7 +833,7 @@ where
     /// Check the `send()` documentation for `Node`.
     pub fn send(
         &mut self,
-        message: SystemMessage<D::Request, D::Reply>,
+        message: SystemMessage<D::State, D::Request, D::Reply>,
         target: NodeId,
     ) -> Digest {
         let send_to = <Node<D>>::send_to(
@@ -851,7 +851,7 @@ where
     /// Check the `broadcast()` documentation for `Node`.
     pub fn broadcast(
         &mut self,
-        message: SystemMessage<D::Request, D::Reply>,
+        message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item = NodeId>,
     ) -> Digest {
         let (mine, others) = <Node<D>>::send_tos(
@@ -880,7 +880,7 @@ enum SendTo<D: SharedData> {
         // shared data
         shared: Arc<NodeShared>,
         // a handle to our message channel
-        tx: MessageChannelTx<D::Request, D::Reply>,
+        tx: MessageChannelTx<D::State, D::Request, D::Reply>,
     },
     Peers {
         // our id
@@ -892,7 +892,7 @@ enum SendTo<D: SharedData> {
         // handle to socket
         sock: Arc<Mutex<TlsStreamCli<Socket>>>,
         // a handle to our message channel
-        tx: MessageChannelTx<D::Request, D::Reply>,
+        tx: MessageChannelTx<D::State, D::Request, D::Reply>,
     },
 }
 
@@ -904,7 +904,7 @@ where
 {
     async fn value(
         &mut self,
-        m: Either<(u64, Digest, Buf), (SystemMessage<D::Request, D::Reply>, u64, Digest, Buf)>,
+        m: Either<(u64, Digest, Buf), (SystemMessage<D::State, D::Request, D::Reply>, u64, Digest, Buf)>,
     ) {
         match self {
             SendTo::Me { my_id, shared: ref sh, ref mut tx } => {
@@ -928,12 +928,12 @@ where
 
     async fn me(
         my_id: NodeId,
-        m: SystemMessage<D::Request, D::Reply>,
+        m: SystemMessage<D::State, D::Request, D::Reply>,
         n: u64,
         d: Digest,
         b: Buf,
         sk: &KeyPair,
-        tx: &mut MessageChannelTx<D::Request, D::Reply>,
+        tx: &mut MessageChannelTx<D::State, D::Request, D::Reply>,
     ) {
         // create wire msg
         let (h, _) = WireMessage::new(
@@ -957,7 +957,7 @@ where
         b: Buf,
         sk: &KeyPair,
         lock: &Mutex<TlsStreamCli<Socket>>,
-        tx: &mut MessageChannelTx<D::Request, D::Reply>,
+        tx: &mut MessageChannelTx<D::State, D::Request, D::Reply>,
     ) {
         // create wire msg
         let wm = WireMessage::new(
