@@ -55,7 +55,7 @@ pub struct CollabStateTransfer<S: Service> {
     phase: ProtoPhase<State<S>, Request<S>>,
     latest_cid: SeqNo,
     latest_cid_count: usize,
-    seq: SeqNo,
+    cst_seq: SeqNo,
     // NOTE: remembers whose replies we have
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
@@ -122,7 +122,7 @@ where
             phase: ProtoPhase::Init,
             latest_cid: SeqNo::from(0u32),
             latest_cid_count: 0,
-            seq: SeqNo::from(0),
+            cst_seq: SeqNo::from(0),
         }
     }
 
@@ -180,7 +180,7 @@ where
                 let (header, message) = getmessage!(progress, CstStatus::RequestLatestCid);
 
                 // drop cst messages with invalid seq no
-                if message.sequence_number() != self.seq {
+                if message.sequence_number() != self.cst_seq {
                     // FIXME: how to handle old or newer messages?
                     // BFT-SMaRt simply ignores messages with a
                     // value of `queryID` different from the current
@@ -241,7 +241,7 @@ where
         // ...
 
         // update our cst seq no
-        self.seq = self.seq.next();
+        self.cst_seq = self.cst_seq.next();
 
         unimplemented!()
     }
