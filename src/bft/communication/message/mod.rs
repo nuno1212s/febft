@@ -112,33 +112,33 @@ pub enum Message<S, O, P> {
 /// or even `ViewChange` messages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub enum SystemMessage<O, P> {
+pub enum SystemMessage<D: SharedData> {
     // TODO: ReadRequest,
-    Request(RequestMessage<O>),
-    Reply(ReplyMessage<P>),
+    Request(RequestMessage<D>),
+    Reply(ReplyMessage<D>),
     Consensus(ConsensusMessage),
-    Cst(CstMessage),
+    Cst(CstMessage<D>),
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct CstMessage {
+pub struct CstMessage<D: SharedData> {
     // NOTE: not the same sequence number used in the
     // consensus layer to order client requests!
     seq: SeqNo,
-    kind: CstMessageKind,
+    kind: CstMessageKind<D>,
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub enum CstMessageKind {
+pub enum CstMessageKind<D: SharedData> {
     RequestLatestConsensusSeq,
     ReplyLatestConsensusSeq(SeqNo),
     RequestState,
-    ReplyState( (/* TODO: app state type */) ),
+    ReplyState(D::State /* TODO: app state type */),
 }
 
-impl CstMessage {
+impl<D: SharedData> CstMessage<D> {
     /// Creates a new `CstMessage` with sequence number `seq`,
     /// and of the kind `kind`.
     pub fn new(seq: SeqNo, kind: CstMessageKind) -> Self {
@@ -151,7 +151,7 @@ impl CstMessage {
     }
 
     /// Returns a reference to the state transfer message kind.
-    pub fn kind(&self) -> &CstMessageKind {
+    pub fn kind(&self) -> &CstMessageKind<D> {
         &self.kind
     }
 }
@@ -162,8 +162,8 @@ impl CstMessage {
 /// over the replicated state.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct RequestMessage<O> {
-    operation: O,
+pub struct RequestMessage<D: SharedData> {
+    operation: D::Request,
 }
 
 /// Represents a reply to a client.
@@ -171,9 +171,9 @@ pub struct RequestMessage<O> {
 /// The `P` type argument symbolizes the response payload.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct ReplyMessage<P> {
+pub struct ReplyMessage<D: SharedData> {
     digest: Digest,
-    payload: P,
+    payload: D::Reply,
 }
 
 /// Represents a message from the consensus sub-protocol.
@@ -201,31 +201,31 @@ pub enum ConsensusMessageKind {
     Commit,
 }
 
-impl<O> RequestMessage<O> {
+impl<D: SharedData> RequestMessage<D> {
     /// Creates a new `RequestMessage`.
-    pub fn new(operation: O) -> Self {
+    pub fn new(operation: D::Request) -> Self {
         Self { operation }
     }
 
     /// Returns a reference to the operation of type `O`.
-    pub fn operation(&self) -> &O {
+    pub fn operation(&self) -> &D::Request {
         &self.operation
     }
 
     /// Unwraps this `RequestMessage`.
-    pub fn into_inner(self) -> O {
+    pub fn into_inner(self) -> D::Request {
         self.operation
     }
 }
 
-impl<P> ReplyMessage<P> {
+impl<D: SharedData> ReplyMessage<D> {
     /// Creates a new `ReplyMessage`.
-    pub fn new(digest: Digest, payload: P) -> Self {
+    pub fn new(digest: Digest, payload: D::Reply) -> Self {
         Self { digest, payload }
     }
 
-    /// Returns a reference to the payload of type `P`.
-    pub fn payload(&self) -> &P {
+    /// Returns a reference to the payload of type `D::Reply`.
+    pub fn payload(&self) -> &D::Reply {
         &self.payload
     }
 
@@ -236,7 +236,7 @@ impl<P> ReplyMessage<P> {
     }
 
     /// Unwraps this `ReplyMessage`.
-    pub fn into_inner(self) -> (Digest, P) {
+    pub fn into_inner(self) -> (Digest, D::Reply) {
         (self.digest, self.payload)
     }
 }

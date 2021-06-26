@@ -36,14 +36,14 @@ enum ProtoPhase {
 // TODO:
 // - finish this struct
 // - include request payload
-pub struct ExecutionState<S, O> {
+pub struct ExecutionState<D: SharedData> {
     latest_cid: SeqNo,
     view: ViewInfo,
-    checkpoint_state: S,
+    checkpoint_state: D::State,
     // used to replay log on recovering replicas;
     // the request batches have been concatenated,
     // for efficiency
-    requests: Vec<O>,
+    requests: Vec<D::Request>,
     pre_prepares: Vec<StoredConsensus>,
     prepares: Vec<StoredConsensus>,
     commits: Vec<StoredConsensus>,
@@ -51,7 +51,7 @@ pub struct ExecutionState<S, O> {
 
 /// Represents the state of an on-going colloborative
 /// state transfer protocol execution.
-pub struct CollabStateTransfer {
+pub struct CollabStateTransfer<S> {
     phase: ProtoPhase,
     latest_cid: SeqNo,
     latest_cid_count: usize,
@@ -59,6 +59,7 @@ pub struct CollabStateTransfer {
     // NOTE: remembers whose replies we have
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
+    _marker: PhantomData<S>,
 }
 
 /// Status returned from processnig a state transfer message.
@@ -110,7 +111,13 @@ macro_rules! getmessage {
     }};
 }
 
-impl CollabStateTransfer {
+impl<S: Service> CollabStateTransfer<S>
+where
+    S: Service + Send + 'static,
+    State<S>: Send + 'static,
+    Request<S>: Send + 'static,
+    Reply<S>: Send + 'static,
+{
     pub fn new() -> Self {
         Self {
             phase: ProtoPhase::Init,
@@ -131,13 +138,7 @@ impl CollabStateTransfer {
         consensus: &Consensus<S>,
         log: &mut Log<Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
-    ) -> CstStatus
-    where
-        S: Service + Send + 'static,
-        State<S>: Send + 'static,
-        Request<S>: Send + 'static,
-        Reply<S>: Send + 'static,
-    {
+    ) -> CstStatus {
         match self.phase {
             ProtoPhase::WaitingCheckpoint(_, _) => {
                 let (header, message) = getmessage!(&mut self.phase);
@@ -233,13 +234,7 @@ impl CollabStateTransfer {
         }
     }
 
-    pub fn request_latest_consensus_seq_no<S>(&mut self, _node: &mut Node<S::Data>)
-    where
-        S: Service + Send + 'static,
-        State<S>: Send + 'static,
-        Request<S>: Send + 'static,
-        Reply<S>: Send + 'static,
-    {
+    pub fn request_latest_consensus_seq_no<S>(&mut self, _node: &mut Node<S::Data>) {
         // reset state of latest seq no
         self.latest_cid = SeqNo::from(0u32);
         self.latest_cid_count = 0;

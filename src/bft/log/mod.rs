@@ -1,7 +1,5 @@
 //! A module to manage the `febft` message log.
 
-use std::marker::PhantomData;
-
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
 use crate::bft::cst::ExecutionState;
@@ -37,7 +35,7 @@ pub enum Info {
     BeginCheckpoint,
 }
 
-enum CheckpointState<S> {
+enum CheckpointState<D> {
     // no checkpoint has been performed yet
     None,
     // we are calling this a partial checkpoint because we are
@@ -50,17 +48,17 @@ enum CheckpointState<S> {
         // sequence number of the last executed request
         seq: SeqNo,
         // save the earlier checkpoint, in case corruption takes place
-        earlier: Checkpoint<S>,
+        earlier: Checkpoint<D>,
     },
     // application state received, the checkpoint state is finalized
-    Complete(Checkpoint<S>),
+    Complete(Checkpoint<D>),
 }
 
-struct Checkpoint<S> {
+struct Checkpoint<D> {
     // sequence number of the last executed request
     seq: SeqNo,
     // application state
-    appstate: S,
+    appstate: D::State,
 }
 
 struct StoredConsensus {
@@ -68,30 +66,29 @@ struct StoredConsensus {
     message: ConsensusMessage,
 }
 
-struct StoredRequest<O> {
+struct StoredRequest<D: SharedData> {
     header: Header,
-    message: RequestMessage<O>
+    message: RequestMessage<D>
 }
 
 /// Represents a log of messages received by the BFT system.
-pub struct Log<S, O, P> {
+pub struct Log<D: SharedData> {
     curr_seq: SeqNo,
     batch_size: usize,
     pre_prepares: Vec<StoredConsensus>,
     prepares: Vec<StoredConsensus>,
     commits: Vec<StoredConsensus>,
     // TODO: view change stuff
-    requests: OrderedMap<Digest, StoredRequest<O>>,
-    deciding: HashMap<Digest, StoredRequest<O>>,
-    decided: Vec<O>,
-    checkpoint: CheckpointState<S>,
-    _marker: PhantomData<P>,
+    requests: OrderedMap<Digest, StoredRequest<D>>,
+    deciding: HashMap<Digest, StoredRequest<D>>,
+    decided: Vec<D::Request>,
+    checkpoint: CheckpointState<D>,
 }
 
 // TODO:
 // - garbage collect the log
 // - save the log to persistent storage
-impl<O, P> Log<O, P> {
+impl<D: SharedData> Log<D> {
     /// Creates a new message log.
     ///
     /// The value `batch_size` represents the maximum number of
@@ -108,7 +105,6 @@ impl<O, P> Log<O, P> {
             decided: Vec::with_capacity(PERIOD as usize),
             requests: collections::ordered_map(),
             checkpoint: CheckpointState::None,
-            _marker: PhantomData,
         }
     }
 
@@ -125,7 +121,7 @@ impl<O, P> Log<O, P> {
 */
 
     /// Adds a new `message` and its respective `header` to the log.
-    pub fn insert(&mut self, header: Header, message: SystemMessage<O, P>) {
+    pub fn insert(&mut self, header: Header, message: SystemMessage<D>) {
         match message {
             SystemMessage::Request(message) => {
                 let digest = header.digest().clone();
@@ -176,7 +172,7 @@ impl<O, P> Log<O, P> {
     ///
     /// The log may be cleared resulting from this operation. Check the enum variant of
     /// `Info`, to perform a local checkpoint when appropriate.
-    pub fn finalize_batch(&mut self, digests: &[Digest]) -> Result<(Info, UpdateBatch<O>)>
+    pub fn finalize_batch(&mut self, digests: &[Digest]) -> Result<(Info, UpdateBatch<D>)>
     where
         O: Clone,
     {
@@ -277,8 +273,8 @@ impl<O, P> Log<O, P> {
     }
 }
 
-impl<O> StoredRequest<O> {
-    fn into_inner(self) -> (Header, RequestMessage<O>) {
+impl<D> StoredRequest<D> {
+    fn into_inner(self) -> (Header, RequestMessage<D>) {
         (self.header, self.message)
     }
 }
