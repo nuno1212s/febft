@@ -63,7 +63,7 @@ pub struct CollabStateTransfer<S> {
 }
 
 /// Status returned from processnig a state transfer message.
-pub enum CstStatus {
+pub enum CstStatus<D: SharedData> {
     /// We are not running the CST protocol.
     ///
     /// Drop any attempt of processing a message in this condition.
@@ -79,7 +79,7 @@ pub enum CstStatus {
     SeqNo(SeqNo),
     /// We have received and validated the state from
     /// a group of replicas.
-    State( (/* TODO: app state type */) )
+    State(D::State /* TODO: app state type */)
 }
 
 /// Represents progress in the CST state machine.
@@ -124,6 +124,7 @@ where
             latest_cid: SeqNo::from(0u32),
             latest_cid_count: 0,
             cst_seq: SeqNo::from(0),
+            _marker: PhantomData,
         }
     }
 
@@ -138,7 +139,7 @@ where
         consensus: &Consensus<S>,
         log: &mut Log<Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
-    ) -> CstStatus {
+    ) -> CstStatus<S::Data> {
         match self.phase {
             ProtoPhase::WaitingCheckpoint(_, _) => {
                 let (header, message) = getmessage!(&mut self.phase);

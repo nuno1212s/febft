@@ -16,39 +16,39 @@ use crate::bft::communication::serialize::{
 
 /// Represents a single client update request, to be executed.
 #[derive(Clone)]
-pub struct Update<O> {
+pub struct Update<D: SharedData> {
     from: NodeId,
     digest: Digest,
-    operation: O,
+    operation: D::Request,
 }
 
 /// Represents a single client update reply.
 #[derive(Clone)]
-pub struct UpdateReply<P> {
+pub struct UpdateReply<D: SharedData> {
     to: NodeId,
     digest: Digest,
-    payload: P,
+    payload: D::Reply,
 }
 
 /// Storage for a batch of client update requests to be executed.
 #[derive(Clone)]
-pub struct UpdateBatch<O> {
-    inner: Vec<Update<O>>,
+pub struct UpdateBatch<D: SharedData> {
+    inner: Vec<Update<D>>,
 }
 
 /// Storage for a batch of client update replies.
 #[derive(Clone)]
-pub struct UpdateBatchReplies<P> {
-    inner: Vec<UpdateReply<P>>,
+pub struct UpdateBatchReplies<D: SharedData> {
+    inner: Vec<UpdateReply<D>>,
 }
 
-enum ExecutionRequest<S, O> {
-    InstallState(S),
+enum ExecutionRequest<D: SharedData> {
+    InstallState(D::State),
     // update the state of the service
-    Update(UpdateBatch<O>),
+    Update(UpdateBatch<D>),
     // same as above, and include the application state
     // in the reply, used for local checkpoints
-    UpdateAndGetAppstate(UpdateBatch<O>),
+    UpdateAndGetAppstate(UpdateBatch<D>),
     // read the state of the service
     Read(NodeId),
 }
@@ -243,19 +243,19 @@ where
     }
 }
 
-impl<O> UpdateBatch<O> {
+impl<D: SharedData> UpdateBatch<D: SharedData> {
     /// Returns a new, empty batch of requests.
     pub fn new() -> Self {
         Self { inner: Vec::new() }
     }
 
     /// Adds a new update request to the batch.
-    pub fn add(&mut self, from: NodeId, digest: Digest, operation: O) {
+    pub fn add(&mut self, from: NodeId, digest: Digest, operation: D::Request) {
         self.inner.push(Update { from, digest, operation });
     }
 
     /// Returns the inner storage.
-    pub fn into_inner(self) -> Vec<Update<O>> {
+    pub fn into_inner(self) -> Vec<Update<D>> {
         self.inner
     }
 
@@ -265,25 +265,25 @@ impl<O> UpdateBatch<O> {
     }
 }
 
-impl<O> AsRef<[Update<O>]> for UpdateBatch<O> {
-    fn as_ref(&self) -> &[Update<O>] {
+impl<D: SharedData> AsRef<[Update<D>]> for UpdateBatch<D> {
+    fn as_ref(&self) -> &[Update<D>] {
         &self.inner[..]
     }
 }
 
-impl<O> Update<O> {
+impl<D: SharedData> Update<D> {
     /// Returns the inner types stored in this `Update`.
-    pub fn into_inner(self) -> (NodeId, Digest, O) {
+    pub fn into_inner(self) -> (NodeId, Digest, D::Request) {
         (self.from, self.digest, self.operation)
     }
 
     /// Returns a reference to this operation in this `Update`.
-    pub fn operation(&self) -> &O {
+    pub fn operation(&self) -> &D::Request {
         &self.operation
     }
 }
 
-impl<P> UpdateBatchReplies<P> {
+impl<D: SharedData> UpdateBatchReplies<D> {
 /*
     /// Returns a new, empty batch of replies.
     pub fn new() -> Self {
@@ -297,12 +297,12 @@ impl<P> UpdateBatchReplies<P> {
     }
 
     /// Adds a new update reply to the batch.
-    pub fn add(&mut self, to: NodeId, digest: Digest, payload: P) {
+    pub fn add(&mut self, to: NodeId, digest: Digest, payload: D::Reply) {
         self.inner.push(UpdateReply { to, digest, payload });
     }
 
     /// Returns the inner storage.
-    pub fn into_inner(self) -> Vec<UpdateReply<P>> {
+    pub fn into_inner(self) -> Vec<UpdateReply<D>> {
         self.inner
     }
 
@@ -312,9 +312,9 @@ impl<P> UpdateBatchReplies<P> {
     }
 }
 
-impl<P> UpdateReply<P> {
+impl<D: SharedData> UpdateReply<D> {
     /// Returns the inner types stored in this `UpdateReply`.
-    pub fn into_inner(self) -> (NodeId, Digest, P) {
+    pub fn into_inner(self) -> (NodeId, Digest, D::Reply) {
         (self.to, self.digest, self.payload)
     }
 }

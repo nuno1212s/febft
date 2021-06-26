@@ -17,6 +17,7 @@ use futures::select;
 use futures::future::FusedFuture;
 
 use crate::bft::error::*;
+use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::message::{
     Header,
     Message,
@@ -123,24 +124,24 @@ impl<'a, T> FusedFuture for ChannelRxFut<'a, T> {
 /// Represents the sending half of a `Message` channel.
 ///
 /// The handle can be cloned as many times as needed for cheap.
-pub struct MessageChannelTx<O, P> {
-    other: ChannelTx<Message<O, P>>,
-    requests: ChannelTx<(Header, RequestMessage<O>)>,
-    replies: ChannelTx<(Header, ReplyMessage<P>)>,
+pub struct MessageChannelTx<D: SharedData> {
+    other: ChannelTx<Message<D>>,
+    requests: ChannelTx<(Header, RequestMessage<D>)>,
+    replies: ChannelTx<(Header, ReplyMessage<D>)>,
     consensus: ChannelTx<(Header, ConsensusMessage)>,
 }
 
 /// Represents the receiving half of a `Message` channel.
-pub struct MessageChannelRx<O, P> {
-    other: ChannelRx<Message<O, P>>,
-    requests: ChannelRx<(Header, RequestMessage<O>)>,
-    replies: ChannelRx<(Header, ReplyMessage<P>)>,
+pub struct MessageChannelRx<D: SharedData> {
+    other: ChannelRx<Message<D>>,
+    requests: ChannelRx<(Header, RequestMessage<D>)>,
+    replies: ChannelRx<(Header, ReplyMessage<D>)>,
     consensus: ChannelRx<(Header, ConsensusMessage)>,
 }
 
 /// Creates a new channel that can queue up to `bound` messages
 /// from different async senders.
-pub fn new_message_channel<O, P>(bound: usize) -> (MessageChannelTx<O, P>, MessageChannelRx<O, P>) {
+pub fn new_message_channel<D: SharedData>(bound: usize) -> (MessageChannelTx<D>, MessageChannelRx<D>) {
     let (c_tx, c_rx) = new_bounded(bound);
     let (r_tx, r_rx) = new_bounded(bound);
     let (rr_tx, rr_rx) = new_bounded(bound);
@@ -160,7 +161,7 @@ pub fn new_message_channel<O, P>(bound: usize) -> (MessageChannelTx<O, P>, Messa
     (tx, rx)
 }
 
-impl<O, P> Clone for MessageChannelTx<O, P> {
+impl<D: SharedData> Clone for MessageChannelTx<D> {
     fn clone(&self) -> Self {
         Self {
             consensus: self.consensus.clone(),
@@ -171,8 +172,8 @@ impl<O, P> Clone for MessageChannelTx<O, P> {
     }
 }
 
-impl<O, P> MessageChannelTx<O, P> {
-    pub async fn send(&mut self, message: Message<O, P>) -> Result<()> {
+impl<D: SharedData> MessageChannelTx<D> {
+    pub async fn send(&mut self, message: Message<D>) -> Result<()> {
         match message {
             Message::System(header, message) => {
                 match message {
@@ -197,8 +198,8 @@ impl<O, P> MessageChannelTx<O, P> {
     }
 }
 
-impl<O, P> MessageChannelRx<O, P> {
-    pub async fn recv(&mut self) -> Result<Message<O, P>> {
+impl<D: SharedData> MessageChannelRx<D> {
+    pub async fn recv(&mut self) -> Result<Message<D>> {
         let message = select! {
             result = self.consensus.recv() => {
                 let (h, c) = result?;

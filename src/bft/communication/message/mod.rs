@@ -79,9 +79,9 @@ pub struct OwnedWireMessage<T> {
 /// The `Message` type encompasses all the messages traded between different
 /// asynchronous tasks in the system.
 ///
-pub enum Message<S, O, P> {
+pub enum Message<D: SharedData> {
     /// Client requests and process sub-protocol messages.
-    System(Header, SystemMessage<O, P>),
+    System(Header, SystemMessage<D>),
     /// A client with id `NodeId` has finished connecting to the socket `Socket`.
     /// This socket should only perform write operations.
     ConnectedTx(NodeId, TlsStreamCli<Socket>),
@@ -96,13 +96,13 @@ pub enum Message<S, O, P> {
     DisconnectedRx(Option<NodeId>),
     /// A batch of client requests has finished executing.
     ///
-    /// The type of the payload delivered to the clients is `P`.
-    ExecutionFinished(UpdateBatchReplies<P>),
+    /// The type of the payload delivered to the clients is `D::Reply`.
+    ExecutionFinished(UpdateBatchReplies<D>),
     /// Same as `Message::ExecutionFinished`, but includes a snapshot of
     /// the application state.
     ///
     /// This is useful for local checkpoints.
-    ExecutionFinishedWithAppstate(UpdateBatchReplies<P>, S),
+    ExecutionFinishedWithAppstate(UpdateBatchReplies<D>, D::State),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
@@ -158,7 +158,7 @@ impl<D: SharedData> CstMessage<D> {
 
 /// Represents a request from a client.
 ///
-/// The `O` type argument symbolizes the client operation to be performed
+/// The `D::Request` type argument symbolizes the client operation to be performed
 /// over the replicated state.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
@@ -168,7 +168,7 @@ pub struct RequestMessage<D: SharedData> {
 
 /// Represents a reply to a client.
 ///
-/// The `P` type argument symbolizes the response payload.
+/// The `D::Reply` type argument symbolizes the response payload.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct ReplyMessage<D: SharedData> {
@@ -207,7 +207,7 @@ impl<D: SharedData> RequestMessage<D> {
         Self { operation }
     }
 
-    /// Returns a reference to the operation of type `O`.
+    /// Returns a reference to the operation of type `D::Request`.
     pub fn operation(&self) -> &D::Request {
         &self.operation
     }
@@ -547,7 +547,7 @@ impl<'a> WireMessage<'a> {
     }
 }
 
-impl<O, P> Message<O, P> {
+impl<D: SharedData> Message<D> {
     /// Returns the `Header` of this message, if it is
     /// a `SystemMessage`.
     pub fn header(&self) -> Result<&Header> {
