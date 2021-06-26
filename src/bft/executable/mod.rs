@@ -11,7 +11,6 @@ use crate::bft::communication::message::Message;
 use crate::bft::communication::channel::MessageChannelTx;
 use crate::bft::communication::serialize::{
     //ReplicaDurability,
-    ReplicaData,
     SharedData,
 };
 
@@ -56,7 +55,7 @@ enum ExecutionRequest<S, O> {
 
 macro_rules! serialize_st {
     (Service: $S:ty, $w:expr, $s:expr) => {
-        <<$S as Service>::Data as ReplicaData>::serialize_state($w, $s)
+        <<$S as Service>::Data as SharedData>::serialize_state($w, $s)
     }
 }
 
@@ -64,14 +63,14 @@ macro_rules! serialize_st {
 
 macro_rules! deserialize_st {
     ($S:ty, $r:expr) => {
-        <<$S as Service>::Data as ReplicaData>::deserialize_state($r)
+        <<$S as Service>::Data as SharedData>::deserialize_state($r)
     }
 }
 
 */
 
 /// State type of the `Service`.
-pub type State<S> = <<S as Service>::Data as ReplicaData>::State;
+pub type State<S> = <<S as Service>::Data as SharedData>::State;
 
 /// Request type of the `Service`.
 pub type Request<S> = <<S as Service>::Data as SharedData>::Request;
@@ -86,7 +85,7 @@ pub trait Service {
     /// The data types used by the application and the SMR protocol.
     ///
     /// This includes their respective serialization routines.
-    type Data: ReplicaData;
+    type Data: SharedData;
 
     ///// Routines used by replicas to persist data into permanent
     ///// storage.

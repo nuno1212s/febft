@@ -20,6 +20,10 @@ use crate::bft::communication::message::SystemMessage;
 /// Both clients and replicas should implement this trait,
 /// to communicate with each other.
 pub trait SharedData {
+    /// The application state, which is mutated by client
+    /// requests.
+    type State;
+
     /// Represents the requests forwarded to replicas by the
     /// clients of the BFT system.
     type Request;
@@ -37,13 +41,6 @@ pub trait SharedData {
     fn deserialize_message<R>(r: R) -> Result<SystemMessage<Self::Request, Self::Reply>>
     where
         R: Read;
-}
-
-/// Extension of `SharedData`, pertaining solely to replicas.
-pub trait ReplicaData: SharedData {
-    /// The application state, which is mutated by client
-    /// requests.
-    type State;
 
     /// Serialize the replica state into the writer `W`.
     fn serialize_state<W>(w: W, s: &Self::State) -> Result<()>
