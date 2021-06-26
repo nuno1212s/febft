@@ -4,11 +4,13 @@
 //! Durable State Machine Replication», by A. Bessani et al.
 
 use std::cmp::Ordering;
+use std::marker::PhantomData;
 
 use crate::bft::log::Log;
 use crate::bft::ordering::SeqNo;
 use crate::bft::consensus::Consensus;
 use crate::bft::core::server::ViewInfo;
+use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::{
     Node,
     //NodeId,
@@ -44,9 +46,9 @@ pub struct ExecutionState<D: SharedData> {
     // the request batches have been concatenated,
     // for efficiency
     requests: Vec<D::Request>,
-    pre_prepares: Vec<StoredConsensus>,
-    prepares: Vec<StoredConsensus>,
-    commits: Vec<StoredConsensus>,
+    //pre_prepares: Vec<StoredConsensus>,
+    //prepares: Vec<StoredConsensus>,
+    //commits: Vec<StoredConsensus>,
 }
 
 /// Represents the state of an on-going colloborative

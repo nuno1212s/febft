@@ -243,7 +243,7 @@ where
     }
 }
 
-impl<D: SharedData> UpdateBatch<D: SharedData> {
+impl<D: SharedData> UpdateBatch<D> {
     /// Returns a new, empty batch of requests.
     pub fn new() -> Self {
         Self { inner: Vec::new() }

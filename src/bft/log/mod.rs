@@ -5,6 +5,7 @@ use crate::bft::ordering::SeqNo;
 use crate::bft::cst::ExecutionState;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::executable::UpdateBatch;
+use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::message::{
     Header,
     SystemMessage,
@@ -108,8 +109,8 @@ impl<D: SharedData> Log<D> {
         }
     }
 
-    pub fn snapshot(&self) -> ExecutionState<> {
-        asd
+    pub fn snapshot(&self) -> ExecutionState<D> {
+        unimplemented!()
     }
 
 /*
@@ -174,7 +175,7 @@ impl<D: SharedData> Log<D> {
     /// `Info`, to perform a local checkpoint when appropriate.
     pub fn finalize_batch(&mut self, digests: &[Digest]) -> Result<(Info, UpdateBatch<D>)>
     where
-        O: Clone,
+        D::Request: Clone,
     {
         let mut batch = UpdateBatch::new();
         for digest in digests {

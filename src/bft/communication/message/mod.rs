@@ -29,6 +29,7 @@ use crate::bft::crypto::hash::{
     Context,
     Digest,
 };
+use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::socket::Socket;
 use crate::bft::executable::UpdateBatchReplies;
 use crate::bft::communication::NodeId;

@@ -27,9 +27,9 @@ use crate::bft::communication::{
     NodeConfig,
 };
 
-struct ClientData<P> {
+struct ClientData<D: SharedData> {
     wakers: Mutex<HashMap<Digest, Waker>>,
-    ready: Mutex<HashMap<Digest, P>>,
+    ready: Mutex<HashMap<Digest, D::Reply>>,
 }
 
 /// Represents a client node in `febft`.
@@ -50,18 +50,18 @@ impl<D: SharedData> Clone for Client<D> {
     }
 }
 
-struct ClientRequestFut<'a, P> {
+struct ClientRequestFut<'a, D: SharedData> {
     digest: Digest,
-    data: &'a ClientData<P>,
+    data: &'a ClientData<D>,
 }
 
-impl<'a, P> Future for ClientRequestFut<'a, P> {
-    type Output = P;
+impl<'a, D: SharedData> Future for ClientRequestFut<'a, D> {
+    type Output = D::Reply;
 
     // TODO: maybe make this impl more efficient;
     // if we have a lot of requests being done in parallel,
     // the mutexes are going to have a fair bit of contention
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<P> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<D::Reply> {
         // check if response is ready
         {
             let mut ready = self.data.ready.lock();
