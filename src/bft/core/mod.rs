@@ -3,11 +3,15 @@
 pub mod client;
 pub mod server;
 
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
+
 use crate::bft::error::*;
 
 /// This struct contains the system parameters of
 /// a replica or client in `febft`, i.e. `n` and `f`
 /// such that `n >= 3*f + 1`.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Copy, Clone)]
 pub struct SystemParams {
     n: usize,

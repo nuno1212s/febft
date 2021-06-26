@@ -120,7 +120,7 @@ impl<S, O, P> Log<S, O, P> {
 */
 
     /// Adds a new `message` and its respective `header` to the log.
-    pub fn insert(&mut self, header: Header, message: SystemMessage<O, P>) {
+    pub fn insert(&mut self, header: Header, message: SystemMessage<S, O, P>) {
         match message {
             SystemMessage::Request(message) => {
                 let digest = header.digest().clone();

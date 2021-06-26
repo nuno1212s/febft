@@ -1,5 +1,8 @@
 //! Contains the server side core protocol logic of `febft`.
 
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
+
 use super::SystemParams;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
@@ -46,6 +49,7 @@ enum ReplicaState {
 
 /// This struct contains information related with an
 /// active `febft` view.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Copy, Clone)]
 pub struct ViewInfo {
     leader: NodeId,
@@ -80,7 +84,7 @@ pub struct Replica<S: Service> {
     executor: ExecutorHandle<S>,
     view: ViewInfo,
     consensus: Consensus<S>,
-    log: Log<Request<S>, Reply<S>>,
+    log: Log<State<S>, Request<S>, Reply<S>>,
     node: Node<S::Data>,
 }
 
