@@ -36,7 +36,7 @@ pub enum Info {
     BeginCheckpoint,
 }
 
-enum CheckpointState<D> {
+enum CheckpointState<D: SharedData> {
     // no checkpoint has been performed yet
     None,
     // we are calling this a partial checkpoint because we are
@@ -55,7 +55,7 @@ enum CheckpointState<D> {
     Complete(Checkpoint<D>),
 }
 
-struct Checkpoint<D> {
+struct Checkpoint<D: SharedData> {
     // sequence number of the last executed request
     seq: SeqNo,
     // application state

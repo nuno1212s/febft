@@ -80,7 +80,7 @@ pub struct Replica<S: Service> {
     executor: ExecutorHandle<S>,
     view: ViewInfo,
     consensus: Consensus<S>,
-    log: Log<Request<S>, Reply<S>>,
+    log: Log<S::Data>,
     node: Node<S::Data>,
 }
 

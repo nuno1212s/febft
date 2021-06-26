@@ -4,7 +4,6 @@
 //! Durable State Machine Replication», by A. Bessani et al.
 
 use std::cmp::Ordering;
-use std::marker::PhantomData;
 
 use crate::bft::log::Log;
 use crate::bft::ordering::SeqNo;
@@ -28,9 +27,9 @@ use crate::bft::executable::{
     State,
 };
 
-enum ProtoPhase {
+enum ProtoPhase<D: SharedData> {
     Init,
-    WaitingCheckpoint(Header, CstMessage),
+    WaitingCheckpoint(Header, CstMessage<D>),
     ReceivingCid(usize),
     ReceivingState(usize),
 }
@@ -53,15 +52,14 @@ pub struct ExecutionState<D: SharedData> {
 
 /// Represents the state of an on-going colloborative
 /// state transfer protocol execution.
-pub struct CollabStateTransfer<S> {
-    phase: ProtoPhase,
+pub struct CollabStateTransfer<S: Service> {
+    phase: ProtoPhase<S::Data>,
     latest_cid: SeqNo,
     latest_cid_count: usize,
     cst_seq: SeqNo,
     // NOTE: remembers whose replies we have
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
-    _marker: PhantomData<S>,
 }
 
 /// Status returned from processnig a state transfer message.
@@ -88,12 +86,12 @@ pub enum CstStatus<D: SharedData> {
 ///
 /// To clarify, the mention of state machine here has nothing to do with the
 /// SMR protocol, but rather the implementation in code of the CST protocol.
-pub enum CstProgress {
+pub enum CstProgress<D: SharedData> {
     /// This value represents null progress in the CST code's state machine.
     Nil,
     /// We have a fresh new message to feed the CST state machine, from
     /// the communication layer.
-    Message(Header, CstMessage),
+    Message(Header, CstMessage<D>),
 }
 
 macro_rules! getmessage {
@@ -126,7 +124,6 @@ where
             latest_cid: SeqNo::from(0u32),
             latest_cid_count: 0,
             cst_seq: SeqNo::from(0),
-            _marker: PhantomData,
         }
     }
 
@@ -136,7 +133,7 @@ where
 
     pub fn process_message(
         &mut self,
-        progress: CstProgress,
+        progress: CstProgress<S::Data>,
         view: ViewInfo,
         consensus: &Consensus<S>,
         log: &mut Log<Request<S>, Reply<S>>,

@@ -108,13 +108,13 @@ pub trait Service {
 pub struct Executor<S: Service> {
     service: S,
     state: State<S>,
-    e_rx: mpsc::Receiver<ExecutionRequest<State<S>, Request<S>>>,
-    system_tx: MessageChannelTx<Request<S>, Reply<S>>,
+    e_rx: mpsc::Receiver<ExecutionRequest<S::Data>>,
+    system_tx: MessageChannelTx<S::Data>,
 }
 
 /// Represents a handle to the client request executor.
 pub struct ExecutorHandle<S: Service> {
-    e_tx: mpsc::Sender<ExecutionRequest<State<S>, Request<S>>>,
+    e_tx: mpsc::Sender<ExecutionRequest<S::Data>>,
 }
 
 impl<S: Service> ExecutorHandle<S>
@@ -166,7 +166,7 @@ where
     ///
     /// A handle to the master message channel, `system_tx`, should be provided.
     pub fn new(
-        system_tx: MessageChannelTx<Request<S>, Reply<S>>,
+        system_tx: MessageChannelTx<S::Data>,
         mut service: S,
     ) -> Result<ExecutorHandle<S>> {
         let (e_tx, e_rx) = mpsc::channel();
