@@ -14,7 +14,7 @@ use crate::bft::consensus::Consensus;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::communication::{
     Node,
-    //NodeId,
+    NodeId,
 };
 use crate::bft::communication::message::{
     Header,
@@ -27,6 +27,10 @@ use crate::bft::executable::{
     Request,
     Reply,
     State,
+};
+use crate::bft::collections::{
+    self,
+    HashMap,
 };
 
 enum ProtoPhase<S, O> {
@@ -66,6 +70,7 @@ pub struct CollabStateTransfer<S: Service> {
     // NOTE: remembers whose replies we have
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
+    received_states: HashMap<NodeId, ExecutionState<State<S>, Request<S>>>,
     phase: ProtoPhase<State<S>, Request<S>>,
 }
 
@@ -128,6 +133,7 @@ where
     /// Craete a new instance of `CollabStateTransfer`.
     pub fn new() -> Self {
         Self {
+            received_states: collections::hash_map(),
             phase: ProtoPhase::Init,
             latest_cid: SeqNo::from(0u32),
             latest_cid_count: 0,
