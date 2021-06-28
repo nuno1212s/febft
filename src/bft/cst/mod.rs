@@ -177,6 +177,7 @@ macro_rules! getmessage {
     }};
 }
 
+// TODO: request timeouts
 impl<S> CollabStateTransfer<S>
 where
     S: Service + Send + 'static,
