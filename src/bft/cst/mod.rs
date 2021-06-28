@@ -95,19 +95,19 @@ impl<S, O> RecoveryState<S, O> {
         &self.requests[..]
     }
 
-    /// Returns the list of PRE-PREPARE messages after the last checkpoint
+    /// Returns the list of `PRE-PREPARE` messages after the last checkpoint
     /// at the moment of the creation of this `RecoveryState`.
     pub fn pre_prepares(&self) -> &[StoredMessage<ConsensusMessage>] {
         &self.pre_prepares[..]
     }
 
-    /// Returns the list of PREPARE messages after the last checkpoint
+    /// Returns the list of `PREPARE` messages after the last checkpoint
     /// at the moment of the creation of this `RecoveryState`.
     pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage>] {
         &self.prepares[..]
     }
 
-    /// Returns the list of COMMIT messages after the last checkpoint
+    /// Returns the list of `COMMIT` messages after the last checkpoint
     /// at the moment of the creation of this `RecoveryState`.
     pub fn commits(&self) -> &[StoredMessage<ConsensusMessage>] {
         &self.commits[..]
