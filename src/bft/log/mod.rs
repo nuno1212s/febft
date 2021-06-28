@@ -163,6 +163,10 @@ impl<S, O, P> Log<S, O, P> {
     ///
     /// This method may fail if we are waiting for the latest application
     /// state to be returned by the execution layer.
+    //
+    // TODO: return reference to the log state, so we don't have to clone()
+    // it, which can be quite expensive
+    //
     pub fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<S, O>>
     where
         S: Clone,
