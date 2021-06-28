@@ -56,7 +56,7 @@ pub struct RecoveryState<S, O> {
     checkpoint_state: S,
     // used to replay log on recovering replicas;
     // the request batches have been concatenated,
-    // for efficiency
+    // for memory efficiency
     requests: Vec<O>,
     pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
     prepares: Vec<StoredMessage<ConsensusMessage>>,
