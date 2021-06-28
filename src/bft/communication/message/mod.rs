@@ -179,6 +179,18 @@ impl<S, O> CstMessage<S, O> {
     pub fn kind(&self) -> &CstMessageKind<S, O> {
         &self.kind
     }
+
+    /// Takes the recovery state embedded in this cst message, if it is available.
+    pub fn take_state(&mut self) -> Option<RecoveryState<S, O>> {
+        let kind = std::mem::replace(&mut self.kind, CstMessageKind::RequestState);
+        match kind {
+            CstMessageKind::ReplyState(state) => Some(state),
+            _ => {
+                self.kind = kind;
+                None
+            },
+        }
+    }
 }
 
 /// Represents a request from a client.

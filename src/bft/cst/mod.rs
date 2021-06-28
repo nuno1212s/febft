@@ -153,6 +153,7 @@ pub enum CstStatus<S, O> {
 /// To clarify, the mention of state machine here has nothing to do with the
 /// SMR protocol, but rather the implementation in code of the CST protocol.
 pub enum CstProgress<S, O> {
+    // TODO: Timeout( some type here)
     /// This value represents null progress in the CST code's state machine.
     Nil,
     /// We have a fresh new message to feed the CST state machine, from
@@ -267,7 +268,7 @@ where
                 CstStatus::Nil
             },
             ProtoPhase::ReceivingCid(i) => {
-                let (header, message) = getmessage!(progress, CstStatus::RequestLatestCid);
+                let (_header, message) = getmessage!(progress, CstStatus::RequestLatestCid);
 
                 // drop cst messages with invalid seq no
                 if message.sequence_number() != self.cst_seq {
@@ -276,6 +277,8 @@ where
                     // value of `queryID` different from the current
                     // `queryID` a replica is tracking...
                     // we will do the same for now
+                    //
+                    // TODO: implement timeouts to fix cases like this
                     return CstStatus::Running;
                 }
 
@@ -298,6 +301,8 @@ where
 
                 // check if we have gathered enough cid
                 // replies from peer nodes
+                //
+                // TODO: check for more than one reply from the same node
                 let i = i + 1;
 
                 if i == view.params().quorum() {
@@ -314,10 +319,35 @@ where
                     CstStatus::Running
                 }
             },
-            ProtoPhase::ReceivingState(_i) => {
-                let (header, message) = getmessage!(progress, CstStatus::RequestState);
+            ProtoPhase::ReceivingState(i) => {
+                let (header, mut message) = getmessage!(progress, CstStatus::RequestState);
 
-                // TODO: implement receiving app state on a replica
+                // NOTE: check comment above, on ProtoPhase::ReceivingCid
+                if message.sequence_number() != self.cst_seq {
+                    return CstStatus::Running;
+                }
+
+                let state = match message.take_state() {
+                    Some(state) => state,
+                    // drop invalid message kinds
+                    None => return CstStatus::Running,
+                };
+
+                self.received_states.insert(header.from(), state);
+
+                // check if we have gathered enough cid
+                // replies from peer nodes
+                //
+                // TODO: check for more than one reply from the same node
+                let i = i + 1;
+
+                if i != view.params().quorum() {
+                    self.phase = ProtoPhase::ReceivingState(i);
+                    return CstStatus::Running;
+                }
+
+                // TODO: check if we have the same valid state
+                // on at least f+1 replicas
                 unimplemented!()
             },
         }
