@@ -32,7 +32,7 @@ use crate::bft::crypto::hash::{
 use crate::bft::communication::socket::Socket;
 use crate::bft::executable::UpdateBatchReplies;
 use crate::bft::communication::NodeId;
-use crate::bft::cst::ExecutionState;
+use crate::bft::cst::RecoveryState;
 use crate::bft::ordering::SeqNo;
 use crate::bft::error::*;
 
@@ -60,6 +60,30 @@ pub struct Header {
     pub(crate) digest: [u8; Digest::LENGTH],
     // sign(hash(le(version) + le(from) + le(to) + le(length) + hash(le(nonce) + serialize(payload))))
     pub(crate) signature: [u8; Signature::LENGTH],
+}
+
+#[cfg(feature = "serialize_serde")]
+impl serde::Serialize for Header {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let hdr: &[u8; Self::LENGTH] = unsafe { std::mem::transmute(self) };
+        serde_bytes::serialize(&hdr[..], serializer)
+    }
+}
+
+#[cfg(feature = "serialize_serde")]
+impl<'de> serde::Deserialize<'de> for Header {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Header, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let bytes: &[u8] = serde_bytes::deserialize(deserializer)?;
+        let mut hdr: [u8; Self::LENGTH] = [0; Self::LENGTH];
+        hdr.copy_from_slice(bytes);
+        Ok(unsafe { std::mem::transmute(hdr) })
+    }
 }
 
 /// A message to be sent over the wire. The payload should be a serialized
@@ -136,7 +160,7 @@ pub enum CstMessageKind<S, O> {
     RequestLatestConsensusSeq,
     ReplyLatestConsensusSeq(SeqNo),
     RequestState,
-    ReplyState(ExecutionState<S, O>),
+    ReplyState(RecoveryState<S, O>),
 }
 
 impl<S, O> CstMessage<S, O> {

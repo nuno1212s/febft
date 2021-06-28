@@ -2,6 +2,9 @@
 
 use std::marker::PhantomData;
 
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
+
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
 use crate::bft::crypto::hash::Digest;
@@ -62,26 +65,46 @@ struct Checkpoint<S> {
     appstate: S,
 }
 
-struct StoredConsensus {
+/// Contains a system message as well as its respective header.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct StoredMessage<M> {
     header: Header,
-    message: ConsensusMessage,
+    message: M,
 }
 
-struct StoredRequest<O> {
-    header: Header,
-    message: RequestMessage<O>
+impl<M> StoredMessage<M> {
+    /// Constructs a new `StoredMessage`.
+    pub fn new(header: Header, message: M) -> Self {
+        Self { header, message }
+    }
+
+    /// Returns the stored message's header.
+    pub fn header(&self) -> &Header {
+        &self.header
+    }
+
+    /// Returns the stored system message.
+    pub fn message(&self) -> &M {
+        &self.message
+    }
+
+    /// Return the inner types of this `StoredMessage`.
+    pub fn into_inner(self) -> (Header, M) {
+        (self.header, self.message)
+    }
 }
 
 /// Represents a log of messages received by the BFT system.
 pub struct Log<S, O, P> {
     curr_seq: SeqNo,
     batch_size: usize,
-    pre_prepares: Vec<StoredConsensus>,
-    prepares: Vec<StoredConsensus>,
-    commits: Vec<StoredConsensus>,
+    pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
+    prepares: Vec<StoredMessage<ConsensusMessage>>,
+    commits: Vec<StoredMessage<ConsensusMessage>>,
     // TODO: view change stuff
-    requests: OrderedMap<Digest, StoredRequest<O>>,
-    deciding: HashMap<Digest, StoredRequest<O>>,
+    requests: OrderedMap<Digest, StoredMessage<RequestMessage<O>>>,
+    deciding: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
     decided: Vec<O>,
     checkpoint: CheckpointState<S>,
     _marker: PhantomData<P>,
@@ -124,12 +147,12 @@ impl<S, O, P> Log<S, O, P> {
         match message {
             SystemMessage::Request(message) => {
                 let digest = header.digest().clone();
-                let stored = StoredRequest { header, message };
+                let stored = StoredMessage::new(header, message);
                 self.requests.insert(digest, stored);
             },
             SystemMessage::Consensus(message) => {
-                let stored = StoredConsensus { header, message };
-                match stored.message.kind() {
+                let stored = StoredMessage::new(header, message);
+                match stored.message().kind() {
                     ConsensusMessageKind::PrePrepare(_) => self.pre_prepares.push(stored),
                     ConsensusMessageKind::Prepare => self.prepares.push(stored),
                     ConsensusMessageKind::Commit => self.commits.push(stored),
@@ -180,7 +203,7 @@ impl<S, O, P> Log<S, O, P> {
             let (header, message) = self.deciding
                 .remove(digest)
                 .or_else(|| self.requests.remove(digest))
-                .map(StoredRequest::into_inner)
+                .map(StoredMessage::into_inner)
                 .ok_or(Error::simple(ErrorKind::Log))?;
             batch.add(header.from(), digest.clone(), message.into_inner());
         }
@@ -195,7 +218,7 @@ impl<S, O, P> Log<S, O, P> {
         // retrive the sequence number stored within the PRE-PREPARE message
         // pertaining to the current request being executed
         let last_seq_no = if self.pre_prepares.len() > 0 {
-            let stored_pre_prepare = &self.pre_prepares[self.pre_prepares.len()-1].message;
+            let stored_pre_prepare = &self.pre_prepares[self.pre_prepares.len()-1].message();
             stored_pre_prepare.sequence_number()
         } else {
             // the log was cleared concurrently, retrieve
@@ -258,7 +281,7 @@ impl<S, O, P> Log<S, O, P> {
                         // store the id of the last received pre-prepare,
                         // which corresponds to the request currently being
                         // processed
-                        self.curr_seq = last_pre_prepare.message.sequence_number();
+                        self.curr_seq = last_pre_prepare.message().sequence_number();
                     },
                     None => {
                         // no stored PRE-PREPARE messages, NOOP
@@ -269,11 +292,5 @@ impl<S, O, P> Log<S, O, P> {
                 Ok(())
             },
         }
-    }
-}
-
-impl<O> StoredRequest<O> {
-    fn into_inner(self) -> (Header, RequestMessage<O>) {
-        (self.header, self.message)
     }
 }

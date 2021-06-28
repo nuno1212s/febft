@@ -27,7 +27,7 @@ socket_tokio_tcp = ["tokio", "tokio-util"]
 socket_async_std_tcp = ["async-std"]
 socket_rio_tcp = ["rio", "socket2"]
 
-serialize_serde = ["serde", "serde-big-array"]
+serialize_serde = ["serde", "serde-big-array", "serde_bytes"]
 
 async_runtime_tokio = ["tokio"]
 async_runtime_async_std = ["async-std"]
@@ -83,3 +83,4 @@ blake3 = { version = "0.3", optional = true }
 flume = { version = "0.10", optional = true }
 async-channel = { version = "1", optional = true }
 twox-hash = { version = "1", optional = true }
+serde_bytes = { version = "0.11", optional = true }

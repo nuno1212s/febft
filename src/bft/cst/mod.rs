@@ -8,10 +8,13 @@ use std::cmp::Ordering;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
-use crate::bft::log::Log;
 use crate::bft::ordering::SeqNo;
 use crate::bft::consensus::Consensus;
 use crate::bft::core::server::ViewInfo;
+use crate::bft::log::{
+    Log,
+    StoredMessage,
+};
 use crate::bft::communication::{
     Node,
     NodeId,
@@ -19,8 +22,9 @@ use crate::bft::communication::{
 use crate::bft::communication::message::{
     Header,
     CstMessage,
-    CstMessageKind,
     SystemMessage,
+    CstMessageKind,
+    ConsensusMessage,
 };
 use crate::bft::executable::{
     Service,
@@ -41,14 +45,12 @@ enum ProtoPhase<S, O> {
 }
 
 // TODO:
-// - finish this struct
 // - add methods to access this struct's fields
 // - add a constructor
-// - figure out if StoredConsensus should be made public
 /// Contains state used by a recovering node.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct ExecutionState<S, O> {
+pub struct RecoveryState<S, O> {
     latest_cid: SeqNo,
     view: ViewInfo,
     checkpoint_state: S,
@@ -56,9 +58,9 @@ pub struct ExecutionState<S, O> {
     // the request batches have been concatenated,
     // for efficiency
     requests: Vec<O>,
-    //pre_prepares: Vec<StoredConsensus>,
-    //prepares: Vec<StoredConsensus>,
-    //commits: Vec<StoredConsensus>,
+    pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
+    prepares: Vec<StoredMessage<ConsensusMessage>>,
+    commits: Vec<StoredMessage<ConsensusMessage>>,
 }
 
 /// Represents the state of an on-going colloborative
@@ -70,7 +72,7 @@ pub struct CollabStateTransfer<S: Service> {
     // NOTE: remembers whose replies we have
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
-    received_states: HashMap<NodeId, ExecutionState<State<S>, Request<S>>>,
+    received_states: HashMap<NodeId, RecoveryState<State<S>, Request<S>>>,
     phase: ProtoPhase<State<S>, Request<S>>,
 }
 
@@ -91,7 +93,7 @@ pub enum CstStatus<S, O> {
     SeqNo(SeqNo),
     /// We have received and validated the state from
     /// a group of replicas.
-    State(ExecutionState<S, O>)
+    State(RecoveryState<S, O>)
 }
 
 /// Represents progress in the CST state machine.
