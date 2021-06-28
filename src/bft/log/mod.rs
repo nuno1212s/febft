@@ -136,7 +136,10 @@ impl<S, O, P> Log<S, O, P> {
     }
 
     /// Take a snapshot of the log, used to recover a replica.
-    pub fn snapshot(&self) -> RecoveryState<S, O> {
+    ///
+    /// This method may fail if we are waiting for the latest application
+    /// state to be returned by the execution layer.
+    pub fn snapshot(&self) -> Result<RecoveryState<S, O>> {
         unimplemented!()
     }
 
