@@ -163,11 +163,21 @@ impl<S, O, P> Log<S, O, P> {
     ///
     /// This method may fail if we are waiting for the latest application
     /// state to be returned by the execution layer.
-    pub fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<S, O>> {
+    pub fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<S, O>>
+    where
+        S: Clone,
+        O: Clone,
+    {
         match self.checkpoint {
             CheckpointState::Complete(ref checkpoint) => {
-                // TODO
-                unimplemented!()
+                Ok(RecoveryState::new(
+                    view,
+                    checkpoint.clone(),
+                    self.decided.clone(),
+                    self.pre_prepares.clone(),
+                    self.prepares.clone(),
+                    self.commits.clone(),
+                ))
             },
             _ => Err("Checkpoint to be finalized").wrapped(ErrorKind::Log),
         }
