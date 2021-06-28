@@ -181,7 +181,7 @@ impl<S> CollabStateTransfer<S>
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
-    Request<S>: Send + 'static,
+    Request<S>: Send + Clone + 'static,
     Reply<S>: Send + 'static,
 {
     /// Craete a new instance of `CollabStateTransfer`.
@@ -203,21 +203,42 @@ where
         matches!(self.phase, ProtoPhase::WaitingCheckpoint(_, _))
     }
 
+    fn process_reply_state(
+        &mut self,
+        view: ViewInfo,
+        header: Header,
+        message: CstMessage<State<S>, Request<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
+        node: &mut Node<S::Data>,
+    ) {
+        let snapshot = match log.snapshot(view) {
+            Ok(snapshot) => snapshot,
+            Err(_) => {
+                self.phase = ProtoPhase::WaitingCheckpoint(header, message);
+                return;
+            },
+        };
+        let reply = SystemMessage::Cst(CstMessage::new(
+            message.sequence_number(),
+            CstMessageKind::ReplyState(snapshot),
+        ));
+        node.send(reply, header.from());
+    }
+
     /// Advances the state of the CST state machine.
     pub fn process_message(
         &mut self,
         progress: CstProgress<State<S>, Request<S>>,
         view: ViewInfo,
         consensus: &Consensus<S>,
-        log: &mut Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) -> CstStatus<State<S>, Request<S>> {
         match self.phase {
             ProtoPhase::WaitingCheckpoint(_, _) => {
                 let (header, message) = getmessage!(&mut self.phase);
-
-                // TODO: send app state
-                unimplemented!()
+                self.process_reply_state(view, header, message, log, node);
+                CstStatus::Nil
             },
             ProtoPhase::Init => {
                 let (header, message) = getmessage!(progress, CstStatus::Nil);
@@ -233,13 +254,7 @@ where
                         node.send(reply, header.from());
                     },
                     CstMessageKind::RequestState => {
-                        if !log.has_complete_checkpoint() {
-                            self.phase = ProtoPhase::WaitingCheckpoint(header, message);
-                            return CstStatus::Nil;
-                        }
-
-                        // TODO: send app state
-                        unimplemented!()
+                        self.process_reply_state(view, header, message, log, node);
                     },
                     // we are not running cst, so drop any reply msgs
                     //
