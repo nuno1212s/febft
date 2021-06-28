@@ -9,6 +9,7 @@ use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
 use crate::bft::cst::RecoveryState;
 use crate::bft::crypto::hash::Digest;
+use crate::bft::core::server::ViewInfo;
 use crate::bft::executable::UpdateBatch;
 use crate::bft::communication::message::{
     Header,
@@ -59,11 +60,34 @@ enum CheckpointState<S> {
     Complete(Checkpoint<S>),
 }
 
-struct Checkpoint<S> {
-    // sequence number of the last executed request
+/// Represents a local checkpoint.
+///
+/// Contains the last application state, as well as the sequence number
+/// which decided the last batch of requests executed before the checkpoint.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct Checkpoint<S> {
     seq: SeqNo,
-    // application state
     appstate: S,
+}
+
+impl<S> Checkpoint<S> {
+    /// Returns the sequence number of the batch of client requests
+    /// decided before the local checkpoint.
+    pub fn sequence_number(&self) -> SeqNo {
+        self.seq
+    }
+
+    /// Returns a reference to the state of the application before
+    /// the local checkpoint.
+    pub fn state(&self) -> &S {
+        &self.appstate
+    }
+
+    /// Returns the inner values within this local checkpoint.
+    pub fn into_inner(self) -> (SeqNo, S) {
+        (self.seq, self.appstate)
+    }
 }
 
 /// Contains a system message as well as its respective header.
@@ -139,8 +163,14 @@ impl<S, O, P> Log<S, O, P> {
     ///
     /// This method may fail if we are waiting for the latest application
     /// state to be returned by the execution layer.
-    pub fn snapshot(&self) -> Result<RecoveryState<S, O>> {
-        unimplemented!()
+    pub fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<S, O>> {
+        match self.checkpoint {
+            CheckpointState::Complete(ref checkpoint) => {
+                // TODO
+                unimplemented!()
+            },
+            _ => Err("Checkpoint to be finalized").wrapped(ErrorKind::Log),
+        }
     }
 
 /*

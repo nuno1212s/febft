@@ -13,6 +13,7 @@ use crate::bft::consensus::Consensus;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::log::{
     Log,
+    Checkpoint,
     StoredMessage,
 };
 use crate::bft::communication::{
@@ -49,7 +50,7 @@ enum ProtoPhase<S, O> {
 #[derive(Clone)]
 pub struct RecoveryState<S, O> {
     view: ViewInfo,
-    checkpoint_state: S,
+    checkpoint: Checkpoint<S>,
     // used to replay log on recovering replicas;
     // the request batches have been concatenated,
     // for memory efficiency
@@ -63,7 +64,7 @@ impl<S, O> RecoveryState<S, O> {
     /// Creates a new `RecoveryState`.
     pub fn new(
         view: ViewInfo,
-        checkpoint_state: S,
+        checkpoint: Checkpoint<S>,
         requests: Vec<O>,
         pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
         prepares: Vec<StoredMessage<ConsensusMessage>>,
@@ -71,7 +72,7 @@ impl<S, O> RecoveryState<S, O> {
     ) -> Self {
         Self {
             view,
-            checkpoint_state,
+            checkpoint,
             requests,
             pre_prepares,
             prepares,
@@ -84,9 +85,9 @@ impl<S, O> RecoveryState<S, O> {
         self.view
     }
 
-    /// Returns the application state saved upon a local checkpoint.
-    pub fn checkpoint(&self) -> &S {
-        &self.checkpoint_state
+    /// Returns the local checkpoint of this recovery state.
+    pub fn checkpoint(&self) -> &Checkpoint<S> {
+        &self.checkpoint
     }
 
     /// Returns the operations embedded in the requests sent by clients
