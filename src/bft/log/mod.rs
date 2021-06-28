@@ -7,6 +7,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
+use crate::bft::cst::RecoveryState;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::executable::UpdateBatch;
 use crate::bft::communication::message::{
@@ -132,6 +133,11 @@ impl<S, O, P> Log<S, O, P> {
             checkpoint: CheckpointState::None,
             _marker: PhantomData,
         }
+    }
+
+    /// Take a snapshot of the log, used to recover a replica.
+    pub fn snapshot(&self) -> RecoveryState<S, O> {
+        unimplemented!()
     }
 
 /*

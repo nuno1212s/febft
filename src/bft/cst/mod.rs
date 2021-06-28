@@ -44,14 +44,10 @@ enum ProtoPhase<S, O> {
     ReceivingState(usize),
 }
 
-// TODO:
-// - add methods to access this struct's fields
-// - add a constructor
 /// Contains state used by a recovering node.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct RecoveryState<S, O> {
-    latest_cid: SeqNo,
     view: ViewInfo,
     checkpoint_state: S,
     // used to replay log on recovering replicas;
@@ -61,6 +57,61 @@ pub struct RecoveryState<S, O> {
     pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
     prepares: Vec<StoredMessage<ConsensusMessage>>,
     commits: Vec<StoredMessage<ConsensusMessage>>,
+}
+
+impl<S, O> RecoveryState<S, O> {
+    /// Creates a new `RecoveryState`.
+    pub fn new(
+        view: ViewInfo,
+        checkpoint_state: S,
+        requests: Vec<O>,
+        pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
+        prepares: Vec<StoredMessage<ConsensusMessage>>,
+        commits: Vec<StoredMessage<ConsensusMessage>>,
+    ) -> Self {
+        Self {
+            view,
+            checkpoint_state,
+            requests,
+            pre_prepares,
+            prepares,
+            commits,
+        }
+    }
+
+    /// Returns the view this `RecoveryState` is tracking.
+    pub fn view(&self) -> ViewInfo {
+        self.view
+    }
+
+    /// Returns the application state saved upon a local checkpoint.
+    pub fn checkpoint(&self) -> &S {
+        &self.checkpoint_state
+    }
+
+    /// Returns the operations embedded in the requests sent by clients
+    /// after the last checkpoint at the moment of the creation of this `RecoveryState`.
+    pub fn requests(&self) -> &[O] {
+        &self.requests[..]
+    }
+
+    /// Returns the list of PRE-PREPARE messages after the last checkpoint
+    /// at the moment of the creation of this `RecoveryState`.
+    pub fn pre_prepares(&self) -> &[StoredMessage<ConsensusMessage>] {
+        &self.pre_prepares[..]
+    }
+
+    /// Returns the list of PREPARE messages after the last checkpoint
+    /// at the moment of the creation of this `RecoveryState`.
+    pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage>] {
+        &self.prepares[..]
+    }
+
+    /// Returns the list of COMMIT messages after the last checkpoint
+    /// at the moment of the creation of this `RecoveryState`.
+    pub fn commits(&self) -> &[StoredMessage<ConsensusMessage>] {
+        &self.commits[..]
+    }
 }
 
 /// Represents the state of an on-going colloborative
