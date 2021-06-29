@@ -200,10 +200,7 @@ where
                     _ => unimplemented!(),
                 }
             },
-            Message::ExecutionFinished(batch) => {
-                self.execution_finished(batch);
-            },
-            Message::ExecutionFinishedWithAppstate(batch, _appstate) => {
+            Message::ExecutionFinished(batch) | Message::ExecutionFinishedWithAppstate(batch, _) => {
                 // TODO: verify if ignoring the checkpoint state while
                 // receiving state from peer nodes is correct
                 self.execution_finished(batch);
