@@ -199,7 +199,7 @@ impl<S, O, P> Log<S, O, P> {
     pub fn insert(&mut self, header: Header, message: SystemMessage<S, O, P>) {
         match message {
             SystemMessage::Request(message) => {
-                let digest = header.digest().clone();
+                let digest = header.unique_digest();
                 let stored = StoredMessage::new(header, message);
                 self.requests.insert(digest, stored);
             },
