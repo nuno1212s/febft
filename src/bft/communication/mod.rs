@@ -382,7 +382,7 @@ where
             }
         });
 
-        digest
+        digest.entropy(nonce.to_le_bytes())
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -440,7 +440,7 @@ where
             // of the `message`, i.e. `Right` = ourselves
         });
 
-        digest
+        digest.entropy(nonce.to_le_bytes())
     }
 
     #[inline]
