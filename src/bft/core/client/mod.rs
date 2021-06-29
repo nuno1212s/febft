@@ -88,7 +88,7 @@ pub struct ClientConfig {
 
 struct ReplicaVotes {
     count: usize,
-    //digest: Digest,
+    digest: Digest,
 }
 
 impl<D> Client<D>
@@ -203,13 +203,13 @@ where
                             let (digest, payload) = message.into_inner();
                             let votes = votes
                                 .entry(digest)
-                                // TODO: enable digest to verify we have equivalent replies
-                                //
-                                // TODO: cache every reply's digest, instead of just the first one
+                                // FIXME: cache every reply's digest, instead of just the first one
                                 // we receive, because the first reply may be faulty, while the
                                 // remaining ones may be correct, therefore we would not be able to
                                 // count at least f+1 identical replies
-                                .or_insert(ReplicaVotes { count: 0 /*, digest: header.digest().clone()*/ });
+                                //
+                                // TODO: change header.payload() to header.payload_digest()
+                                .or_insert(ReplicaVotes { count: 0, digest: header.digest().clone() });
 
                             // reply already delivered to application
                             if votes.count > params.f() {
@@ -217,15 +217,12 @@ where
                             }
 
                             // register new reply received
-                            votes.count += 1;
-                            /*
                             if &votes.digest == header.digest() {
                                 votes.count += 1;
                             }
-                            */
 
                             // TODO: check if a replica hasn't voted
-                            // twice for the same client request digest
+                            // twice for the same digest
 
                             // wait for at least f+1 identical replies
                             if votes.count > params.f() {
