@@ -367,7 +367,6 @@ where
         // serialize
         let mut buf: Buf = Buf::new();
         let digest = <D as DigestData>::serialize_digest(
-            nonce,
             &message,
             &mut buf,
         ).unwrap();
@@ -413,7 +412,6 @@ where
         // serialize
         let mut buf: Buf = Buf::new();
         let digest = <D as DigestData>::serialize_digest(
-            nonce,
             &message,
             &mut buf,
         ).unwrap();

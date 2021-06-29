@@ -56,9 +56,9 @@ pub struct Header {
     pub(crate) nonce: u64,
     // length of the payload
     pub(crate) length: u64,
-    // the digest of the serialized payload + nonce
+    // the digest of the serialized payload
     pub(crate) digest: [u8; Digest::LENGTH],
-    // sign(hash(le(version) + le(from) + le(to) + le(length) + hash(le(nonce) + serialize(payload))))
+    // sign(hash(le(version) + le(from) + le(to) + le(nonce) + le(length) + hash(serialize(payload))))
     pub(crate) signature: [u8; Signature::LENGTH],
 }
 
@@ -381,6 +381,15 @@ impl Header {
         unsafe { std::mem::transmute(&self.digest) }
     }
 
+    /// Hashes the digest of the associated message's payload
+    /// with this header's nonce.
+    ///
+    /// This is useful for attaining a unique identifier for
+    /// a particular client request.
+    pub fn unique_digest(&self) -> Digest {
+        self.digest().entropy(self.nonce.to_le_bytes())
+    }
+
     /// Returns the nonce associated with this `Header`.
     pub fn nonce(&self) -> u64 {
         self.nonce
@@ -457,6 +466,7 @@ impl<'a> WireMessage<'a> {
                     sk,
                     from.into(),
                     to.into(),
+                    nonce,
                     &digest[..],
                 );
                 // safety: signatures have repr(transparent)
@@ -477,7 +487,7 @@ impl<'a> WireMessage<'a> {
         Self { header, payload }
     }
 
-    fn digest_parts(from: u32, to: u32, payload: &[u8]) -> Digest {
+    fn digest_parts(from: u32, to: u32, nonce: u64, payload: &[u8]) -> Digest {
         let mut ctx = Context::new();
 
         let buf = Self::CURRENT_VERSION.to_le_bytes();
@@ -489,6 +499,9 @@ impl<'a> WireMessage<'a> {
         let buf = to.to_le_bytes();
         ctx.update(&buf[..]);
 
+        let buf = nonce.to_le_bytes();
+        ctx.update(&buf[..]);
+
         let buf = (payload.len() as u64).to_le_bytes();
         ctx.update(&buf[..]);
 
@@ -496,8 +509,14 @@ impl<'a> WireMessage<'a> {
         ctx.finish()
     }
 
-    fn sign_parts(sk: &KeyPair, from: u32, to: u32, payload: &[u8]) -> Signature {
-        let digest = Self::digest_parts(from, to, payload);
+    fn sign_parts(
+        sk: &KeyPair,
+        from: u32,
+        to: u32,
+        nonce: u64,
+        payload: &[u8],
+    ) -> Signature {
+        let digest = Self::digest_parts(from, to, nonce, payload);
         // NOTE: unwrap() should always work, much like heap allocs
         // should always work
         sk.sign(digest.as_ref()).unwrap()
@@ -508,9 +527,10 @@ impl<'a> WireMessage<'a> {
         sig: &Signature,
         from: u32,
         to: u32,
+        nonce: u64,
         payload: &[u8],
     ) -> Result<()> {
-        let digest = Self::digest_parts(from, to, payload);
+        let digest = Self::digest_parts(from, to, nonce, payload);
         pk.verify(digest.as_ref(), sig)
     }
 
@@ -546,6 +566,7 @@ impl<'a> WireMessage<'a> {
                     self.header.signature(),
                     self.header.from,
                     self.header.to,
+                    self.header.nonce,
                     &self.header.digest[..],
                 ).is_ok()
             })

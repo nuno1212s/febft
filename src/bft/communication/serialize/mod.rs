@@ -64,14 +64,11 @@ pub trait DigestData: SharedData {
     /// Convenience function to obtain the digest of a request upon
     /// serialization.
     fn serialize_digest<W: Write + AsRef<[u8]>>(
-        nonce: u64,
         message: &SystemMessage<Self::State, Self::Request, Self::Reply>,
         mut w: W,
     ) -> Result<Digest> {
         Self::serialize_message(&mut w, message)?;
         let mut ctx = Context::new();
-        let nonce = nonce.to_le_bytes();
-        ctx.update(&nonce[..]);
         ctx.update(w.as_ref());
         Ok(ctx.finish())
     }
