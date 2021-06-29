@@ -80,6 +80,14 @@ impl Digest {
         }?;
         Ok(Digest { inner })
     }
+
+    /// Hashes this `Digest` with the given `nonce`.
+    pub fn entropy<B: AsRef<[u8]>>(&self, nonce: B) -> Self {
+        let mut ctx = Context::new();
+        ctx.update(nonce.as_ref());
+        ctx.update(self.as_ref());
+        ctx.finish()
+    }
 }
 
 impl AsRef<[u8]> for Digest {
