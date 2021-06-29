@@ -9,6 +9,7 @@ use std::cmp::Ordering;
 use serde::{Serialize, Deserialize};
 
 use crate::bft::ordering::SeqNo;
+use crate::bft::crypto::hash::Digest;
 use crate::bft::consensus::Consensus;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::log::{
@@ -115,16 +116,21 @@ impl<S, O> RecoveryState<S, O> {
     }
 }
 
+struct ReceivedState<S, O> {
+    count: usize,
+    state: RecoveryState<S, O>,
+}
+
 /// Represents the state of an on-going colloborative
 /// state transfer protocol execution.
 pub struct CollabStateTransfer<S: Service> {
     latest_cid: SeqNo,
-    latest_cid_count: usize,
     cst_seq: SeqNo,
+    latest_cid_count: usize,
     // NOTE: remembers whose replies we have
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
-    received_states: HashMap<NodeId, RecoveryState<State<S>, Request<S>>>,
+    received_states: HashMap<Digest, ReceivedState<State<S>, Request<S>>>,
     phase: ProtoPhase<State<S>, Request<S>>,
 }
 
@@ -262,7 +268,7 @@ where
                     //
                     // TODO: maybe inspect cid msgs, and passively start
                     // the state transfer protocol, by returning
-                    // CstStatus::RequestReplicaState
+                    // CstStatus::RequestState
                     _ => (),
                 }
                 CstStatus::Nil
@@ -333,7 +339,11 @@ where
                     None => return CstStatus::Running,
                 };
 
-                self.received_states.insert(header.from(), state);
+                let received_state = self.received_states
+                    .entry(header.digest().clone())
+                    .or_insert(ReceivedState { count: 0, state });
+
+                received_state.count += 1;
 
                 // check if we have gathered enough cid
                 // replies from peer nodes
@@ -346,9 +356,33 @@ where
                     return CstStatus::Running;
                 }
 
-                // TODO: check if we have the same valid state
-                // on at least f+1 replicas
-                unimplemented!()
+                // check if we have at least f+1 matching states
+                let digest = {
+                    let received_state = self.received_states
+                        .iter()
+                        .max_by_key(|(_, st)| st.count);
+                    match received_state {
+                        Some((digest, _)) => digest.clone(),
+                        None => {
+                            self.received_states.clear();
+                            return CstStatus::RequestState;
+                        },
+                    }
+                };
+                let received_state = {
+                    let received_state = self.received_states
+                        .remove(&digest);
+                    self.received_states.clear();
+                    received_state
+                };
+
+                // return the state
+                match received_state {
+                    Some(ReceivedState { count, state }) if count > view.params().f() => {
+                        CstStatus::State(state)
+                    },
+                    _ => CstStatus::RequestState,
+                }
             },
         }
     }
