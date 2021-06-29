@@ -3,6 +3,9 @@
 //! The implementation is based on the paper «On the Efﬁciency of
 //! Durable State Machine Replication», by A. Bessani et al.
 
+// NOTE: in this module, we may use cid interchangeably with
+// consensus sequence number
+
 use std::cmp::Ordering;
 
 #[cfg(feature = "serialize_serde")]
