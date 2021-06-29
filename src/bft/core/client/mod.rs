@@ -203,6 +203,12 @@ where
                             let (digest, payload) = message.into_inner();
                             let votes = votes
                                 .entry(digest)
+                                // FIXME: cache every reply's digest, instead of just the first one
+                                // we receive, because the first reply may be faulty, while the
+                                // remaining ones may be correct, therefore we would not be able to
+                                // count at least f+1 identical replies
+                                //
+                                // TODO: change header.payload() to header.payload_digest()
                                 .or_insert(ReplicaVotes { count: 0, digest: header.digest().clone() });
 
                             // reply already delivered to application
