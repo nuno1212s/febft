@@ -17,12 +17,13 @@ use crate::bft::consensus::{
     ConsensusPollStatus,
 };
 use crate::bft::executable::{
+    Reply,
+    State,
+    Request,
     Service,
     Executor,
     ExecutorHandle,
-    Request,
-    Reply,
-    State,
+    UpdateBatchReplies,
 };
 use crate::bft::communication::{
     Node,
@@ -186,7 +187,36 @@ where
     }
 
     async fn update_retrieving_state(&mut self) -> Result<()> {
-        unimplemented!()
+        let message = self.node.receive().await?;
+
+        match message {
+            Message::System(header, message) => {
+                match message {
+                    SystemMessage::Consensus(message) => {
+                        self.consensus.queue(header, message);
+                    },
+                    // TODO: implement handling the rest of the
+                    // system message kinds
+                    _ => unimplemented!(),
+                }
+            },
+            Message::ExecutionFinished(batch) => {
+                self.execution_finished(batch);
+            },
+            Message::ExecutionFinishedWithAppstate(batch, _appstate) => {
+                // TODO: verify if ignoring the checkpoint state while
+                // receiving state from peer nodes is correct
+                self.execution_finished(batch);
+            },
+            Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
+            Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
+            // TODO: node disconnected on send side
+            Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
+            // TODO: node disconnected on receive side
+            Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
+        }
+
+        Ok(())
     }
 
     async fn update_sync_phase(&mut self) -> Result<()> {
@@ -271,42 +301,10 @@ where
                 }
             },
             Message::ExecutionFinished(batch) => {
-                // deliver replies to clients
-                for update_reply in batch.into_inner() {
-                    let (peer_id, digest, payload) = update_reply.into_inner();
-                    let message = SystemMessage::Reply(ReplyMessage::new(
-                        digest,
-                        payload,
-                    ));
-                    self.node.send(message, peer_id);
-                }
+                self.execution_finished(batch);
             },
             Message::ExecutionFinishedWithAppstate(batch, appstate) => {
-                // store the application state in the checkpoint
-                self.log.finalize_checkpoint(appstate)?;
-
-                // deliver replies to clients
-                for update_reply in batch.into_inner() {
-                    let (peer_id, digest, payload) = update_reply.into_inner();
-                    let message = SystemMessage::Reply(ReplyMessage::new(
-                        digest,
-                        payload,
-                    ));
-                    self.node.send(message, peer_id);
-                }
-
-/*
-                // check if the cst layer needs the checkpoint
-                if self.cst.needs_checkpoint() {
-                    let status = self.cst.process_message(
-                        CstProgress::Nil,
-                        &self.view,
-                        &self.consensus,
-                        &mut self.log,
-                        &mut self.node,
-                    );
-                }
-*/
+                self.execution_finished_with_appstate(batch, appstate)?;
             },
             Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
             Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
@@ -315,6 +313,40 @@ where
             // TODO: node disconnected on receive side
             Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
         }
+        Ok(())
+    }
+
+    fn execution_finished(&mut self, batch: UpdateBatchReplies<Reply<S>>) {
+        // deliver replies to clients
+        for update_reply in batch.into_inner() {
+            let (peer_id, digest, payload) = update_reply.into_inner();
+            let message = SystemMessage::Reply(ReplyMessage::new(
+                digest,
+                payload,
+            ));
+            self.node.send(message, peer_id);
+        }
+    }
+
+    fn execution_finished_with_appstate(
+        &mut self,
+        batch: UpdateBatchReplies<Reply<S>>,
+        appstate: State<S>,
+    ) -> Result<()> {
+        self.log.finalize_checkpoint(appstate)?;
+        self.execution_finished(batch);
+        /*
+        // check if the cst layer needs the checkpoint
+        if self.cst.needs_checkpoint() {
+            let status = self.cst.process_message(
+                CstProgress::Nil,
+                &self.view,
+                &self.consensus,
+                &mut self.log,
+                &mut self.node,
+            );
+        }
+        */
         Ok(())
     }
 }
