@@ -356,6 +356,10 @@ where
                     return CstStatus::Running;
                 }
 
+                // NOTE: clear saved states when we return;
+                // this is important, because each state
+                // may be several GBs in size
+
                 // check if we have at least f+1 matching states
                 let digest = {
                     let received_state = self.received_states
@@ -393,6 +397,19 @@ where
         // reset state of latest seq no
         self.latest_cid = SeqNo::from(0u32);
         self.latest_cid_count = 0;
+
+        // ...
+
+        // update our cst seq no
+        self.cst_seq = self.cst_seq.next();
+
+        unimplemented!()
+    }
+
+    /// Used by a recovering node to retrieve the latest state.
+    pub fn request_latest_state(&mut self, _node: &mut Node<S::Data>) {
+        // reset hashmap of received states
+        self.received_states.clear();
 
         // ...
 
