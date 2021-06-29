@@ -19,7 +19,7 @@ use crate::bft::log::{
 };
 use crate::bft::communication::{
     Node,
-    NodeId,
+    //NodeId,
 };
 use crate::bft::communication::message::{
     Header,
