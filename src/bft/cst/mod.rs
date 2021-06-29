@@ -345,7 +345,7 @@ where
 
                 received_state.count += 1;
 
-                // check if we have gathered enough cid
+                // check if we have gathered enough state
                 // replies from peer nodes
                 //
                 // TODO: check for more than one reply from the same node
