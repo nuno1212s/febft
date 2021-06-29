@@ -88,6 +88,7 @@ pub struct ClientConfig {
 
 struct ReplicaVotes {
     count: usize,
+    digest: Digest,
 }
 
 impl<D> Client<D>
@@ -175,7 +176,7 @@ where
 
         while let Ok(message) = node.receive().await {
             match message {
-                Message::System(_, message) => {
+                Message::System(header, message) => {
                     match message {
                         SystemMessage::Reply(message) => {
                             let now = Instant::now();
@@ -188,7 +189,7 @@ where
                                 let mut to_remove = Vec::new();
 
                                 for (dig, v) in votes.iter() {
-                                    if v.count >= params.quorum() {
+                                    if v.count > params.f() {
                                         to_remove.push(dig.clone());
                                     }
                                 }
@@ -202,17 +203,23 @@ where
                             let (digest, payload) = message.into_inner();
                             let votes = votes
                                 .entry(digest)
-                                .or_insert(ReplicaVotes { count: 0 });
+                                .or_insert(ReplicaVotes { count: 0, digest: header.digest().clone() });
+
+                            // reply already delivered to application
+                            if votes.count > params.f() {
+                                continue;
+                            }
 
                             // register new reply received
-                            votes.count += 1;
+                            if &votes.digest == header.digest() {
+                                votes.count += 1;
+                            }
 
-                            // TODO: check if we got equivalent responses by
-                            // verifying the digest; furthermore, check if
-                            // a replica hasn't voted twice for the same
-                            // digest
+                            // TODO: check if a replica hasn't voted
+                            // twice for the same digest
 
-                            if votes.count == params.quorum() {
+                            // wait for at least f+1 identical replies
+                            if votes.count > params.f() {
                                 // register response
                                 {
                                     let mut ready = data.ready.lock();
