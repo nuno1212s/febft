@@ -19,17 +19,25 @@ use crate::bft::executable::{
     State,
 };
 
-pub enum Timeout {
+type SeqNo = u64;
+
+pub struct Timeout {
+    seq: SeqNo,
+    kind: TimeoutKind,
+}
+
+pub enum TimeoutKind {
     // TODO: fill in some items here
 }
 
-enum TimeoutKind {
-    Request(Timeout),
-    Reply(Timeout),
+enum TimeoutOp {
+    Requested(Timeout),
+    Resolved(SeqNo),
+    Canceled(SeqNo),
 }
 
 pub struct TimeoutsHandle {
-    tx: ChannelTx<TimeoutKind>,
+    tx: ChannelTx<TimeoutOp>,
 }
 
 pub struct Timeouts<S: Service> {
@@ -50,9 +58,15 @@ impl<S: Service> Timeouts<S> {
             asd
         });
         rt::spawn(async move {
-            while let Ok(request) = handler_rx.recv().await {
-                // TODO: handle timeouts
-                drop(request);
+            // TODO: use futures::select! { ... } to choose msg
+            // between resolver and timeouts handler
+            while let Ok(op) = handler_rx.recv().await {
+                // TODO: handle timeout ops
+                match op {
+                    TimeoutOp::Requested(_) => unimplemented!(),
+                    TimeoutOp::Resolved(_) => unimplemented!(),
+                    TimeoutOp::Canceled(_) => unimplemented!(),
+                }
             }
         });
 
