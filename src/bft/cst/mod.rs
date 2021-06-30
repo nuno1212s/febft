@@ -22,7 +22,7 @@ use crate::bft::log::{
 };
 use crate::bft::communication::{
     Node,
-    //NodeId,
+    NodeId,
 };
 use crate::bft::communication::message::{
     Header,
@@ -394,31 +394,45 @@ where
         }
     }
 
+    fn next_seq(&mut self) -> SeqNo {
+        let next = self.cst_seq;
+        self.cst_seq = self.cst_seq.next();
+        next
+    }
+
     /// Used by a recovering node to retrieve the latest sequence number
     /// attributed to a client request by the consensus layer.
-    pub fn request_latest_consensus_seq_no(&mut self, _node: &mut Node<S::Data>) {
-        // reset state of latest seq no
+    pub fn request_latest_consensus_seq_no(
+        &mut self,
+        view: ViewInfo,
+        node: &mut Node<S::Data>,
+    ) {
+        // reset state of latest seq no. request
         self.latest_cid = SeqNo::from(0u32);
         self.latest_cid_count = 0;
 
-        // ...
-
-        // update our cst seq no
-        self.cst_seq = self.cst_seq.next();
-
-        unimplemented!()
+        let message = SystemMessage::Cst(CstMessage::new(
+            self.next_seq(),
+            CstMessageKind::RequestLatestConsensusSeq,
+        ));
+        let targets = NodeId::targets(0..view.params().n());
+        node.broadcast(message, targets);
     }
 
     /// Used by a recovering node to retrieve the latest state.
-    pub fn request_latest_state(&mut self, _node: &mut Node<S::Data>) {
+    pub fn request_latest_state(
+        &mut self,
+        view: ViewInfo,
+        node: &mut Node<S::Data>,
+    ) {
         // reset hashmap of received states
         self.received_states.clear();
 
-        // ...
-
-        // update our cst seq no
-        self.cst_seq = self.cst_seq.next();
-
-        unimplemented!()
+        let message = SystemMessage::Cst(CstMessage::new(
+            self.next_seq(),
+            CstMessageKind::RequestState,
+        ));
+        let targets = NodeId::targets(0..view.params().n());
+        node.broadcast(message, targets);
     }
 }
