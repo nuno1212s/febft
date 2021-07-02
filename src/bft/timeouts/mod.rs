@@ -214,7 +214,7 @@ impl<S: Service> Timeouts<S> {
             while let Ok(op) = rx.recv().await {
                 match op {
                     TimeoutOp::Tick => {
-                        let mut fired = Vec::new();
+                        let mut triggered = Vec::new();
                         loop {
                             let timestamp = shared.curr_timestamp();
                             match to_trigger.peek() {
@@ -222,7 +222,7 @@ impl<S: Service> Timeouts<S> {
                                 Some(t) if timestamp >= t.when => {
                                     let t = to_trigger.pop().unwrap();
                                     if evaluating.remove(t.seq).is_some() {
-                                        fired.push(t.kind);
+                                        triggered.push(t.kind);
                                     }
                                 },
                                 // this is a min priority queue, so no more timeouts should be
@@ -231,7 +231,7 @@ impl<S: Service> Timeouts<S> {
                             }
                         }
                         // TODO: system_tx.send() ...
-                        drop(fired);
+                        drop(triggered);
                     },
                     TimeoutOp::Requested(timeout) => {
                         to_trigger.push(timeout);
