@@ -65,7 +65,6 @@ pub enum TimeoutKind {
 enum TimeoutOp {
     Tick,
     Requested(Timeout),
-    Resolved(SeqNo),
     Canceled(SeqNo),
 }
 
@@ -106,7 +105,6 @@ impl<S: Service> Timeouts<S> {
                 match op {
                     TimeoutOp::Tick => unimplemented!(),
                     TimeoutOp::Requested(_) => unimplemented!(),
-                    TimeoutOp::Resolved(_) => unimplemented!(),
                     TimeoutOp::Canceled(_) => unimplemented!(),
                 }
             }
