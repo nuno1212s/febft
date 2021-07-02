@@ -4,7 +4,10 @@
 //! view change messages exchanged between replicas.
 
 use std::marker::PhantomData;
+use std::collections::BinaryHeap;
 use std::cmp::{PartialOrd, Ordering};
+
+use futures_timer::Delay;
 
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::channel::{
@@ -92,25 +95,37 @@ impl<S: Service> Timeouts<S> {
         granularity: Duration,
         system_tx: MessageChannelTx<State<S>, Request<S>, Reply<S>>,
     ) -> TimeoutsHandle {
-        let (handler_tx, handler_rx) = channel::new_bounded(Self::CHAN_BOUND);
+        let (tx, rx) = channel::new_bounded(Self::CHAN_BOUND);
+        let timeouts = BinaryHeap::new();
 
+        let mut ticker = tx.clone();
         rt::spawn(async move {
-            // this task simply ticks every `granularity` duration,
-            // generating a chan msg
+            let delay = Delay::new(granularity);
+            loop {
+                delay.await;
+                ticker.send(TimeoutOp::Tick).await.unwrap();
+            }
         });
+
         rt::spawn(async move {
             // TODO: save an `Instant`, and use that to generate
             // timestamps for timeouts
-            while let Ok(op) = handler_rx.recv().await {
+            while let Ok(op) = rx.recv().await {
                 // TODO: handle timeout ops
                 match op {
-                    TimeoutOp::Tick => unimplemented!(),
+                    TimeoutOp::Tick => {
+                        loop {
+                            match timeouts.peek() {
+                                Some(timeout) if ...
+                            }
+                        }
+                    },
                     TimeoutOp::Requested(_) => unimplemented!(),
                     TimeoutOp::Canceled(_) => unimplemented!(),
                 }
             }
         });
 
-        TimeoutsHandle { tx: handler_tx }
+        TimeoutsHandle { tx }
     }
 }
