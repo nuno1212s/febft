@@ -21,6 +21,7 @@ use crate::bft::executable::{
 };
 
 type SeqNo = u64;
+type AtomicSeqNo = AtomicU64;
 type Timestamp = u64;
 
 #[derive(Eq, PartialEq)]
@@ -70,7 +71,7 @@ enum TimeoutOp {
 
 /*
 struct TimeoutsHandleShared {
-    current_seq_no: SeqNo,
+    current_seq_no: AtomicSeqNo,
     timestamp_generator: Instant,
 }
 */
