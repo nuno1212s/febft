@@ -149,8 +149,8 @@ impl TimeoutsHandle {
 
     /// Creates a new timeout event, that will fire after a duration of `dur`.
     ///
-    /// Different from `timeout()`, this method returns a handle that allows the user to
-    /// cancel a timeout.
+    /// Different from `timeout()`, this method returns a handle that allows the user
+    /// to cancel the timeout before it is triggered.
     pub async fn timeout_with_cancel(&mut self, dur: Duration, kind: TimeoutKind) -> Result<TimeoutHandle> {
         self.timeout_impl(true, dur, kind).await
     }
