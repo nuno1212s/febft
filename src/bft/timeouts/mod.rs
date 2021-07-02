@@ -6,19 +6,18 @@
 use std::marker::PhantomData;
 use std::collections::BinaryHeap;
 use std::time::{Duration, Instant};
-use std::sync::atomic::{self, AtomicI32};
+use std::sync::atomic::{self, AtomicU64};
 use std::cmp::{PartialOrd, Ordering, PartialEq, Eq};
 use std::sync::Arc;
 
+use intmap::IntMap;
 use futures_timer::Delay;
 
 use crate::bft::error::*;
-use crate::bft::collections;
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::channel::{
     self,
     ChannelTx,
-    ChannelRx,
     MessageChannelTx,
 };
 use crate::bft::executable::{
@@ -28,11 +27,11 @@ use crate::bft::executable::{
     State,
 };
 
-type SeqNo = i32;
-type AtomicSeqNo = AtomicI32;
+type SeqNo = u64;
+type AtomicSeqNo = AtomicU64;
 type Timestamp = u128;
 
-pub struct Timeout {
+struct Timeout {
     seq: SeqNo,
     when: Timestamp,
     kind: TimeoutKind,
@@ -50,9 +49,14 @@ impl PartialEq for Timeout {
 
 impl Eq for Timeout { }
 
+// NOTE: the ord impl is reversed, because `BinaryHeap` is a max heap
 impl PartialOrd for Timeout {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.when.cmp(&other.when).reverse())
+        if self.seq == other.seq {
+            Some(Ordering::Equal)
+        } else {
+            Some(self.when.cmp(&other.when).reverse())
+        }
     }
 
     fn lt(&self, other: &Self) -> bool {
@@ -60,7 +64,7 @@ impl PartialOrd for Timeout {
     }
 
     fn le(&self, other: &Self) -> bool {
-        self.when > other.when
+        self.seq == other.seq || self.when > other.when
     }
 
     fn gt(&self, other: &Self) -> bool {
@@ -68,7 +72,7 @@ impl PartialOrd for Timeout {
     }
 
     fn ge(&self, other: &Self) -> bool {
-        self.when < other.when
+        self.seq == other.seq || self.when < other.when
     }
 }
 
@@ -105,6 +109,18 @@ pub struct TimeoutHandle {
 
 pub struct Timeouts<S: Service> {
     _marker: PhantomData<S>,
+}
+
+impl TimeoutHandle {
+    /// Cancels the timeout associated with this handle.
+    ///
+    /// This method does not check for timeouts that 
+    pub async fn cancel(&mut self) -> Result<()> {
+        match self.tx {
+            Some(ref mut tx) => tx.send(TimeoutOp::Canceled(self.seq)).await,
+            None => Err(Error::simple(ErrorKind::Timeouts)),
+        }
+    }
 }
 
 impl TimeoutsHandleShared {
@@ -166,7 +182,7 @@ impl<S: Service> Timeouts<S> {
         let (tx, mut rx) = channel::new_bounded(Self::CHAN_BOUND);
 
         let mut to_trigger = BinaryHeap::<Timeout>::new();
-        let mut canceled = collections::hash_set();
+        let mut evaluating = IntMap::<()>::new();
 
         let mut ticker = tx.clone();
         rt::spawn(async move {
@@ -188,26 +204,30 @@ impl<S: Service> Timeouts<S> {
             while let Ok(op) = rx.recv().await {
                 match op {
                     TimeoutOp::Tick => {
-                        // TODO: notify a batch of timeouts
+                        let mut fired = Vec::new();
                         loop {
                             let timestamp = shared.curr_timestamp();
                             match to_trigger.peek() {
-                                Some(t) if timestamp >= t.when && !canceled.remove(&t.seq) => {
-                                    // TODO: send timeout message into `system_tx`
-                                    unimplemented!()
+                                // timeout should be fired, if it hasn't been canceled yet
+                                Some(t) if timestamp >= t.when => {
+                                    let t = to_trigger.pop().unwrap();
+                                    if evaluating.remove(t.seq).is_some() {
+                                        fired.push(t.kind);
+                                    }
                                 },
-                                // NOTE: this is a min priority queue, so no
-                                // more timeouts should be triggered if the first
-                                // timeout is after the current time
+                                // this is a min priority queue, so no more timeouts should be
+                                // triggered if the first timeout is after the current time
                                 _ => break,
                             }
                         }
+                        // TODO: system_tx.send() ...
+                        drop(fired);
                     },
                     TimeoutOp::Requested(timeout) => {
                         to_trigger.push(timeout);
                     },
                     TimeoutOp::Canceled(seq_no) => {
-                        canceled.insert(seq_no);
+                        evaluating.remove(seq_no);
                     },
                 }
             }
