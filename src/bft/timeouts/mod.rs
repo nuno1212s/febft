@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use std::collections::BinaryHeap;
 use std::time::{Duration, Instant};
 use std::cmp::{PartialOrd, Ordering};
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 
 use futures_timer::Delay;
@@ -26,8 +26,8 @@ use crate::bft::executable::{
     State,
 };
 
-type SeqNo = u64;
-type AtomicSeqNo = AtomicU64;
+type SeqNo = i32;
+type AtomicSeqNo = AtomicI32;
 type Timestamp = u64;
 
 #[derive(Eq, PartialEq)]
@@ -94,10 +94,12 @@ impl<S: Service> Timeouts<S> {
 
     pub fn new(
         granularity: Duration,
-        system_tx: MessageChannelTx<State<S>, Request<S>, Reply<S>>,
+        mut system_tx: MessageChannelTx<State<S>, Request<S>, Reply<S>>,
     ) -> TimeoutsHandle {
-        let (tx, rx) = channel::new_bounded(Self::CHAN_BOUND);
-        let timeouts = BinaryHeap::new();
+        let (tx, mut rx) = channel::new_bounded(Self::CHAN_BOUND);
+
+        let mut to_trigger = BinaryHeap::new();
+        let mut canceled = HashSet::new();
 
         let mut ticker = tx.clone();
         rt::spawn(async move {
@@ -117,14 +119,12 @@ impl<S: Service> Timeouts<S> {
 
         rt::spawn(async move {
             let shared = shared_clone;
-            // TODO: save an `Instant`, and use that to generate
-            // timestamps for timeouts
             while let Ok(op) = rx.recv().await {
                 // TODO: handle timeout ops
                 match op {
                     TimeoutOp::Tick => {
                         loop {
-                            match timeouts.peek() {
+                            match to_trigger.peek() {
                                 Some(timeout) if ...
                             }
                         }
