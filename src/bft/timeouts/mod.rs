@@ -12,6 +12,11 @@ use std::sync::Arc;
 
 use intmap::IntMap;
 use futures_timer::Delay;
+use either::{
+    Left,
+    Right,
+    Either,
+};
 
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
@@ -104,7 +109,7 @@ pub struct TimeoutsHandle {
 
 pub struct TimeoutHandle {
     seq: SeqNo,
-    tx: Option<ChannelTx<TimeoutOp>>,
+    tx: ChannelTx<TimeoutOp>,
 }
 
 pub struct Timeouts<S: Service> {
@@ -113,13 +118,8 @@ pub struct Timeouts<S: Service> {
 
 impl TimeoutHandle {
     /// Cancels the timeout associated with this handle.
-    ///
-    /// This method does not check for timeouts that 
-    pub async fn cancel(&mut self) -> Result<()> {
-        match self.tx {
-            Some(ref mut tx) => tx.send(TimeoutOp::Canceled(self.seq)).await,
-            None => Err(Error::simple(ErrorKind::Timeouts)),
-        }
+    pub async fn cancel(mut self) -> Result<()> {
+        self.tx.send(TimeoutOp::Canceled(self.seq)).await
     }
 }
 
@@ -144,7 +144,10 @@ impl TimeoutsHandleShared {
 impl TimeoutsHandle {
     /// Creates a new timeout event, that will fire after a duration of `dur`.
     pub async fn timeout(&mut self, dur: Duration, kind: TimeoutKind) -> Result<()> {
-        self.timeout_impl(false, dur, kind).await.map(|_| ())
+        match self.timeout_impl(false, dur, kind).await? {
+            Left(_) => Ok(()),
+            Right(_) => unreachable!(),
+        }
     }
 
     /// Creates a new timeout event, that will fire after a duration of `dur`.
@@ -152,7 +155,10 @@ impl TimeoutsHandle {
     /// Different from `timeout()`, this method returns a handle that allows the user
     /// to cancel the timeout before it is triggered.
     pub async fn timeout_with_cancel(&mut self, dur: Duration, kind: TimeoutKind) -> Result<TimeoutHandle> {
-        self.timeout_impl(true, dur, kind).await
+        match self.timeout_impl(true, dur, kind).await? {
+            Left(_) => unreachable!(),
+            Right(h) => Ok(h),
+        }
     }
 
     async fn timeout_impl(
@@ -160,15 +166,19 @@ impl TimeoutsHandle {
         can_cancel: bool,
         dur: Duration,
         kind: TimeoutKind,
-    ) -> Result<TimeoutHandle> {
+    ) -> Result<Either<(), TimeoutHandle>> {
         let seq = self.shared.gen_seq_no();
         let when = self.shared.gen_timestamp(dur);
         let timeout = Timeout { seq, when, kind };
-        let tx = if can_cancel { Some(self.tx.clone()) } else { None };
 
         self.tx.send(TimeoutOp::Requested(timeout)).await?;
 
-        Ok(TimeoutHandle { seq, tx })
+        Ok(if can_cancel {
+            let tx = self.tx.clone();
+            Right(TimeoutHandle { seq, tx })
+        } else {
+            Left(())
+        })
     }
 }
 
