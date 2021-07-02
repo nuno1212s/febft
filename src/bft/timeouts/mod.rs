@@ -5,7 +5,10 @@
 
 use std::marker::PhantomData;
 use std::collections::BinaryHeap;
+use std::time::{Duration, Instant};
 use std::cmp::{PartialOrd, Ordering};
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 
 use futures_timer::Delay;
 
@@ -72,15 +75,13 @@ enum TimeoutOp {
     Canceled(SeqNo),
 }
 
-/*
 struct TimeoutsHandleShared {
     current_seq_no: AtomicSeqNo,
     timestamp_generator: Instant,
 }
-*/
 
 pub struct TimeoutsHandle {
-    //shared: Arc<TimeoutsHandleShared>,
+    shared: Arc<TimeoutsHandleShared>,
     tx: ChannelTx<TimeoutOp>,
 }
 
@@ -101,13 +102,21 @@ impl<S: Service> Timeouts<S> {
         let mut ticker = tx.clone();
         rt::spawn(async move {
             let delay = Delay::new(granularity);
+            // TODO: exit condition
             loop {
                 delay.await;
                 ticker.send(TimeoutOp::Tick).await.unwrap();
             }
         });
 
+        let shared = Arc::new(TimeoutsHandleShared {
+            current_seq_no: AtomicSeqNo::new(0),
+            timestamp_generator: Instant::now(),
+        });
+        let shared_clone = Arc::clone(&shared);
+
         rt::spawn(async move {
+            let shared = shared_clone;
             // TODO: save an `Instant`, and use that to generate
             // timestamps for timeouts
             while let Ok(op) = rx.recv().await {
@@ -126,6 +135,6 @@ impl<S: Service> Timeouts<S> {
             }
         });
 
-        TimeoutsHandle { tx }
+        TimeoutsHandle { tx, shared }
     }
 }
