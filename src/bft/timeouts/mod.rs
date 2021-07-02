@@ -63,12 +63,21 @@ pub enum TimeoutKind {
 }
 
 enum TimeoutOp {
+    Tick,
     Requested(Timeout),
     Resolved(SeqNo),
     Canceled(SeqNo),
 }
 
+/*
+struct TimeoutsHandleShared {
+    current_seq_no: SeqNo,
+    timestamp_generator: Instant,
+}
+*/
+
 pub struct TimeoutsHandle {
+    //shared: Arc<TimeoutsHandleShared>,
     tx: ChannelTx<TimeoutOp>,
 }
 
@@ -84,17 +93,18 @@ impl<S: Service> Timeouts<S> {
         system_tx: MessageChannelTx<State<S>, Request<S>, Reply<S>>,
     ) -> TimeoutsHandle {
         let (handler_tx, handler_rx) = channel::new_bounded(Self::CHAN_BOUND);
-        let (resolver_tx, resolver_rx) = channel::new_bounded(Self::CHAN_BOUND);
 
         rt::spawn(async move {
-            asd
+            // this task simply ticks every `granularity` duration,
+            // generating a chan msg
         });
         rt::spawn(async move {
-            // TODO: use futures::select! { ... } to choose msg
-            // between resolver and timeouts handler
+            // TODO: save an `Instant`, and use that to generate
+            // timestamps for timeouts
             while let Ok(op) = handler_rx.recv().await {
                 // TODO: handle timeout ops
                 match op {
+                    TimeoutOp::Tick => unimplemented!(),
                     TimeoutOp::Requested(_) => unimplemented!(),
                     TimeoutOp::Resolved(_) => unimplemented!(),
                     TimeoutOp::Canceled(_) => unimplemented!(),
