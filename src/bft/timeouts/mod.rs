@@ -4,6 +4,7 @@
 //! view change messages exchanged between replicas.
 
 use std::marker::PhantomData;
+use std::cmp::{PartialOrd, Ordering};
 
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::channel::{
@@ -20,10 +21,41 @@ use crate::bft::executable::{
 };
 
 type SeqNo = u64;
+type Timestamp = u64;
 
+#[derive(Eq, PartialEq)]
 pub struct Timeout {
     seq: SeqNo,
+    when: Timestamp,
     kind: TimeoutKind,
+}
+
+impl PartialOrd for Timeout {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.when.cmp(&other.when).reverse())
+    }
+
+    fn lt(&self, other: &Self) -> bool {
+        self.when >= other.when
+    }
+
+    fn le(&self, other: &Self) -> bool {
+        self.when > other.when
+    }
+
+    fn gt(&self, other: &Self) -> bool {
+        self.when <= other.when
+    }
+
+    fn ge(&self, other: &Self) -> bool {
+        self.when < other.when
+    }
+}
+
+impl Ord for Timeout {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.when.cmp(&other.when).reverse()
+    }
 }
 
 pub enum TimeoutKind {
