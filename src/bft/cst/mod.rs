@@ -400,6 +400,28 @@ where
         next
     }
 
+    /// Handle a timeout received from the timeouts layer.
+    pub fn timed_out(&self, seq: SeqNo) -> CstStatus<State<S>, Request<S>> {
+        if seq.next() != self.cst_seq {
+            // the timeout we received is for a request
+            // that has already completed, therefore we ignore it
+            //
+            // TODO: this check is probably not necessary,
+            // as we have likely already updated the `ProtoPhase`
+            // to reflect the fact we are no longer receiving state
+            // from peer nodes
+            return CstStatus::Nil;
+        }
+        match self.phase {
+            // retry requests if receiving state and we have timed out
+            ProtoPhase::ReceivingCid(_) => CstStatus::RequestLatestCid,
+            ProtoPhase::ReceivingState(_) => CstStatus::RequestState,
+            // ignore timeouts if not receiving any kind
+            // of state from peer nodes
+            _ => CstStatus::Nil,
+        }
+    }
+
     /// Used by a recovering node to retrieve the latest sequence number
     /// attributed to a client request by the consensus layer.
     pub fn request_latest_consensus_seq_no(
