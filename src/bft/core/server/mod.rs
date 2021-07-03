@@ -190,6 +190,8 @@ where
         let message = self.node.receive().await?;
 
         match message {
+            // TODO: handle timeouts
+            Message::Timeouts(_) => unimplemented!(),
             Message::System(header, message) => {
                 match message {
                     SystemMessage::Consensus(message) => {
@@ -241,6 +243,8 @@ where
         };
 
         match message {
+            // TODO: handle timeouts
+            Message::Timeouts(_) => unimplemented!(),
             Message::System(header, message) => {
                 match message {
                     request @ SystemMessage::Request(_) => {
