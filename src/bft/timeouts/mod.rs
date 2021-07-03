@@ -100,8 +100,8 @@ where
     Reply<S>: Send + 'static,
 {
     /// Creates a new timeout event, that will fire after a duration of `dur`.
-    pub async fn timeout(&self, dur: Duration, kind: TimeoutKind) {
-        match self.timeout_impl(false, dur, kind).await {
+    pub fn timeout(&self, dur: Duration, kind: TimeoutKind) {
+        match self.timeout_impl(false, dur, kind) {
             Left(_) => (),
             Right(_) => unreachable!(),
         }
@@ -111,14 +111,14 @@ where
     ///
     /// Different from `timeout()`, this method returns a handle that allows the user
     /// to cancel the timeout before it is triggered.
-    pub async fn timeout_with_cancel(&self, dur: Duration, kind: TimeoutKind) -> TimeoutHandle {
-        match self.timeout_impl(true, dur, kind).await {
+    pub fn timeout_with_cancel(&self, dur: Duration, kind: TimeoutKind) -> TimeoutHandle {
+        match self.timeout_impl(true, dur, kind) {
             Left(_) => unreachable!(),
             Right(h) => h,
         }
     }
 
-    async fn timeout_impl(
+    fn timeout_impl(
         &self,
         can_cancel: bool,
         dur: Duration,
