@@ -25,8 +25,6 @@ type S = State<Sv>;
 type O = Request<Sv>;
 type P = Reply<Sv>;
 
-const GRANULARITY: Duration = Duration::from_millis(1);
-
 fn main() {
     let conf = InitConfig {
         async_threads: num_cpus::get(),
@@ -37,19 +35,17 @@ fn main() {
 
 async fn async_main() {
     let (tx, mut rx) = channel::new_message_channel::<S, O, P>(8);
-    let mut timeouts = Timeouts::<Sv>::new(GRANULARITY, tx);
+    let mut timeouts = Timeouts::<Sv>::new(tx);
 
     for i in 1..=5 {
         println!("Created timeout of {} seconds", i * 5);
         let dur = Duration::from_secs(i * 5);
-        timeouts.timeout(dur, TimeoutKind::Dummy).await.unwrap();
+        timeouts.timeout(dur, TimeoutKind::Dummy);
     }
 
     while let Ok(message) = rx.recv().await {
-        let batch = match message {
-            Message::Timeouts(batch) => batch,
-            _ => continue,
-        };
-        println!("Received {} timeouts!", batch.len());
+        if let Message::Timeout(_) = message {
+            println!("Received a timeout!");
+        }
     }
 }

@@ -129,8 +129,8 @@ pub enum Message<S, O, P> {
     ///
     /// This is useful for local checkpoints.
     ExecutionFinishedWithAppstate(UpdateBatchReplies<P>, S),
-    ///// We received a batch of timeouts from the timeouts layer.
-    Timeouts(Vec<TimeoutKind>),
+    /// We received a timeout from the timeouts layer.
+    Timeout(TimeoutKind),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
@@ -633,8 +633,8 @@ impl<S, O, P> Message<S, O, P> {
             Message::ExecutionFinishedWithAppstate(_, _) =>
                 Err("Expected System found ExecutionFinishedWithAppstate")
                     .wrapped(ErrorKind::CommunicationMessage),
-            Message::Timeouts(_) =>
-                Err("Expected System found Timeouts")
+            Message::Timeout(_) =>
+                Err("Expected System found Timeout")
                     .wrapped(ErrorKind::CommunicationMessage),
         }
     }
