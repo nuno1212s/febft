@@ -32,6 +32,7 @@ use crate::bft::crypto::hash::{
 use crate::bft::communication::socket::Socket;
 use crate::bft::executable::UpdateBatchReplies;
 use crate::bft::communication::NodeId;
+use crate::bft::timeouts::TimeoutKind;
 use crate::bft::cst::RecoveryState;
 use crate::bft::ordering::SeqNo;
 use crate::bft::error::*;
@@ -128,6 +129,8 @@ pub enum Message<S, O, P> {
     ///
     /// This is useful for local checkpoints.
     ExecutionFinishedWithAppstate(UpdateBatchReplies<P>, S),
+    ///// We received a batch of timeouts from the timeouts layer.
+    Timeouts(Vec<TimeoutKind>),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
@@ -629,6 +632,9 @@ impl<S, O, P> Message<S, O, P> {
                     .wrapped(ErrorKind::CommunicationMessage),
             Message::ExecutionFinishedWithAppstate(_, _) =>
                 Err("Expected System found ExecutionFinishedWithAppstate")
+                    .wrapped(ErrorKind::CommunicationMessage),
+            Message::Timeouts(_) =>
+                Err("Expected System found Timeouts")
                     .wrapped(ErrorKind::CommunicationMessage),
         }
     }
