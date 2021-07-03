@@ -40,7 +40,7 @@ async fn async_main() {
     for i in 1..=5 {
         println!("Created timeout of {} seconds", i * 5);
         let dur = Duration::from_secs(i * 5);
-        timeouts.timeout(dur, TimeoutKind::Dummy);
+        timeouts.timeout(dur, TimeoutKind::Cst);
     }
 
     while let Ok(message) = rx.recv().await {
