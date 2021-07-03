@@ -35,7 +35,7 @@ fn main() {
 
 async fn async_main() {
     let (tx, mut rx) = channel::new_message_channel::<S, O, P>(8);
-    let mut timeouts = Timeouts::<Sv>::new(tx);
+    let timeouts = Timeouts::<Sv>::new(tx);
 
     for i in 1..=5 {
         println!("Created timeout of {} seconds", i * 5);
