@@ -20,6 +20,7 @@ use either::{
 
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
+use crate::bft::communication::message::Message;
 use crate::bft::communication::channel::{
     self,
     ChannelTx,
@@ -65,7 +66,7 @@ impl PartialOrd for Timeout {
     }
 
     fn lt(&self, other: &Self) -> bool {
-        self.when >= other.when
+        self.seq >= other.seq || self.when >= other.when
     }
 
     fn le(&self, other: &Self) -> bool {
@@ -73,7 +74,7 @@ impl PartialOrd for Timeout {
     }
 
     fn gt(&self, other: &Self) -> bool {
-        self.when <= other.when
+        self.seq <= other.seq || self.when <= other.when
     }
 
     fn ge(&self, other: &Self) -> bool {
@@ -89,6 +90,7 @@ impl Ord for Timeout {
 
 pub enum TimeoutKind {
     // TODO: fill in some items here
+    Dummy,
 }
 
 enum TimeoutOp {
@@ -182,7 +184,13 @@ impl TimeoutsHandle {
     }
 }
 
-impl<S: Service> Timeouts<S> {
+impl<S: Service> Timeouts<S>
+where
+    S: Service + Send + 'static,
+    State<S>: Send + 'static,
+    Request<S>: Send + 'static,
+    Reply<S>: Send + 'static,
+{
     const CHAN_BOUND: usize = 128;
 
     pub fn new(
@@ -214,6 +222,9 @@ impl<S: Service> Timeouts<S> {
             while let Ok(op) = rx.recv().await {
                 match op {
                     TimeoutOp::Tick => {
+                        if to_trigger.is_empty() {
+                            continue;
+                        }
                         let mut triggered = Vec::new();
                         loop {
                             let timestamp = shared.curr_timestamp();
@@ -230,10 +241,12 @@ impl<S: Service> Timeouts<S> {
                                 _ => break,
                             }
                         }
-                        // TODO: system_tx.send() ...
-                        drop(triggered);
+                        if !triggered.is_empty() {
+                            system_tx.send(Message::Timeouts(triggered)).await.unwrap();
+                        }
                     },
                     TimeoutOp::Requested(timeout) => {
+                        evaluating.insert(timeout.seq, ());
                         to_trigger.push(timeout);
                     },
                     TimeoutOp::Canceled(seq_no) => {
