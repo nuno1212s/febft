@@ -26,8 +26,9 @@ type SeqNo = u64;
 type AtomicSeqNo = AtomicU64;
 
 pub enum TimeoutKind {
-    // TODO: fill in some items here
-    Dummy,
+    Cst,
+    // TODO: add the rest of the timeout kinds,
+    // e.g. client requests
 }
 
 struct TimeoutsHandleShared {

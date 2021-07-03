@@ -7,6 +7,7 @@
 // consensus sequence number
 
 use std::cmp::Ordering;
+use std::time::Duration;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
@@ -15,6 +16,10 @@ use crate::bft::ordering::SeqNo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::consensus::Consensus;
 use crate::bft::core::server::ViewInfo;
+use crate::bft::timeouts::{
+    TimeoutKind,
+    TimeoutsHandle,
+};
 use crate::bft::log::{
     Log,
     Checkpoint,
@@ -130,6 +135,8 @@ pub struct CollabStateTransfer<S: Service> {
     latest_cid: SeqNo,
     cst_seq: SeqNo,
     latest_cid_count: usize,
+    base_timeout: Duration,
+    curr_timeout: Duration,
     // NOTE: remembers whose replies we have
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
@@ -196,8 +203,10 @@ where
     Reply<S>: Send + 'static,
 {
     /// Craete a new instance of `CollabStateTransfer`.
-    pub fn new() -> Self {
+    pub fn new(base_timeout: Duration) -> Self {
         Self {
+            base_timeout,
+            curr_timeout: base_timeout,
             received_states: collections::hash_map(),
             phase: ProtoPhase::Init,
             latest_cid: SeqNo::from(0u32),
@@ -317,6 +326,9 @@ where
                 if i == view.params().quorum() {
                     self.phase = ProtoPhase::Init;
                     if self.latest_cid_count > view.params().f() {
+                        // reset timeout, since req was successful
+                        self.curr_timeout = self.base_timeout;
+
                         // the latest cid was available in at least
                         // f+1 replicas
                         CstStatus::SeqNo(self.latest_cid)
@@ -383,6 +395,9 @@ where
                     received_state
                 };
 
+                // reset timeout, since req was successful
+                self.curr_timeout = self.base_timeout;
+
                 // return the state
                 match received_state {
                     Some(ReceivedState { count, state }) if count > view.params().f() => {
@@ -401,7 +416,7 @@ where
     }
 
     /// Handle a timeout received from the timeouts layer.
-    pub fn timed_out(&self, seq: SeqNo) -> CstStatus<State<S>, Request<S>> {
+    pub fn timed_out(&mut self, seq: SeqNo) -> CstStatus<State<S>, Request<S>> {
         if seq.next() != self.cst_seq {
             // the timeout we received is for a request
             // that has already completed, therefore we ignore it
@@ -414,8 +429,14 @@ where
         }
         match self.phase {
             // retry requests if receiving state and we have timed out
-            ProtoPhase::ReceivingCid(_) => CstStatus::RequestLatestCid,
-            ProtoPhase::ReceivingState(_) => CstStatus::RequestState,
+            ProtoPhase::ReceivingCid(_) => {
+                self.curr_timeout *= 2;
+                CstStatus::RequestLatestCid
+            },
+            ProtoPhase::ReceivingState(_) => {
+                self.curr_timeout *= 2;
+                CstStatus::RequestState
+            },
             // ignore timeouts if not receiving any kind
             // of state from peer nodes
             _ => CstStatus::Nil,
@@ -427,11 +448,15 @@ where
     pub fn request_latest_consensus_seq_no(
         &mut self,
         view: ViewInfo,
+        timeouts: &TimeoutsHandle<S>,
         node: &mut Node<S::Data>,
     ) {
         // reset state of latest seq no. request
         self.latest_cid = SeqNo::from(0u32);
         self.latest_cid_count = 0;
+
+        timeouts.timeout(self.curr_timeout, TimeoutKind::Cst);
+        self.phase = ProtoPhase::ReceivingCid(0);
 
         let message = SystemMessage::Cst(CstMessage::new(
             self.next_seq(),
@@ -445,10 +470,14 @@ where
     pub fn request_latest_state(
         &mut self,
         view: ViewInfo,
+        timeouts: &TimeoutsHandle<S>,
         node: &mut Node<S::Data>,
     ) {
         // reset hashmap of received states
         self.received_states.clear();
+
+        timeouts.timeout(self.curr_timeout, TimeoutKind::Cst);
+        self.phase = ProtoPhase::ReceivingState(0);
 
         let message = SystemMessage::Cst(CstMessage::new(
             self.next_seq(),
