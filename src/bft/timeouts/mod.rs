@@ -11,11 +11,6 @@ use std::sync::Arc;
 use intmap::IntMap;
 use parking_lot::Mutex;
 use futures_timer::Delay;
-use either::{
-    Left,
-    Right,
-    Either,
-};
 
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::message::Message;
@@ -101,10 +96,11 @@ where
 {
     /// Creates a new timeout event, that will fire after a duration of `dur`.
     pub fn timeout(&self, dur: Duration, kind: TimeoutKind) {
-        match self.timeout_impl(false, dur, kind) {
-            Left(_) => (),
-            Right(_) => unreachable!(),
-        }
+        let mut system_tx = self.system_tx.clone();
+        rt::spawn(async move {
+            Delay::new(dur).await;
+            system_tx.send(Message::Timeout(kind)).await.unwrap_or(());
+        });
     }
 
     /// Creates a new timeout event, that will fire after a duration of `dur`.
@@ -112,37 +108,19 @@ where
     /// Different from `timeout()`, this method returns a handle that allows the user
     /// to cancel the timeout before it is triggered.
     pub fn timeout_with_cancel(&self, dur: Duration, kind: TimeoutKind) -> TimeoutHandle {
-        match self.timeout_impl(true, dur, kind) {
-            Left(_) => unreachable!(),
-            Right(h) => h,
-        }
-    }
-
-    fn timeout_impl(
-        &self,
-        can_cancel: bool,
-        dur: Duration,
-        kind: TimeoutKind,
-    ) -> Either<(), TimeoutHandle> {
         let mut system_tx = self.system_tx.clone();
-        if can_cancel {
-            let seq = self.shared.gen_seq_no();
-            let shared = Arc::clone(&self.shared);
-            rt::spawn(async move {
-                Delay::new(dur).await;
-                if !shared.was_canceled(seq) {
-                    system_tx.send(Message::Timeout(kind)).await.unwrap_or(());
-                }
-            });
-            let shared = Arc::clone(&self.shared);
-            Right(TimeoutHandle { shared, seq })
-        } else {
-            rt::spawn(async move {
-                Delay::new(dur).await;
+        let seq = self.shared.gen_seq_no();
+
+        let shared = Arc::clone(&self.shared);
+        rt::spawn(async move {
+            Delay::new(dur).await;
+            if !shared.was_canceled(seq) {
                 system_tx.send(Message::Timeout(kind)).await.unwrap_or(());
-            });
-            Left(())
-        }
+            }
+        });
+
+        let shared = Arc::clone(&self.shared);
+        TimeoutHandle { shared, seq }
     }
 }
 
