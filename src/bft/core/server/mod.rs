@@ -221,6 +221,23 @@ where
                     SystemMessage::Consensus(message) => {
                         self.consensus.queue(header, message);
                     },
+                    SystemMessage::Cst(_message) => {
+                        unimplemented!()
+                        /*
+                        let status = self.cst.process_message(
+                            CstProgress::Message(header, message),
+                            self.view,
+                            &self.consensus,
+                            &mut self.log,
+                            &mut self.node,
+                        );
+                        match status {
+                            CstStatus::Nil => (),
+                            // should not happen...
+                            _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+                        }
+                        */
+                    },
                     // TODO: implement handling the rest of the
                     // system message kinds
                     _ => unimplemented!(),
@@ -275,9 +292,19 @@ where
                     request @ SystemMessage::Request(_) => {
                         self.log.insert(header, request);
                     },
-                    SystemMessage::Cst(_message) => {
-                        // TODO: update cst state
-                        //self.cst.process_message( ... )
+                    SystemMessage::Cst(message) => {
+                        let status = self.cst.process_message(
+                            CstProgress::Message(header, message),
+                            self.view,
+                            &self.consensus,
+                            &mut self.log,
+                            &mut self.node,
+                        );
+                        match status {
+                            CstStatus::Nil => (),
+                            // should not happen...
+                            _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+                        }
                     },
                     SystemMessage::Consensus(message) => {
                         let status = self.consensus.process_message(
