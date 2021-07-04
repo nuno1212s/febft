@@ -1,12 +1,18 @@
 //! Contains the server side core protocol logic of `febft`.
 
+use std::time::Duration;
+
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
 use super::SystemParams;
 use crate::bft::error::*;
-use crate::bft::async_runtime as rt;
 use crate::bft::ordering::SeqNo;
+use crate::bft::async_runtime as rt;
+use crate::bft::cst::{
+    CollabStateTransfer,
+    CstProgress,
+};
 use crate::bft::log::{
     Info,
     Log,
@@ -85,6 +91,7 @@ pub struct Replica<S: Service> {
     executor: ExecutorHandle<S>,
     view: ViewInfo,
     consensus: Consensus<S>,
+    cst: CollabStateTransfer<S>,
     log: Log<State<S>, Request<S>, Reply<S>>,
     node: Node<S::Data>,
 }
@@ -140,7 +147,13 @@ where
         // TODO: get log from persistent storage
         let log = Log::new(batch_size);
 
+        // TODO:
+        // - cst timeout base dur configure param
+        // - ask for latest cid when bootstrapping
+        const CST_BASE_DUR: Duration = Duration::from_secs(30);
+
         let mut replica = Replica {
+            cst: CollabStateTransfer::new(CST_BASE_DUR),
             consensus: Consensus::new(next_consensus_seq, batch_size),
             state: ReplicaState::NormalPhase,
             executor,
@@ -336,18 +349,17 @@ where
     ) -> Result<()> {
         self.log.finalize_checkpoint(appstate)?;
         self.execution_finished(batch);
-        /*
-        // check if the cst layer needs the checkpoint
         if self.cst.needs_checkpoint() {
-            let status = self.cst.process_message(
+            // status should return CstStatus::Nil,
+            // which does not need to be handled
+            let _status = self.cst.process_message(
                 CstProgress::Nil,
-                &self.view,
+                self.view,
                 &self.consensus,
                 &mut self.log,
                 &mut self.node,
             );
         }
-        */
         Ok(())
     }
 }
