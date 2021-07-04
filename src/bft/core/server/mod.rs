@@ -221,9 +221,7 @@ where
                     SystemMessage::Consensus(message) => {
                         self.consensus.queue(header, message);
                     },
-                    SystemMessage::Cst(_message) => {
-                        unimplemented!()
-                        /*
+                    SystemMessage::Cst(message) => {
                         let status = self.cst.process_message(
                             CstProgress::Message(header, message),
                             self.view,
@@ -232,11 +230,35 @@ where
                             &mut self.node,
                         );
                         match status {
-                            CstStatus::Nil => (),
+                            CstStatus::Running => (),
+                            CstStatus::State(_) => {
+                                // TODO: install state
+                                unimplemented!()
+                            },
+                            CstStatus::SeqNo(_) => {
+                                // TODO: install latest seq no
+                                unimplemented!()
+                            },
+                            CstStatus::RequestLatestCid => {
+                                self.cst.request_latest_consensus_seq_no(
+                                    self.view,
+                                    &self.timeouts,
+                                    &mut self.node,
+                                );
+                            },
+                            CstStatus::RequestState => {
+                                self.cst.request_latest_state(
+                                    self.view,
+                                    &self.timeouts,
+                                    &mut self.node,
+                                );
+                            },
                             // should not happen...
-                            _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+                            CstStatus::Nil => {
+                                return Err("Invalid state reached!")
+                                    .wrapped(ErrorKind::CoreServer);
+                            },
                         }
-                        */
                     },
                     // TODO: implement handling the rest of the
                     // system message kinds
