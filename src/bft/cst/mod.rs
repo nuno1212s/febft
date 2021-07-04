@@ -455,11 +455,12 @@ where
         self.latest_cid = SeqNo::from(0u32);
         self.latest_cid_count = 0;
 
-        timeouts.timeout(self.curr_timeout, TimeoutKind::Cst);
+        let cst_seq = self.next_seq();
+        timeouts.timeout(self.curr_timeout, TimeoutKind::Cst(cst_seq));
         self.phase = ProtoPhase::ReceivingCid(0);
 
         let message = SystemMessage::Cst(CstMessage::new(
-            self.next_seq(),
+            cst_seq,
             CstMessageKind::RequestLatestConsensusSeq,
         ));
         let targets = NodeId::targets(0..view.params().n());
@@ -476,11 +477,12 @@ where
         // reset hashmap of received states
         self.received_states.clear();
 
-        timeouts.timeout(self.curr_timeout, TimeoutKind::Cst);
+        let cst_seq = self.next_seq();
+        timeouts.timeout(self.curr_timeout, TimeoutKind::Cst(cst_seq));
         self.phase = ProtoPhase::ReceivingState(0);
 
         let message = SystemMessage::Cst(CstMessage::new(
-            self.next_seq(),
+            cst_seq,
             CstMessageKind::RequestState,
         ));
         let targets = NodeId::targets(0..view.params().n());

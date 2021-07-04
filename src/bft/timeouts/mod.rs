@@ -12,6 +12,7 @@ use intmap::IntMap;
 use parking_lot::Mutex;
 use futures_timer::Delay;
 
+use crate::bft::ordering;
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::message::Message;
 use crate::bft::communication::channel::MessageChannelTx;
@@ -26,7 +27,7 @@ type SeqNo = u64;
 type AtomicSeqNo = AtomicU64;
 
 pub enum TimeoutKind {
-    Cst,
+    Cst(ordering::SeqNo),
     // TODO: add the rest of the timeout kinds,
     // e.g. client requests
 }
