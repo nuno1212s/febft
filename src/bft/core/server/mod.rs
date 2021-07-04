@@ -9,9 +9,15 @@ use super::SystemParams;
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
 use crate::bft::async_runtime as rt;
+use crate::bft::timeouts::{
+    Timeouts,
+    TimeoutKind,
+    TimeoutsHandle,
+};
 use crate::bft::cst::{
     CollabStateTransfer,
     CstProgress,
+    CstStatus,
 };
 use crate::bft::log::{
     Info,
@@ -42,7 +48,7 @@ use crate::bft::communication::message::{
     Message,
 };
 
-enum ReplicaState {
+enum ReplicaPhase {
     // the replica is retrieving state from
     // its peer replicas
     RetrievingState,
@@ -87,7 +93,8 @@ impl ViewInfo {
 
 /// Represents a replica in `febft`.
 pub struct Replica<S: Service> {
-    state: ReplicaState,
+    phase: ReplicaPhase,
+    timeouts: TimeoutsHandle<S>,
     executor: ExecutorHandle<S>,
     view: ViewInfo,
     consensus: Consensus<S>,
@@ -144,6 +151,11 @@ where
             service,
         )?;
 
+        // start timeouts handler
+        let timeouts = Timeouts::new(
+            node.master_channel(),
+        );
+
         // TODO: get log from persistent storage
         let log = Log::new(batch_size);
 
@@ -155,7 +167,8 @@ where
         let mut replica = Replica {
             cst: CollabStateTransfer::new(CST_BASE_DUR),
             consensus: Consensus::new(next_consensus_seq, batch_size),
-            state: ReplicaState::NormalPhase,
+            phase: ReplicaPhase::NormalPhase,
+            timeouts,
             executor,
             node,
             view,
@@ -191,10 +204,10 @@ where
     pub async fn run(&mut self) -> Result<()> {
         // TODO: exit condition?
         loop {
-            match self.state {
-                ReplicaState::RetrievingState => self.update_retrieving_state().await?,
-                ReplicaState::NormalPhase => self.update_normal_phase().await?,
-                ReplicaState::SyncPhase => self.update_sync_phase().await?,
+            match self.phase {
+                ReplicaPhase::RetrievingState => self.update_retrieving_state().await?,
+                ReplicaPhase::NormalPhase => self.update_normal_phase().await?,
+                ReplicaPhase::SyncPhase => self.update_sync_phase().await?,
             }
         }
     }
@@ -203,8 +216,6 @@ where
         let message = self.node.receive().await?;
 
         match message {
-            // TODO: handle timeouts
-            Message::Timeout(_) => unimplemented!(),
             Message::System(header, message) => {
                 match message {
                     SystemMessage::Consensus(message) => {
@@ -214,6 +225,9 @@ where
                     // system message kinds
                     _ => unimplemented!(),
                 }
+            },
+            Message::Timeout(timeout_kind) => {
+                self.timeout_received(timeout_kind);
             },
             Message::ExecutionFinished(batch) | Message::ExecutionFinishedWithAppstate(batch, _) => {
                 // TODO: verify if ignoring the checkpoint state while
@@ -256,8 +270,6 @@ where
         };
 
         match message {
-            // TODO: handle timeouts
-            Message::Timeout(_) => unimplemented!(),
             Message::System(header, message) => {
                 match message {
                     request @ SystemMessage::Request(_) => {
@@ -314,6 +326,9 @@ where
                     SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
                 }
             },
+            Message::Timeout(timeout_kind) => {
+                self.timeout_received(timeout_kind);
+            },
             Message::ExecutionFinished(batch) => {
                 self.execution_finished(batch);
             },
@@ -361,5 +376,33 @@ where
             );
         }
         Ok(())
+    }
+
+    fn timeout_received(&mut self, timeout_kind: TimeoutKind) {
+        match timeout_kind {
+            TimeoutKind::Cst(cst_seq) => {
+                let status = self.cst.timed_out(cst_seq);
+                match status {
+                    CstStatus::RequestLatestCid => {
+                        self.cst.request_latest_consensus_seq_no(
+                            self.view,
+                            &self.timeouts,
+                            &mut self.node,
+                        );
+                        self.phase = ReplicaPhase::RetrievingState;
+                    },
+                    CstStatus::RequestState => {
+                        self.cst.request_latest_state(
+                            self.view,
+                            &self.timeouts,
+                            &mut self.node,
+                        );
+                        self.phase = ReplicaPhase::RetrievingState;
+                    },
+                    // nothing to do
+                    _ => (),
+                }
+            },
+        }
     }
 }
