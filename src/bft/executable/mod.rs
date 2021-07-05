@@ -43,7 +43,8 @@ pub struct UpdateBatchReplies<P> {
 }
 
 enum ExecutionRequest<S, O> {
-    InstallState(S),
+    // install state from state transfer protocol
+    InstallState(S, Vec<O>),
     // update the state of the service
     Update(UpdateBatch<O>),
     // same as above, and include the application state
@@ -125,8 +126,8 @@ where
     Reply<S>: Send + 'static,
 {
     /// Sets the current state of the execution layer to the given value.
-    pub fn install_state(&mut self, state: State<S>) -> Result<()> {
-        self.e_tx.send(ExecutionRequest::InstallState(state))
+    pub fn install_state(&mut self, state: State<S>, after: Vec<Request<S>>) -> Result<()> {
+        self.e_tx.send(ExecutionRequest::InstallState(state, after))
             .simple(ErrorKind::Executable)
     }
 
@@ -188,8 +189,11 @@ where
         thread::spawn(move || {
             while let Ok(exec_req) = exec.e_rx.recv() {
                 match exec_req {
-                    ExecutionRequest::InstallState(state) => {
-                        exec.state = state;
+                    ExecutionRequest::InstallState(checkpoint, after) => {
+                        exec.state = checkpoint;
+                        for req in after {
+                            exec.service.update(&mut exec.state, req);
+                        }
                     },
                     ExecutionRequest::Update(batch) => {
                         let mut reply_batch = UpdateBatchReplies::with_capacity(batch.len());

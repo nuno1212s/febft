@@ -231,7 +231,7 @@ where
                         );
                         match status {
                             CstStatus::Running => (),
-                            CstStatus::State(_) => {
+                            CstStatus::State(state) => {
                                 // TODO: install state
                                 unimplemented!()
                             },
