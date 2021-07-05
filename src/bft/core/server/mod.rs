@@ -235,9 +235,14 @@ where
                                 // TODO: install state
                                 unimplemented!()
                             },
-                            CstStatus::SeqNo(_) => {
-                                // TODO: install latest seq no
-                                unimplemented!()
+                            CstStatus::SeqNo(seq) => {
+                                if seq < self.consensus.sequence_number() {
+                                    self.cst.request_latest_state(
+                                        self.view,
+                                        &self.timeouts,
+                                        &mut self.node,
+                                    );
+                                }
                             },
                             CstStatus::RequestLatestCid => {
                                 self.cst.request_latest_consensus_seq_no(
