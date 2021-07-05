@@ -226,7 +226,7 @@ where
                             CstProgress::Message(header, message),
                             self.view,
                             &self.consensus,
-                            &mut self.log,
+                            &self.log,
                             &mut self.node,
                         );
                         match status {
@@ -242,6 +242,8 @@ where
                                         &self.timeouts,
                                         &mut self.node,
                                     );
+                                } else {
+                                    self.phase = ReplicaPhase::NormalPhase;
                                 }
                             },
                             CstStatus::RequestLatestCid => {
@@ -324,7 +326,7 @@ where
                             CstProgress::Message(header, message),
                             self.view,
                             &self.consensus,
-                            &mut self.log,
+                            &self.log,
                             &mut self.node,
                         );
                         match status {
@@ -425,7 +427,7 @@ where
                 CstProgress::Nil,
                 self.view,
                 &self.consensus,
-                &mut self.log,
+                &self.log,
                 &mut self.node,
             );
         }
