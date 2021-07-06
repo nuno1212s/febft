@@ -72,10 +72,12 @@ pub struct RecoveryState<S, O> {
 }
 
 /// Allow a replica to recover from the state received by peer nodes.
-pub fn install_state<S>(
+pub fn install_recovery_state<S>(
     recovery_state: RecoveryState<State<S>, Request<S>>,
+    view: &mut ViewInfo,
     log: &mut Log<State<S>, Request<S>, Reply<S>>,
     executor: &mut ExecutorHandle<S>,
+    consensus: &mut Consensus<S>,
 ) -> Result<()>
 where
     S: Service + Send + 'static,
@@ -94,11 +96,14 @@ where
         .requests
         .clone();
 
-    // update state in the execution layer
-    executor.install_state(state, requests)?;
+    // TODO: update pub/priv keys when reconfig is implemented?
 
-    // update log state
-    unimplemented!()
+    *view = received_state.view;
+    consensus.install_new_phase(&recovery_state);
+    executor.install_state(state, requests)?;
+    log.install_state(recovery_state);
+
+    Ok(())
 }
 
 impl<S, O> RecoveryState<S, O> {

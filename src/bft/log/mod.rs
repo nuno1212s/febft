@@ -159,6 +159,11 @@ impl<S, O, P> Log<S, O, P> {
         }
     }
 
+    /// Update the log state, received from the CST protocol.
+    pub fn install_state(recovery_state: RecoveryState<S, O>) {
+        unimplemented!()
+    }
+
     /// Take a snapshot of the log, used to recover a replica.
     ///
     /// This method may fail if we are waiting for the latest application

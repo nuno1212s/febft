@@ -11,6 +11,7 @@ use either::{
 
 use crate::bft::log::Log;
 use crate::bft::ordering::SeqNo;
+use crate::bft::cst::RecoveryState;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::communication::message::{
@@ -262,6 +263,28 @@ where
         }
     }
 
+    /// Update the consensus protocol phase, according to the state
+    /// received from peer nodes in the CST protocol.
+    pub fn install_new_phase(
+        &mut self,
+        recovery_state: &RecoveryState<State<S>, Request<S>>,
+    ) {
+        // get the latest seq no
+        let seq_no = {
+            let pre_prepares = recovery_state.pre_prepares();
+            if pre_prepares.is_empty() {
+                self.sequence_number()
+            } else {
+                pre_prepares[pre_prepares.len() - 1]
+                    .message()
+                    .sequence_number()
+            }
+        };
+
+        // start voting on next phase
+        self.install_sequence_number(seq_no.next());
+    }
+
     /// Proposes a new request with digest `dig`.
     ///
     /// This function will only succeed if the `node` is
@@ -339,6 +362,20 @@ where
     pub fn next_instance(&mut self) {
         self.tbo.next_instance_queue();
         //self.voted.clear();
+    }
+
+    /// Sets the id of the current consensus.
+    pub fn install_sequence_number(&mut self, seq: SeqNo) {
+        self.tbo.curr_seq = seq;
+
+        // drop old msgs
+        self.tbo.pre_prepares.clear();
+        self.tbo.prepares.clear();
+        self.tbo.commits.clear();
+
+        self.phase = ProtoPhase::Init;
+
+        // FIXME: do we need to clear the missing requests buffers?
     }
 
     /// Process a message for a particular consensus instance.
