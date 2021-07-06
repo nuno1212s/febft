@@ -12,6 +12,7 @@ use std::time::Duration;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
+use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::consensus::Consensus;
@@ -37,6 +38,7 @@ use crate::bft::communication::message::{
     ConsensusMessage,
 };
 use crate::bft::executable::{
+    ExecutorHandle,
     Service,
     Request,
     Reply,
@@ -67,6 +69,36 @@ pub struct RecoveryState<S, O> {
     pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
     prepares: Vec<StoredMessage<ConsensusMessage>>,
     commits: Vec<StoredMessage<ConsensusMessage>>,
+}
+
+/// Allow a replica to recover from the state received by peer nodes.
+pub fn install_state<S>(
+    recovery_state: RecoveryState<State<S>, Request<S>>,
+    log: &mut Log<State<S>, Request<S>, Reply<S>>,
+    executor: &mut ExecutorHandle<S>,
+) -> Result<()>
+where
+    S: Service + Send + 'static,
+    State<S>: Send + Clone + 'static,
+    Request<S>: Send + Clone + 'static,
+    Reply<S>: Send + 'static,
+{
+    // TODO: maybe try to optimize this, to avoid clone(),
+    // which may be quite expensive depending on the size
+    // of the state and the amount of batched requests
+    let state = recovery_state
+        .checkpoint
+        .state()
+        .clone();
+    let requests = recovery_state
+        .requests
+        .clone();
+
+    // update state in the execution layer
+    executor.install_state(state, requests)?;
+
+    // update log state
+    unimplemented!()
 }
 
 impl<S, O> RecoveryState<S, O> {
