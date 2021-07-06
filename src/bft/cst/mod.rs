@@ -98,7 +98,7 @@ where
 
     // TODO: update pub/priv keys when reconfig is implemented?
 
-    *view = received_state.view;
+    *view = recovery_state.view;
     consensus.install_new_phase(&recovery_state);
     executor.install_state(state, requests)?;
     log.install_state(recovery_state);

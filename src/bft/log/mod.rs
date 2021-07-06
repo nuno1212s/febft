@@ -160,7 +160,7 @@ impl<S, O, P> Log<S, O, P> {
     }
 
     /// Update the log state, received from the CST protocol.
-    pub fn install_state(recovery_state: RecoveryState<S, O>) {
+    pub fn install_state(&mut self, _recovery_state: RecoveryState<S, O>) {
         unimplemented!()
     }
 

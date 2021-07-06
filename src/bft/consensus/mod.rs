@@ -281,8 +281,13 @@ where
             }
         };
 
-        // start voting on next phase
-        self.install_sequence_number(seq_no.next());
+        // skip old messages
+        while self.sequence_number() < seq_no {
+            self.next_instance();
+        }
+
+        // FIXME: update phase
+        self.phase = ProtoPhase::Init;
     }
 
     /// Proposes a new request with digest `dig`.
