@@ -406,6 +406,9 @@ where
         }
 
         // install new phase
+        //
+        // NOTE: using `ProtoPhase::Init` forces us to queue
+        // all messages, which is fine, until we call `install_new_phase`
         self.tbo.curr_seq = seq;
         self.phase = ProtoPhase::Init;
 
