@@ -285,8 +285,8 @@ where
         // skip old messages
         self.install_sequence_number(seq_no);
 
-        // FIXME: update phase
-        self.phase = ProtoPhase::Init;
+        // try to fetch msgs from tbo queue
+        self.signal();
     }
 
     /// Proposes a new request with digest `dig`.
