@@ -225,8 +225,11 @@ impl<S, O, P> Log<S, O, P> {
     pub fn next_batch(&mut self) -> Option<Vec<Digest>> {
         let (digest, stored) = self.requests.pop_front()?;
         self.deciding.insert(digest, stored);
-        // TODO: we may include another condition here to decide on a
+        // TODO:
+        // - we may include another condition here to decide on a
         // smaller batch size, so that client request latency is lower
+        // - prevent non leader replicas to collect a batch of digests,
+        // as only the leader will actually propose!
         if self.deciding.len() >= self.batch_size {
             Some(self.deciding
                 .keys()
