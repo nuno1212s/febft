@@ -181,6 +181,7 @@ where
                 Message::System(header, message) => {
                     match message {
                         request @ SystemMessage::Request(_) => {
+                            // TODO: start timer for request
                             replica.log.insert(header, request);
                         },
                         SystemMessage::Consensus(message) => {
@@ -326,6 +327,7 @@ where
             Message::System(header, message) => {
                 match message {
                     request @ SystemMessage::Request(_) => {
+                        // TODO: start timer for request
                         self.log.insert(header, request);
                     },
                     SystemMessage::Cst(message) => {
