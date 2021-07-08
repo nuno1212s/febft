@@ -372,13 +372,41 @@ where
 
     /// Sets the id of the current consensus.
     pub fn install_sequence_number(&mut self, seq: SeqNo) {
-        self.tbo.curr_seq = seq;
-
         // drop old msgs
-        self.tbo.pre_prepares.clear();
-        self.tbo.prepares.clear();
-        self.tbo.commits.clear();
+        match seq.index(self.sequence_number()) {
+            // nothing to do if we are on the same seq
+            Right(0) => return,
+            // drop messages up to `limit`
+            Right(limit) if limit >= self.tbo.pre_prepares.len() => {
+                // NOTE: optimization to avoid draining the `VecDeque`
+                // structures when the difference between the seq
+                // numbers is huge
+                self.tbo.pre_prepares.clear();
+                self.tbo.prepares.clear();
+                self.tbo.commits.clear();
+            },
+            Right(limit) => {
+                let iterator = self.tbo.pre_prepares
+                    .drain(..limit)
+                    .chain(self.tbo.prepares
+                        .drain(..limit)
+                        .chain(self.tbo.commits
+                            .drain(..limit)));
+                for _ in iterator {
+                    // consume elems
+                }
+            },
+            // drop all messages
+            Left(_) => {
+                // NOTE: same as NOTE on the match branch above
+                self.tbo.pre_prepares.clear();
+                self.tbo.prepares.clear();
+                self.tbo.commits.clear();
+            },
+        }
 
+        // install new phase
+        self.tbo.curr_seq = seq;
         self.phase = ProtoPhase::Init;
 
         // FIXME: do we need to clear the missing requests buffers?
