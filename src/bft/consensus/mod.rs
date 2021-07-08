@@ -283,9 +283,7 @@ where
         };
 
         // skip old messages
-        while self.sequence_number() < seq_no {
-            self.next_instance();
-        }
+        self.install_sequence_number(seq_no);
 
         // FIXME: update phase
         self.phase = ProtoPhase::Init;
