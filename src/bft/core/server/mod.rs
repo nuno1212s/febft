@@ -245,6 +245,7 @@ where
                                     &mut self.executor,
                                     &mut self.consensus,
                                 )?;
+                                self.phase = ReplicaPhase::NormalPhase;
                             },
                             CstStatus::SeqNo(seq) => {
                                 if self.consensus.sequence_number() < seq {
