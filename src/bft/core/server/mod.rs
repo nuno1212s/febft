@@ -248,7 +248,9 @@ where
                                     // for older consensus instances we may have had stored;
                                     //
                                     // after we receive the latest recovery state, we
-                                    // need to install the then latest sequence no.
+                                    // need to install the then latest sequence no;
+                                    // this is done with the function
+                                    // `install_recovery_state` from cst
                                     self.consensus.install_sequence_number(seq);
 
                                     self.cst.request_latest_state(
