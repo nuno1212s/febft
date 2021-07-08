@@ -267,7 +267,6 @@ where
     /// received from peer nodes in the CST protocol.
     pub fn install_new_phase(
         &mut self,
-        view: ViewInfo,
         recovery_state: &RecoveryState<State<S>, Request<S>>,
     ) {
         // get the latest seq no

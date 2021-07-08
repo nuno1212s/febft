@@ -15,6 +15,7 @@ use crate::bft::timeouts::{
     TimeoutsHandle,
 };
 use crate::bft::cst::{
+    install_recovery_state,
     CollabStateTransfer,
     CstProgress,
     CstStatus,
@@ -232,9 +233,14 @@ where
                         );
                         match status {
                             CstStatus::Running => (),
-                            CstStatus::State(_state) => {
-                                // TODO: install state
-                                unimplemented!()
+                            CstStatus::State(state) => {
+                                install_recovery_state(
+                                    state,
+                                    &mut self.view,
+                                    &mut self.log,
+                                    &mut self.executor,
+                                    &mut self.consensus,
+                                )?;
                             },
                             CstStatus::SeqNo(seq) => {
                                 if self.consensus.sequence_number() < seq {
