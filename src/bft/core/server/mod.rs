@@ -220,6 +220,10 @@ where
         match message {
             Message::System(header, message) => {
                 match message {
+                    request @ SystemMessage::Request(_) => {
+                        // TODO: start timer for request
+                        self.log.insert(header, request);
+                    },
                     SystemMessage::Consensus(message) => {
                         self.consensus.queue(header, message);
                     },
@@ -283,9 +287,8 @@ where
                             },
                         }
                     },
-                    // TODO: implement handling the rest of the
-                    // system message kinds
-                    _ => unimplemented!(),
+                    // FIXME: handle rogue reply messages
+                    SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
                 }
             },
             Message::Timeout(timeout_kind) => {
