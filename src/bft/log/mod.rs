@@ -160,8 +160,15 @@ impl<S, O, P> Log<S, O, P> {
     }
 
     /// Update the log state, received from the CST protocol.
-    pub fn install_state(&mut self, _recovery_state: RecoveryState<S, O>) {
-        unimplemented!()
+    pub fn install_state(&mut self, last_seq: SeqNo, rs: RecoveryState<S, O>) {
+        // FIXME: what to do with `self.deciding`..?
+
+        self.pre_prepares = rs.pre_prepares;
+        self.prepares = rs.prepares;
+        self.commits = rs.commits;
+        self.decided = rs.requests;
+        self.checkpoint = CheckpointState::Complete(rs.checkpoint);
+        self.curr_seq = last_seq;
     }
 
     /// Take a snapshot of the log, used to recover a replica.

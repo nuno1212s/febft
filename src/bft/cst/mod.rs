@@ -60,15 +60,15 @@ enum ProtoPhase<S, O> {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct RecoveryState<S, O> {
-    view: ViewInfo,
-    checkpoint: Checkpoint<S>,
+    pub(crate) view: ViewInfo,
+    pub(crate) checkpoint: Checkpoint<S>,
     // used to replay log on recovering replicas;
     // the request batches have been concatenated,
     // for memory efficiency
-    requests: Vec<O>,
-    pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
-    prepares: Vec<StoredMessage<ConsensusMessage>>,
-    commits: Vec<StoredMessage<ConsensusMessage>>,
+    pub(crate) requests: Vec<O>,
+    pub(crate) pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
+    pub(crate) prepares: Vec<StoredMessage<ConsensusMessage>>,
+    pub(crate) commits: Vec<StoredMessage<ConsensusMessage>>,
 }
 
 /// Allow a replica to recover from the state received by peer nodes.
@@ -101,7 +101,7 @@ where
     *view = recovery_state.view;
     consensus.install_new_phase(&recovery_state);
     executor.install_state(state, requests)?;
-    log.install_state(recovery_state);
+    log.install_state(consensus.sequence_number(), recovery_state);
 
     Ok(())
 }
