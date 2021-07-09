@@ -3,6 +3,8 @@
 //! This code allows a replica to change its view, where a new
 //! leader is elected.
 
+use crate::bft::core::server::ViewInfo;
+
 enum ProtoPhase {
     Init,
     Stopping,
@@ -10,8 +12,15 @@ enum ProtoPhase {
     Syncing,
 }
 
+// TODO: finish statuses returned from `process_message`
 pub enum SynchronizerStatus {
-    // TODO: statuses returned from `process_message`
+    /// We are not running the view change protocol.
+    Nil,
+    /// The view change protocol is currently running.
+    Running,
+    /// We installed a new view, resulted from running the
+    /// view change protocol.
+    NewView(ViewInfo),
 }
 
 // TODO:
