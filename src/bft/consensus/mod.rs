@@ -179,7 +179,7 @@ impl TboQueue {
 
 /// Repreents the current phase of the consensus protocol.
 #[derive(Debug, Copy, Clone)]
-pub enum ProtoPhase {
+enum ProtoPhase {
     /// Start of a new consensus instance.
     Init,
     /// Running the `PRE-PREPARE` phase.
@@ -309,9 +309,9 @@ where
         node.broadcast(message, targets);
     }
 
-    /// Returns the current protocol phase.
-    pub fn phase(&self) -> ProtoPhase {
-        self.phase
+    /// Returns true if there is no running consensus instance.
+    pub fn is_not_deciding(&self) -> bool {
+        matches!(self.phase, ProtoPhase::Init)
     }
 
     /// Check if we can process new consensus messages.
