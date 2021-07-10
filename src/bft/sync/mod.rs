@@ -5,11 +5,31 @@
 
 use crate::bft::core::server::ViewInfo;
 
+pub type TimeoutSeqNo = i32;
+
 enum ProtoPhase {
+    // nothing is happening, there are no client
+    // requests to be ordered
     Init,
-    Stopping,
-    StoppingData,
-    Syncing,
+    // we are watching the timers of a batch
+    // of client requests (not the same batch
+    // used during consensus)
+    WatchingTimeout,
+    // first batch of client requests has timed
+    // out, and we reset its timers
+    Watching2ndTimeout,
+    // we are running the stopping phase of the
+    // Mod-SMaRt protocol
+    Stopping(usize),
+    // we are still running the stopping phase of
+    // Mod-SMaRt, but we have either locally triggered
+    // a view change, or received at least f+1 STOP msgs,
+    // so we don't need to broadcast a new STOP msgs
+    Stopping2(usize),
+    // we are running the STOP-DATA phase of Mod-SMaRt
+    StoppingData(usize),
+    // we are running the SYNC phase of Mod-SMaRt
+    Syncing(usize),
 }
 
 // TODO: finish statuses returned from `process_message`
@@ -26,7 +46,10 @@ pub enum SynchronizerStatus {
 // TODO:
 // - the fields in this struct
 // - TboQueue for sync phase messages?
-pub struct Synchronizer;
+pub struct Synchronizer {
+    phase: ProtoPhase,
+    timeout_seq: TimeoutSeqNo,
+}
 
 impl Synchronizer {
 /*
