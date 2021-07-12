@@ -87,6 +87,12 @@ impl ViewInfo {
         self.seq
     }
 
+    /// Returns view with the next sequence number.
+    pub fn next_view(mut self) -> ViewInfo {
+        self.seq = self.seq.next();
+        self
+    }
+
     /// Returns the leader of the current view.
     pub fn leader(&self) -> NodeId {
         NodeId::from(usize::from(self.seq) % self.params.n())
