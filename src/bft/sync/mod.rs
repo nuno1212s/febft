@@ -10,6 +10,10 @@ use crate::bft::ordering::SeqNo;
 use crate::bft::communication::Node;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::core::server::ViewInfo;
+use crate::bft::timeouts::{
+    TimeoutKind,
+    TimeoutsHandle,
+};
 use crate::bft::collections::{
     self,
     HashMap,
@@ -40,9 +44,6 @@ enum ProtoPhase {
     // of client requests (not the same batch
     // used during consensus)
     WatchingTimeout,
-    // first batch of client requests has timed
-    // out, and we reset its timers
-    Watching2ndTimeout,
     // we are running the stopping phase of the
     // Mod-SMaRt protocol
     Stopping(usize),
@@ -93,6 +94,37 @@ where
             phase: ProtoPhase::Init,
             timeout_seq: SeqNo::from(0),
             watching: collections::hash_map(),
+        }
+    }
+
+    /// Watch a client request with the digest `digest`.
+    pub fn watch_request(
+        &mut self,
+        digest: Digest,
+        timeouts: &TimeoutsHandle<S>,
+    ) {
+        if matches!(self.phase, ProtoPhase::Init) {
+            self.phase = ProtoPhase::WatchingTimeout;
+        }
+
+        // TODO: watch request
+        drop((digest, timeouts));
+    }
+
+    /// Remove a client request with digest `digest` from the watched list
+    /// of requests.
+    pub fn unwatch_request(
+        &mut self,
+        digest: Digest,
+    ) {
+        // TODO: unwatch request
+        drop(digest);
+
+        match self.phase {
+            ProtoPhase::WatchingTimeout if self.watching.is_empty() => {
+                self.phase = ProtoPhase::Init;
+            },
+            _ => (),
         }
     }
 
