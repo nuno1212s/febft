@@ -8,8 +8,8 @@ use serde::{Serialize, Deserialize};
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
 use crate::bft::cst::RecoveryState;
-use crate::bft::sync::Synchronizer;
 use crate::bft::crypto::hash::Digest;
+use crate::bft::core::server::ViewInfo;
 use crate::bft::executable::UpdateBatch;
 use crate::bft::communication::message::{
     Header,
@@ -179,7 +179,7 @@ impl<S, O, P> Log<S, O, P> {
     // TODO: return reference to the log state, so we don't have to clone()
     // it, which can be quite expensive
     //
-    pub fn snapshot(&self, synchronizer: &Synchronizer) -> Result<RecoveryState<S, O>>
+    pub fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<S, O>>
     where
         S: Clone,
         O: Clone,
@@ -187,7 +187,7 @@ impl<S, O, P> Log<S, O, P> {
         match self.checkpoint {
             CheckpointState::Complete(ref checkpoint) => {
                 Ok(RecoveryState::new(
-                    synchronizer.view().clone(),
+                    view,
                     checkpoint.clone(),
                     self.decided.clone(),
                     self.pre_prepares.clone(),

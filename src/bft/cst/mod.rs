@@ -75,7 +75,7 @@ pub struct RecoveryState<S, O> {
 /// Allow a replica to recover from the state received by peer nodes.
 pub fn install_recovery_state<S>(
     recovery_state: RecoveryState<State<S>, Request<S>>,
-    synchronizer: &mut Synchronizer,
+    synchronizer: &mut Synchronizer<S>,
     log: &mut Log<State<S>, Request<S>, Reply<S>>,
     executor: &mut ExecutorHandle<S>,
     consensus: &mut Consensus<S>,
@@ -265,11 +265,11 @@ where
         &mut self,
         header: Header,
         message: CstMessage<State<S>, Request<S>>,
-        synchronizer: &Synchronizer,
+        synchronizer: &Synchronizer<S>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) {
-        let snapshot = match log.snapshot(synchronizer) {
+        let snapshot = match log.snapshot(*synchronizer.view()) {
             Ok(snapshot) => snapshot,
             Err(_) => {
                 self.phase = ProtoPhase::WaitingCheckpoint(header, message);
@@ -287,7 +287,7 @@ where
     pub fn process_message(
         &mut self,
         progress: CstProgress<State<S>, Request<S>>,
-        synchronizer: &Synchronizer,
+        synchronizer: &Synchronizer<S>,
         consensus: &Consensus<S>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
@@ -486,7 +486,7 @@ where
     /// attributed to a client request by the consensus layer.
     pub fn request_latest_consensus_seq_no(
         &mut self,
-        synchronizer: &Synchronizer,
+        synchronizer: &Synchronizer<S>,
         timeouts: &TimeoutsHandle<S>,
         node: &mut Node<S::Data>,
     ) {
@@ -509,7 +509,7 @@ where
     /// Used by a recovering node to retrieve the latest state.
     pub fn request_latest_state(
         &mut self,
-        synchronizer: &Synchronizer,
+        synchronizer: &Synchronizer<S>,
         timeouts: &TimeoutsHandle<S>,
         node: &mut Node<S::Data>,
     ) {

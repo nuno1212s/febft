@@ -88,10 +88,12 @@ impl ViewInfo {
         self.seq
     }
 
-    /// Returns view with the next sequence number.
-    pub fn next_view(mut self) -> ViewInfo {
-        self.seq = self.seq.next();
-        self
+    /// Returns a new view with the sequence number after
+    /// the current view's number.
+    pub fn next_view(&mut self) -> ViewInfo {
+        let mut view = *self;
+        view.seq = view.seq.next();
+        view
     }
 
     /// Returns the leader of the current view.
@@ -105,7 +107,7 @@ pub struct Replica<S: Service> {
     phase: ReplicaPhase,
     timeouts: TimeoutsHandle<S>,
     executor: ExecutorHandle<S>,
-    synchronizer: Synchronizer,
+    synchronizer: Synchronizer<S>,
     consensus: Consensus<S>,
     cst: CollabStateTransfer<S>,
     log: Log<State<S>, Request<S>, Reply<S>>,

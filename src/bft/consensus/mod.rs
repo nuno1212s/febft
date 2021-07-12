@@ -296,7 +296,7 @@ where
     pub fn propose(
         &mut self,
         digests: Vec<Digest>,
-        synchronizer: &Synchronizer,
+        synchronizer: &Synchronizer<S>,
         node: &mut Node<S::Data>,
     ) {
         match self.phase {
@@ -422,7 +422,7 @@ where
         &'a mut self,
         header: Header,
         message: ConsensusMessage,
-        synchronizer: &Synchronizer,
+        synchronizer: &Synchronizer<S>,
         log: &mut Log<State<S>, Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) -> ConsensusStatus<'a> {

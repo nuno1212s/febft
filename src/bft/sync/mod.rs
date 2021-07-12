@@ -3,7 +3,20 @@
 //! This code allows a replica to change its view, where a new
 //! leader is elected.
 
+use std::marker::PhantomData;
+
+use crate::bft::log::Log;
 use crate::bft::core::server::ViewInfo;
+use crate::bft::communication::Node;
+use crate::bft::communication::message::{
+    Header,
+};
+use crate::bft::executable::{
+    Service,
+    Request,
+    Reply,
+    State,
+};
 
 pub type TimeoutSeqNo = i32;
 
@@ -46,42 +59,48 @@ pub enum SynchronizerStatus {
 // TODO:
 // - the fields in this struct
 // - TboQueue for sync phase messages?
-pub struct Synchronizer {
+pub struct Synchronizer<S: Service> {
     phase: ProtoPhase,
     // TODO: probably remove this...
     timeout_seq: TimeoutSeqNo,
     view: ViewInfo,
+    _phantom: PhantomData<S>,
 }
 
-impl Synchronizer {
+impl<S> Synchronizer<S>
+where
+    S: Service + Send + 'static,
+    State<S>: Send + 'static,
+    Request<S>: Send + 'static,
+    Reply<S>: Send + 'static,
+{
     pub fn new(view: ViewInfo) -> Self {
         Self {
             view,
+            _phantom: PhantomData,
             phase: ProtoPhase::Init,
             timeout_seq: 0,
         }
     }
 
-    /// Install a new view received from the CST protocol.
+    /// Install a new view received from the CST protocol, or from
+    /// running the view change protocol.
     pub fn install_view(&mut self, view: ViewInfo) {
         // FIXME: is the following line necessary?
         //self.phase = ProtoPhase::Init;
         self.view = view;
     }
 
-/*
     /// Advances the state of the view change state machine.
     pub fn process_message(
         &mut self,
         header: Header,
-        message: ViewChangeMessage,
-        view: ViewInfo,
+        message: () /*ViewChangeMessage*/,
         log: &mut Log<State<S>, Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) -> SynchronizerStatus {
         unimplemented!()
     }
-*/
 
     /// Handle a timeout received from the timeouts layer.
     pub fn timed_out(&mut self) -> SynchronizerStatus {
