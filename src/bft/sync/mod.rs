@@ -3,6 +3,7 @@
 //! This code allows a replica to change its view, where a new
 //! leader is elected.
 
+use std::time::Duration;
 use std::marker::PhantomData;
 
 use crate::bft::log::Log;
@@ -75,6 +76,7 @@ pub enum SynchronizerStatus {
 pub struct Synchronizer<S: Service> {
     phase: ProtoPhase,
     timeout_seq: SeqNo,
+    timeout_dur: Duration,
     view: ViewInfo,
     watching: HashMap<Digest, TimeoutPhase>,
     _phantom: PhantomData<S>,
@@ -87,13 +89,14 @@ where
     Request<S>: Send + 'static,
     Reply<S>: Send + 'static,
 {
-    pub fn new(view: ViewInfo) -> Self {
+    pub fn new(timeout_dur: Duration, view: ViewInfo) -> Self {
         Self {
             view,
-            _phantom: PhantomData,
+            timeout_dur,
             phase: ProtoPhase::Init,
             timeout_seq: SeqNo::from(0),
             watching: collections::hash_map(),
+            _phantom: PhantomData,
         }
     }
 
@@ -104,6 +107,8 @@ where
         timeouts: &TimeoutsHandle<S>,
     ) {
         if matches!(self.phase, ProtoPhase::Init) {
+            let seq = self.next_timeout();
+            timeouts.timeout(self.timeout_dur, TimeoutKind::ClientRequests(seq));
             self.phase = ProtoPhase::WatchingTimeout;
         }
 
@@ -148,7 +153,9 @@ where
     }
 
     /// Handle a timeout received from the timeouts layer.
-    pub fn timed_out(&mut self) -> SynchronizerStatus {
+    ///
+    /// This timeout pertains to a group of client requests awaiting to be decided.
+    pub fn client_requests_timed_out(&mut self, _seq: SeqNo) -> SynchronizerStatus {
         // TODO:
         // - on the first timeout we forward pending requests to
         //   the leader
@@ -161,5 +168,11 @@ where
     /// the number of faulty replicas the system can tolerate.
     pub fn view(&self) -> &ViewInfo {
         &self.view
+    }
+
+    fn next_timeout(&mut self) -> SeqNo {
+        let next = self.timeout_seq;
+        self.timeout_seq = self.timeout_seq.next();
+        next
     }
 }

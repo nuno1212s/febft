@@ -152,7 +152,6 @@ where
         let n = node_config.n;
         let f = node_config.f;
         let view = ViewInfo::new(view, n, f)?;
-        let synchronizer = Synchronizer::new(view);
 
         // connect to peer nodes
         let (node, rogue) = Node::bootstrap(node_config).await?;
@@ -172,15 +171,17 @@ where
         let log = Log::new(batch_size);
 
         // TODO:
+        // - client req timeout base dur configure param
         // - cst timeout base dur configure param
         // - ask for latest cid when bootstrapping
         const CST_BASE_DUR: Duration = Duration::from_secs(30);
+        const REQ_BASE_DUR: Duration = Duration::from_secs(2 * 60);
 
         let mut replica = Replica {
             cst: CollabStateTransfer::new(CST_BASE_DUR),
+            synchronizer: Synchronizer::new(REQ_BASE_DUR, view),
             consensus: Consensus::new(next_consensus_seq, batch_size),
             phase: ReplicaPhase::NormalPhase,
-            synchronizer,
             timeouts,
             executor,
             node,
@@ -490,6 +491,10 @@ where
                     // nothing to do
                     _ => (),
                 }
+            },
+            TimeoutKind::ClientRequests(_timeout_seq) => {
+                // TODO: handle client requests timing out
+                unimplemented!()
             },
         }
     }
