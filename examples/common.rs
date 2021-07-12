@@ -145,7 +145,7 @@ pub async fn setup_replica(
         node,
         batch_size: 1024,
         next_consensus_seq: SeqNo::from(0),
-        leader: NodeId::from(0u32),
+        view: SeqNo::from(0),
         service: CalcService(id, 0),
     };
     Replica::bootstrap(conf).await

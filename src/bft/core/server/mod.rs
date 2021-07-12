@@ -66,19 +66,15 @@ enum ReplicaPhase {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Copy, Clone)]
 pub struct ViewInfo {
-    leader: NodeId,
+    seq: SeqNo,
     params: SystemParams,
 }
 
 impl ViewInfo {
     /// Creates a new instance of `ViewInfo`.
-    pub fn new(leader: NodeId, n: usize, f: usize) -> Result<Self> {
-        if leader >= NodeId::from(n) {
-            return Err("Invalid NodeId")
-                .wrapped(ErrorKind::Core);
-        }
+    pub fn new(seq: SeqNo, n: usize, f: usize) -> Result<Self> {
         let params = SystemParams::new(n, f)?;
-        Ok(ViewInfo { leader, params })
+        Ok(ViewInfo { seq, params })
     }
 
     /// Returns a copy of this node's `SystemParams`.
@@ -86,9 +82,14 @@ impl ViewInfo {
         &self.params
     }
 
+    /// Returns the sequence number of the current view.
+    pub fn sequence_number(&self) -> SeqNo {
+        self.seq
+    }
+
     /// Returns the leader of the current view.
     pub fn leader(&self) -> NodeId {
-        self.leader
+        NodeId::from(usize::from(self.seq) % self.params.n())
     }
 }
 
@@ -109,8 +110,8 @@ pub struct Replica<S: Service> {
 pub struct ReplicaConfig<S> {
     /// The application logic.
     pub service: S,
-    /// The leader for the current view.
-    pub leader: NodeId,
+    /// The sequence number for the current view.
+    pub view: SeqNo,
     /// Next sequence number attributed to a request by
     /// the consensus layer.
     pub next_consensus_seq: SeqNo,
@@ -135,13 +136,13 @@ where
             node: node_config,
             batch_size,
             service,
-            leader,
+            view,
         } = cfg;
 
         // system params
         let n = node_config.n;
         let f = node_config.f;
-        let view = ViewInfo::new(leader, n, f)?;
+        let view = ViewInfo::new(view, n, f)?;
 
         // connect to peer nodes
         let (node, rogue) = Node::bootstrap(node_config).await?;

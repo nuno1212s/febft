@@ -44,6 +44,13 @@ impl From<SeqNo> for u32 {
     }
 }
 
+impl From<SeqNo> for usize {
+    #[inline]
+    fn from(sequence_number: SeqNo) -> usize {
+        sequence_number.0 as usize
+    }
+}
+
 impl PartialOrd for SeqNo {
     fn partial_cmp(&self, other: &SeqNo) -> Option<Ordering> {
         Some(match self.index(*other) {
