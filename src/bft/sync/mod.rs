@@ -6,8 +6,14 @@
 use std::marker::PhantomData;
 
 use crate::bft::log::Log;
-use crate::bft::core::server::ViewInfo;
+use crate::bft::ordering::SeqNo;
 use crate::bft::communication::Node;
+use crate::bft::crypto::hash::Digest;
+use crate::bft::core::server::ViewInfo;
+use crate::bft::collections::{
+    self,
+    HashMap,
+};
 use crate::bft::communication::message::{
     Header,
 };
@@ -18,7 +24,13 @@ use crate::bft::executable::{
     State,
 };
 
-pub type TimeoutSeqNo = i32;
+enum TimeoutPhase {
+    // we have never received a timeout
+    Init,
+    // we received a second timeout for the same request;
+    // start view change protocol
+    TimedOutOnce,
+}
 
 enum ProtoPhase {
     // nothing is happening, there are no client
@@ -61,9 +73,9 @@ pub enum SynchronizerStatus {
 // - TboQueue for sync phase messages?
 pub struct Synchronizer<S: Service> {
     phase: ProtoPhase,
-    // TODO: probably remove this...
-    timeout_seq: TimeoutSeqNo,
+    timeout_seq: SeqNo,
     view: ViewInfo,
+    watching: HashMap<Digest, TimeoutPhase>,
     _phantom: PhantomData<S>,
 }
 
@@ -79,7 +91,8 @@ where
             view,
             _phantom: PhantomData,
             phase: ProtoPhase::Init,
-            timeout_seq: 0,
+            timeout_seq: SeqNo::from(0),
+            watching: collections::hash_map(),
         }
     }
 
