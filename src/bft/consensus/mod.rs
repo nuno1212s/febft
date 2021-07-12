@@ -12,8 +12,8 @@ use either::{
 use crate::bft::log::Log;
 use crate::bft::ordering::SeqNo;
 use crate::bft::cst::RecoveryState;
+use crate::bft::sync::Synchronizer;
 use crate::bft::crypto::hash::Digest;
-use crate::bft::core::server::ViewInfo;
 use crate::bft::communication::message::{
     Header,
     SystemMessage,
@@ -291,21 +291,26 @@ where
     /// Proposes a new request with digest `dig`.
     ///
     /// This function will only succeed if the `node` is
-    /// the leader of the current `view` and the `node` is
+    /// the leader of the current view and the `node` is
     /// in the phase `ProtoPhase::Init`.
-    pub fn propose(&mut self, digests: Vec<Digest>, view: ViewInfo, node: &mut Node<S::Data>) {
+    pub fn propose(
+        &mut self,
+        digests: Vec<Digest>,
+        synchronizer: &Synchronizer,
+        node: &mut Node<S::Data>,
+    ) {
         match self.phase {
             ProtoPhase::Init => self.phase = ProtoPhase::PrePreparing,
             _ => return,
         }
-        if node.id() != view.leader() {
+        if node.id() != synchronizer.view().leader() {
             return;
         }
         let message = SystemMessage::Consensus(ConsensusMessage::new(
             self.sequence_number(),
             ConsensusMessageKind::PrePrepare(digests),
         ));
-        let targets = NodeId::targets(0..view.params().n());
+        let targets = NodeId::targets(0..synchronizer.view().params().n());
         node.broadcast(message, targets);
     }
 
@@ -417,7 +422,7 @@ where
         &'a mut self,
         header: Header,
         message: ConsensusMessage,
-        view: ViewInfo,
+        synchronizer: &Synchronizer,
         log: &mut Log<State<S>, Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) -> ConsensusStatus<'a> {
@@ -467,12 +472,12 @@ where
                     },
                 }
                 // leader can't vote for a prepare
-                if node.id() != view.leader() {
+                if node.id() != synchronizer.view().leader() {
                     let message = SystemMessage::Consensus(ConsensusMessage::new(
                         self.sequence_number(),
                         ConsensusMessageKind::Prepare,
                     ));
-                    let targets = NodeId::targets(0..view.params().n());
+                    let targets = NodeId::targets(0..synchronizer.view().params().n());
                     node.broadcast(message, targets);
                 }
                 // add message to the log
@@ -528,12 +533,12 @@ where
                 log.insert(header, SystemMessage::Consensus(message));
                 // check if we have gathered enough votes,
                 // and transition to a new phase
-                self.phase = if i == view.params().quorum() {
+                self.phase = if i == synchronizer.view().params().quorum() {
                     let message = SystemMessage::Consensus(ConsensusMessage::new(
                         self.sequence_number(),
                         ConsensusMessageKind::Commit,
                     ));
-                    let targets = NodeId::targets(0..view.params().n());
+                    let targets = NodeId::targets(0..synchronizer.view().params().n());
                     node.broadcast(message, targets);
                     ProtoPhase::Committing(0)
                 } else {
@@ -563,7 +568,7 @@ where
                 log.insert(header, SystemMessage::Consensus(message));
                 // check if we have gathered enough votes,
                 // and transition to a new phase
-                if i == view.params().quorum() {
+                if i == synchronizer.view().params().quorum() {
                     // we have reached a decision,
                     // notify core protocol
                     self.phase = ProtoPhase::Init;

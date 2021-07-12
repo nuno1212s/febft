@@ -48,10 +48,27 @@ pub enum SynchronizerStatus {
 // - TboQueue for sync phase messages?
 pub struct Synchronizer {
     phase: ProtoPhase,
+    // TODO: probably remove this...
     timeout_seq: TimeoutSeqNo,
+    view: ViewInfo,
 }
 
 impl Synchronizer {
+    pub fn new(view: ViewInfo) -> Self {
+        Self {
+            view,
+            phase: ProtoPhase::Init,
+            timeout_seq: 0,
+        }
+    }
+
+    /// Install a new view received from the CST protocol.
+    pub fn install_view(&mut self, view: ViewInfo) {
+        // FIXME: is the following line necessary?
+        //self.phase = ProtoPhase::Init;
+        self.view = view;
+    }
+
 /*
     /// Advances the state of the view change state machine.
     pub fn process_message(
@@ -74,5 +91,11 @@ impl Synchronizer {
         // - on the second timeout, we start a view change by
         //   broadcasting a STOP message
         unimplemented!()
+    }
+
+    /// Returns some information regarding the current view, such as
+    /// the number of faulty replicas the system can tolerate.
+    pub fn view(&self) -> &ViewInfo {
+        &self.view
     }
 }

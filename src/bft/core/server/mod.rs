@@ -8,6 +8,7 @@ use serde::{Serialize, Deserialize};
 use super::SystemParams;
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
+use crate::bft::sync::Synchronizer;
 use crate::bft::async_runtime as rt;
 use crate::bft::timeouts::{
     Timeouts,
@@ -104,7 +105,7 @@ pub struct Replica<S: Service> {
     phase: ReplicaPhase,
     timeouts: TimeoutsHandle<S>,
     executor: ExecutorHandle<S>,
-    view: ViewInfo,
+    synchronizer: Synchronizer,
     consensus: Consensus<S>,
     cst: CollabStateTransfer<S>,
     log: Log<State<S>, Request<S>, Reply<S>>,
@@ -149,6 +150,7 @@ where
         let n = node_config.n;
         let f = node_config.f;
         let view = ViewInfo::new(view, n, f)?;
+        let synchronizer = Synchronizer::new(view);
 
         // connect to peer nodes
         let (node, rogue) = Node::bootstrap(node_config).await?;
@@ -176,10 +178,10 @@ where
             cst: CollabStateTransfer::new(CST_BASE_DUR),
             consensus: Consensus::new(next_consensus_seq, batch_size),
             phase: ReplicaPhase::NormalPhase,
+            synchronizer,
             timeouts,
             executor,
             node,
-            view,
             log,
         };
 
@@ -237,7 +239,7 @@ where
                     SystemMessage::Cst(message) => {
                         let status = self.cst.process_message(
                             CstProgress::Message(header, message),
-                            self.view,
+                            &self.synchronizer,
                             &self.consensus,
                             &self.log,
                             &mut self.node,
@@ -247,7 +249,7 @@ where
                             CstStatus::State(state) => {
                                 install_recovery_state(
                                     state,
-                                    &mut self.view,
+                                    &mut self.synchronizer,
                                     &mut self.log,
                                     &mut self.executor,
                                     &mut self.consensus,
@@ -266,7 +268,7 @@ where
                                     self.consensus.install_sequence_number(seq);
 
                                     self.cst.request_latest_state(
-                                        self.view,
+                                        &self.synchronizer,
                                         &self.timeouts,
                                         &mut self.node,
                                     );
@@ -276,14 +278,14 @@ where
                             },
                             CstStatus::RequestLatestCid => {
                                 self.cst.request_latest_consensus_seq_no(
-                                    self.view,
+                                    &self.synchronizer,
                                     &self.timeouts,
                                     &mut self.node,
                                 );
                             },
                             CstStatus::RequestState => {
                                 self.cst.request_latest_state(
-                                    self.view,
+                                    &self.synchronizer,
                                     &self.timeouts,
                                     &mut self.node,
                                 );
@@ -336,7 +338,7 @@ where
             },
             ConsensusPollStatus::TryProposeAndRecv => {
                 if let Some(digests) = self.log.next_batch() {
-                    self.consensus.propose(digests, self.view, &mut self.node);
+                    self.consensus.propose(digests, &self.synchronizer, &mut self.node);
                 }
                 self.node.receive().await?
             },
@@ -352,7 +354,7 @@ where
                     SystemMessage::Cst(message) => {
                         let status = self.cst.process_message(
                             CstProgress::Message(header, message),
-                            self.view,
+                            &self.synchronizer,
                             &self.consensus,
                             &self.log,
                             &mut self.node,
@@ -367,7 +369,7 @@ where
                         let status = self.consensus.process_message(
                             header,
                             message,
-                            self.view,
+                            &self.synchronizer,
                             &mut self.log,
                             &mut self.node,
                         );
@@ -453,7 +455,7 @@ where
             // which does not need to be handled
             let _status = self.cst.process_message(
                 CstProgress::Nil,
-                self.view,
+                &self.synchronizer,
                 &self.consensus,
                 &self.log,
                 &mut self.node,
@@ -469,7 +471,7 @@ where
                 match status {
                     CstStatus::RequestLatestCid => {
                         self.cst.request_latest_consensus_seq_no(
-                            self.view,
+                            &self.synchronizer,
                             &self.timeouts,
                             &mut self.node,
                         );
@@ -477,7 +479,7 @@ where
                     },
                     CstStatus::RequestState => {
                         self.cst.request_latest_state(
-                            self.view,
+                            &self.synchronizer,
                             &self.timeouts,
                             &mut self.node,
                         );
