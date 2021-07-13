@@ -257,6 +257,18 @@ impl<S, O, P> Log<S, O, P> {
         }
     }
 
+    /// Clone the requests corresponding to the provided list of hash digests.
+    pub fn clone_requests(&self, digests: &[Digest]) -> Vec<StoredMessage<RequestMessage<O>>>
+    where
+        O: Clone,
+    {
+        digests
+            .iter()
+            .flat_map(|d| self.deciding.get(d).or_else(|| self.requests.get(d)))
+            .cloned()
+            .collect()
+    }
+
     /// Finalize a batch of client requests, retrieving the payload associated with their
     /// given digests `digests`.
     ///
