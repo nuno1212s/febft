@@ -146,6 +146,14 @@ pub enum SystemMessage<S, O, P> {
     Reply(ReplyMessage<P>),
     Consensus(ConsensusMessage),
     Cst(CstMessage<S, O>),
+    ViewChange(ViewChangeMessage<O>),
+}
+
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct ViewChangeMessage<O> {
+    view: SeqNo,
+    kind: [O; 0] /* ViewChangeMessageKind */,
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
