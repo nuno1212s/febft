@@ -72,7 +72,7 @@ pub enum SynchronizerStatus {
     ///
     /// We need to invoke the leader change protocol if
     /// we have a non empty set of stopped messages.
-    TimedOut { forwarded: Vec<Digest>, stopped: Vec<Digest> },
+    RequestsTimedOut { forwarded: Vec<Digest>, stopped: Vec<Digest> },
 }
 
 // TODO:
@@ -199,7 +199,7 @@ where
         // - on the second timeout, we start a view change by
         //   broadcasting a STOP message
 
-        SynchronizerStatus::TimedOut { forwarded, stopped }
+        SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
     }
 
     /// Trigger a view change locally.

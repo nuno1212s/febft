@@ -501,7 +501,7 @@ where
                     .client_requests_timed_out(timeout_seq);
 
                 match status {
-                    SynchronizerStatus::TimedOut { forwarded, stopped } => {
+                    SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
                         if forwarded.len() > 0 {
                             // TODO: fetch requests from log and forward them
                             // to all of our peer nodes
