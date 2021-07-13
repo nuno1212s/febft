@@ -3,8 +3,8 @@
 //! This code allows a replica to change its view, where a new
 //! leader is elected.
 
-use std::time::Duration;
 use std::marker::PhantomData;
+use std::time::{Instant, Duration};
 
 use crate::bft::log::Log;
 use crate::bft::ordering::SeqNo;
@@ -31,10 +31,10 @@ use crate::bft::executable::{
 
 enum TimeoutPhase {
     // we have never received a timeout
-    Init,
+    Init(Instant),
     // we received a second timeout for the same request;
     // start view change protocol
-    TimedOutOnce,
+    TimedOutOnce(Instant),
 }
 
 enum ProtoPhase {
@@ -76,6 +76,7 @@ pub enum SynchronizerStatus {
 pub struct Synchronizer<S: Service> {
     phase: ProtoPhase,
     timeout_seq: SeqNo,
+    old_timeout_seq: SeqNo,
     timeout_dur: Duration,
     view: ViewInfo,
     watching: HashMap<Digest, TimeoutPhase>,
@@ -95,6 +96,7 @@ where
             timeout_dur,
             phase: ProtoPhase::Init,
             timeout_seq: SeqNo::from(0),
+            old_timeout_seq: SeqNo::from(i32::MAX as u32),
             watching: collections::hash_map(),
             _phantom: PhantomData,
         }
@@ -112,25 +114,33 @@ where
             self.phase = ProtoPhase::WatchingTimeout;
         }
 
-        // TODO: watch request
-        drop((digest, timeouts));
+        self.watching
+            .entry(digest)
+            .and_modify(|phase| *phase = TimeoutPhase::TimedOutOnce(Instant::now()))
+            .or_insert_with(|| TimeoutPhase::Init(Instant::now()));
     }
 
     /// Remove a client request with digest `digest` from the watched list
     /// of requests.
-    pub fn unwatch_request(
-        &mut self,
-        digest: Digest,
-    ) {
-        // TODO: unwatch request
-        drop(digest);
+    pub fn unwatch_request(&mut self, digest: &Digest) {
+        self.watching.remove(digest);
 
-        match self.phase {
-            ProtoPhase::WatchingTimeout if self.watching.is_empty() => {
-                self.phase = ProtoPhase::Init;
-            },
-            _ => (),
+        let change_phase = matches!(
+            self.phase,
+            ProtoPhase::WatchingTimeout
+                if self.watching.is_empty(),
+        );
+
+        if change_phase {
+            self.phase = ProtoPhase::Init;
         }
+    }
+
+    /// Stop watching all pending client requests.
+    pub fn unwatch_all(&mut self) {
+        // since we will be on a different seq no,
+        // the time out will do nothing
+        self.next_timeout();
     }
 
     /// Install a new view received from the CST protocol, or from
@@ -155,7 +165,30 @@ where
     /// Handle a timeout received from the timeouts layer.
     ///
     /// This timeout pertains to a group of client requests awaiting to be decided.
-    pub fn client_requests_timed_out(&mut self, _seq: SeqNo) -> SynchronizerStatus {
+    pub fn client_requests_timed_out(&mut self, seq: SeqNo) -> SynchronizerStatus {
+        if seq != self.old_timeout_seq || self.watching.is_empty() {
+            return SynchronizerStatus::Nil;
+        }
+
+        // select list of watched pending requests
+        let mut pending = Vec::new();
+        let now = Instant::now();
+
+        for (digest, timeout_phase) in self.watching.iter_mut() {
+            match timeout_phase {
+                TimeoutPhase::Init(i) if now.duration_since(*i) > self.timeout_dur => {
+                    *timeout_phase = TimeoutPhase::TimedOutOnce(now);
+                },
+                TimeoutPhase::TimedOutOnce(i) if now.duration_since(*i) > self.timeout_dur => {
+                    pending.push(digest.clone());
+                },
+                _ => (),
+            }
+        }
+
+        // TODO: trigger view change
+        //if pending.len() > 0 { ... }
+
         // TODO:
         // - on the first timeout we forward pending requests to
         //   the leader
@@ -172,6 +205,7 @@ where
 
     fn next_timeout(&mut self) -> SeqNo {
         let next = self.timeout_seq;
+        self.old_timeout_seq = next;
         self.timeout_seq = self.timeout_seq.next();
         next
     }
