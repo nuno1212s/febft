@@ -8,8 +8,11 @@ use serde::{Serialize, Deserialize};
 use super::SystemParams;
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
-use crate::bft::sync::Synchronizer;
 use crate::bft::async_runtime as rt;
+use crate::bft::sync::{
+    Synchronizer,
+    SynchronizerStatus,
+};
 use crate::bft::timeouts::{
     Timeouts,
     TimeoutKind,
@@ -471,6 +474,7 @@ where
         match timeout_kind {
             TimeoutKind::Cst(cst_seq) => {
                 let status = self.cst.timed_out(cst_seq);
+
                 match status {
                     CstStatus::RequestLatestCid => {
                         self.cst.request_latest_consensus_seq_no(
@@ -492,9 +496,25 @@ where
                     _ => (),
                 }
             },
-            TimeoutKind::ClientRequests(_timeout_seq) => {
-                // TODO: handle client requests timing out
-                unimplemented!()
+            TimeoutKind::ClientRequests(timeout_seq) => {
+                let status = self.synchronizer
+                    .client_requests_timed_out(timeout_seq);
+
+                match status {
+                    SynchronizerStatus::TimedOut { forwarded, stopped } => {
+                        if forwarded.len() > 0 {
+                            // TODO: fetch requests from log and forward them
+                            // to all of our peer nodes
+                            unimplemented!()
+                        }
+                        if stopped.len() > 0 {
+                            // TODO: begin view change
+                            unimplemented!()
+                        }
+                    },
+                    // nothing to do
+                    _ => (),
+                }
             },
         }
     }
