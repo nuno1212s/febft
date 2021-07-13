@@ -68,6 +68,11 @@ pub enum SynchronizerStatus {
     /// We installed a new view, resulted from running the
     /// view change protocol.
     NewView(ViewInfo),
+    /// The following set of client requests timed out.
+    ///
+    /// We need to invoke the leader change protocol if
+    /// we have a non empty set of stopped messages.
+    TimedOut { forwarded: Vec<Digest>, stopped: Vec<Digest> },
 }
 
 // TODO:
@@ -76,7 +81,6 @@ pub enum SynchronizerStatus {
 pub struct Synchronizer<S: Service> {
     phase: ProtoPhase,
     timeout_seq: SeqNo,
-    old_timeout_seq: SeqNo,
     timeout_dur: Duration,
     view: ViewInfo,
     watching: HashMap<Digest, TimeoutPhase>,
@@ -96,7 +100,6 @@ where
             timeout_dur,
             phase: ProtoPhase::Init,
             timeout_seq: SeqNo::from(0),
-            old_timeout_seq: SeqNo::from(i32::MAX as u32),
             watching: collections::hash_map(),
             _phantom: PhantomData,
         }
@@ -166,34 +169,48 @@ where
     ///
     /// This timeout pertains to a group of client requests awaiting to be decided.
     pub fn client_requests_timed_out(&mut self, seq: SeqNo) -> SynchronizerStatus {
-        if seq != self.old_timeout_seq || self.watching.is_empty() {
+        if seq.next() != self.timeout_seq || self.watching.is_empty() {
             return SynchronizerStatus::Nil;
         }
 
-        // select list of watched pending requests
-        let mut pending = Vec::new();
+        // iterate over list of watched pending requests,
+        // and select the ones to be stopped or forwarded
+        // to peer nodes
+        let mut forwarded = Vec::new();
+        let mut stopped = Vec::new();
         let now = Instant::now();
 
         for (digest, timeout_phase) in self.watching.iter_mut() {
             match timeout_phase {
                 TimeoutPhase::Init(i) if now.duration_since(*i) > self.timeout_dur => {
+                    forwarded.push(digest.clone());
                     *timeout_phase = TimeoutPhase::TimedOutOnce(now);
                 },
                 TimeoutPhase::TimedOutOnce(i) if now.duration_since(*i) > self.timeout_dur => {
-                    pending.push(digest.clone());
+                    stopped.push(digest.clone());
                 },
                 _ => (),
             }
         }
-
-        // TODO: trigger view change
-        //if pending.len() > 0 { ... }
 
         // TODO:
         // - on the first timeout we forward pending requests to
         //   the leader
         // - on the second timeout, we start a view change by
         //   broadcasting a STOP message
+
+        SynchronizerStatus::TimedOut { forwarded, stopped }
+    }
+
+    /// Trigger a view change locally.
+    pub fn begin_view_change(
+        &mut self,
+        _requests: (),
+        node: &mut Node<S::Data>,
+    ) {
+        self.phase = ProtoPhase::Stopping2(0);
+
+        // TODO: send STOP msgs
         unimplemented!()
     }
 
@@ -205,7 +222,6 @@ where
 
     fn next_timeout(&mut self) -> SeqNo {
         let next = self.timeout_seq;
-        self.old_timeout_seq = next;
         self.timeout_seq = self.timeout_seq.next();
         next
     }
