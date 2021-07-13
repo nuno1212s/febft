@@ -275,6 +275,10 @@ where
             if pre_prepares.is_empty() {
                 self.sequence_number()
             } else {
+                // FIXME: `pre_prepares` len should never be more than one...
+                // unless some replica thinks it is the leader, when it fact
+                // it is not! we ought to check for such cases! e.g. check
+                // if the message was sent to us by the current leader
                 pre_prepares[pre_prepares.len() - 1]
                     .message()
                     .sequence_number()
