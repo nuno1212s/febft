@@ -181,6 +181,12 @@ where
         let now = Instant::now();
 
         for (digest, timeout_phase) in self.watching.iter_mut() {
+            // NOTE:
+            // =====================================================
+            // - on the first timeout we forward pending requests to
+            //   the leader
+            // - on the second timeout, we start a view change by
+            //   broadcasting a STOP message
             match timeout_phase {
                 TimeoutPhase::Init(i) if now.duration_since(*i) > self.timeout_dur => {
                     forwarded.push(digest.clone());
@@ -192,12 +198,6 @@ where
                 _ => (),
             }
         }
-
-        // TODO:
-        // - on the first timeout we forward pending requests to
-        //   the leader
-        // - on the second timeout, we start a view change by
-        //   broadcasting a STOP message
 
         SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
     }
