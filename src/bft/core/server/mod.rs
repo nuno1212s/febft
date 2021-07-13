@@ -503,11 +503,15 @@ where
                 match status {
                     SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
                         if forwarded.len() > 0 {
+                            let _requests = self.log.clone_requests(&forwarded);
+
                             // TODO: fetch requests from log and forward them
                             // to all of our peer nodes
                             unimplemented!()
                         }
                         if stopped.len() > 0 {
+                            let _stopped = self.log.clone_requests(&stopped);
+
                             // TODO: begin view change
                             unimplemented!()
                         }

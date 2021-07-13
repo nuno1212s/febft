@@ -157,10 +157,10 @@ where
     /// Advances the state of the view change state machine.
     pub fn process_message(
         &mut self,
-        header: Header,
-        message: () /*ViewChangeMessage*/,
-        log: &mut Log<State<S>, Request<S>, Reply<S>>,
-        node: &mut Node<S::Data>,
+        _header: Header,
+        _message: () /*ViewChangeMessage*/,
+        _log: &mut Log<State<S>, Request<S>, Reply<S>>,
+        _node: &mut Node<S::Data>,
     ) -> SynchronizerStatus {
         unimplemented!()
     }
@@ -206,7 +206,7 @@ where
     pub fn begin_view_change(
         &mut self,
         _requests: (),
-        node: &mut Node<S::Data>,
+        _node: &mut Node<S::Data>,
     ) {
         self.phase = ProtoPhase::Stopping2(0);
 
