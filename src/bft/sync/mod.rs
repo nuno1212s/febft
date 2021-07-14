@@ -3,14 +3,16 @@
 //! This code allows a replica to change its view, where a new
 //! leader is elected.
 
-use std::marker::PhantomData;
 use std::time::{Instant, Duration};
 
-use crate::bft::log::Log;
 use crate::bft::ordering::SeqNo;
 use crate::bft::communication::Node;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::core::server::ViewInfo;
+use crate::bft::log::{
+    Log,
+    StoredMessage,
+};
 use crate::bft::timeouts::{
     TimeoutKind,
     TimeoutsHandle,
@@ -21,6 +23,7 @@ use crate::bft::collections::{
 };
 use crate::bft::communication::message::{
     Header,
+    ViewChangeMessage,
 };
 use crate::bft::executable::{
     Service,
@@ -28,6 +31,28 @@ use crate::bft::executable::{
     Reply,
     State,
 };
+
+struct TboQueue<O> {
+    // the current view
+    view: ViewInfo,
+    // stores all STOP messages for the next view
+    stop: Vec<StoredMessage<ViewChangeMessage<O>>>,
+    // stores all STOP-DATA messages for the next view
+    stop_data: Vec<StoredMessage<ViewChangeMessage<O>>>,
+    // stores all SYNC messages for the next view
+    sync: Vec<StoredMessage<ViewChangeMessage<O>>>,
+}
+
+impl<O> TboQueue<O> {
+    fn new(view: ViewInfo) -> Self {
+        Self {
+            view,
+            stop: Vec::new(),
+            stop_data: Vec::new(),
+            sync: Vec::new(),
+        }
+    }
+}
 
 enum TimeoutPhase {
     // we have never received a timeout
@@ -82,9 +107,8 @@ pub struct Synchronizer<S: Service> {
     phase: ProtoPhase,
     timeout_seq: SeqNo,
     timeout_dur: Duration,
-    view: ViewInfo,
     watching: HashMap<Digest, TimeoutPhase>,
-    _phantom: PhantomData<S>,
+    tbo: TboQueue<Request<S>>,
 }
 
 impl<S> Synchronizer<S>
@@ -96,12 +120,11 @@ where
 {
     pub fn new(timeout_dur: Duration, view: ViewInfo) -> Self {
         Self {
-            view,
             timeout_dur,
             phase: ProtoPhase::Init,
             timeout_seq: SeqNo::from(0),
             watching: collections::hash_map(),
-            _phantom: PhantomData,
+            tbo: TboQueue::new(view),
         }
     }
 
@@ -151,7 +174,7 @@ where
     pub fn install_view(&mut self, view: ViewInfo) {
         // FIXME: is the following line necessary?
         //self.phase = ProtoPhase::Init;
-        self.view = view;
+        self.tbo.view = view;
     }
 
     /// Advances the state of the view change state machine.
@@ -220,7 +243,6 @@ where
         if self.running_view_change() {
             return;
         }
-
         self.phase = ProtoPhase::Stopping2(0);
 
         // TODO: send STOP msgs
@@ -230,7 +252,7 @@ where
     /// Returns some information regarding the current view, such as
     /// the number of faulty replicas the system can tolerate.
     pub fn view(&self) -> &ViewInfo {
-        &self.view
+        &self.tbo.view
     }
 
     fn next_timeout(&mut self) -> SeqNo {
