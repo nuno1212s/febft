@@ -169,7 +169,11 @@ where
     ///
     /// This timeout pertains to a group of client requests awaiting to be decided.
     pub fn client_requests_timed_out(&mut self, seq: SeqNo) -> SynchronizerStatus {
-        if seq.next() != self.timeout_seq || self.watching.is_empty() {
+        let ignore_timeout = seq.next() != self.timeout_seq
+            || self.watching.is_empty()
+            || self.running_view_change();
+
+        if ignore_timeout {
             return SynchronizerStatus::Nil;
         }
 
@@ -213,6 +217,10 @@ where
         _requests: (),
         _node: &mut Node<S::Data>,
     ) {
+        if self.running_view_change() {
+            return;
+        }
+
         self.phase = ProtoPhase::Stopping2(0);
 
         // TODO: send STOP msgs
@@ -229,5 +237,15 @@ where
         let next = self.timeout_seq;
         self.timeout_seq = self.timeout_seq.next();
         next
+    }
+
+    fn running_view_change(&self) -> bool {
+        match self.phase {
+            ProtoPhase::Init
+                | ProtoPhase::WatchingTimeout
+                | ProtoPhase::Stopping(_)
+                | ProtoPhase::Stopping2(_) => false,
+            _ => true,
+        }
     }
 }
