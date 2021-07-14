@@ -207,6 +207,8 @@ where
                         SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
                         // FIXME: handle rogue cst messages
                         SystemMessage::Cst(_) => panic!("Rogue cst message detected"),
+                        // FIXME: handle rogue view change messages
+                        SystemMessage::ViewChange(_) => panic!("Rogue view change message detected"),
                     }
                 },
                 // ignore other messages for now
@@ -241,6 +243,10 @@ where
                     },
                     SystemMessage::Consensus(message) => {
                         self.consensus.queue(header, message);
+                    },
+                    SystemMessage::ViewChange(_message) => {
+                        // TODO: handle view change messages
+                        unimplemented!()
                     },
                     SystemMessage::Cst(message) => {
                         let status = self.cst.process_message(
@@ -370,6 +376,10 @@ where
                             // should not happen...
                             _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
                         }
+                    },
+                    SystemMessage::ViewChange(_message) => {
+                        // TODO: handle view change messages
+                        unimplemented!()
                     },
                     SystemMessage::Consensus(message) => {
                         let status = self.consensus.process_message(

@@ -188,6 +188,9 @@ impl<S, O, P> MessageChannelTx<S, O, P> {
                     message @ SystemMessage::Cst(_) => {
                         self.other.send(Message::System(header, message)).await
                     },
+                    message @ SystemMessage::ViewChange(_) => {
+                        self.other.send(Message::System(header, message)).await
+                    },
                 }
             },
             _ => {
