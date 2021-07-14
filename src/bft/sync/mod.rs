@@ -199,6 +199,11 @@ where
             }
         }
 
+        for digest in &stopped {
+            // remove stopped requests
+            self.watching.remove(digest);
+        }
+
         SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
     }
 
