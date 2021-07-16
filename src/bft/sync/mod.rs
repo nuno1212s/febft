@@ -35,6 +35,9 @@ use crate::bft::executable::{
 struct TboQueue<O> {
     // the current view
     view: ViewInfo,
+    // probe messages from this queue instead of
+    // fetching them from the network
+    get_queue: bool,
     // stores all STOP messages for the next view
     stop: Vec<StoredMessage<ViewChangeMessage<O>>>,
     // stores all STOP-DATA messages for the next view
@@ -47,6 +50,7 @@ impl<O> TboQueue<O> {
     fn new(view: ViewInfo) -> Self {
         Self {
             view,
+            get_queue: false,
             stop: Vec::new(),
             stop_data: Vec::new(),
             sync: Vec::new(),
@@ -63,13 +67,10 @@ enum TimeoutPhase {
 }
 
 enum ProtoPhase {
-    // nothing is happening, there are no client
-    // requests to be ordered
+    // the view change protocol isn't running;
+    // we are watching pending client requests for
+    // any potential timeouts
     Init,
-    // we are watching the timers of a batch
-    // of client requests (not the same batch
-    // used during consensus)
-    WatchingTimeout,
     // we are running the stopping phase of the
     // Mod-SMaRt protocol
     Stopping(usize),
@@ -104,11 +105,15 @@ pub enum SynchronizerStatus {
 // - the fields in this struct
 // - TboQueue for sync phase messages?
 pub struct Synchronizer<S: Service> {
+    watching_timeouts: bool,
     phase: ProtoPhase,
     timeout_seq: SeqNo,
     timeout_dur: Duration,
     watching: HashMap<Digest, TimeoutPhase>,
     tbo: TboQueue<Request<S>>,
+    // NOTE: remembers whose replies we have
+    // received already, to avoid replays
+    //voted: HashSet<NodeId>,
 }
 
 impl<S> Synchronizer<S>
@@ -122,6 +127,7 @@ where
         Self {
             timeout_dur,
             phase: ProtoPhase::Init,
+            watching_timeouts: false,
             timeout_seq: SeqNo::from(0),
             watching: collections::hash_map(),
             tbo: TboQueue::new(view),
@@ -134,10 +140,10 @@ where
         digest: Digest,
         timeouts: &TimeoutsHandle<S>,
     ) {
-        if matches!(self.phase, ProtoPhase::Init) {
+        if !self.watching_timeouts {
             let seq = self.next_timeout();
             timeouts.timeout(self.timeout_dur, TimeoutKind::ClientRequests(seq));
-            self.phase = ProtoPhase::WatchingTimeout;
+            self.watching_timeouts = true;
         }
 
         self.watching
@@ -150,16 +156,7 @@ where
     /// of requests.
     pub fn unwatch_request(&mut self, digest: &Digest) {
         self.watching.remove(digest);
-
-        let change_phase = matches!(
-            self.phase,
-            ProtoPhase::WatchingTimeout
-                if self.watching.is_empty(),
-        );
-
-        if change_phase {
-            self.phase = ProtoPhase::Init;
-        }
+        self.watching_timeouts = !self.watching.is_empty();
     }
 
     /// Stop watching all pending client requests.
@@ -264,7 +261,6 @@ where
     fn running_view_change(&self) -> bool {
         match self.phase {
             ProtoPhase::Init
-                | ProtoPhase::WatchingTimeout
                 | ProtoPhase::Stopping(_)
                 | ProtoPhase::Stopping2(_) => false,
             _ => true,
