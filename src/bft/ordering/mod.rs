@@ -1,5 +1,4 @@
-//! Module to order messages pertaining to sub-protocols other than
-//! consensus.
+//! Ordering messages of the sub-protocols in `febft`.
 
 use std::cmp::{
     PartialOrd,
