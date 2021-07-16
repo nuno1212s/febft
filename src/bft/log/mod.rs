@@ -6,7 +6,6 @@ use std::marker::PhantomData;
 use serde::{Serialize, Deserialize};
 
 use crate::bft::error::*;
-use crate::bft::ordering::SeqNo;
 use crate::bft::cst::RecoveryState;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::core::server::ViewInfo;
@@ -22,6 +21,10 @@ use crate::bft::collections::{
     self,
     HashMap,
     OrderedMap,
+};
+use crate::bft::ordering::{
+    SeqNo,
+    Orderable,
 };
 
 /// Checkpoint period.

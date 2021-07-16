@@ -29,12 +29,15 @@ use crate::bft::crypto::hash::{
     Context,
     Digest,
 };
+use crate::bft::ordering::{
+    SeqNo,
+    Orderable,
+};
 use crate::bft::communication::socket::Socket;
 use crate::bft::executable::UpdateBatchReplies;
 use crate::bft::communication::NodeId;
 use crate::bft::timeouts::TimeoutKind;
 use crate::bft::cst::RecoveryState;
-use crate::bft::ordering::SeqNo;
 use crate::bft::error::*;
 
 /// A header that is sent before a message in transit in the wire.
@@ -156,9 +159,9 @@ pub struct ViewChangeMessage<O> {
     kind: [O; 0] /* ViewChangeMessageKind */,
 }
 
-impl<O> ViewChangeMessage<O> {
+impl<O> Orderable for ViewChangeMessage<O> {
     /// Returns the sequence number of the view this message refers to.
-    pub fn sequence_number(&self) -> SeqNo {
+    fn sequence_number(&self) -> SeqNo {
         self.view
     }
 }
@@ -296,16 +299,18 @@ impl<P> ReplyMessage<P> {
     }
 }
 
+impl Orderable for ConsensusMessage {
+    /// Returns the sequence number of this consensus message.
+    fn sequence_number(&self) -> SeqNo {
+        self.seq
+    }
+}
+
 impl ConsensusMessage {
     /// Creates a new `ConsensusMessage` with sequence number `seq`,
     /// and of the kind `kind`.
     pub fn new(seq: SeqNo, kind: ConsensusMessageKind) -> Self {
         Self { seq, kind }
-    }
-
-    /// Returns the sequence number of this consensus message.
-    pub fn sequence_number(&self) -> SeqNo {
-        self.seq
     }
 
     /// Returns a reference to the consensus message kind.

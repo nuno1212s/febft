@@ -6,6 +6,7 @@ use std::cmp::{
     PartialEq,
     Ordering,
 };
+use std::collections::VecDeque;
 
 use either::{
     Left,
@@ -13,7 +14,10 @@ use either::{
     Either,
 };
 
-use crate::bft::log;
+use crate::bft::log::{
+    self,
+    StoredMessage,
+};
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
@@ -102,4 +106,63 @@ impl SeqNo {
             Right(index as usize)
         }
     }
+}
+
+/// Takes an internal queue of a `TboQueue` (e.g. the one used in the consensus
+/// module), and pops a message.
+pub fn tbo_pop_message<M>(
+    tbo: &mut VecDeque<VecDeque<StoredMessage<M>>>,
+) -> Option<StoredMessage<M>> {
+    if tbo.is_empty() {
+        None
+    } else {
+        tbo[0].pop_front()
+    }
+}
+
+/// Takes an internal queue of a `TboQueue` (e.g. the one used in the consensus
+/// module), and queues a message.
+pub fn tbo_queue_message<M: Orderable>(
+    curr_seq: SeqNo,
+    tbo: &mut VecDeque<VecDeque<StoredMessage<M>>>,
+    m: StoredMessage<M>,
+) {
+    let index = match m.message().sequence_number().index(curr_seq) {
+        Right(i) => i,
+        Left(_) => {
+            // FIXME: maybe notify peers if we detect a message
+            // with an invalid (too large) seq no? return the
+            // `NodeId` of the offending node.
+            //
+            // NOTE: alternatively, if this seq no pertains to consensus,
+            // we can try running the state transfer protocol
+            return;
+        },
+    };
+    if index >= tbo.len() {
+        let len = index - tbo.len() + 1;
+        tbo.extend(std::iter::repeat_with(VecDeque::new).take(len));
+    }
+    tbo[index].push_back(m);
+}
+
+/// Takes an internal queue of a `TboQueue` (e.g. the one used in the consensus
+/// module), and drops messages pertaining to the last sequence number.
+pub fn tbo_advance_message_queue<M>(
+    tbo: &mut VecDeque<VecDeque<StoredMessage<M>>>,
+) {
+    match tbo.pop_front() {
+        Some(mut vec) => {
+            // recycle memory
+            vec.clear();
+            tbo.push_back(vec);
+        },
+        None => (),
+    }
+}
+
+/// Represents any value that can be oredered.
+pub trait Orderable {
+    /// Returns the sequence number of this value.
+    fn sequence_number(&self) -> SeqNo;
 }

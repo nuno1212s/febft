@@ -6,15 +6,18 @@
 use std::collections::VecDeque;
 use std::time::{Instant, Duration};
 
-use either::{
-    Left,
-    Right,
-};
+//use either::{
+//    Left,
+//    Right,
+//};
 
-use crate::bft::ordering::SeqNo;
 use crate::bft::communication::Node;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::core::server::ViewInfo;
+use crate::bft::ordering::{
+    SeqNo,
+    //Orderable,
+};
 use crate::bft::log::{
     Log,
     StoredMessage,
@@ -53,7 +56,7 @@ struct TboQueue<O> {
 }
 
 impl<O> TboQueue<O> {
-    fn new_impl(view: ViewInfo) -> Self {
+    fn new(view: ViewInfo) -> Self {
         Self {
             view,
             get_queue: false,
@@ -61,57 +64,6 @@ impl<O> TboQueue<O> {
             stop_data: VecDeque::new(),
             sync: VecDeque::new(),
         }
-    }
-
-    fn pop_message(
-        tbo: &mut VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
-    ) -> Option<StoredMessage<ViewChangeMessage<O>>> {
-        if tbo.is_empty() {
-            None
-        } else {
-            tbo[0].pop_front()
-        }
-    }
-
-    fn queue_message(
-        curr_seq: SeqNo,
-        tbo: &mut VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
-        h: Header,
-        m: ViewChangeMessage<O>,
-    ) {
-        let index = match m.sequence_number().index(curr_seq) {
-            Right(i) => i,
-            Left(_) => {
-                // FIXME: maybe notify peers if we detect a message
-                // with an invalid (too large) seq no? return the
-                // `NodeId` of the offending node.
-                return;
-            },
-        };
-        if index >= tbo.len() {
-            let len = index - tbo.len() + 1;
-            tbo.extend(std::iter::repeat_with(VecDeque::new).take(len));
-        }
-        tbo[index].push_back(StoredMessage::new(h, m));
-    }
-
-    fn advance_message_queue(
-        tbo: &mut VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
-    ) {
-        match tbo.pop_front() {
-            Some(mut vec) => {
-                // recycle memory
-                vec.clear();
-                tbo.push_back(vec);
-            },
-            None => (),
-        }
-    }
-}
-
-impl<O> TboQueue<O> {
-    fn new(view: ViewInfo) -> Self {
-        Self::new_impl(view)
     }
 }
 

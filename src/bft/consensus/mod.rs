@@ -9,7 +9,6 @@ use either::{
     Right,
 };
 
-use crate::bft::ordering::SeqNo;
 use crate::bft::cst::RecoveryState;
 use crate::bft::sync::Synchronizer;
 use crate::bft::crypto::hash::Digest;
@@ -32,6 +31,13 @@ use crate::bft::executable::{
     Request,
     Reply,
     State,
+};
+use crate::bft::ordering::{
+    tbo_advance_message_queue,
+    tbo_queue_message,
+    tbo_pop_message,
+    Orderable,
+    SeqNo,
 };
 use crate::bft::log::{
     Log,
@@ -68,9 +74,8 @@ pub struct TboQueue {
     commits: VecDeque<VecDeque<StoredMessage<ConsensusMessage>>>,
 }
 
-// XXX: details
 impl TboQueue {
-    fn new_impl(curr_seq: SeqNo) -> Self {
+    fn new(curr_seq: SeqNo) -> Self {
         Self {
             curr_seq,
             get_queue: false,
@@ -78,61 +83,6 @@ impl TboQueue {
             prepares: VecDeque::new(),
             commits: VecDeque::new(),
         }
-    }
-
-    fn pop_message(
-        tbo: &mut VecDeque<VecDeque<StoredMessage<ConsensusMessage>>>,
-    ) -> Option<StoredMessage<ConsensusMessage>> {
-        if tbo.is_empty() {
-            None
-        } else {
-            tbo[0].pop_front()
-        }
-    }
-
-    fn queue_message(
-        curr_seq: SeqNo,
-        tbo: &mut VecDeque<VecDeque<StoredMessage<ConsensusMessage>>>,
-        h: Header,
-        m: ConsensusMessage,
-    ) {
-        let index = match m.sequence_number().index(curr_seq) {
-            Right(i) => i,
-            Left(_) => {
-                // FIXME: maybe notify peers if we detect a message
-                // with an invalid (too large) seq no? return the
-                // `NodeId` of the offending node.
-                //
-                // NOTE: alternatively, we can try running the
-                // state transfer protocol
-                return;
-            },
-        };
-        if index >= tbo.len() {
-            let len = index - tbo.len() + 1;
-            tbo.extend(std::iter::repeat_with(VecDeque::new).take(len));
-        }
-        tbo[index].push_back(StoredMessage::new(h, m));
-    }
-
-    fn advance_message_queue(
-        tbo: &mut VecDeque<VecDeque<StoredMessage<ConsensusMessage>>>,
-    ) {
-        match tbo.pop_front() {
-            Some(mut vec) => {
-                // recycle memory
-                vec.clear();
-                tbo.push_back(vec);
-            },
-            None => (),
-        }
-    }
-}
-
-// XXX: api
-impl TboQueue {
-    fn new(curr_seq: SeqNo) -> Self {
-        Self::new_impl(curr_seq)
     }
 
     /// Signal this `TboQueue` that it may be able to extract new
@@ -149,9 +99,9 @@ impl TboQueue {
     /// Advances the message queue, and updates the consensus instance id.
     fn next_instance_queue(&mut self) {
         self.curr_seq = self.curr_seq.next();
-        Self::advance_message_queue(&mut self.pre_prepares);
-        Self::advance_message_queue(&mut self.prepares);
-        Self::advance_message_queue(&mut self.commits);
+        tbo_advance_message_queue(&mut self.pre_prepares);
+        tbo_advance_message_queue(&mut self.prepares);
+        tbo_advance_message_queue(&mut self.commits);
     }
 
     /// Queues a consensus message for later processing, or drops it
@@ -167,19 +117,19 @@ impl TboQueue {
     /// Queues a `PRE-PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
     fn queue_pre_prepare(&mut self, h: Header, m: ConsensusMessage) {
-        Self::queue_message(self.curr_seq, &mut self.pre_prepares, h, m)
+        tbo_queue_message(self.curr_seq, &mut self.pre_prepares, StoredMessage::new(h, m))
     }
 
     /// Queues a `PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
     fn queue_prepare(&mut self, h: Header, m: ConsensusMessage) {
-        Self::queue_message(self.curr_seq, &mut self.prepares, h, m)
+        tbo_queue_message(self.curr_seq, &mut self.prepares, StoredMessage::new(h, m))
     }
 
     /// Queues a `COMMIT` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
     fn queue_commit(&mut self, h: Header, m: ConsensusMessage) {
-        Self::queue_message(self.curr_seq, &mut self.commits, h, m)
+        tbo_queue_message(self.curr_seq, &mut self.commits, StoredMessage::new(h, m))
     }
 }
 
@@ -235,7 +185,7 @@ macro_rules! extract_msg {
     };
 
     ($opt:block, $g:expr, $q:expr) => {
-        if let Some(stored) = TboQueue::pop_message($q) {
+        if let Some(stored) = tbo_pop_message::<ConsensusMessage>($q) {
             $opt
             let (header, message) = stored.into_inner();
             ConsensusPollStatus::NextMessage(header, message)
