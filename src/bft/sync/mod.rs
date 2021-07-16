@@ -3,7 +3,13 @@
 //! This code allows a replica to change its view, where a new
 //! leader is elected.
 
+use std::collections::VecDeque;
 use std::time::{Instant, Duration};
+
+use either::{
+    Left,
+    Right,
+};
 
 use crate::bft::ordering::SeqNo;
 use crate::bft::communication::Node;
@@ -39,22 +45,73 @@ struct TboQueue<O> {
     // fetching them from the network
     get_queue: bool,
     // stores all STOP messages for the next view
-    stop: Vec<StoredMessage<ViewChangeMessage<O>>>,
+    stop: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
     // stores all STOP-DATA messages for the next view
-    stop_data: Vec<StoredMessage<ViewChangeMessage<O>>>,
+    stop_data: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
     // stores all SYNC messages for the next view
-    sync: Vec<StoredMessage<ViewChangeMessage<O>>>,
+    sync: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
+}
+
+impl<O> TboQueue<O> {
+    fn new_impl(view: ViewInfo) -> Self {
+        Self {
+            view,
+            get_queue: false,
+            stop: VecDeque::new(),
+            stop_data: VecDeque::new(),
+            sync: VecDeque::new(),
+        }
+    }
+
+    fn pop_message(
+        tbo: &mut VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
+    ) -> Option<StoredMessage<ViewChangeMessage<O>>> {
+        if tbo.is_empty() {
+            None
+        } else {
+            tbo[0].pop_front()
+        }
+    }
+
+    fn queue_message(
+        curr_seq: SeqNo,
+        tbo: &mut VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
+        h: Header,
+        m: ViewChangeMessage<O>,
+    ) {
+        let index = match m.sequence_number().index(curr_seq) {
+            Right(i) => i,
+            Left(_) => {
+                // FIXME: maybe notify peers if we detect a message
+                // with an invalid (too large) seq no? return the
+                // `NodeId` of the offending node.
+                return;
+            },
+        };
+        if index >= tbo.len() {
+            let len = index - tbo.len() + 1;
+            tbo.extend(std::iter::repeat_with(VecDeque::new).take(len));
+        }
+        tbo[index].push_back(StoredMessage::new(h, m));
+    }
+
+    fn advance_message_queue(
+        tbo: &mut VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
+    ) {
+        match tbo.pop_front() {
+            Some(mut vec) => {
+                // recycle memory
+                vec.clear();
+                tbo.push_back(vec);
+            },
+            None => (),
+        }
+    }
 }
 
 impl<O> TboQueue<O> {
     fn new(view: ViewInfo) -> Self {
-        Self {
-            view,
-            get_queue: false,
-            stop: Vec::new(),
-            stop_data: Vec::new(),
-            sync: Vec::new(),
-        }
+        Self::new_impl(view)
     }
 }
 
@@ -77,7 +134,7 @@ enum ProtoPhase {
     // we are still running the stopping phase of
     // Mod-SMaRt, but we have either locally triggered
     // a view change, or received at least f+1 STOP msgs,
-    // so we don't need to broadcast a new STOP msgs
+    // so we don't need to broadcast a new STOP
     Stopping2(usize),
     // we are running the STOP-DATA phase of Mod-SMaRt
     StoppingData(usize),
@@ -99,6 +156,15 @@ pub enum SynchronizerStatus {
     /// We need to invoke the leader change protocol if
     /// we have a non empty set of stopped messages.
     RequestsTimedOut { forwarded: Vec<Digest>, stopped: Vec<Digest> },
+}
+
+/// Represents the status of calling `poll()` on a `Synchronizer`.
+pub enum SynchronizerPollStatus<O> {
+    /// The `Replica` associated with this `Synchronizer` should
+    /// poll its main channel for more messages.
+    Recv,
+    /// A new view change message is available to be processed.
+    NextMessage(Header, ViewChangeMessage<O>),
 }
 
 // TODO:

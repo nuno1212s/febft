@@ -156,6 +156,13 @@ pub struct ViewChangeMessage<O> {
     kind: [O; 0] /* ViewChangeMessageKind */,
 }
 
+impl<O> ViewChangeMessage<O> {
+    /// Returns the sequence number of the view this message refers to.
+    pub fn sequence_number(&self) -> SeqNo {
+        self.view
+    }
+}
+
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct CstMessage<S, O> {

@@ -38,12 +38,12 @@ use crate::bft::log::{
     StoredMessage,
 };
 
-/// Represents the status of calling `poll()` on a `TboQueue`.
+/// Represents the status of calling `poll()` on a `Consensus`.
 pub enum ConsensusPollStatus {
-    /// The `Replica` associated with this `TboQueue` should
+    /// The `Replica` associated with this `Consensus` should
     /// poll its main channel for more messages.
     Recv,
-    /// The `Replica` associated with this `TboQueue` should
+    /// The `Replica` associated with this `Consensus` should
     /// propose a new client request to be ordered, if it is
     /// the leader, and then it should poll its main channel
     /// for more messages. Alternatively, if the request has
@@ -102,6 +102,9 @@ impl TboQueue {
                 // FIXME: maybe notify peers if we detect a message
                 // with an invalid (too large) seq no? return the
                 // `NodeId` of the offending node.
+                //
+                // NOTE: alternatively, we can try running the
+                // state transfer protocol
                 return;
             },
         };
