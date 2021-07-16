@@ -207,8 +207,8 @@ where
     ///
     /// This timeout pertains to a group of client requests awaiting to be decided.
     pub fn client_requests_timed_out(&mut self, seq: SeqNo) -> SynchronizerStatus {
-        let ignore_timeout = seq.next() != self.timeout_seq
-            || self.watching.is_empty()
+        let ignore_timeout = !self.watching_timeouts
+            || seq.next() != self.timeout_seq
             || self.running_view_change();
 
         if ignore_timeout {
