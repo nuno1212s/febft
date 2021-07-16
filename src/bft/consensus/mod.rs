@@ -9,7 +9,6 @@ use either::{
     Right,
 };
 
-use crate::bft::log::Log;
 use crate::bft::ordering::SeqNo;
 use crate::bft::cst::RecoveryState;
 use crate::bft::sync::Synchronizer;
@@ -33,6 +32,10 @@ use crate::bft::executable::{
     Request,
     Reply,
     State,
+};
+use crate::bft::log::{
+    Log,
+    StoredMessage,
 };
 
 /// Represents the status of calling `poll()` on a `TboQueue`.
@@ -60,9 +63,9 @@ pub enum ConsensusPollStatus {
 pub struct TboQueue {
     curr_seq: SeqNo,
     get_queue: bool,
-    pre_prepares: VecDeque<VecDeque<(Header, ConsensusMessage)>>,
-    prepares: VecDeque<VecDeque<(Header, ConsensusMessage)>>,
-    commits: VecDeque<VecDeque<(Header, ConsensusMessage)>>,
+    pre_prepares: VecDeque<VecDeque<StoredMessage<ConsensusMessage>>>,
+    prepares: VecDeque<VecDeque<StoredMessage<ConsensusMessage>>>,
+    commits: VecDeque<VecDeque<StoredMessage<ConsensusMessage>>>,
 }
 
 // XXX: details
@@ -78,8 +81,8 @@ impl TboQueue {
     }
 
     fn pop_message(
-        tbo: &mut VecDeque<VecDeque<(Header, ConsensusMessage)>>,
-    ) -> Option<(Header, ConsensusMessage)> {
+        tbo: &mut VecDeque<VecDeque<StoredMessage<ConsensusMessage>>>,
+    ) -> Option<StoredMessage<ConsensusMessage>> {
         if tbo.is_empty() {
             None
         } else {
@@ -89,7 +92,7 @@ impl TboQueue {
 
     fn queue_message(
         curr_seq: SeqNo,
-        tbo: &mut VecDeque<VecDeque<(Header, ConsensusMessage)>>,
+        tbo: &mut VecDeque<VecDeque<StoredMessage<ConsensusMessage>>>,
         h: Header,
         m: ConsensusMessage,
     ) {
@@ -106,11 +109,11 @@ impl TboQueue {
             let len = index - tbo.len() + 1;
             tbo.extend(std::iter::repeat_with(VecDeque::new).take(len));
         }
-        tbo[index].push_back((h, m));
+        tbo[index].push_back(StoredMessage::new(h, m));
     }
 
     fn advance_message_queue(
-        tbo: &mut VecDeque<VecDeque<(Header, ConsensusMessage)>>,
+        tbo: &mut VecDeque<VecDeque<StoredMessage<ConsensusMessage>>>,
     ) {
         match tbo.pop_front() {
             Some(mut vec) => {
@@ -229,8 +232,9 @@ macro_rules! extract_msg {
     };
 
     ($opt:block, $g:expr, $q:expr) => {
-        if let Some((header, message)) = TboQueue::pop_message($q) {
+        if let Some(stored) = TboQueue::pop_message($q) {
             $opt
+            let (header, message) = stored.into_inner();
             ConsensusPollStatus::NextMessage(header, message)
         } else {
             *$g = false;
