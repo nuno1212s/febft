@@ -74,6 +74,13 @@ pub struct TboQueue {
     commits: VecDeque<VecDeque<StoredMessage<ConsensusMessage>>>,
 }
 
+impl Orderable for TboQueue {
+    /// Reports the id of the consensus this `TboQueue` is tracking.
+    fn sequence_number(&self) -> SeqNo {
+        self.curr_seq
+    }
+}
+
 impl TboQueue {
     fn new(curr_seq: SeqNo) -> Self {
         Self {
@@ -89,11 +96,6 @@ impl TboQueue {
     /// consensus messages from its internal storage.
     pub fn signal(&mut self) {
         self.get_queue = true;
-    }
-
-    /// Reports the id of the consensus this `TboQueue` is tracking.
-    pub fn sequence_number(&self) -> SeqNo {
-        self.curr_seq
     }
 
     /// Advances the message queue, and updates the consensus instance id.

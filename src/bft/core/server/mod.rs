@@ -7,8 +7,11 @@ use serde::{Serialize, Deserialize};
 
 use super::SystemParams;
 use crate::bft::error::*;
-use crate::bft::ordering::SeqNo;
 use crate::bft::async_runtime as rt;
+use crate::bft::ordering::{
+    SeqNo,
+    Orderable,
+};
 use crate::bft::sync::{
     Synchronizer,
     SynchronizerStatus,
@@ -74,6 +77,13 @@ pub struct ViewInfo {
     params: SystemParams,
 }
 
+impl Orderable for ViewInfo {
+    /// Returns the sequence number of the current view.
+    fn sequence_number(&self) -> SeqNo {
+        self.seq
+    }
+}
+
 impl ViewInfo {
     /// Creates a new instance of `ViewInfo`.
     pub fn new(seq: SeqNo, n: usize, f: usize) -> Result<Self> {
@@ -84,11 +94,6 @@ impl ViewInfo {
     /// Returns a copy of this node's `SystemParams`.
     pub fn params(&self) -> &SystemParams {
         &self.params
-    }
-
-    /// Returns the sequence number of the current view.
-    pub fn sequence_number(&self) -> SeqNo {
-        self.seq
     }
 
     /// Returns a new view with the sequence number after

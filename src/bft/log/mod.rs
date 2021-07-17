@@ -74,13 +74,15 @@ pub struct Checkpoint<S> {
     appstate: S,
 }
 
-impl<S> Checkpoint<S> {
+impl<S> Orderable for Checkpoint<S> {
     /// Returns the sequence number of the batch of client requests
     /// decided before the local checkpoint.
-    pub fn sequence_number(&self) -> SeqNo {
+    fn sequence_number(&self) -> SeqNo {
         self.seq
     }
+}
 
+impl<S> Checkpoint<S> {
     /// Returns a reference to the state of the application before
     /// the local checkpoint.
     pub fn state(&self) -> &S {
