@@ -93,7 +93,7 @@ impl ViewInfo {
 
     /// Returns a new view with the sequence number after
     /// the current view's number.
-    pub fn next_view(&mut self) -> ViewInfo {
+    pub fn next_view(&self) -> ViewInfo {
         let mut view = *self;
         view.seq = view.seq.next();
         view

@@ -4,6 +4,7 @@
 //! leader is elected.
 
 use std::collections::VecDeque;
+use std::ops::{Deref, DerefMut};
 use std::time::{Instant, Duration};
 
 //use either::{
@@ -17,6 +18,9 @@ use crate::bft::core::server::ViewInfo;
 use crate::bft::ordering::{
     SeqNo,
     //Orderable,
+    tbo_pop_message,
+    tbo_queue_message,
+    tbo_advance_message_queue,
 };
 use crate::bft::log::{
     Log,
@@ -41,7 +45,8 @@ use crate::bft::executable::{
     State,
 };
 
-struct TboQueue<O> {
+/// Represents a queue of view change messages that arrive out of context into a node.
+pub struct TboQueue<O> {
     // the current view
     view: ViewInfo,
     // probe messages from this queue instead of
@@ -64,6 +69,43 @@ impl<O> TboQueue<O> {
             stop_data: VecDeque::new(),
             sync: VecDeque::new(),
         }
+    }
+
+    /// Signal this `TboQueue` that it may be able to extract new
+    /// consensus messages from its internal storage.
+    pub fn signal(&mut self) {
+        self.get_queue = true;
+    }
+
+    fn next_instance_queue(&mut self) {
+        self.view = self.view.next_view();
+        tbo_advance_message_queue(&mut self.stop);
+        tbo_advance_message_queue(&mut self.stop_data);
+        tbo_advance_message_queue(&mut self.sync);
+    }
+
+    /// Queues a view change message for later processing, or drops it
+    /// immediately if it pertains to an older view change instance.
+    pub fn queue(&mut self, h: Header, m: ViewChangeMessage<O>) {
+        unimplemented!()
+    }
+
+    /// Queues a `STOP` message for later processing, or drops it
+    /// immediately if it pertains to an older view change instance.
+    fn queue_stop(&mut self, h: Header, m: ViewChangeMessage<O>) {
+        //tbo_queue_message(self.curr_seq, &mut self.pre_prepares, StoredMessage::new(h, m))
+    }
+
+    /// Queues a `STOP-DATA` message for later processing, or drops it
+    /// immediately if it pertains to an older view change instance.
+    fn queue_stop_data(&mut self, h: Header, m: ViewChangeMessage<O>) {
+        //tbo_queue_message(self.curr_seq, &mut self.prepares, StoredMessage::new(h, m))
+    }
+
+    /// Queues a `SYNC` message for later processing, or drops it
+    /// immediately if it pertains to an older view change instance.
+    fn queue_sync(&mut self, h: Header, m: ViewChangeMessage<O>) {
+        //tbo_queue_message(self.curr_seq, &mut self.commits, StoredMessage::new(h, m))
     }
 }
 
@@ -283,5 +325,33 @@ where
                 | ProtoPhase::Stopping2(_) => false,
             _ => true,
         }
+    }
+}
+
+impl<S> Deref for Synchronizer<S>
+where
+    S: Service + Send + 'static,
+    State<S>: Send + 'static,
+    Request<S>: Send + 'static,
+    Reply<S>: Send + 'static,
+{
+    type Target = TboQueue<Request<S>>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.tbo
+    }
+}
+
+impl<S> DerefMut for Synchronizer<S>
+where
+    S: Service + Send + 'static,
+    State<S>: Send + 'static,
+    Request<S>: Send + 'static,
+    Reply<S>: Send + 'static,
+{
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.tbo
     }
 }
