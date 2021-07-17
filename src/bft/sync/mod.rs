@@ -269,12 +269,21 @@ where
     /// Advances the state of the view change state machine.
     pub fn process_message(
         &mut self,
-        _header: Header,
-        _message: () /*ViewChangeMessage*/,
+        header: Header,
+        message: ViewChangeMessage<O>,
         _log: &mut Log<State<S>, Request<S>, Reply<S>>,
         _node: &mut Node<S::Data>,
     ) -> SynchronizerStatus {
-        unimplemented!()
+        match self.phase {
+            ProtoPhase::Init => {
+                match message.kind() {
+                    ViewChangeMessageKind::Stop(_) => self.queue_stop(header, message),
+                    ViewChangeMessageKind::StopData(_) => self.queue_stop_data(header, message),
+                    ViewChangeMessageKind::Sync(_) => self.queue_sync(header, message),
+                }
+                SynchronizerStatus::
+            },
+        }
     }
 
     /// Handle a timeout received from the timeouts layer.
@@ -282,8 +291,14 @@ where
     /// This timeout pertains to a group of client requests awaiting to be decided.
     pub fn client_requests_timed_out(&mut self, seq: SeqNo) -> SynchronizerStatus {
         let ignore_timeout = !self.watching_timeouts
-            || seq.next() != self.timeout_seq
-            || self.running_view_change();
+            //
+            // FIXME: maybe we should continue even after we have
+            // already stopped, since we may need to forward new requests...
+            //
+            // tl;dr remove the `|| self.sent_stop()` line
+            //
+            || self.sent_stop()
+            || seq.next() != self.timeout_seq;
 
         if ignore_timeout {
             return SynchronizerStatus::Nil;
@@ -332,10 +347,15 @@ where
         requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         node: &mut Node<S::Data>,
     ) {
-        if self.running_view_change() {
-            return;
+        match self.phase {
+            // we have timed out, and sent a stop msg
+            ProtoPhase::Init => self.phase = ProtoPhase::Stopping2(0),
+            // we have received stop messages from peer nodes,
+            // but haven't sent our own stop
+            ProtoPhase::Stopping(n) => self.phase = ProtoPhase::Stopping2(n),
+            // we are already running the view change proto, and sent a stop
+            _ => return,
         }
-        self.phase = ProtoPhase::Stopping2(0);
 
         let message = SystemMessage::ViewChange(ViewChangeMessage::new(
             self.view().sequence_number().next(),
@@ -357,11 +377,9 @@ where
         next
     }
 
-    fn running_view_change(&self) -> bool {
+    fn sent_stop(&self) -> bool {
         match self.phase {
-            ProtoPhase::Init
-                | ProtoPhase::Stopping(_)
-                | ProtoPhase::Stopping2(_) => false,
+            ProtoPhase::Init | ProtoPhase::Stopping(_) => false,
             _ => true,
         }
     }
