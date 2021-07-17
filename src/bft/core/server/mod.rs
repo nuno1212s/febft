@@ -501,7 +501,7 @@ where
         let requests = requests
             .into_inner()
             .into_iter()
-            .map(|s| s.into_inner());
+            .map(|forwarded| forwarded.into_inner());
 
         for (header, request) in requests {
             self.log.insert(header, SystemMessage::Request(request));
