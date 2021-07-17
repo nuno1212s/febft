@@ -313,6 +313,9 @@ where
             self.watching.remove(digest);
         }
 
+        // TODO: include stopped messages we have received in the forwarded messages;
+        // if we add the stopped messages into our queue of requests as soon as we
+        // receive them, this should be done automagically
         SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
     }
 
