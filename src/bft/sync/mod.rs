@@ -348,10 +348,10 @@ where
         node: &mut Node<S::Data>,
     ) {
         match self.phase {
-            // we have timed out, and sent a stop msg
+            // we have timed out, therefore we should send a stop msg
             ProtoPhase::Init => self.phase = ProtoPhase::Stopping2(0),
             // we have received stop messages from peer nodes,
-            // but haven't sent our own stop
+            // but haven't sent our own stop, yet
             ProtoPhase::Stopping(n) => self.phase = ProtoPhase::Stopping2(n),
             // we are already running the view change proto, and sent a stop
             _ => return,
