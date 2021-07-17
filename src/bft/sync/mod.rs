@@ -17,7 +17,7 @@ use crate::bft::crypto::hash::Digest;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::ordering::{
     SeqNo,
-    //Orderable,
+    Orderable,
     tbo_pop_message,
     tbo_queue_message,
     tbo_advance_message_queue,
@@ -37,6 +37,7 @@ use crate::bft::collections::{
 use crate::bft::communication::message::{
     Header,
     ViewChangeMessage,
+    ViewChangeMessageKind,
 };
 use crate::bft::executable::{
     Service,
@@ -87,25 +88,32 @@ impl<O> TboQueue<O> {
     /// Queues a view change message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
     pub fn queue(&mut self, h: Header, m: ViewChangeMessage<O>) {
-        unimplemented!()
+        match m.kind() {
+            ViewChangeMessageKind::Stop(_) => self.queue_stop(h, m),
+            ViewChangeMessageKind::StopData(_) => self.queue_stop_data(h, m),
+            ViewChangeMessageKind::Sync(_) => self.queue_sync(h, m),
+        }
     }
 
     /// Queues a `STOP` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
     fn queue_stop(&mut self, h: Header, m: ViewChangeMessage<O>) {
-        //tbo_queue_message(self.curr_seq, &mut self.pre_prepares, StoredMessage::new(h, m))
+        let seq = self.view.sequence_number();
+        tbo_queue_message(seq, &mut self.stop, StoredMessage::new(h, m))
     }
 
     /// Queues a `STOP-DATA` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
     fn queue_stop_data(&mut self, h: Header, m: ViewChangeMessage<O>) {
-        //tbo_queue_message(self.curr_seq, &mut self.prepares, StoredMessage::new(h, m))
+        let seq = self.view.sequence_number();
+        tbo_queue_message(seq, &mut self.stop_data, StoredMessage::new(h, m))
     }
 
     /// Queues a `SYNC` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
     fn queue_sync(&mut self, h: Header, m: ViewChangeMessage<O>) {
-        //tbo_queue_message(self.curr_seq, &mut self.commits, StoredMessage::new(h, m))
+        let seq = self.view.sequence_number();
+        tbo_queue_message(seq, &mut self.sync, StoredMessage::new(h, m))
     }
 }
 
