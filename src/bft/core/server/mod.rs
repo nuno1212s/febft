@@ -246,6 +246,8 @@ where
             Message::System(header, message) => {
                 match message {
                     SystemMessage::ForwardedRequests(requests) => {
+                        // FIXME: is this the correct behavior? to save forwarded requests
+                        // while we are retrieving state...
                         self.forwarded_requests_received(requests);
                     },
                     request @ SystemMessage::Request(_) => {
