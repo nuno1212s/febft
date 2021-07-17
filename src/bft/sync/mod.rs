@@ -73,7 +73,7 @@ impl<O> TboQueue<O> {
     }
 
     /// Signal this `TboQueue` that it may be able to extract new
-    /// consensus messages from its internal storage.
+    /// view change messages from its internal storage.
     pub fn signal(&mut self) {
         self.get_queue = true;
     }
