@@ -123,6 +123,15 @@ impl<M> StoredMessage<M> {
     }
 }
 
+/// Subset of a `Log`, containing only consensus messages.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct DecisionLog {
+    pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
+    prepares: Vec<StoredMessage<ConsensusMessage>>,
+    commits: Vec<StoredMessage<ConsensusMessage>>,
+}
+
 /// Represents a log of messages received by the BFT system.
 pub struct Log<S, O, P> {
     curr_seq: SeqNo,
@@ -159,6 +168,16 @@ impl<S, O, P> Log<S, O, P> {
             requests: collections::ordered_map(),
             checkpoint: CheckpointState::None,
             _marker: PhantomData,
+        }
+    }
+
+    /// Returns a (cloned) subset of this log, containing only
+    /// consensus messages.
+    pub fn decision_log(&self) -> DecisionLog {
+        DecisionLog {
+            pre_prepares: self.pre_prepares.clone(),
+            prepares: self.prepares.clone(),
+            commits: self.commits.clone(),
         }
     }
 
@@ -265,6 +284,7 @@ impl<S, O, P> Log<S, O, P> {
     where
         O: Clone,
     {
+        // TODO: maybe return iterator to merge with other msgs in STOP??
         digests
             .iter()
             .flat_map(|d| self.deciding.get(d).or_else(|| self.requests.get(d)))

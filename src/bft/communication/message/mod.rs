@@ -33,6 +33,10 @@ use crate::bft::ordering::{
     SeqNo,
     Orderable,
 };
+use crate::bft::log::{
+    StoredMessage,
+    DecisionLog,
+};
 use crate::bft::communication::socket::Socket;
 use crate::bft::executable::UpdateBatchReplies;
 use crate::bft::communication::NodeId;
@@ -156,7 +160,7 @@ pub enum SystemMessage<S, O, P> {
 #[derive(Clone)]
 pub struct ViewChangeMessage<O> {
     view: SeqNo,
-    kind: [O; 0] /* ViewChangeMessageKind */,
+    kind: ViewChangeMessageKind<O>,
 }
 
 impl<O> Orderable for ViewChangeMessage<O> {
@@ -164,6 +168,27 @@ impl<O> Orderable for ViewChangeMessage<O> {
     fn sequence_number(&self) -> SeqNo {
         self.view
     }
+}
+
+impl<O> ViewChangeMessage<O> {
+    /// Creates a new `ViewChangeMessage`, pertaining to the view
+    /// with sequence number `view`, and of the kind `kind`.
+    pub fn new(view: SeqNo, kind: ViewChangeMessageKind<O>) -> Self {
+        Self { view, kind }
+    }
+
+    /// Returns a reference to the view change message kind.
+    pub fn kind(&self) -> &ViewChangeMessageKind<O> {
+        &self.kind
+    }
+}
+
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub enum ViewChangeMessageKind<O> {
+    Stop(Vec<StoredMessage<RequestMessage<O>>>),
+    StopData(DecisionLog),
+    Sync(Vec<StoredMessage<ViewChangeMessage<O>>>),
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
@@ -184,16 +209,18 @@ pub enum CstMessageKind<S, O> {
     ReplyState(RecoveryState<S, O>),
 }
 
+impl<S, O> Orderable for CstMessage<S, O> {
+    /// Returns the sequence number of this state transfer message.
+    fn sequence_number(&self) -> SeqNo {
+        self.seq
+    }
+}
+
 impl<S, O> CstMessage<S, O> {
     /// Creates a new `CstMessage` with sequence number `seq`,
     /// and of the kind `kind`.
     pub fn new(seq: SeqNo, kind: CstMessageKind<S, O>) -> Self {
         Self { seq, kind }
-    }
-
-    /// Returns the sequence number of this state transfer message.
-    pub fn sequence_number(&self) -> SeqNo {
-        self.seq
     }
 
     /// Returns a reference to the state transfer message kind.

@@ -176,6 +176,23 @@ pub struct Synchronizer<S: Service> {
     //voted: HashSet<NodeId>,
 }
 
+macro_rules! extract_msg {
+    ($t:ty => $g:expr, $q:expr) => {
+        extract_msg!($t => {}, $g, $q)
+    };
+
+    ($t:ty => $opt:block, $g:expr, $q:expr) => {
+        if let Some(stored) = tbo_pop_message::<ViewChangeMessage<O>>($q) {
+            $opt
+            let (header, message) = stored.into_inner();
+            ConsensusPollStatus::NextMessage(header, message)
+        } else {
+            *$g = false;
+            ConsensusPollStatus::Recv
+        }
+    };
+}
+
 impl<S> Synchronizer<S>
 where
     S: Service + Send + 'static,

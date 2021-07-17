@@ -13,11 +13,14 @@ use std::time::Duration;
 use serde::{Serialize, Deserialize};
 
 use crate::bft::error::*;
-use crate::bft::ordering::SeqNo;
 use crate::bft::sync::Synchronizer;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::consensus::Consensus;
 use crate::bft::core::server::ViewInfo;
+use crate::bft::ordering::{
+    SeqNo,
+    Orderable,
+};
 use crate::bft::timeouts::{
     TimeoutKind,
     TimeoutsHandle,
