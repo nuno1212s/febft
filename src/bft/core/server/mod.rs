@@ -51,6 +51,7 @@ use crate::bft::communication::{
     NodeConfig,
 };
 use crate::bft::communication::message::{
+    ForwardedRequestsMessage,
     SystemMessage,
     ReplyMessage,
     Message,
@@ -214,6 +215,8 @@ where
                         SystemMessage::Cst(_) => panic!("Rogue cst message detected"),
                         // FIXME: handle rogue view change messages
                         SystemMessage::ViewChange(_) => panic!("Rogue view change message detected"),
+                        // FIXME: handle rogue forwarded requests messages
+                        SystemMessage::ForwardedRequests(_) => panic!("Rogue forwarded requests message detected"),
                     }
                 },
                 // ignore other messages for now
@@ -242,6 +245,9 @@ where
         match message {
             Message::System(header, message) => {
                 match message {
+                    SystemMessage::ForwardedRequests(requests) => {
+                        self.forwarded_requests_received(requests);
+                    },
                     request @ SystemMessage::Request(_) => {
                         // TODO: start timer for request
                         self.log.insert(header, request);
@@ -364,6 +370,9 @@ where
         match message {
             Message::System(header, message) => {
                 match message {
+                    SystemMessage::ForwardedRequests(requests) => {
+                        self.forwarded_requests_received(requests);
+                    },
                     request @ SystemMessage::Request(_) => {
                         // TODO: start timer for request
                         self.log.insert(header, request);
@@ -483,6 +492,20 @@ where
             );
         }
         Ok(())
+    }
+
+    fn forwarded_requests_received(
+        &mut self,
+        requests: ForwardedRequestsMessage<Request<S>>,
+    ) {
+        let requests = requests
+            .into_inner()
+            .into_iter()
+            .map(|s| s.into_inner());
+
+        for (header, request) in requests {
+            self.log.insert(header, SystemMessage::Request(request));
+        }
     }
 
     fn timeout_received(&mut self, timeout_kind: TimeoutKind) {

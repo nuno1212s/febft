@@ -154,6 +154,25 @@ pub enum SystemMessage<S, O, P> {
     Consensus(ConsensusMessage),
     Cst(CstMessage<S, O>),
     ViewChange(ViewChangeMessage<O>),
+    ForwardedRequests(ForwardedRequestsMessage<O>),
+}
+
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct ForwardedRequestsMessage<O> {
+    inner: Vec<StoredMessage<RequestMessage<O>>>,
+}
+
+impl<O> ForwardedRequestsMessage<O> {
+    /// Creates a new `ForwardedRequestsMessage`, containing the given client requests.
+    pub fn new(inner: Vec<StoredMessage<RequestMessage<O>>>) -> Self {
+        Self { inner }
+    }
+
+    /// Returns the client requests contained in this `ForwardedRequestsMessage`.
+    pub fn into_inner(self) -> Vec<StoredMessage<RequestMessage<O>>> {
+        self.inner
+    }
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
