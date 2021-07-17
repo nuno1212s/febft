@@ -12,9 +12,12 @@ use std::time::{Instant, Duration};
 //    Right,
 //};
 
-use crate::bft::communication::Node;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::core::server::ViewInfo;
+use crate::bft::communication::{
+    Node,
+    NodeId
+};
 use crate::bft::ordering::{
     SeqNo,
     Orderable,
@@ -36,6 +39,8 @@ use crate::bft::collections::{
 };
 use crate::bft::communication::message::{
     Header,
+    SystemMessage,
+    RequestMessage,
     ViewChangeMessage,
     ViewChangeMessageKind,
 };
@@ -204,7 +209,7 @@ macro_rules! extract_msg {
 impl<S> Synchronizer<S>
 where
     S: Service + Send + 'static,
-    State<S>: Send + 'static,
+    State<S>: Send + Clone + 'static,
     Request<S>: Send + 'static,
     Reply<S>: Send + 'static,
 {
@@ -322,16 +327,20 @@ where
     /// Trigger a view change locally.
     pub fn begin_view_change(
         &mut self,
-        _requests: (),
-        _node: &mut Node<S::Data>,
+        requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+        node: &mut Node<S::Data>,
     ) {
         if self.running_view_change() {
             return;
         }
         self.phase = ProtoPhase::Stopping2(0);
 
-        // TODO: send STOP msgs
-        unimplemented!()
+        let message = SystemMessage::ViewChange(ViewChangeMessage::new(
+            self.view().sequence_number().next(),
+            ViewChangeMessageKind::Stop(requests),
+        ));
+        let targets = NodeId::targets(0..self.view().params().n());
+        node.broadcast(message, targets);
     }
 
     /// Returns some information regarding the current view, such as

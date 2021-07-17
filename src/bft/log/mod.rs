@@ -286,7 +286,6 @@ impl<S, O, P> Log<S, O, P> {
     where
         O: Clone,
     {
-        // TODO: maybe return iterator to merge with other msgs in STOP??
         digests
             .iter()
             .flat_map(|d| self.deciding.get(d).or_else(|| self.requests.get(d)))
