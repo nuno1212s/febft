@@ -103,7 +103,9 @@ impl<O> TboQueue<O> {
     /// Queues a `STOP` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
     fn queue_stop(&mut self, h: Header, m: ViewChangeMessage<O>) {
-        let seq = self.view.sequence_number();
+        // NOTE: we use next() because we want to retrieve messages
+        // for v+1, as we haven't started installing the new view yet
+        let seq = self.view.sequence_number().next();
         tbo_queue_message(seq, &mut self.stop, StoredMessage::new(h, m))
     }
 
