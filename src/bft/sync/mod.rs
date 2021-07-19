@@ -305,6 +305,7 @@ where
         &mut self,
         header: Header,
         message: ViewChangeMessage<Request<S>>,
+        // FIXME: maybe we don't need mut on the log
         _log: &mut Log<State<S>, Request<S>, Reply<S>>,
         _node: &mut Node<S::Data>,
     ) -> SynchronizerStatus {
@@ -317,11 +318,11 @@ where
                     },
                     ViewChangeMessageKind::StopData(_) => {
                         self.queue_stop_data(header, message);
-                        return SynchronizerStatus::Running;
+                        return SynchronizerStatus::Nil;
                     },
                     ViewChangeMessageKind::Sync(_) => {
                         self.queue_sync(header, message);
-                        return SynchronizerStatus::Running;
+                        return SynchronizerStatus::Nil;
                     },
                 }
             },
@@ -392,9 +393,9 @@ where
         node: &mut Node<S::Data>,
     ) {
         match self.phase {
-            // we have timed out, therefore we should send a stop msg
+            // we have timed out, therefore we should send a STOP msg
             ProtoPhase::Init => self.phase = ProtoPhase::Stopping2(0),
-            // we have received stop messages from peer nodes,
+            // we have received STOP messages from peer nodes,
             // but haven't sent our own stop, yet
             ProtoPhase::Stopping(n) => self.phase = ProtoPhase::Stopping2(n),
             // we are already running the view change proto, and sent a stop
