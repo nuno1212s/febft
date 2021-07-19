@@ -514,14 +514,11 @@ where
         &mut self,
         requests: ForwardedRequestsMessage<Request<S>>,
     ) {
-        let requests = requests
-            .into_inner()
-            .into_iter()
-            .map(|forwarded| forwarded.into_inner());
-
-        for (header, request) in requests {
-            self.log.insert(header, SystemMessage::Request(request));
-        }
+        self.synchronizer.watch_forwarded_requests(
+            requests,
+            &self.timeouts,
+            &mut self.log,
+        );
     }
 
     fn timeout_received(&mut self, timeout_kind: TimeoutKind) {

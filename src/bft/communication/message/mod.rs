@@ -200,6 +200,11 @@ impl<O> ViewChangeMessage<O> {
     pub fn kind(&self) -> &ViewChangeMessageKind<O> {
         &self.kind
     }
+
+    /// Returns an owned view change message kind.
+    pub fn into_kind(self) -> ViewChangeMessageKind<O> {
+        &self.kind
+    }
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]

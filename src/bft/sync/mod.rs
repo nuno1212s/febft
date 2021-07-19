@@ -36,6 +36,7 @@ use crate::bft::timeouts::{
 use crate::bft::collections::{
     self,
     HashMap,
+    HashSet,
 };
 use crate::bft::communication::message::{
     Header,
@@ -43,6 +44,7 @@ use crate::bft::communication::message::{
     RequestMessage,
     ViewChangeMessage,
     ViewChangeMessageKind,
+    ForwardedRequestsMessage,
 };
 use crate::bft::executable::{
     Service,
@@ -186,6 +188,7 @@ pub struct Synchronizer<S: Service> {
     phase: ProtoPhase,
     timeout_seq: SeqNo,
     timeout_dur: Duration,
+    stopped: HashSet<Digest>,
     watching: HashMap<Digest, TimeoutPhase>,
     tbo: TboQueue<Request<S>>,
     // NOTE: remembers whose replies we have
@@ -224,6 +227,7 @@ where
             watching_timeouts: false,
             timeout_seq: SeqNo::from(0),
             watching: collections::hash_map(),
+            stopped: collections::hash_set(),
             tbo: TboQueue::new(view),
         }
     }
@@ -231,6 +235,36 @@ where
     /// Watch a client request with the digest `digest`.
     pub fn watch_request(
         &mut self,
+        digest: Digest,
+        timeouts: &TimeoutsHandle<S>,
+    ) {
+        let phase = TimeoutPhase::Init(Instant::now());
+        self.watch_request_impl(phase, digest, timeouts);
+    }
+
+    /// Watch a group of client requests that we received from a
+    /// forwarded requests system message.
+    pub fn watch_forwarded_requests(
+        &mut self,
+        requests: ForwardedRequestsMessage<Request<S>>,
+        timeouts: &TimeoutsHandle<S>,
+        log: &mut Log<State<S>, Request<S>, Reply<S>>,
+    ) {
+        let phase = TimeoutPhase::TimedOutOnce(Instant::now());
+        let requests = requests
+            .into_inner()
+            .into_iter()
+            .map(|forwarded| forwarded.into_inner());
+
+        for (header, request) in requests {
+            self.watch_request_impl(phase, header.unique_digest(), timeouts);
+            log.insert(header, SystemMessage::Request(request));
+        }
+    }
+
+    fn watch_request_impl(
+        &mut self,
+        phase: TimeoutPhase,
         digest: Digest,
         timeouts: &TimeoutsHandle<S>,
     ) {
@@ -243,7 +277,7 @@ where
         self.watching
             .entry(digest)
             .and_modify(|phase| *phase = TimeoutPhase::TimedOutOnce(Instant::now()))
-            .or_insert_with(|| TimeoutPhase::Init(Instant::now()));
+            .or_insert(phase);
     }
 
     /// Remove a client request with digest `digest` from the watched list
@@ -305,9 +339,8 @@ where
         &mut self,
         header: Header,
         message: ViewChangeMessage<Request<S>>,
-        // FIXME: maybe we don't need mut on the log
-        _log: &mut Log<State<S>, Request<S>, Reply<S>>,
-        _node: &mut Node<S::Data>,
+        log: &mut Log<State<S>, Request<S>, Reply<S>>,
+        node: &mut Node<S::Data>,
     ) -> SynchronizerStatus {
         match self.phase {
             ProtoPhase::Init => {
@@ -326,9 +359,53 @@ where
                     },
                 }
             },
-            ProtoPhase::Stopping(_i) => {
+            ProtoPhase::Stopping(i) => {
+                let next_seq = self.sequence_number().next();
+                let i = match message.kind() {
+                    ViewChangeMessageKind::Stop(_) if message.sequence_number() != next_seq => {
+                        self.queue_stop(header, message);
+                        return SynchronizerStatus::Nil;
+                    },
+                    ViewChangeMessageKind::Stop(_) => i + 1,
+                    ViewChangeMessageKind::StopData(_) => {
+                        self.queue_stop_data(header, message);
+                        return SynchronizerStatus::Nil;
+                    },
+                    ViewChangeMessageKind::Sync(_) => {
+                        self.queue_sync(header, message);
+                        return SynchronizerStatus::Nil;
+                    },
+                };
+
+                // store pending requests from this STOP
+                let stopped = message
+                    .into_stopped_requests()
+                    .unwrap()
+                    .into_iter()
+                    .map(|forwarded| forwarded.into_inner());
+
+                for (header, request) in stopped {
+                    self.stopped.insert(request.
+                }
+
+                self.phase = if i > self.view().params().f() {
+                    // broadcast STOP message with pending requests
+                    let message = SystemMessage::ViewChange(ViewChangeMessage::new(
+                        self.view().sequence_number().next(),
+                        ViewChangeMessageKind::Stop(requests),
+                    ));
+                    let targets = NodeId::targets(0..self.view().params().n());
+                    node.broadcast(message, targets);
+
+                    ProtoPhase::Stopping2(i)
+                } else {
+                    ProtoPhase::Stopping(i)
+                };
+
+                SynchronizerStatus::Nil
+
                 // TODO:
-                // - store stop messages
+                // - store STOP messages
                 // - return SynchronizerStatus::Nil, since
                 //   we have not installed the new view, yet
                 unimplemented!()
