@@ -360,9 +360,11 @@ where
                 }
             },
             ProtoPhase::Stopping(i) => {
-                let next_seq = self.sequence_number().next();
+                let msg_seq = message.sequence_number();
+                let next_seq = self.view().sequence_number().next();
+
                 let i = match message.kind() {
-                    ViewChangeMessageKind::Stop(_) if message.sequence_number() != next_seq => {
+                    ViewChangeMessageKind::Stop(_) if msg_seq != next_seq => {
                         self.queue_stop(header, message);
                         return SynchronizerStatus::Nil;
                     },
@@ -402,7 +404,7 @@ where
                     ProtoPhase::Stopping(i)
                 };
 
-                SynchronizerStatus::Nil
+                // SynchronizerStatus::Nil
 
                 // TODO:
                 // - store STOP messages
