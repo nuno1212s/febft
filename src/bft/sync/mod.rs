@@ -155,6 +155,8 @@ enum ProtoPhase {
 pub enum SynchronizerStatus {
     /// We are not running the view change protocol.
     Nil,
+    /// We have received STOP messages, check if we can process them.
+    HaveStops,
     /// The view change protocol is currently running.
     Running,
     /// We installed a new view, resulted from running the
@@ -197,13 +199,13 @@ macro_rules! extract_msg {
     };
 
     ($t:ty => $opt:block, $g:expr, $q:expr) => {
-        if let Some(stored) = tbo_pop_message::<ViewChangeMessage<O>>($q) {
+        if let Some(stored) = tbo_pop_message::<ViewChangeMessage<$t>>($q) {
             $opt
             let (header, message) = stored.into_inner();
-            ConsensusPollStatus::NextMessage(header, message)
+            SynchronizerPollStatus::NextMessage(header, message)
         } else {
             *$g = false;
-            ConsensusPollStatus::Recv
+            SynchronizerPollStatus::Recv
         }
     };
 }
@@ -266,23 +268,65 @@ where
         self.tbo.view = view;
     }
 
+    /// Check if we can process new view change messages.
+    pub fn poll(&mut self) -> SynchronizerPollStatus<Request<S>> {
+        match self.phase {
+            _ if !self.tbo.get_queue => SynchronizerPollStatus::Recv,
+            ProtoPhase::Init => {
+                extract_msg!(Request<S> => 
+                    { self.phase = ProtoPhase::Stopping(0); },
+                    &mut self.tbo.get_queue,
+                    &mut self.tbo.stop
+                )
+            },
+            ProtoPhase::Stopping(_) | ProtoPhase::Stopping2(_) => {
+                extract_msg!(Request<S> =>
+                    &mut self.tbo.get_queue,
+                    &mut self.tbo.stop
+                )
+            },
+            ProtoPhase::StoppingData(_) => {
+                extract_msg!(Request<S> =>
+                    &mut self.tbo.get_queue,
+                    &mut self.tbo.stop_data
+                )
+            },
+            ProtoPhase::Syncing(_) => {
+                extract_msg!(Request<S> =>
+                    &mut self.tbo.get_queue,
+                    &mut self.tbo.sync
+                )
+            },
+        }
+    }
+
     /// Advances the state of the view change state machine.
     pub fn process_message(
         &mut self,
         header: Header,
-        message: ViewChangeMessage<O>,
+        message: ViewChangeMessage<Request<S>>,
         _log: &mut Log<State<S>, Request<S>, Reply<S>>,
         _node: &mut Node<S::Data>,
     ) -> SynchronizerStatus {
         match self.phase {
             ProtoPhase::Init => {
                 match message.kind() {
-                    ViewChangeMessageKind::Stop(_) => self.queue_stop(header, message),
-                    ViewChangeMessageKind::StopData(_) => self.queue_stop_data(header, message),
-                    ViewChangeMessageKind::Sync(_) => self.queue_sync(header, message),
+                    ViewChangeMessageKind::Stop(_) => {
+                        self.queue_stop(header, message);
+                        return SynchronizerStatus::HaveStops;
+                    },
+                    ViewChangeMessageKind::StopData(_) => {
+                        self.queue_stop_data(header, message);
+                        return SynchronizerStatus::Running;
+                    },
+                    ViewChangeMessageKind::Sync(_) => {
+                        self.queue_sync(header, message);
+                        return SynchronizerStatus::Running;
+                    },
                 }
-                SynchronizerStatus::
             },
+            // TODO: other phases
+            _ => unimplemented!(),
         }
     }
 
@@ -369,6 +413,14 @@ where
     /// the number of faulty replicas the system can tolerate.
     pub fn view(&self) -> &ViewInfo {
         &self.tbo.view
+    }
+
+    fn cant_process_next(&self, m: ViewChangeMessage<Request<S>>) -> bool {
+        m.sequence_number() != self.view().sequence_number().next()
+    }
+
+    fn cant_process(&self, m: ViewChangeMessage<Request<S>>) -> bool {
+        m.sequence_number() != self.view().sequence_number()
     }
 
     fn next_timeout(&mut self) -> SeqNo {
