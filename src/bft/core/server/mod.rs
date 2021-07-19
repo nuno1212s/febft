@@ -393,9 +393,23 @@ where
                             _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
                         }
                     },
-                    SystemMessage::ViewChange(_message) => {
-                        // TODO: handle view change messages
-                        unimplemented!()
+                    SystemMessage::ViewChange(message) => {
+                        let status = self.synchronizer.process_message(
+                            header,
+                            message,
+                            &mut self.log,
+                            &mut self.node,
+                        );
+                        match status {
+                            SynchronizerStatus::HaveStops => {
+                                // momentarily change the phase of this replica, so
+                                // we can process STOP messages
+                                self.phase = ReplicaPhase::SyncPhase;
+                            },
+                            SynchronizerStatus::Nil => (),
+                            // should not happen...
+                            _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+                        }
                     },
                     SystemMessage::Consensus(message) => {
                         let status = self.consensus.process_message(
