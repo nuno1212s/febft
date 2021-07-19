@@ -326,6 +326,13 @@ where
                     },
                 }
             },
+            ProtoPhase::Stopping(_i) => {
+                // TODO:
+                // - store stop messages
+                // - return SynchronizerStatus::Nil, since
+                //   we have not installed the new view, yet
+                unimplemented!()
+            },
             // TODO: other phases
             _ => unimplemented!(),
         }
@@ -414,14 +421,6 @@ where
     /// the number of faulty replicas the system can tolerate.
     pub fn view(&self) -> &ViewInfo {
         &self.tbo.view
-    }
-
-    fn cant_process_next(&self, m: ViewChangeMessage<Request<S>>) -> bool {
-        m.sequence_number() != self.view().sequence_number().next()
-    }
-
-    fn cant_process(&self, m: ViewChangeMessage<Request<S>>) -> bool {
-        m.sequence_number() != self.view().sequence_number()
     }
 
     fn next_timeout(&mut self) -> SeqNo {
