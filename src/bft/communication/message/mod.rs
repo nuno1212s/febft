@@ -203,7 +203,7 @@ impl<O> ViewChangeMessage<O> {
 
     /// Returns an owned view change message kind.
     pub fn into_kind(self) -> ViewChangeMessageKind<O> {
-        &self.kind
+        self.kind
     }
 }
 

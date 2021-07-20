@@ -36,7 +36,6 @@ use crate::bft::timeouts::{
 use crate::bft::collections::{
     self,
     HashMap,
-    HashSet,
 };
 use crate::bft::communication::message::{
     Header,
@@ -132,6 +131,9 @@ enum TimeoutPhase {
     // we received a second timeout for the same request;
     // start view change protocol
     TimedOutOnce(Instant),
+    // keep requests that timed out stored in memory,
+    // for efficienty
+    TimedOut,
 }
 
 enum ProtoPhase {
@@ -188,7 +190,7 @@ pub struct Synchronizer<S: Service> {
     phase: ProtoPhase,
     timeout_seq: SeqNo,
     timeout_dur: Duration,
-    stopped: HashSet<Digest>,
+    stopped: HashMap<NodeId, Vec<StoredMessage<RequestMessage<Request<S>>>>>,
     watching: HashMap<Digest, TimeoutPhase>,
     tbo: TboQueue<Request<S>>,
     // NOTE: remembers whose replies we have
@@ -217,7 +219,7 @@ impl<S> Synchronizer<S>
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
-    Request<S>: Send + 'static,
+    Request<S>: Send + Clone + 'static,
     Reply<S>: Send + 'static,
 {
     pub fn new(timeout_dur: Duration, view: ViewInfo) -> Self {
@@ -227,7 +229,7 @@ where
             watching_timeouts: false,
             timeout_seq: SeqNo::from(0),
             watching: collections::hash_map(),
-            stopped: collections::hash_set(),
+            stopped: collections::hash_map(),
             tbo: TboQueue::new(view),
         }
     }
@@ -273,11 +275,7 @@ where
             timeouts.timeout(self.timeout_dur, TimeoutKind::ClientRequests(seq));
             self.watching_timeouts = true;
         }
-
-        self.watching
-            .entry(digest)
-            .and_modify(|phase| *phase = TimeoutPhase::TimedOutOnce(Instant::now()))
-            .or_insert(phase);
+        self.watching.insert(digest, phase);
     }
 
     /// Remove a client request with digest `digest` from the watched list
@@ -380,18 +378,16 @@ where
                 };
 
                 // store pending requests from this STOP
-                let stopped = message
-                    .into_stopped_requests()
-                    .unwrap()
-                    .into_iter()
-                    .map(|forwarded| forwarded.into_inner());
-
-                for (header, request) in stopped {
-                    self.stopped.insert(request.
-                }
+                let stopped = match message.into_kind() {
+                    ViewChangeMessageKind::Stop(stopped) => stopped,
+                    _ => unreachable!(),
+                };
+                self.stopped.insert(header.from(), stopped);
 
                 self.phase = if i > self.view().params().f() {
-                    // broadcast STOP message with pending requests
+                    // broadcast STOP message with pending requests collected
+                    // from peer nodes' STOP messages
+                    let requests = self.stopped_requests(None);
                     let message = SystemMessage::ViewChange(ViewChangeMessage::new(
                         self.view().sequence_number().next(),
                         ViewChangeMessageKind::Stop(requests),
@@ -404,13 +400,52 @@ where
                     ProtoPhase::Stopping(i)
                 };
 
-                // SynchronizerStatus::Nil
+                SynchronizerStatus::Nil
+            },
+            ProtoPhase::Stopping2(i) => {
+                let msg_seq = message.sequence_number();
+                let next_seq = self.view().sequence_number().next();
 
-                // TODO:
-                // - store STOP messages
-                // - return SynchronizerStatus::Nil, since
-                //   we have not installed the new view, yet
-                unimplemented!()
+                let i = match message.kind() {
+                    ViewChangeMessageKind::Stop(_) if msg_seq != next_seq => {
+                        self.queue_stop(header, message);
+                        return SynchronizerStatus::Nil;
+                    },
+                    ViewChangeMessageKind::Stop(_) => i + 1,
+                    ViewChangeMessageKind::StopData(_) => {
+                        self.queue_stop_data(header, message);
+                        return SynchronizerStatus::Nil;
+                    },
+                    ViewChangeMessageKind::Sync(_) => {
+                        self.queue_sync(header, message);
+                        return SynchronizerStatus::Nil;
+                    },
+                };
+
+                // store pending requests from this STOP
+                let stopped = match message.into_kind() {
+                    ViewChangeMessageKind::Stop(stopped) => stopped,
+                    _ => unreachable!(),
+                };
+                self.stopped.insert(header.from(), stopped);
+
+                if i == self.view().params().quorum() {
+                    //
+                    // TODO:
+                    // - add requests from STOP into client requests
+                    //   in the log, to be ordered
+                    // - reset the timers of the requests in the STOP
+                    //   messages with TimeoutPhase::Init(_)
+                    // - broadcast STOP-DATA message
+                    //
+                    self.phase = ProtoPhase::StoppingData(0);
+
+                    //SynchronizerStatus::Running
+                    unimplemented!()
+                } else {
+                    self.phase = ProtoPhase::Stopping2(i);
+                    SynchronizerStatus::Nil
+                }
             },
             // TODO: other phases
             _ => unimplemented!(),
@@ -452,30 +487,25 @@ where
             match timeout_phase {
                 TimeoutPhase::Init(i) if now.duration_since(*i) > self.timeout_dur => {
                     forwarded.push(digest.clone());
-                    *timeout_phase = TimeoutPhase::TimedOutOnce(now);
                 },
                 TimeoutPhase::TimedOutOnce(i) if now.duration_since(*i) > self.timeout_dur => {
                     stopped.push(digest.clone());
+                    *timeout_phase = TimeoutPhase::TimedOut;
                 },
                 _ => (),
             }
         }
 
-        for digest in &stopped {
-            // remove stopped requests
-            self.watching.remove(digest);
-        }
-
-        // TODO: include stopped messages we have received in the forwarded messages;
-        // if we add the stopped messages into our queue of requests as soon as we
-        // receive them, this should be done automagically
         SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
     }
 
     /// Trigger a view change locally.
+    ///
+    /// The value `timed_out` corresponds to a list of client requests
+    /// that have timed out on the current replica.
     pub fn begin_view_change(
         &mut self,
-        requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+        timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         node: &mut Node<S::Data>,
     ) {
         match self.phase {
@@ -488,6 +518,7 @@ where
             _ => return,
         }
 
+        let requests = self.stopped_requests(Some(timed_out));
         let message = SystemMessage::ViewChange(ViewChangeMessage::new(
             self.view().sequence_number().next(),
             ViewChangeMessageKind::Stop(requests),
@@ -513,6 +544,34 @@ where
             ProtoPhase::Init | ProtoPhase::Stopping(_) => false,
             _ => true,
         }
+    }
+
+    fn stopped_requests(
+        &self,
+        timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
+    ) -> Vec<StoredMessage<RequestMessage<Request<S>>>> {
+        let mut all_reqs = collections::hash_map();
+
+        // FIXME: optimize this; we are including every STOP we have
+        // received thus far for the new view in our own STOP, plus
+        // the requests that timed out on us
+        if let Some(requests) = timed_out {
+            for r in requests {
+                all_reqs.insert(r.header().unique_digest(), r);
+            }
+        }
+        for (_, stopped) in self.stopped.iter() {
+            for r in stopped {
+                all_reqs
+                    .entry(r.header().unique_digest())
+                    .or_insert_with(|| r.clone());
+            }
+        }
+
+        all_reqs
+            .drain()
+            .map(|(_, stop)| stop)
+            .collect()
     }
 }
 
