@@ -358,7 +358,7 @@ where
                     },
                 }
             },
-            ProtoPhase::Stopping(i) => {
+            ProtoPhase::Stopping(i) | ProtoPhase::Stopping2(i) => {
                 let msg_seq = message.sequence_number();
                 let next_seq = self.view().sequence_number().next();
 
@@ -385,50 +385,26 @@ where
                 };
                 self.stopped.insert(header.from(), stopped);
 
-                self.phase = if i > self.view().params().f() {
-                    // broadcast STOP message with pending requests collected
-                    // from peer nodes' STOP messages
-                    let requests = self.stopped_requests(None);
-                    let message = SystemMessage::ViewChange(ViewChangeMessage::new(
-                        self.view().sequence_number().next(),
-                        ViewChangeMessageKind::Stop(requests),
-                    ));
-                    let targets = NodeId::targets(0..self.view().params().n());
-                    node.broadcast(message, targets);
+                // NOTE: we only take this branch of the code before
+                // we have sent our own STOP message
+                if let ProtoPhase::Stopping(_) = self.phase {
+                    self.phase = if i > self.view().params().f() {
+                        // broadcast STOP message with pending requests collected
+                        // from peer nodes' STOP messages
+                        let requests = self.stopped_requests(None);
+                        let message = SystemMessage::ViewChange(ViewChangeMessage::new(
+                            self.view().sequence_number().next(),
+                            ViewChangeMessageKind::Stop(requests),
+                        ));
+                        let targets = NodeId::targets(0..self.view().params().n());
+                        node.broadcast(message, targets);
 
-                    ProtoPhase::Stopping2(i)
-                } else {
-                    ProtoPhase::Stopping(i)
-                };
-
-                SynchronizerStatus::Nil
-            },
-            ProtoPhase::Stopping2(i) => {
-                let msg_seq = message.sequence_number();
-                let next_seq = self.view().sequence_number().next();
-
-                let i = match message.kind() {
-                    ViewChangeMessageKind::Stop(_) if msg_seq != next_seq => {
-                        self.queue_stop(header, message);
-                        return SynchronizerStatus::Nil;
-                    },
-                    ViewChangeMessageKind::Stop(_) => i + 1,
-                    ViewChangeMessageKind::StopData(_) => {
-                        self.queue_stop_data(header, message);
-                        return SynchronizerStatus::Nil;
-                    },
-                    ViewChangeMessageKind::Sync(_) => {
-                        self.queue_sync(header, message);
-                        return SynchronizerStatus::Nil;
-                    },
-                };
-
-                // store pending requests from this STOP
-                let stopped = match message.into_kind() {
-                    ViewChangeMessageKind::Stop(stopped) => stopped,
-                    _ => unreachable!(),
-                };
-                self.stopped.insert(header.from(), stopped);
+                        ProtoPhase::Stopping2(i)
+                    } else {
+                        ProtoPhase::Stopping(i)
+                    };
+                    return SynchronizerStatus::Nil;
+                }
 
                 if i == self.view().params().quorum() {
                     //
