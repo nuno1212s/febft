@@ -125,6 +125,7 @@ impl<O> TboQueue<O> {
     }
 }
 
+#[derive(Copy, Clone)]
 enum TimeoutPhase {
     // we have never received a timeout
     Init(Instant),
@@ -438,6 +439,7 @@ where
                     //   messages with TimeoutPhase::Init(_)
                     // - broadcast STOP-DATA message
                     //
+                    drop(log);
                     self.phase = ProtoPhase::StoppingData(0);
 
                     //SynchronizerStatus::Running

@@ -202,7 +202,7 @@ impl<S> Consensus<S>
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
-    Request<S>: Send + 'static,
+    Request<S>: Send + Clone + 'static,
     Reply<S>: Send + 'static,
 {
     /// Starts a new consensus protocol tracker.
