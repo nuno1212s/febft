@@ -148,7 +148,9 @@ enum ProtoPhase {
     // we are still running the stopping phase of
     // Mod-SMaRt, but we have either locally triggered
     // a view change, or received at least f+1 STOP msgs,
-    // so we don't need to broadcast a new STOP
+    // so we don't need to broadcast a new STOP;
+    // this is effectively an implementation detail,
+    // and not a real phase of Mod-SMaRt!
     Stopping2(usize),
     // we are running the STOP-DATA phase of Mod-SMaRt
     StoppingData(usize),
