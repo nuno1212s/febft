@@ -395,7 +395,7 @@ where
                         // from peer nodes' STOP messages
                         let requests = self.stopped_requests(None);
                         let message = SystemMessage::ViewChange(ViewChangeMessage::new(
-                            self.view().sequence_number().next(),
+                            next_seq,
                             ViewChangeMessageKind::Stop(requests),
                         ));
                         let targets = NodeId::targets(0..self.view().params().n());
@@ -416,6 +416,7 @@ where
                     // - reset the timers of the requests in the STOP
                     //   messages with TimeoutPhase::Init(_)
                     // - broadcast STOP-DATA message
+                    // - install new view (i.e. update view seq no)
                     //
                     drop(log);
                     self.phase = ProtoPhase::StoppingData(0);
