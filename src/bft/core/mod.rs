@@ -31,7 +31,8 @@ impl SystemParams {
     /// Returns the quorum size associated with these
     /// `SystemParams`.
     pub fn quorum(&self) -> usize {
-        2*self.f + 1
+        //2*self.f + 1
+        self.n - self.f
     }
 
     /// Returns the `n` parameter.
