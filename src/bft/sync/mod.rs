@@ -424,25 +424,28 @@ where
                 }
 
                 if i == self.view().params().quorum() {
-                    //
-                    // DONE:
+                    // NOTE:
                     // - add requests from STOP into client requests
                     //   in the log, to be ordered
                     // - reset the timers of the requests in the STOP
                     //   messages with TimeoutPhase::Init(_)
-                    // TODO:
-                    // - broadcast STOP-DATA message
                     // - install new view (i.e. update view seq no)
-                    //
+                    // - send STOP-DATA message
                     self.watch_stopped_requests(
                         timeouts,
                         log,
                     );
 
                     self.phase = ProtoPhase::StoppingData(0);
+                    self.install_view(self.view().next_view());
 
-                    //SynchronizerStatus::Running
-                    unimplemented!()
+                    let message = SystemMessage::ViewChange(ViewChangeMessage::new(
+                        self.view().sequence_number().next(),
+                        ViewChangeMessageKind::StopData(log.decision_log()),
+                    ));
+                    node.send(message, self.view().leader());
+
+                    SynchronizerStatus::Running
                 } else {
                     self.phase = ProtoPhase::Stopping2(i);
                     SynchronizerStatus::Nil
@@ -488,6 +491,9 @@ where
             match timeout_phase {
                 TimeoutPhase::Init(i) if now.duration_since(*i) > self.timeout_dur => {
                     forwarded.push(digest.clone());
+                    // NOTE: we don't update the timeout phase here, because this is
+                    // done with the message we receive locally containing the forwarded
+                    // requests, on `watch_forwarded_requests`
                 },
                 TimeoutPhase::TimedOutOnce(i) if now.duration_since(*i) > self.timeout_dur => {
                     stopped.push(digest.clone());
