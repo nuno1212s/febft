@@ -314,8 +314,15 @@ where
         // since we will be on a different seq no,
         // the time out will do nothing
         self.next_timeout();
-        self.watching.clear();
-        self.watching_timeouts = false;
+    }
+
+    /// Start watching all pending client requests.
+    pub fn watch_all_requests(&mut self) {
+        let phase = TimeoutPhase::Init(Instant::now());
+        for timeout_phase in self.watching.values_mut() {
+            *timeout_phase = phase;
+        }
+        self.watching_timeouts = !self.watching.is_empty();
     }
 
     /// Install a new view received from the CST protocol, or from
