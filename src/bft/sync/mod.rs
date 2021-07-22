@@ -271,20 +271,21 @@ where
     /// STOP view change messages.
     pub fn watch_stopped_requests(
         &mut self,
-        _timeouts: &TimeoutsHandle<S>,
-        _log: &mut Log<State<S>, Request<S>, Reply<S>>,
+        timeouts: &TimeoutsHandle<S>,
+        log: &mut Log<State<S>, Request<S>, Reply<S>>,
     ) {
-        unimplemented!()
-        //let phase = TimeoutPhase::TimedOutOnce(Instant::now());
-        //let requests = requests
-        //    .into_inner()
-        //    .into_iter()
-        //    .map(|forwarded| forwarded.into_inner());
+        // TODO: maybe optimize this `stopped_requests` call, to avoid
+        // a heap allocation of a `Vec`?
+        let requests = self.stopped_requests(None);
+        let phase = TimeoutPhase::Init(Instant::now());
+        let requests = requests
+            .into_iter()
+            .map(|stopped| stopped.into_inner());
 
-        //for (header, request) in requests {
-        //    self.watch_request_impl(phase, header.unique_digest(), timeouts);
-        //    log.insert(header, SystemMessage::Request(request));
-        //}
+        for (header, request) in requests {
+            self.watch_request_impl(phase, header.unique_digest(), timeouts);
+            log.insert(header, SystemMessage::Request(request));
+        }
     }
 
     fn watch_request_impl(
@@ -362,6 +363,7 @@ where
         &mut self,
         header: Header,
         message: ViewChangeMessage<Request<S>>,
+        timeouts: &TimeoutsHandle<S>,
         log: &mut Log<State<S>, Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) -> SynchronizerStatus {
@@ -423,15 +425,20 @@ where
 
                 if i == self.view().params().quorum() {
                     //
-                    // TODO:
+                    // DONE:
                     // - add requests from STOP into client requests
                     //   in the log, to be ordered
                     // - reset the timers of the requests in the STOP
                     //   messages with TimeoutPhase::Init(_)
+                    // TODO:
                     // - broadcast STOP-DATA message
                     // - install new view (i.e. update view seq no)
                     //
-                    drop(log);
+                    self.watch_stopped_requests(
+                        timeouts,
+                        log,
+                    );
+
                     self.phase = ProtoPhase::StoppingData(0);
 
                     //SynchronizerStatus::Running
@@ -550,24 +557,35 @@ where
     }
 
     fn stopped_requests(
-        &self,
+        &mut self,
         timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
     ) -> Vec<StoredMessage<RequestMessage<Request<S>>>> {
         let mut all_reqs = collections::hash_map();
 
-        // FIXME: optimize this; we are including every STOP we have
+        // TODO: optimize this; we are including every STOP we have
         // received thus far for the new view in our own STOP, plus
         // the requests that timed out on us
         if let Some(requests) = timed_out {
             for r in requests {
                 all_reqs.insert(r.header().unique_digest(), r);
             }
-        }
-        for (_, stopped) in self.stopped.iter() {
-            for r in stopped {
-                all_reqs
-                    .entry(r.header().unique_digest())
-                    .or_insert_with(|| r.clone());
+            for (_, stopped) in self.stopped.iter() {
+                for r in stopped {
+                    all_reqs
+                        .entry(r.header().unique_digest())
+                        .or_insert_with(|| r.clone());
+                }
+            }
+        } else {
+            // we did not time out, but rather are just
+            // clearing the buffer of STOP messages received
+            // for the current view change
+            for (_, stopped) in self.stopped.drain() {
+                for r in stopped {
+                    all_reqs
+                        .entry(r.header().unique_digest())
+                        .or_insert_with(|| r);
+                }
             }
         }
 

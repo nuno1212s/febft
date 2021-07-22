@@ -397,6 +397,7 @@ where
                         let status = self.synchronizer.process_message(
                             header,
                             message,
+                            &self.timeouts,
                             &mut self.log,
                             &mut self.node,
                         );
