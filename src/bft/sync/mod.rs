@@ -506,8 +506,12 @@ where
             // we have timed out, therefore we should send a STOP msg
             ProtoPhase::Init => self.phase = ProtoPhase::Stopping2(0),
             // we have received STOP messages from peer nodes,
-            // but haven't sent our own stop, yet
-            ProtoPhase::Stopping(n) => self.phase = ProtoPhase::Stopping2(n),
+            // but haven't sent our own stop, yet;
+            //
+            // this will be called from `process_message`, so
+            // we need to update our phase with a new received
+            // message
+            ProtoPhase::Stopping(i) => self.phase = ProtoPhase::Stopping2(i + 1),
             // we are already running the view change proto, and sent a stop
             _ => return,
         }
