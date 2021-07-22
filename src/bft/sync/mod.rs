@@ -317,12 +317,16 @@ where
     }
 
     /// Start watching all pending client requests.
-    pub fn watch_all_requests(&mut self) {
+    pub fn watch_all_requests(&mut self, timeouts: &TimeoutsHandle<S>) {
         let phase = TimeoutPhase::Init(Instant::now());
         for timeout_phase in self.watching.values_mut() {
             *timeout_phase = phase;
         }
         self.watching_timeouts = !self.watching.is_empty();
+        if self.watching_timeouts {
+            let seq = self.next_timeout();
+            timeouts.timeout(self.timeout_dur, TimeoutKind::ClientRequests(seq));
+        }
     }
 
     /// Install a new view received from the CST protocol, or from
