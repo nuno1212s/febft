@@ -267,6 +267,26 @@ where
         }
     }
 
+    /// Watch a group of client requests that we received from
+    /// STOP view change messages.
+    pub fn watch_stopped_requests(
+        &mut self,
+        _timeouts: &TimeoutsHandle<S>,
+        _log: &mut Log<State<S>, Request<S>, Reply<S>>,
+    ) {
+        unimplemented!()
+        //let phase = TimeoutPhase::TimedOutOnce(Instant::now());
+        //let requests = requests
+        //    .into_inner()
+        //    .into_iter()
+        //    .map(|forwarded| forwarded.into_inner());
+
+        //for (header, request) in requests {
+        //    self.watch_request_impl(phase, header.unique_digest(), timeouts);
+        //    log.insert(header, SystemMessage::Request(request));
+        //}
+    }
+
     fn watch_request_impl(
         &mut self,
         phase: TimeoutPhase,
@@ -289,10 +309,12 @@ where
     }
 
     /// Stop watching all pending client requests.
-    pub fn unwatch_all(&mut self) {
+    pub fn unwatch_all_requests(&mut self) {
         // since we will be on a different seq no,
         // the time out will do nothing
         self.next_timeout();
+        self.watching.clear();
+        self.watching_timeouts = false;
     }
 
     /// Install a new view received from the CST protocol, or from
@@ -390,22 +412,13 @@ where
                 // NOTE: we only take this branch of the code before
                 // we have sent our own STOP message
                 if let ProtoPhase::Stopping(_) = self.phase {
-                    self.phase = if i > self.view().params().f() {
-                        // broadcast STOP message with pending requests collected
-                        // from peer nodes' STOP messages
-                        let requests = self.stopped_requests(None);
-                        let message = SystemMessage::ViewChange(ViewChangeMessage::new(
-                            next_seq,
-                            ViewChangeMessageKind::Stop(requests),
-                        ));
-                        let targets = NodeId::targets(0..self.view().params().n());
-                        node.broadcast(message, targets);
-
-                        ProtoPhase::Stopping2(i)
+                    return if i > self.view().params().f() {
+                        self.begin_view_change(None, node);
+                        SynchronizerStatus::Running
                     } else {
-                        ProtoPhase::Stopping(i)
+                        self.phase = ProtoPhase::Stopping(i);
+                        SynchronizerStatus::Nil
                     };
-                    return SynchronizerStatus::Nil;
                 }
 
                 if i == self.view().params().quorum() {
@@ -486,7 +499,7 @@ where
     /// that have timed out on the current replica.
     pub fn begin_view_change(
         &mut self,
-        timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+        timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
         node: &mut Node<S::Data>,
     ) {
         match self.phase {
@@ -499,7 +512,12 @@ where
             _ => return,
         }
 
-        let requests = self.stopped_requests(Some(timed_out));
+        // stop all timers
+        self.unwatch_all_requests();
+
+        // broadcast STOP message with pending requests collected
+        // from peer nodes' STOP messages
+        let requests = self.stopped_requests(timed_out);
         let message = SystemMessage::ViewChange(ViewChangeMessage::new(
             self.view().sequence_number().next(),
             ViewChangeMessageKind::Stop(requests),
