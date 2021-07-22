@@ -276,11 +276,11 @@ where
     ) {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
-        let requests = self.stopped_requests(None);
-        let phase = TimeoutPhase::Init(Instant::now());
-        let requests = requests
+        let requests = self
+            .stopped_requests(None)
             .into_iter()
             .map(|stopped| stopped.into_inner());
+        let phase = TimeoutPhase::Init(Instant::now());
 
         for (header, request) in requests {
             self.watch_request_impl(phase, header.unique_digest(), timeouts);
@@ -509,16 +509,16 @@ where
         timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
         node: &mut Node<S::Data>,
     ) {
-        match self.phase {
+        match (&self.phase, &timed_out) {
             // we have timed out, therefore we should send a STOP msg
-            ProtoPhase::Init => self.phase = ProtoPhase::Stopping2(0),
+            (ProtoPhase::Init, _) => self.phase = ProtoPhase::Stopping2(0),
             // we have received STOP messages from peer nodes,
             // but haven't sent our own stop, yet;
             //
-            // this will be called from `process_message`, so
-            // we need to update our phase with a new received
-            // message
-            ProtoPhase::Stopping(i) => self.phase = ProtoPhase::Stopping2(i + 1),
+            // when `timed_out` is `None`, we were called from `process_message`,
+            // so we need to update our phase with a new received message
+            (ProtoPhase::Stopping(i), None) => self.phase = ProtoPhase::Stopping2(*i + 1),
+            (ProtoPhase::Stopping(i), _) => self.phase = ProtoPhase::Stopping2(*i),
             // we are already running the view change proto, and sent a stop
             _ => return,
         }
