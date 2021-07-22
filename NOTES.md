@@ -12,3 +12,10 @@
   just their hash digests
 * requests are concurrently added to the request queue, and
   don't go through the master channel (use Mutex)
+
+# systems in rust
+
+* https://crates.io/crates/overlord
+* https://crates.io/crates/brb
+* https://crates.io/crates/aleph-bft
+    + https://github.com/Cardinal-Cryptography/AlephBFT
