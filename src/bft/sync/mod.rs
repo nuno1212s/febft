@@ -458,6 +458,35 @@ where
                     SynchronizerStatus::Nil
                 }
             },
+            ProtoPhase::StoppingData(i) => {
+                let msg_seq = message.sequence_number();
+                let seq = self.view().sequence_number();
+
+                // reject STOP-DATA messages if we are not the leader
+                let i = match message.kind() {
+                    ViewChangeMessageKind::Stop(_)=> {
+                        self.queue_stop(header, message);
+                        return SynchronizerStatus::Running;
+                    },
+                    ViewChangeMessageKind::StopData(_) if msg_seq != seq => {
+                        if self.view().peek(msg_seq).leader() == node.id() {
+                            self.queue_stop_data(header, message);
+                        }
+                        return SynchronizerStatus::Running;
+                    },
+                    ViewChangeMessageKind::StopData(_) if self.view().leader() != node.id() => {
+                        return SynchronizerStatus::Running;
+                    },
+                    ViewChangeMessageKind::StopData(_) => i + 1,
+                    ViewChangeMessageKind::Sync(_) => {
+                        self.queue_sync(header, message);
+                        return SynchronizerStatus::Nil;
+                    },
+                };
+                drop(i);
+
+                unimplemented!()
+            },
             // TODO: other phases
             _ => unimplemented!(),
         }

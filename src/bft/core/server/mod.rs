@@ -100,8 +100,13 @@ impl ViewInfo {
     /// Returns a new view with the sequence number after
     /// the current view's number.
     pub fn next_view(&self) -> ViewInfo {
+        self.peek(self.seq.next())
+    }
+
+    /// Returns a new view with the specified sequence number.
+    pub fn peek(&self, seq: SeqNo) -> ViewInfo {
         let mut view = *self;
-        view.seq = view.seq.next();
+        view.seq = seq;
         view
     }
 
