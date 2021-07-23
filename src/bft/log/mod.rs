@@ -167,7 +167,7 @@ impl DecisionLog {
 pub struct Log<S, O, P> {
     curr_seq: SeqNo,
     batch_size: usize,
-    decisions: DecisionLog,
+    declog: DecisionLog,
     // TODO: view change stuff
     requests: OrderedMap<Digest, StoredMessage<RequestMessage<O>>>,
     deciding: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
@@ -188,7 +188,7 @@ impl<S, O, P> Log<S, O, P> {
         Self {
             batch_size,
             curr_seq: SeqNo::from(0),
-            decisions: DecisionLog::new(),
+            declog: DecisionLog::new(),
             deciding: collections::hash_map_capacity(batch_size),
             // TODO: use config value instead of const
             decided: Vec::with_capacity(PERIOD as usize),
@@ -201,14 +201,14 @@ impl<S, O, P> Log<S, O, P> {
     /// Returns a reference to a subset of this log, containing only
     /// consensus messages.
     pub fn decision_log(&self) -> &DecisionLog {
-        &self.decisions
+        &self.declog
     }
 
     /// Update the log state, received from the CST protocol.
     pub fn install_state(&mut self, last_seq: SeqNo, rs: RecoveryState<S, O>) {
         // FIXME: what to do with `self.deciding`..?
 
-        self.decisions = rs.decisions;
+        self.declog = rs.declog;
         self.decided = rs.requests;
         self.checkpoint = CheckpointState::Complete(rs.checkpoint);
         self.curr_seq = last_seq;
@@ -233,7 +233,7 @@ impl<S, O, P> Log<S, O, P> {
                     view,
                     checkpoint.clone(),
                     self.decided.clone(),
-                    self.decisions.clone(),
+                    self.declog.clone(),
                 ))
             },
             _ => Err("Checkpoint to be finalized").wrapped(ErrorKind::Log),
@@ -259,9 +259,9 @@ impl<S, O, P> Log<S, O, P> {
             SystemMessage::Consensus(message) => {
                 let stored = StoredMessage::new(header, message);
                 match stored.message().kind() {
-                    ConsensusMessageKind::PrePrepare(_) => self.decisions.pre_prepares.push(stored),
-                    ConsensusMessageKind::Prepare => self.decisions.prepares.push(stored),
-                    ConsensusMessageKind::Commit => self.decisions.commits.push(stored),
+                    ConsensusMessageKind::PrePrepare(_) => self.declog.pre_prepares.push(stored),
+                    ConsensusMessageKind::Prepare => self.declog.prepares.push(stored),
+                    ConsensusMessageKind::Commit => self.declog.commits.push(stored),
                 }
             },
             // rest are not handled by the log
@@ -338,9 +338,9 @@ impl<S, O, P> Log<S, O, P> {
 
         // retrive the sequence number stored within the PRE-PREPARE message
         // pertaining to the current request being executed
-        let last_seq_no = if self.decisions.pre_prepares.len() > 0 {
+        let last_seq_no = if self.declog.pre_prepares.len() > 0 {
             let stored_pre_prepare =
-                &self.decisions.pre_prepares[self.decisions.pre_prepares.len()-1].message();
+                &self.declog.pre_prepares[self.declog.pre_prepares.len()-1].message();
             stored_pre_prepare.sequence_number()
         } else {
             // the log was cleared concurrently, retrieve
@@ -390,9 +390,9 @@ impl<S, O, P> Log<S, O, P> {
                 //
                 // FIXME: the log should not be cleared until a request is over
                 //
-                match self.decisions.pre_prepares.pop() {
+                match self.declog.pre_prepares.pop() {
                     Some(last_pre_prepare) => {
-                        self.decisions.pre_prepares.clear();
+                        self.declog.pre_prepares.clear();
 
                         // store the id of the last received pre-prepare,
                         // which corresponds to the request currently being
@@ -403,8 +403,8 @@ impl<S, O, P> Log<S, O, P> {
                         // no stored PRE-PREPARE messages, NOOP
                     },
                 }
-                self.decisions.prepares.clear();
-                self.decisions.commits.clear();
+                self.declog.prepares.clear();
+                self.declog.commits.clear();
                 Ok(())
             },
         }
