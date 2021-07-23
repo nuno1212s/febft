@@ -230,7 +230,9 @@ where
     ) {
         // get the latest seq no
         let seq_no = {
-            let pre_prepares = recovery_state.pre_prepares();
+            let pre_prepares = recovery_state
+                .decision_log()
+                .pre_prepares();
             if pre_prepares.is_empty() {
                 self.sequence_number()
             } else {

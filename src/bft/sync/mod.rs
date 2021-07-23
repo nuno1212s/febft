@@ -452,7 +452,7 @@ where
 
                     let message = SystemMessage::ViewChange(ViewChangeMessage::new(
                         self.view().sequence_number(),
-                        ViewChangeMessageKind::StopData(log.decision_log()),
+                        ViewChangeMessageKind::StopData(log.decision_log().clone()),
                     ));
                     node.send(message, self.view().leader());
 

@@ -134,13 +134,40 @@ pub struct DecisionLog {
     commits: Vec<StoredMessage<ConsensusMessage>>,
 }
 
+impl DecisionLog {
+    /// Returns a brand new `DecisionLog`.
+    pub fn new() -> Self {
+        Self {
+            pre_prepares: Vec::new(),
+            prepares: Vec::new(),
+            commits: Vec::new(),
+        }
+    }
+
+    /// Returns the list of `PRE-PREPARE` messages after the last checkpoint
+    /// at the moment of the creation of this `DecisionLog`.
+    pub fn pre_prepares(&self) -> &[StoredMessage<ConsensusMessage>] {
+        &self.pre_prepares[..]
+    }
+
+    /// Returns the list of `PREPARE` messages after the last checkpoint
+    /// at the moment of the creation of this `DecisionLog`.
+    pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage>] {
+        &self.prepares[..]
+    }
+
+    /// Returns the list of `COMMIT` messages after the last checkpoint
+    /// at the moment of the creation of this `DecisionLog`.
+    pub fn commits(&self) -> &[StoredMessage<ConsensusMessage>] {
+        &self.commits[..]
+    }
+}
+
 /// Represents a log of messages received by the BFT system.
 pub struct Log<S, O, P> {
     curr_seq: SeqNo,
     batch_size: usize,
-    pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
-    prepares: Vec<StoredMessage<ConsensusMessage>>,
-    commits: Vec<StoredMessage<ConsensusMessage>>,
+    decisions: DecisionLog,
     // TODO: view change stuff
     requests: OrderedMap<Digest, StoredMessage<RequestMessage<O>>>,
     deciding: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
@@ -161,9 +188,7 @@ impl<S, O, P> Log<S, O, P> {
         Self {
             batch_size,
             curr_seq: SeqNo::from(0),
-            pre_prepares: Vec::new(),
-            prepares: Vec::new(),
-            commits: Vec::new(),
+            decisions: DecisionLog::new(),
             deciding: collections::hash_map_capacity(batch_size),
             // TODO: use config value instead of const
             decided: Vec::with_capacity(PERIOD as usize),
@@ -173,23 +198,17 @@ impl<S, O, P> Log<S, O, P> {
         }
     }
 
-    /// Returns a (cloned) subset of this log, containing only
+    /// Returns a reference to a subset of this log, containing only
     /// consensus messages.
-    pub fn decision_log(&self) -> DecisionLog {
-        DecisionLog {
-            pre_prepares: self.pre_prepares.clone(),
-            prepares: self.prepares.clone(),
-            commits: self.commits.clone(),
-        }
+    pub fn decision_log(&self) -> &DecisionLog {
+        &self.decisions
     }
 
     /// Update the log state, received from the CST protocol.
     pub fn install_state(&mut self, last_seq: SeqNo, rs: RecoveryState<S, O>) {
         // FIXME: what to do with `self.deciding`..?
 
-        self.pre_prepares = rs.pre_prepares;
-        self.prepares = rs.prepares;
-        self.commits = rs.commits;
+        self.decisions = rs.decisions;
         self.decided = rs.requests;
         self.checkpoint = CheckpointState::Complete(rs.checkpoint);
         self.curr_seq = last_seq;
@@ -214,9 +233,7 @@ impl<S, O, P> Log<S, O, P> {
                     view,
                     checkpoint.clone(),
                     self.decided.clone(),
-                    self.pre_prepares.clone(),
-                    self.prepares.clone(),
-                    self.commits.clone(),
+                    self.decisions.clone(),
                 ))
             },
             _ => Err("Checkpoint to be finalized").wrapped(ErrorKind::Log),
@@ -242,9 +259,9 @@ impl<S, O, P> Log<S, O, P> {
             SystemMessage::Consensus(message) => {
                 let stored = StoredMessage::new(header, message);
                 match stored.message().kind() {
-                    ConsensusMessageKind::PrePrepare(_) => self.pre_prepares.push(stored),
-                    ConsensusMessageKind::Prepare => self.prepares.push(stored),
-                    ConsensusMessageKind::Commit => self.commits.push(stored),
+                    ConsensusMessageKind::PrePrepare(_) => self.decisions.pre_prepares.push(stored),
+                    ConsensusMessageKind::Prepare => self.decisions.prepares.push(stored),
+                    ConsensusMessageKind::Commit => self.decisions.commits.push(stored),
                 }
             },
             // rest are not handled by the log
@@ -321,8 +338,9 @@ impl<S, O, P> Log<S, O, P> {
 
         // retrive the sequence number stored within the PRE-PREPARE message
         // pertaining to the current request being executed
-        let last_seq_no = if self.pre_prepares.len() > 0 {
-            let stored_pre_prepare = &self.pre_prepares[self.pre_prepares.len()-1].message();
+        let last_seq_no = if self.decisions.pre_prepares.len() > 0 {
+            let stored_pre_prepare =
+                &self.decisions.pre_prepares[self.decisions.pre_prepares.len()-1].message();
             stored_pre_prepare.sequence_number()
         } else {
             // the log was cleared concurrently, retrieve
@@ -372,9 +390,9 @@ impl<S, O, P> Log<S, O, P> {
                 //
                 // FIXME: the log should not be cleared until a request is over
                 //
-                match self.pre_prepares.pop() {
+                match self.decisions.pre_prepares.pop() {
                     Some(last_pre_prepare) => {
-                        self.pre_prepares.clear();
+                        self.decisions.pre_prepares.clear();
 
                         // store the id of the last received pre-prepare,
                         // which corresponds to the request currently being
@@ -385,8 +403,8 @@ impl<S, O, P> Log<S, O, P> {
                         // no stored PRE-PREPARE messages, NOOP
                     },
                 }
-                self.prepares.clear();
-                self.commits.clear();
+                self.decisions.prepares.clear();
+                self.decisions.commits.clear();
                 Ok(())
             },
         }

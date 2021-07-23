@@ -28,7 +28,7 @@ use crate::bft::timeouts::{
 use crate::bft::log::{
     Log,
     Checkpoint,
-    StoredMessage,
+    DecisionLog,
 };
 use crate::bft::communication::{
     Node,
@@ -39,7 +39,6 @@ use crate::bft::communication::message::{
     CstMessage,
     SystemMessage,
     CstMessageKind,
-    ConsensusMessage,
 };
 use crate::bft::executable::{
     ExecutorHandle,
@@ -70,9 +69,7 @@ pub struct RecoveryState<S, O> {
     // the request batches have been concatenated,
     // for memory efficiency
     pub(crate) requests: Vec<O>,
-    pub(crate) pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
-    pub(crate) prepares: Vec<StoredMessage<ConsensusMessage>>,
-    pub(crate) commits: Vec<StoredMessage<ConsensusMessage>>,
+    pub(crate) decisions: DecisionLog,
 }
 
 /// Allow a replica to recover from the state received by peer nodes.
@@ -116,17 +113,13 @@ impl<S, O> RecoveryState<S, O> {
         view: ViewInfo,
         checkpoint: Checkpoint<S>,
         requests: Vec<O>,
-        pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
-        prepares: Vec<StoredMessage<ConsensusMessage>>,
-        commits: Vec<StoredMessage<ConsensusMessage>>,
+        decisions: DecisionLog,
     ) -> Self {
         Self {
             view,
             checkpoint,
             requests,
-            pre_prepares,
-            prepares,
-            commits,
+            decisions,
         }
     }
 
@@ -146,22 +139,9 @@ impl<S, O> RecoveryState<S, O> {
         &self.requests[..]
     }
 
-    /// Returns the list of `PRE-PREPARE` messages after the last checkpoint
-    /// at the moment of the creation of this `RecoveryState`.
-    pub fn pre_prepares(&self) -> &[StoredMessage<ConsensusMessage>] {
-        &self.pre_prepares[..]
-    }
-
-    /// Returns the list of `PREPARE` messages after the last checkpoint
-    /// at the moment of the creation of this `RecoveryState`.
-    pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage>] {
-        &self.prepares[..]
-    }
-
-    /// Returns the list of `COMMIT` messages after the last checkpoint
-    /// at the moment of the creation of this `RecoveryState`.
-    pub fn commits(&self) -> &[StoredMessage<ConsensusMessage>] {
-        &self.commits[..]
+    /// Returns a reference to the decided consensus messages of this recovery state.
+    pub fn decision_log(&self) -> &DecisionLog {
+        &self.decisions
     }
 }
 
