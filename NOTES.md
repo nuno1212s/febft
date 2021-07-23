@@ -12,6 +12,8 @@
   just their hash digests
 * requests are concurrently added to the request queue, and
   don't go through the master channel (use Mutex)
+* send_node on execution layer, so we don't need to go
+  through the master channel to send replies to clients
 
 # systems in rust
 
