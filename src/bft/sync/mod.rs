@@ -488,9 +488,18 @@ where
                         return SynchronizerStatus::Nil;
                     },
                 };
-                drop(i);
 
-                unimplemented!()
+                // TODO: validate STOP-DATA signature and store msg
+
+                if i == self.view().params().quorum() {
+                    // TODO: broadcast SYNC msg with collected
+                    // STOP-DATA proofs
+                    unimplemented!()
+                } else {
+                    self.phase = ProtoPhase::StoppingData(i);
+                    //SynchronizerStatus::Nil
+                    unimplemented!()
+                }
             },
             // TODO: other phases
             _ => unimplemented!(),
