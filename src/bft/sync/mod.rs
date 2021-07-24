@@ -450,7 +450,7 @@ where
                     self.phase = ProtoPhase::StoppingData(0);
                     self.install_view(self.view().next_view());
 
-                    let proof = log.decision_log().last(*self.view());
+                    let proof = log.decision_log().last_decision(*self.view());
                     let message = SystemMessage::ViewChange(ViewChangeMessage::new(
                         self.view().sequence_number(),
                         ViewChangeMessageKind::StopData(proof),

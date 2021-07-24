@@ -176,7 +176,7 @@ impl DecisionLog {
 
     /// Returns the proof of the last executed consensus
     /// instance registered in this `DecisionLog`.
-    pub fn last(&self, view: ViewInfo) -> Option<Proof> {
+    pub fn last_decision(&self, view: ViewInfo) -> Option<Proof> {
         // there is not a single complete proof to return
         if self.pre_prepares.is_empty() || self.prepares.is_empty() || self.commits.is_empty() {
             return None;
