@@ -17,6 +17,7 @@
 
 # systems in rust
 
+* https://www.ibr.cs.tu-bs.de/users/ruesch/papers/ruesch-serial19.pdf
 * https://crates.io/crates/overlord
 * https://crates.io/crates/brb
 * https://crates.io/crates/aleph-bft
