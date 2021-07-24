@@ -402,16 +402,25 @@ where
                 let i = match message.kind() {
                     ViewChangeMessageKind::Stop(_) if msg_seq != next_seq => {
                         self.queue_stop(header, message);
-                        return SynchronizerStatus::Nil;
+
+                        let f = self.view().params().f();
+                        return if i > f { SynchronizerStatus::Running }
+                            else { SynchronizerStatus::Nil };
                     },
                     ViewChangeMessageKind::Stop(_) => i + 1,
                     ViewChangeMessageKind::StopData(_) => {
                         self.queue_stop_data(header, message);
-                        return SynchronizerStatus::Nil;
+
+                        let f = self.view().params().f();
+                        return if i > f { SynchronizerStatus::Running }
+                            else { SynchronizerStatus::Nil };
                     },
                     ViewChangeMessageKind::Sync(_) => {
                         self.queue_sync(header, message);
-                        return SynchronizerStatus::Nil;
+
+                        let f = self.view().params().f();
+                        return if i > f { SynchronizerStatus::Running }
+                            else { SynchronizerStatus::Nil };
                     },
                 };
 
@@ -456,12 +465,11 @@ where
                         ViewChangeMessageKind::StopData(proof),
                     ));
                     node.send(message, self.view().leader());
-
-                    SynchronizerStatus::Running
                 } else {
                     self.phase = ProtoPhase::Stopping2(i);
-                    SynchronizerStatus::Nil
                 }
+
+                SynchronizerStatus::Running
             },
             ProtoPhase::StoppingData(i) => {
                 let msg_seq = message.sequence_number();
@@ -485,7 +493,7 @@ where
                     ViewChangeMessageKind::StopData(_) => i + 1,
                     ViewChangeMessageKind::Sync(_) => {
                         self.queue_sync(header, message);
-                        return SynchronizerStatus::Nil;
+                        return SynchronizerStatus::Running;
                     },
                 };
 
