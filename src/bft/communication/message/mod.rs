@@ -211,8 +211,8 @@ impl<O> ViewChangeMessage<O> {
 #[derive(Clone)]
 pub enum ViewChangeMessageKind<O> {
     Stop(Vec<StoredMessage<RequestMessage<O>>>),
-    StopData(Proof),
-    Sync(Vec<StoredMessage<ViewChangeMessage<O>>>),
+    StopData(Option<Proof>),
+    Sync(( /* TODO: type used here */)),
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]

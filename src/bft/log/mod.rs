@@ -176,8 +176,48 @@ impl DecisionLog {
 
     /// Returns the proof of the last executed consensus
     /// instance registered in this `DecisionLog`.
-    pub fn last(&self) -> Option<Proof> {
-        unimplemented!()
+    pub fn last(&self, view: ViewInfo) -> Option<Proof> {
+        // there is not a single complete proof to return
+        if self.pre_prepares.is_empty() || self.prepares.is_empty() || self.commits.is_empty() {
+            return None;
+        }
+
+        let pre_prepare_ref = &self.pre_prepares[self.pre_prepares.len()-1];
+        let prepares = {
+            // TODO: this code could be improved when `ControlFlow` is stabilized in
+            // the Rust standard library
+            let mut buf = Vec::new();
+            for i in (0..self.prepares.len()).rev() {
+                let stored = &self.prepares[i];
+                let will_exit = stored.message().sequence_number()
+                    != pre_prepare_ref.message().sequence_number();
+                if will_exit {
+                    break;
+                }
+                buf.push(stored.clone());
+            }
+            // minus one because leader doesn't vote in the PREPARE phase,
+            // since it already voted in the PRE-PREPARE phase
+            let quorum = view.params().quorum() - 1;
+            if buf.len() < quorum { None } else { Some(buf) }
+        }?;
+        let commits = {
+            let mut buf = Vec::new();
+            for i in (0..self.commits.len()).rev() {
+                let stored = &self.commits[i];
+                let will_exit = stored.message().sequence_number()
+                    != pre_prepare_ref.message().sequence_number();
+                if will_exit {
+                    break;
+                }
+                buf.push(stored.clone());
+            }
+            let quorum = view.params().quorum();
+            if buf.len() < quorum { None } else { Some(buf) }
+        }?;
+        let pre_prepare = pre_prepare_ref.clone();
+
+        Some(Proof { pre_prepare, prepares, commits })
     }
 }
 

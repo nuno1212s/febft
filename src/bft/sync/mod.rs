@@ -450,9 +450,10 @@ where
                     self.phase = ProtoPhase::StoppingData(0);
                     self.install_view(self.view().next_view());
 
+                    let proof = log.decision_log().last(*self.view());
                     let message = SystemMessage::ViewChange(ViewChangeMessage::new(
                         self.view().sequence_number(),
-                        ViewChangeMessageKind::StopData(log.decision_log().clone()),
+                        ViewChangeMessageKind::StopData(proof),
                     ));
                     node.send(message, self.view().leader());
 
