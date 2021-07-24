@@ -137,6 +137,15 @@ pub struct DecisionLog {
     commits: Vec<StoredMessage<ConsensusMessage>>,
 }
 
+/// Represents a single decision from the `DecisionLog`.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct Proof {
+    pre_prepare: StoredMessage<ConsensusMessage>,
+    prepares: Vec<StoredMessage<ConsensusMessage>>,
+    commits: Vec<StoredMessage<ConsensusMessage>>,
+}
+
 impl DecisionLog {
     /// Returns a brand new `DecisionLog`.
     pub fn new() -> Self {
@@ -163,6 +172,12 @@ impl DecisionLog {
     /// at the moment of the creation of this `DecisionLog`.
     pub fn commits(&self) -> &[StoredMessage<ConsensusMessage>] {
         &self.commits[..]
+    }
+
+    /// Returns the proof of the last executed consensus
+    /// instance registered in this `DecisionLog`.
+    pub fn last(&self) -> Option<Proof> {
+        unimplemented!()
     }
 }
 

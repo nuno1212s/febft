@@ -35,7 +35,7 @@ use crate::bft::ordering::{
 };
 use crate::bft::log::{
     StoredMessage,
-    DecisionLog,
+    Proof,
 };
 use crate::bft::communication::socket::Socket;
 use crate::bft::executable::UpdateBatchReplies;
@@ -211,7 +211,7 @@ impl<O> ViewChangeMessage<O> {
 #[derive(Clone)]
 pub enum ViewChangeMessageKind<O> {
     Stop(Vec<StoredMessage<RequestMessage<O>>>),
-    StopData(DecisionLog),
+    StopData(Proof),
     Sync(Vec<StoredMessage<ViewChangeMessage<O>>>),
 }
 
