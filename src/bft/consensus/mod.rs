@@ -313,7 +313,7 @@ where
                 }
                 if self.missing_requests.is_empty() {
                     extract_msg!(
-                        { self.phase = ProtoPhase::Preparing(0); },
+                        { self.phase = ProtoPhase::Preparing(1); },
                         &mut self.tbo.get_queue,
                         &mut self.tbo.prepares
                     )
@@ -452,7 +452,7 @@ where
                     self.missing_requests.push_back(digest.clone());
                 }
                 self.phase = if self.missing_requests.is_empty() {
-                    ProtoPhase::Preparing(0)
+                    ProtoPhase::Preparing(1)
                 } else {
                     ProtoPhase::PreparingRequests
                 };
