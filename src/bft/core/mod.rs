@@ -32,7 +32,8 @@ impl SystemParams {
     /// `SystemParams`.
     pub fn quorum(&self) -> usize {
         //2*self.f + 1
-        self.n - self.f
+        //self.n - self.f
+        (self.f << 1) + 1
     }
 
     /// Returns the `n` parameter.
