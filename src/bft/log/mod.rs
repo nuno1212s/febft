@@ -1,5 +1,8 @@
 //! A module to manage the `febft` message log.
 
+// TODO: maybe move this module to `febft::bft::consensus::log`,
+// since it is tightly integrated with the `consensus` module
+
 use std::marker::PhantomData;
 
 #[cfg(feature = "serialize_serde")]
