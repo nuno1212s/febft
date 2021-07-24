@@ -279,9 +279,12 @@ where
         node.broadcast(message, targets);
     }
 
-    /// Returns true if there is no running consensus instance.
-    pub fn is_not_deciding(&self) -> bool {
-        matches!(self.phase, ProtoPhase::Init)
+    /// Returns true if there is a running consensus instance.
+    pub fn is_deciding(&self) -> bool {
+        match self.phase {
+            ProtoPhase::Init => false,
+            _ => true,
+        }
     }
 
     /// Check if we can process new consensus messages.
