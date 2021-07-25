@@ -422,6 +422,8 @@ where
                 // queue message if we're not pre-preparing
                 // or in the same seq as the message
                 match message.kind() {
+                    // TODO: reject PRE-PREPARE if it's not in the same view (i.e. from a different
+                    // leader)
                     ConsensusMessageKind::PrePrepare(_) if message.sequence_number() != self.sequence_number() => {
                         self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
