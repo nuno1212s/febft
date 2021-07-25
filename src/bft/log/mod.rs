@@ -132,6 +132,7 @@ impl<M> StoredMessage<M> {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct DecisionLog {
+    last_exec: Option<SeqNo>,
     pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
     prepares: Vec<StoredMessage<ConsensusMessage>>,
     commits: Vec<StoredMessage<ConsensusMessage>>,
@@ -150,10 +151,19 @@ impl DecisionLog {
     /// Returns a brand new `DecisionLog`.
     pub fn new() -> Self {
         Self {
+            // TODO: when recovering a replica from persistent
+            // storage, set this value to `Some(...)`
+            last_exec: None,
             pre_prepares: Vec::new(),
             prepares: Vec::new(),
             commits: Vec::new(),
         }
+    }
+
+    /// Returns the sequence number of the last executed batch of client
+    /// requests, assigned by the conesensus layer.
+    pub fn last_execution(&self) -> Option<SeqNo> {
+        self.last_exec
     }
 
     /// Returns the list of `PRE-PREPARE` messages after the last checkpoint
@@ -177,37 +187,62 @@ impl DecisionLog {
     /// Returns the proof of the last executed consensus
     /// instance registered in this `DecisionLog`.
     pub fn last_decision(&self, view: ViewInfo) -> Option<Proof> {
-        // there is not a single complete proof to return
-        if self.pre_prepares.is_empty() || self.prepares.is_empty() || self.commits.is_empty() {
-            return None;
-        }
+        let last_exec = self.last_exec?;
 
-        let pre_prepare_ref = &self.pre_prepares[self.pre_prepares.len()-1];
+        let pre_prepare = 'outer: loop {
+            for i in (0..self.prepares.len()).rev() {
+                let pre_prepare_ref = &self.pre_prepares[i];
+                if pre_prepare_ref.message().sequence_number() == last_exec {
+                    break 'outer pre_prepare_ref.clone();
+                }
+            }
+            // if nothing went wrong, this code should be unreachable,
+            // since we registered the last executed sequence number
+            unreachable!()
+        };
         let prepares = {
             // TODO: this code could be improved when `ControlFlow` is stabilized in
             // the Rust standard library
             let mut buf = Vec::new();
+            let mut found = false;
             for i in (0..self.prepares.len()).rev() {
                 let stored = &self.prepares[i];
-                let will_exit = stored.message().sequence_number()
-                    != pre_prepare_ref.message().sequence_number();
-                if will_exit {
+                if !found {
+                    if stored.message().sequence_number() != last_exec {
+                        // skip messages added to log after the last execution
+                        continue;
+                    } else {
+                        found = true;
+                        buf.push(stored.clone());
+                        continue;
+                    }
+                }
+                if stored.message().sequence_number() != last_exec {
                     break;
                 }
                 buf.push(stored.clone());
             }
-            // minus one because leader doesn't vote in the PREPARE phase,
-            // since it already voted in the PRE-PREPARE phase
-            let quorum = view.params().quorum() - 1;
+            // quorum size minus one, because leader doesn't vote in the PREPARE
+            // phase, since it already voted in the PRE-PREPARE phase;
+            // = (N - F) - 1 = (2F + 1) - 1 = 2F
+            let quorum = view.params().f() << 1;
             if buf.len() < quorum { None } else { Some(buf) }
         }?;
         let commits = {
             let mut buf = Vec::new();
+            let mut found = false;
             for i in (0..self.commits.len()).rev() {
                 let stored = &self.commits[i];
-                let will_exit = stored.message().sequence_number()
-                    != pre_prepare_ref.message().sequence_number();
-                if will_exit {
+                if !found {
+                    if stored.message().sequence_number() != last_exec {
+                        continue;
+                    } else {
+                        found = true;
+                        buf.push(stored.clone());
+                        continue;
+                    }
+                }
+                if stored.message().sequence_number() != last_exec {
                     break;
                 }
                 buf.push(stored.clone());
@@ -215,7 +250,6 @@ impl DecisionLog {
             let quorum = view.params().quorum();
             if buf.len() < quorum { None } else { Some(buf) }
         }?;
-        let pre_prepare = pre_prepare_ref.clone();
 
         Some(Proof { pre_prepare, prepares, commits })
     }
@@ -226,7 +260,6 @@ pub struct Log<S, O, P> {
     curr_seq: SeqNo,
     batch_size: usize,
     declog: DecisionLog,
-    // TODO: view change stuff
     requests: OrderedMap<Digest, StoredMessage<RequestMessage<O>>>,
     deciding: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
     decided: Vec<O>,
@@ -368,12 +401,13 @@ impl<S, O, P> Log<S, O, P> {
             .collect()
     }
 
-    /// Finalize a batch of client requests, retrieving the payload associated with their
+    /// Finalize a batch of client requests decided on the consensus instance
+    /// with sequence number `seq`, retrieving the payload associated with their
     /// given digests `digests`.
     ///
     /// The log may be cleared resulting from this operation. Check the enum variant of
     /// `Info`, to perform a local checkpoint when appropriate.
-    pub fn finalize_batch(&mut self, digests: &[Digest]) -> Result<(Info, UpdateBatch<O>)>
+    pub fn finalize_batch(&mut self, seq: SeqNo, digests: &[Digest]) -> Result<(Info, UpdateBatch<O>)>
     where
         O: Clone,
     {
@@ -412,6 +446,9 @@ impl<S, O, P> Log<S, O, P> {
         } else {
             Info::Nil
         };
+
+        // the last executed sequence number
+        self.declog.last_exec = Some(seq);
 
         Ok((info, batch))
     }

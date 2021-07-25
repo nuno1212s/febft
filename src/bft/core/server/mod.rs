@@ -418,6 +418,7 @@ where
                         }
                     },
                     SystemMessage::Consensus(message) => {
+                        let seq = self.consensus.sequence_number();
                         let status = self.consensus.process_message(
                             header,
                             message,
@@ -436,7 +437,7 @@ where
                             // attributed by the consensus layer to each op,
                             // to execute in order
                             ConsensusStatus::Decided(digests) => {
-                                let (info, batch) = self.log.finalize_batch(digests)?;
+                                let (info, batch) = self.log.finalize_batch(seq, digests)?;
                                 match info {
                                     // normal execution
                                     Info::Nil => self.executor.queue_update(
