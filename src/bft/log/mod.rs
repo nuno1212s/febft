@@ -349,8 +349,8 @@ impl<S, O, P> Log<S, O, P> {
                 let stored = StoredMessage::new(header, message);
                 match stored.message().kind() {
                     ConsensusMessageKind::PrePrepare(_) => self.declog.pre_prepares.push(stored),
-                    ConsensusMessageKind::Prepare => self.declog.prepares.push(stored),
-                    ConsensusMessageKind::Commit => self.declog.commits.push(stored),
+                    ConsensusMessageKind::Prepare(_) => self.declog.prepares.push(stored),
+                    ConsensusMessageKind::Commit(_) => self.declog.commits.push(stored),
                 }
             },
             // rest are not handled by the log
