@@ -498,7 +498,7 @@ where
                         // drop msg in a different view
                         return ConsensusStatus::Deciding;
                     },
-                    ConsensusMessageKind::Prepare(_) if header.digest() != &self.current_digest => {
+                    ConsensusMessageKind::Prepare(d) if d != &self.current_digest => {
                         // drop msg with different digest from proposed value
                         return ConsensusStatus::Deciding;
                     },
@@ -546,7 +546,7 @@ where
                         // drop msg in a different view
                         return ConsensusStatus::Deciding;
                     },
-                    ConsensusMessageKind::Commit(_) if header.digest() != &self.current_digest => {
+                    ConsensusMessageKind::Commit(d) if d != &self.current_digest => {
                         // drop msg with different digest from proposed value
                         return ConsensusStatus::Deciding;
                     },
