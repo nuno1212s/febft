@@ -205,8 +205,7 @@ impl DecisionLog {
             // the Rust standard library
             let mut buf = Vec::new();
             let mut found = false;
-            for i in (0..self.prepares.len()).rev() {
-                let stored = &self.prepares[i];
+            for stored in self.prepares.iter().rev() {
                 if !found {
                     if stored.message().sequence_number() != last_exec {
                         // skip messages added to log after the last execution
@@ -231,8 +230,7 @@ impl DecisionLog {
         let commits = {
             let mut buf = Vec::new();
             let mut found = false;
-            for i in (0..self.commits.len()).rev() {
-                let stored = &self.commits[i];
+            for stored in self.commits.iter().rev() {
                 if !found {
                     if stored.message().sequence_number() != last_exec {
                         continue;
