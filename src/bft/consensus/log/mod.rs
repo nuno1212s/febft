@@ -206,6 +206,9 @@ impl DecisionLog {
         &self.commits[..]
     }
 
+    /// Returns an incomplete proof of the consensus
+    /// instance currently being decided in this `DecisionLog`.
+    //
     // TODO: quorum sizes may differ when we implement reconfiguration
     pub fn to_be_decided(&self, view: ViewInfo) -> IncompleteProof {
         // we haven't called `finalize_batch` yet, so the in execution
