@@ -209,6 +209,7 @@ impl DecisionLog {
         &self.commits[..]
     }
 
+    // TODO: quorum sizes may differ when we implement reconfiguration
     pub fn to_be_decided(&self, view: ViewInfo) -> IncompleteProof {
         // we haven't called `finalize_batch` yet, so the in execution
         // seq no will be the last + 1 or 0
@@ -239,13 +240,19 @@ impl DecisionLog {
         let quorum_writes = 'outer: loop {
             // NOTE: check `last_decision` comment on quorum
             let quorum = view.params().f() << 1;
+            let mut last_view = None;
             let mut count = 0;
 
             for stored in self.prepares.iter().rev() {
                 match stored.message().sequence_number().cmp(&in_exec) {
                     Ordering::Equal => {
+                        match &last_view {
+                            None => last_view = Some(stored.message().view()),
+                            Some(v) if stored.message().view() == *v => (),
+                            _ => count = 0,
+                        }
                         count += 1;
-                        if count == quorum && stored.message().view() == {
+                        if count == quorum {
                             let digest = match stored.message().kind() {
                                 ConsensusMessageKind::Prepare(d) => d.clone(),
                                 _ => unreachable!(),
@@ -271,7 +278,9 @@ impl DecisionLog {
     /// Returns the proof of the last executed consensus
     /// instance registered in this `DecisionLog`.
     //
-    // TODO: check if messages are in the same view!!!
+    // TODO:
+    // - check if messages are in the same view!!!
+    // - quorum sizes may differ when we implement reconfiguration
     pub fn last_decision(&self, view: ViewInfo) -> Option<Proof> {
         let last_exec = self.last_exec?;
 
