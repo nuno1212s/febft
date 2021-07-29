@@ -169,6 +169,28 @@ pub struct IncompleteProof {
     quorum_writes: Option<ViewDecisionPair>,
 }
 
+/// Contains data about the running consensus instance,
+/// as well as the last stable proof acquired from the previous
+/// consensus instance.
+///
+/// Corresponds to the class of the same name in `BFT-SMaRt`.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct CollectData {
+    incomplete_proof: IncompleteProof,
+    last_proof: Option<Proof>,
+}
+
+impl CollectData {
+    pub fn incomplete_proof(&self) -> &IncompleteProof {
+        &self.incomplete_proof
+    }
+
+    pub fn last_proof(&self) -> Option<&Proof> {
+        self.last_proof.as_ref()
+    }
+}
+
 impl DecisionLog {
     /// Returns a brand new `DecisionLog`.
     pub fn new() -> Self {
@@ -206,10 +228,16 @@ impl DecisionLog {
         &self.commits[..]
     }
 
+    // TODO: quorum sizes may differ when we implement reconfiguration
+    pub fn collect_data(&self, view: ViewInfo) -> CollectData {
+        CollectData {
+            incomplete_proof: self.to_be_decided(view),
+            last_proof: self.last_decision(view),
+        }
+    }
+
     /// Returns an incomplete proof of the consensus
     /// instance currently being decided in this `DecisionLog`.
-    //
-    // TODO: quorum sizes may differ when we implement reconfiguration
     pub fn to_be_decided(&self, view: ViewInfo) -> IncompleteProof {
         // we haven't called `finalize_batch` yet, so the in execution
         // seq no will be the last + 1 or 0
@@ -281,7 +309,6 @@ impl DecisionLog {
     //
     // TODO:
     // - check if messages are in the same view!!!
-    // - quorum sizes may differ when we implement reconfiguration
     pub fn last_decision(&self, view: ViewInfo) -> Option<Proof> {
         let last_exec = self.last_exec?;
 
