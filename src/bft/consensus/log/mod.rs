@@ -243,11 +243,12 @@ impl DecisionLog {
             for stored in self.prepares.iter().rev() {
                 match stored.message().sequence_number().cmp(&in_exec) {
                     Ordering::Equal => {
-                        match &last_view {
-                            None => last_view = Some(stored.message().view()),
-                            Some(v) if stored.message().view() == *v => (),
+                        match last_view {
+                            None => (),
+                            Some(v) if stored.message().view() == v => (),
                             _ => count = 0,
                         }
+                        last_view = Some(stored.message().view());
                         count += 1;
                         if count == quorum {
                             let digest = match stored.message().kind() {
