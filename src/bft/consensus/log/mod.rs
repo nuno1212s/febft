@@ -13,6 +13,7 @@ use crate::bft::core::server::ViewInfo;
 use crate::bft::executable::UpdateBatch;
 use crate::bft::communication::message::{
     Header,
+    StoredMessage,
     SystemMessage,
     RequestMessage,
     ConsensusMessage,
@@ -93,36 +94,6 @@ impl<S> Checkpoint<S> {
     /// Returns the inner values within this local checkpoint.
     pub fn into_inner(self) -> (SeqNo, S) {
         (self.seq, self.appstate)
-    }
-}
-
-/// Contains a system message as well as its respective header.
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct StoredMessage<M> {
-    header: Header,
-    message: M,
-}
-
-impl<M> StoredMessage<M> {
-    /// Constructs a new `StoredMessage`.
-    pub fn new(header: Header, message: M) -> Self {
-        Self { header, message }
-    }
-
-    /// Returns the stored message's header.
-    pub fn header(&self) -> &Header {
-        &self.header
-    }
-
-    /// Returns the stored system message.
-    pub fn message(&self) -> &M {
-        &self.message
-    }
-
-    /// Return the inner types of this `StoredMessage`.
-    pub fn into_inner(self) -> (Header, M) {
-        (self.header, self.message)
     }
 }
 

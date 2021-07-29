@@ -27,7 +27,6 @@ use crate::bft::ordering::{
 };
 use crate::bft::consensus::log::{
     Log,
-    StoredMessage,
 };
 use crate::bft::timeouts::{
     TimeoutKind,
@@ -39,6 +38,7 @@ use crate::bft::collections::{
 };
 use crate::bft::communication::message::{
     Header,
+    StoredMessage,
     SystemMessage,
     RequestMessage,
     ViewChangeMessage,

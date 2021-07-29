@@ -16,6 +16,7 @@ use crate::bft::sync::Synchronizer;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::communication::message::{
     Header,
+    StoredMessage,
     SystemMessage,
     ConsensusMessage,
     ConsensusMessageKind,
@@ -43,7 +44,6 @@ use crate::bft::ordering::{
 };
 use crate::bft::consensus::log::{
     Log,
-    StoredMessage,
 };
 
 /// Represents the status of calling `poll()` on a `Consensus`.

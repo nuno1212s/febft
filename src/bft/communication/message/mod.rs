@@ -34,7 +34,6 @@ use crate::bft::ordering::{
     Orderable,
 };
 use crate::bft::consensus::log::{
-    StoredMessage,
     Proof,
 };
 use crate::bft::communication::socket::Socket;
@@ -43,6 +42,36 @@ use crate::bft::communication::NodeId;
 use crate::bft::timeouts::TimeoutKind;
 use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
+
+/// Contains a system message as well as its respective header.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct StoredMessage<M> {
+    header: Header,
+    message: M,
+}
+
+impl<M> StoredMessage<M> {
+    /// Constructs a new `StoredMessage`.
+    pub fn new(header: Header, message: M) -> Self {
+        Self { header, message }
+    }
+
+    /// Returns the stored message's header.
+    pub fn header(&self) -> &Header {
+        &self.header
+    }
+
+    /// Returns the stored system message.
+    pub fn message(&self) -> &M {
+        &self.message
+    }
+
+    /// Return the inner types of this `StoredMessage`.
+    pub fn into_inner(self) -> (Header, M) {
+        (self.header, self.message)
+    }
+}
 
 /// A header that is sent before a message in transit in the wire.
 ///

@@ -13,10 +13,8 @@ use either::{
     Either,
 };
 
-use crate::bft::consensus::log::{
-    self,
-    StoredMessage,
-};
+use crate::bft::consensus::log;
+use crate::bft::communication::message::StoredMessage;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
