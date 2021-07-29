@@ -148,13 +148,28 @@ pub struct Proof {
     commits: Vec<StoredMessage<ConsensusMessage>>,
 }
 
+/// Contains a collection of `ViewDecisionPair` values,
+/// pertaining to a particular consensus instance.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct WriteSet(pub Vec<ViewDecisionPair>);
+
+/// Contains a sequence number pertaining to a particular view,
+/// as well as a hash digest of a value decided in a consensus
+/// instance of that view.
+///
+/// Corresponds to the `TimestampValuePair` class in `BFT-SMaRt`.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct ViewDecisionPair(pub SeqNo, pub Digest);
+
 /// Represents an incomplete decision from the `DecisionLog`.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct IncompleteProof {
     in_exec: SeqNo,
-    pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
-    prepares: Vec<StoredMessage<ConsensusMessage>>,
+    write_set: WriteSet,
+    quorum_writes: Option<ViewDecisionPair>,
 }
 
 impl DecisionLog {
@@ -194,35 +209,69 @@ impl DecisionLog {
         &self.commits[..]
     }
 
-    pub fn to_be_decided(&self) -> IncompleteProof {
+    pub fn to_be_decided(&self, view: ViewInfo) -> IncompleteProof {
         // we haven't called `finalize_batch` yet, so the in execution
         // seq no will be the last + 1 or 0
         let in_exec = self.last_exec
             .map(|last| SeqNo::from(u32::from(last) + 1))
             .unwrap_or_else(|| SeqNo::from(0));
 
-        let pre_prepares = {
+        // fetch write set
+        let write_set = WriteSet({
             let mut buf = Vec::new();
             for stored in self.pre_prepares.iter().rev() {
                 match stored.message().sequence_number().cmp(&in_exec) {
-                    Ordering::Equal => buf.push(stored.clone()),
+                    Ordering::Equal => {
+                        buf.push(ViewDecisionPair(
+                            stored.message().view(),
+                            stored.header().digest().clone(),
+                        ));
+                    },
                     Ordering::Less => break,
                     // impossible, because we are executing `in_exec`
                     Ordering::Greater => unreachable!(),
                 }
             }
             buf
-        };
-        let prepares = {
-            // TODO
-            Vec::new()
+        });
+
+        // fetch quorum writes
+        let quorum_writes = 'outer: loop {
+            // NOTE: check `last_decision` comment on quorum
+            let quorum = view.params().f() << 1;
+            let mut count = 0;
+
+            for stored in self.prepares.iter().rev() {
+                match stored.message().sequence_number().cmp(&in_exec) {
+                    Ordering::Equal => {
+                        count += 1;
+                        if count == quorum && stored.message().view() == {
+                            let digest = match stored.message().kind() {
+                                ConsensusMessageKind::Prepare(d) => d.clone(),
+                                _ => unreachable!(),
+                            };
+                            break 'outer Some(ViewDecisionPair(
+                                stored.message().view(),
+                                digest,
+                            ));
+                        }
+                    },
+                    Ordering::Less => break,
+                    // impossible, because we are executing `in_exec`
+                    Ordering::Greater => unreachable!(),
+                }
+            }
+
+            break 'outer None;
         };
 
-        IncompleteProof { in_exec, pre_prepares, prepares }
+        IncompleteProof { in_exec, write_set, quorum_writes }
     }
 
     /// Returns the proof of the last executed consensus
     /// instance registered in this `DecisionLog`.
+    //
+    // TODO: check if messages are in the same view!!!
     pub fn last_decision(&self, view: ViewInfo) -> Option<Proof> {
         let last_exec = self.last_exec?;
 

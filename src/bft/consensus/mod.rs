@@ -383,6 +383,7 @@ where
         // NOTE: using `ProtoPhase::Init` forces us to queue
         // all messages, which is fine, until we call `install_new_phase`
         self.tbo.curr_seq = seq;
+        self.tbo.get_queue = true;
         self.phase = ProtoPhase::Init;
 
         // FIXME: do we need to clear the missing requests buffers?
