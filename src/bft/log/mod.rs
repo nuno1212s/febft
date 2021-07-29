@@ -3,6 +3,7 @@
 // TODO: maybe move this module to `febft::bft::consensus::log`,
 // since it is tightly integrated with the `consensus` module
 
+use std::cmp::Ordering;
 use std::marker::PhantomData;
 
 #[cfg(feature = "serialize_serde")]
@@ -147,6 +148,15 @@ pub struct Proof {
     commits: Vec<StoredMessage<ConsensusMessage>>,
 }
 
+/// Represents an incomplete decision from the `DecisionLog`.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct IncompleteProof {
+    in_exec: SeqNo,
+    pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
+    prepares: Vec<StoredMessage<ConsensusMessage>>,
+}
+
 impl DecisionLog {
     /// Returns a brand new `DecisionLog`.
     pub fn new() -> Self {
@@ -184,16 +194,42 @@ impl DecisionLog {
         &self.commits[..]
     }
 
+    pub fn to_be_decided(&self) -> IncompleteProof {
+        // we haven't called `finalize_batch` yet, so the in execution
+        // seq no will be the last + 1 or 0
+        let in_exec = self.last_exec
+            .map(|last| SeqNo::from(u32::from(last) + 1))
+            .unwrap_or_else(|| SeqNo::from(0));
+
+        let pre_prepares = {
+            let mut buf = Vec::new();
+            for stored in self.pre_prepares.iter().rev() {
+                match stored.message().sequence_number().cmp(&in_exec) {
+                    Ordering::Equal => buf.push(stored.clone()),
+                    Ordering::Less => break,
+                    // impossible, because we are executing `in_exec`
+                    Ordering::Greater => unreachable!(),
+                }
+            }
+            buf
+        };
+        let prepares = {
+            // TODO
+            Vec::new()
+        };
+
+        IncompleteProof { in_exec, pre_prepares, prepares }
+    }
+
     /// Returns the proof of the last executed consensus
     /// instance registered in this `DecisionLog`.
     pub fn last_decision(&self, view: ViewInfo) -> Option<Proof> {
         let last_exec = self.last_exec?;
 
         let pre_prepare = 'outer: loop {
-            for i in (0..self.prepares.len()).rev() {
-                let pre_prepare_ref = &self.pre_prepares[i];
-                if pre_prepare_ref.message().sequence_number() == last_exec {
-                    break 'outer pre_prepare_ref.clone();
+            for stored in self.pre_prepares.iter().rev() {
+                if stored.message().sequence_number() == last_exec {
+                    break 'outer stored.clone();
                 }
             }
             // if nothing went wrong, this code should be unreachable,
