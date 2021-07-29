@@ -1,5 +1,7 @@
 //! The consensus algorithm used for `febft` and other logic.
 
+pub mod log;
+
 use std::marker::PhantomData;
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
@@ -39,7 +41,7 @@ use crate::bft::ordering::{
     Orderable,
     SeqNo,
 };
-use crate::bft::log::{
+use crate::bft::consensus::log::{
     Log,
     StoredMessage,
 };

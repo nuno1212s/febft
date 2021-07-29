@@ -1,8 +1,5 @@
 //! A module to manage the `febft` message log.
 
-// TODO: maybe move this module to `febft::bft::consensus::log`,
-// since it is tightly integrated with the `consensus` module
-
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 
@@ -419,7 +416,7 @@ impl<S, O, P> Log<S, O, P> {
                     self.declog.clone(),
                 ))
             },
-            _ => Err("Checkpoint to be finalized").wrapped(ErrorKind::Log),
+            _ => Err("Checkpoint to be finalized").wrapped(ErrorKind::ConsensusLog),
         }
     }
 
@@ -509,7 +506,7 @@ impl<S, O, P> Log<S, O, P> {
                 .remove(digest)
                 .or_else(|| self.requests.remove(digest))
                 .map(StoredMessage::into_inner)
-                .ok_or(Error::simple(ErrorKind::Log))?;
+                .ok_or(Error::simple(ErrorKind::ConsensusLog))?;
             batch.add(header.from(), digest.clone(), message.into_inner());
         }
 
@@ -550,7 +547,7 @@ impl<S, O, P> Log<S, O, P> {
         self.checkpoint = match earlier {
             CheckpointState::None => CheckpointState::Partial { seq },
             CheckpointState::Complete(earlier) => CheckpointState::PartialWithEarlier { seq, earlier },
-            _ => return Err("Invalid checkpoint state detected").wrapped(ErrorKind::Log),
+            _ => return Err("Invalid checkpoint state detected").wrapped(ErrorKind::ConsensusLog),
         };
         Ok(Info::BeginCheckpoint)
     }
@@ -562,8 +559,8 @@ impl<S, O, P> Log<S, O, P> {
     /// on the core server task's master channel.
     pub fn finalize_checkpoint(&mut self, appstate: S) -> Result<()> {
         match self.checkpoint {
-            CheckpointState::None => Err("No checkpoint has been initiated yet").wrapped(ErrorKind::Log),
-            CheckpointState::Complete(_) => Err("Checkpoint already finalized").wrapped(ErrorKind::Log),
+            CheckpointState::None => Err("No checkpoint has been initiated yet").wrapped(ErrorKind::ConsensusLog),
+            CheckpointState::Complete(_) => Err("Checkpoint already finalized").wrapped(ErrorKind::ConsensusLog),
             CheckpointState::Partial { ref seq } | CheckpointState::PartialWithEarlier { ref seq, .. } => {
                 let seq = *seq;
                 self.checkpoint = CheckpointState::Complete(Checkpoint {

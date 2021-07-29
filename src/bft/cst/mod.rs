@@ -25,7 +25,7 @@ use crate::bft::timeouts::{
     TimeoutKind,
     TimeoutsHandle,
 };
-use crate::bft::log::{
+use crate::bft::consensus::log::{
     Log,
     Checkpoint,
     DecisionLog,

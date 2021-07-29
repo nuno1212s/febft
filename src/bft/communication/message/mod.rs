@@ -33,7 +33,7 @@ use crate::bft::ordering::{
     SeqNo,
     Orderable,
 };
-use crate::bft::log::{
+use crate::bft::consensus::log::{
     StoredMessage,
     Proof,
 };

@@ -13,7 +13,7 @@ use either::{
     Either,
 };
 
-use crate::bft::log::{
+use crate::bft::consensus::log::{
     self,
     StoredMessage,
 };

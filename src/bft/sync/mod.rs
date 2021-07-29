@@ -25,7 +25,7 @@ use crate::bft::ordering::{
     tbo_queue_message,
     tbo_advance_message_queue,
 };
-use crate::bft::log::{
+use crate::bft::consensus::log::{
     Log,
     StoredMessage,
 };

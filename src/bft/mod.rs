@@ -18,7 +18,6 @@ pub mod prng;
 pub mod core;
 pub mod sync;
 pub mod cst;
-pub mod log;
 
 use std::ops::Drop;
 

@@ -27,7 +27,7 @@ use crate::bft::cst::{
     CstProgress,
     CstStatus,
 };
-use crate::bft::log::{
+use crate::bft::consensus::log::{
     Info,
     Log,
 };
