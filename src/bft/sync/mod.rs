@@ -27,6 +27,7 @@ use crate::bft::ordering::{
 };
 use crate::bft::consensus::log::{
     Log,
+    CollectData,
 };
 use crate::bft::timeouts::{
     TimeoutKind,
@@ -195,6 +196,7 @@ pub struct Synchronizer<S: Service> {
     timeout_seq: SeqNo,
     timeout_dur: Duration,
     stopped: HashMap<NodeId, Vec<StoredMessage<RequestMessage<Request<S>>>>>,
+    collects: HashMap<NodeId, CollectData>,
     watching: HashMap<Digest, TimeoutPhase>,
     tbo: TboQueue<Request<S>>,
     // NOTE: remembers whose replies we have
@@ -234,6 +236,7 @@ where
             timeout_seq: SeqNo::from(0),
             watching: collections::hash_map(),
             stopped: collections::hash_map(),
+            collects: collections::hash_map(),
             tbo: TboQueue::new(view),
         }
     }
@@ -503,6 +506,13 @@ where
                 // verify their content when we retransmit the COLLECTs
                 // to other nodes via a SYNC message! this guarantees
                 // the new leader isn't forging messages.
+
+                // store collects from this STOP-DATA
+                let collect = match message.into_kind() {
+                    ViewChangeMessageKind::StopData(collect) => collect,
+                    _ => unreachable!(),
+                };
+                self.collects.insert(header.from(), collect);
 
                 if i == self.view().params().quorum() {
                     // TODO: broadcast SYNC msg with collected
