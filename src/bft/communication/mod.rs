@@ -314,6 +314,11 @@ where
         Ok((node, rogue))
     }
 
+    /// Returns the public key of the node with the given id `id`.
+    pub fn get_public_key(&self, id: NodeId) -> Option<&PublicKey> {
+        self.shared.peer_keys.get(&id)
+    }
+
     /// Reports the id of this `Node`.
     pub fn id(&self) -> NodeId {
         self.id

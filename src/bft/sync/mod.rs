@@ -38,6 +38,7 @@ use crate::bft::collections::{
 };
 use crate::bft::communication::message::{
     Header,
+    WireMessage,
     StoredMessage,
     SystemMessage,
     RequestMessage,
@@ -497,7 +498,10 @@ where
                     },
                 };
 
-                // TODO: validate STOP-DATA signature and store msg
+                // NOTE: the STOP-DATA message signatures are already
+                // verified by the TLS layer, but we still need to
+                // verify their content when we retransmit the COLLECTs
+                // to other nodes via a SYNC message!
 
                 if i == self.view().params().quorum() {
                     // TODO: broadcast SYNC msg with collected
