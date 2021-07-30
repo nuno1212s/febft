@@ -54,6 +54,11 @@ use crate::bft::executable::{
     State,
 };
 
+struct NormalizedCollect<'a> {
+    has_value: bool,
+    collect: &'a CollectData,
+}
+
 /// Represents a queue of view change messages that arrive out of context into a node.
 pub struct TboQueue<O> {
     // the current view
@@ -684,10 +689,16 @@ where
             .collect()
     }
 
-    fn normalized_collects<'a>(&'a self) -> impl Iterator<Item = &'a CollectData> + 'a {
-        //for collect in self.collects.values() {
-        //}
-        self.collects.values()
+    fn normalized_collects<'a>(&'a self, in_exec: SeqNo) -> impl Iterator<Item = NormalizedCollect<'a>> {
+        //self.collects
+        //    .values()
+        //    .filter(move |&c| c.incomplete_proof().executing() == in_exec)
+        self.collects
+            .values()
+            .map(move |c| {
+                let has_value = c.incomplete_proof().executing() == in_exec;
+                NormalizedCollect { collect: c, has_value }
+            })
     }
 }
 
