@@ -144,7 +144,7 @@ impl IncompleteProof {
     /// Returns the sequence number of the consensus instance currently
     /// being executed.
     pub fn executing(&self) -> SeqNo {
-        &self.incomplete_proof
+        self.in_exec
     }
 
     /// Returns a reference to the `WriteSet` included in this `IncompleteProof`.

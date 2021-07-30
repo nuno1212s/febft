@@ -199,9 +199,6 @@ pub struct Synchronizer<S: Service> {
     collects: HashMap<NodeId, CollectData>,
     watching: HashMap<Digest, TimeoutPhase>,
     tbo: TboQueue<Request<S>>,
-    // NOTE: remembers whose replies we have
-    // received already, to avoid replays
-    //voted: HashSet<NodeId>,
 }
 
 macro_rules! extract_msg {
@@ -411,6 +408,12 @@ where
                         return if i > f { SynchronizerStatus::Running }
                             else { SynchronizerStatus::Nil };
                     },
+                    ViewChangeMessageKind::Stop(_) if self.stopped.contains_key(&header.from()) => {
+                        // drop attempts to vote twice
+                        let f = self.view().params().f();
+                        return if i > f { SynchronizerStatus::Running }
+                            else { SynchronizerStatus::Nil };
+                    },
                     ViewChangeMessageKind::Stop(_) => i + 1,
                     ViewChangeMessageKind::StopData(_) => {
                         self.queue_stop_data(header, message);
@@ -494,6 +497,10 @@ where
                     ViewChangeMessageKind::StopData(_) if self.view().leader() != node.id() => {
                         return SynchronizerStatus::Running;
                     },
+                    ViewChangeMessageKind::StopData(_) if self.collects.contains_key(&header.from()) => {
+                        // drop attempts to vote twice
+                        return SynchronizerStatus::Running;
+                    },
                     ViewChangeMessageKind::StopData(_) => i + 1,
                     ViewChangeMessageKind::Sync(_) => {
                         self.queue_sync(header, message);
@@ -515,8 +522,11 @@ where
                 self.collects.insert(header.from(), collect);
 
                 if i == self.view().params().quorum() {
-                    // TODO: broadcast SYNC msg with collected
-                    // STOP-DATA proofs
+                    // TODO:
+                    // - pick decision from STOP-DATA msgs
+                    // - broadcast SYNC msg with collected
+                    //   STOP-DATA proofs so other replicas
+                    //   can repeat the leader's computation
                     unimplemented!()
                 } else {
                     self.phase = ProtoPhase::StoppingData(i);
@@ -672,6 +682,12 @@ where
             .drain()
             .map(|(_, stop)| stop)
             .collect()
+    }
+
+    fn normalized_collects<'a>(&'a self) -> impl Iterator<Item = &'a CollectData> + 'a {
+        //for collect in self.collects.values() {
+        //}
+        self.collects.values()
     }
 }
 
