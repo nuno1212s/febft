@@ -140,6 +140,25 @@ pub struct IncompleteProof {
     quorum_writes: Option<ViewDecisionPair>,
 }
 
+impl IncompleteProof {
+    /// Returns the sequence number of the consensus instance currently
+    /// being executed.
+    pub fn executing(&self) -> SeqNo {
+        &self.incomplete_proof
+    }
+
+    /// Returns a reference to the `WriteSet` included in this `IncompleteProof`.
+    pub fn write_set(&self) -> &WriteSet {
+        &self.write_set
+    }
+
+    /// Returns a reference to the quorum writes included in this `IncompleteProof`,
+    /// if any value was prepared in the previous view.
+    pub fn quorum_writes(&self) -> Option<&ViewDecisionPair> {
+        self.quorum_writes.as_ref()
+    }
+}
+
 /// Contains data about the running consensus instance,
 /// as well as the last stable proof acquired from the previous
 /// consensus instance.
