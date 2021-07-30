@@ -460,10 +460,10 @@ where
                     self.phase = ProtoPhase::StoppingData(0);
                     self.install_view(self.view().next_view());
 
-                    let proof = log.decision_log().last_decision(*self.view());
+                    let collect = log.decision_log().collect_data(*self.view());
                     let message = SystemMessage::ViewChange(ViewChangeMessage::new(
                         self.view().sequence_number(),
-                        ViewChangeMessageKind::StopData(proof),
+                        ViewChangeMessageKind::StopData(collect),
                     ));
                     node.send(message, self.view().leader());
                 } else {
@@ -501,7 +501,8 @@ where
                 // NOTE: the STOP-DATA message signatures are already
                 // verified by the TLS layer, but we still need to
                 // verify their content when we retransmit the COLLECTs
-                // to other nodes via a SYNC message!
+                // to other nodes via a SYNC message! this guarantees
+                // the new leader isn't forging messages.
 
                 if i == self.view().params().quorum() {
                     // TODO: broadcast SYNC msg with collected

@@ -33,9 +33,7 @@ use crate::bft::ordering::{
     SeqNo,
     Orderable,
 };
-use crate::bft::consensus::log::{
-    Proof,
-};
+use crate::bft::consensus::log::CollectData;
 use crate::bft::communication::socket::Socket;
 use crate::bft::executable::UpdateBatchReplies;
 use crate::bft::communication::NodeId;
@@ -240,8 +238,8 @@ impl<O> ViewChangeMessage<O> {
 #[derive(Clone)]
 pub enum ViewChangeMessageKind<O> {
     Stop(Vec<StoredMessage<RequestMessage<O>>>),
-    StopData(Option<Proof>),
-    Sync(( /* TODO: type used here */)),
+    StopData(CollectData),
+    Sync(Vec<CollectData>),
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
