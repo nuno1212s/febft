@@ -277,9 +277,6 @@ impl DecisionLog {
 
     /// Returns the proof of the last executed consensus
     /// instance registered in this `DecisionLog`.
-    //
-    // TODO:
-    // - check if messages are in the same view!!!
     pub fn last_decision(&self, view: ViewInfo) -> Option<Proof> {
         let last_exec = self.last_exec?;
 
@@ -297,6 +294,7 @@ impl DecisionLog {
             // TODO: this code could be improved when `ControlFlow` is stabilized in
             // the Rust standard library
             let mut buf = Vec::new();
+            let mut last_view = SeqNo::from(0);
             let mut found = false;
             for stored in self.prepares.iter().rev() {
                 if !found {
@@ -305,11 +303,14 @@ impl DecisionLog {
                         continue;
                     } else {
                         found = true;
+                        last_view = stored.message().view();
                         buf.push(stored.clone());
                         continue;
                     }
                 }
-                if stored.message().sequence_number() != last_exec {
+                let will_exit = stored.message().sequence_number() != last_exec
+                    || stored.message().view() != last_view;
+                if will_exit {
                     break;
                 }
                 buf.push(stored.clone());
@@ -322,6 +323,7 @@ impl DecisionLog {
         }?;
         let commits = {
             let mut buf = Vec::new();
+            let mut last_view = SeqNo::from(0);
             let mut found = false;
             for stored in self.commits.iter().rev() {
                 if !found {
@@ -329,11 +331,14 @@ impl DecisionLog {
                         continue;
                     } else {
                         found = true;
+                        last_view = stored.message().view();
                         buf.push(stored.clone());
                         continue;
                     }
                 }
-                if stored.message().sequence_number() != last_exec {
+                let will_exit = stored.message().sequence_number() != last_exec
+                    || stored.message().view() != last_view;
+                if will_exit {
                     break;
                 }
                 buf.push(stored.clone());
