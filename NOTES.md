@@ -5,6 +5,8 @@
 
 # changes for the research branch
 
+* group flush() calls together, by sorting replies
+  per node id
 * remove TLS from clients
 * maybe replicas use non-async communication
 * use MACs instead of pubkey signatures
