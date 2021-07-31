@@ -791,6 +791,17 @@ fn unbound(
     }
 }
 
+// NOTE: `filter_map` on the predicates below filters out
+// collects whose cid was different from the one in execution;
+//
+// in BFT-SMaRt's code, a `TimestampValuePair` is generated in
+// `LCManager::normalizeCollects`, containing an empty (zero sized
+// byte array) digest, which will always evaluate to false when
+// comparing its equality to other digests from collects whose
+// cid is the same as the one in execution;
+//
+// therefore, our code *should* be correct :)
+
 fn quorum_highest(
     curr_view: ViewInfo,
     ts: SeqNo,
