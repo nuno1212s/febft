@@ -702,7 +702,44 @@ where
     }
 }
 
-// see Cachin's 'Yet Another Visit to Paxos' (April 2011), pages 10-11
+impl<S> Deref for Synchronizer<S>
+where
+    S: Service + Send + 'static,
+    State<S>: Send + 'static,
+    Request<S>: Send + 'static,
+    Reply<S>: Send + 'static,
+{
+    type Target = TboQueue<Request<S>>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.tbo
+    }
+}
+
+impl<S> DerefMut for Synchronizer<S>
+where
+    S: Service + Send + 'static,
+    State<S>: Send + 'static,
+    Request<S>: Send + 'static,
+    Reply<S>: Send + 'static,
+{
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.tbo
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// NOTE: the predicates below were taken from
+// Cachin's 'Yet Another Visit to Paxos' (April 2011), pages 10-11
+//
+// in this consensus algorithm, the WRITE phase is equivalent to the
+// PREPARE phase of PBFT, so we will observe a mismatch of terminology
+//
+////////////////////////////////////////////////////////////////////////////////
+
 // 'ts' means 'timestamp', and it is equivalent to the sequence number of a view
 fn quorum_highest(
     curr_view: ViewInfo,
@@ -741,32 +778,4 @@ fn quorum_highest(
         })
         .count();
     appears && count > curr_view.params().quorum()
-}
-
-impl<S> Deref for Synchronizer<S>
-where
-    S: Service + Send + 'static,
-    State<S>: Send + 'static,
-    Request<S>: Send + 'static,
-    Reply<S>: Send + 'static,
-{
-    type Target = TboQueue<Request<S>>;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.tbo
-    }
-}
-
-impl<S> DerefMut for Synchronizer<S>
-where
-    S: Service + Send + 'static,
-    State<S>: Send + 'static,
-    Request<S>: Send + 'static,
-    Reply<S>: Send + 'static,
-{
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.tbo
-    }
 }
