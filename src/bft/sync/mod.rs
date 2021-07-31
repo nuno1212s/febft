@@ -38,6 +38,7 @@ use crate::bft::timeouts::{
 use crate::bft::collections::{
     self,
     HashMap,
+    HashSet,
 };
 use crate::bft::communication::message::{
     Header,
@@ -744,7 +745,39 @@ where
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-// TODO: sound() predicate
+fn sound(
+    curr_view: ViewInfo,
+    normalized_collects: &[Option<&CollectData>],
+) -> bool {
+    // collect timestamps and values
+    let mut timestamps = collections::hash_set();
+    let mut values = collections::hash_set();
+
+    for c in normalized_collects.iter().filter_map(Option::as_ref) {
+        // add quorum write timestamp
+        timestamps.insert(c
+            .incomplete_proof()
+            .quorum_writes()
+            .map(|ViewDecisionPair(ts, _)| *ts)
+            .unwrap_or(SeqNo::ZERO));
+
+        // add writeset timestamps and values
+        for ViewDecisionPair(ts, value) in c.incomplete_proof().write_set().iter() {
+            timestamps.insert(*ts);
+            values.insert(value);
+        }
+    }
+
+    for ts in timestamps {
+        for value in values.iter() {
+            if binds(curr_view, ts, value, normalized_collects) {
+                return true;
+            }
+        }
+    }
+
+    unbound(curr_view, normalized_collects)
+}
 
 fn binds(
     curr_view: ViewInfo,
@@ -769,7 +802,6 @@ fn unbound(
     } else {
         let count = normalized_collects
             .iter()
-            .map(Option::as_ref)
             .filter(move |maybe_collect| {
                 maybe_collect
                     .map(|collect| {
