@@ -715,13 +715,14 @@ fn quorum_highest(
     let appears = collects
         .iter()
         .position(|c| {
-            let c = if c.has_value { c.collect } else { return false };
-            match c.incomplete_proof().quorum_writes() {
-                Some(ViewDecisionPair(other_ts, other_value)) => {
+            let collect = if c.has_value { c.collect } else { return false };
+            collect
+                .incomplete_proof()
+                .quorum_writes()
+                .map(|ViewDecisionPair(other_ts, other_value)| {
                     *other_ts == ts && other_value == value
-                },
-                None => false,
-            }
+                })
+                .unwrap_or(false)
         })
         .is_some();
     let count = collects
