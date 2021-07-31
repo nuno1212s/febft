@@ -232,7 +232,7 @@ where
             timeout_dur,
             phase: ProtoPhase::Init,
             watching_timeouts: false,
-            timeout_seq: SeqNo::from(0),
+            timeout_seq: SeqNo::ZERO,
             watching: collections::hash_map(),
             stopped: collections::hash_map(),
             collects: collections::hash_map(),
@@ -686,6 +686,7 @@ where
             .collect()
     }
 
+    // collects whose in execution cid is different from the given `in_exec` become `None`
     fn normalized_collects<'a>(&'a self, in_exec: SeqNo) -> impl Iterator<Item = Option<&'a CollectData>> {
         //self.collects
         //    .values()
@@ -738,7 +739,7 @@ where
 // in this consensus algorithm, the WRITE phase is equivalent to the
 // PREPARE phase of PBFT, so we will observe a mismatch of terminology
 //
-// on the arguments of the predicates below, 'ts' means 'timestamp',
+// in the arguments of the predicates below, 'ts' means 'timestamp',
 // and it is equivalent to the sequence number of a view
 //
 ////////////////////////////////////////////////////////////////////////////////
@@ -754,6 +755,39 @@ fn binds(
     } else {
         quorum_highest(curr_view, ts, value, normalized_collects)
             && certified_value(curr_view, ts, value, normalized_collects)
+    }
+}
+
+fn unbound(
+    curr_view: ViewInfo,
+    normalized_collects: &[Option<&CollectData>],
+) -> bool {
+    if normalized_collects.len() < curr_view.params().quorum() {
+        false
+    } else {
+        let count = normalized_collects
+            .iter()
+            .map(Option::as_ref)
+            .filter(move |maybe_collect| {
+                maybe_collect
+                    .map(|collect| {
+                        collect
+                            .incomplete_proof()
+                            .quorum_writes()
+                            .map(|ViewDecisionPair(other_ts, _)| {
+                                *other_ts == SeqNo::ZERO
+                            })
+                            // when there is no quorum write, BFT-SMaRt
+                            // assumes replicas are on view 0
+                            .unwrap_or(true)
+                    })
+                    // BFT-SMaRt assumes normalized values start on view 0,
+                    // if their CID is different from the one in execution;
+                    // see `LCManager::normalizeCollects` on its code
+                    .unwrap_or(true)
+            })
+            .count();
+        count >= curr_view.params().quorum()
     }
 }
 
