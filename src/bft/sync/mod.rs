@@ -538,12 +538,23 @@ where
                         self.collects.clear();
                         return SynchronizerStatus::Running;
                     }
+                    drop(normalized_collects);
 
-                    unimplemented!()
+                    let collects = self.collects
+                        .drain()
+                        .map(|(_, collect)| collect)
+                        .collect();
+                    let message = SystemMessage::ViewChange(ViewChangeMessage::new(
+                        self.view().sequence_number(),
+                        ViewChangeMessageKind::Sync(collects),
+                    ));
+                    let targets = NodeId::targets(0..self.view().params().n());
+                    node.broadcast(message, targets);
                 } else {
                     self.phase = ProtoPhase::StoppingData(i);
-                    SynchronizerStatus::Running
                 }
+
+                SynchronizerStatus::Running
             },
             // TODO: other phases
             _ => unimplemented!(),
