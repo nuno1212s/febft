@@ -56,11 +56,6 @@ use crate::bft::executable::{
     State,
 };
 
-struct NormalizedCollect<'a> {
-    has_value: bool,
-    collect: &'a CollectData,
-}
-
 /// Represents a queue of view change messages that arrive out of context into a node.
 pub struct TboQueue<O> {
     // the current view
@@ -691,15 +686,18 @@ where
             .collect()
     }
 
-    fn normalized_collects<'a>(&'a self, in_exec: SeqNo) -> impl Iterator<Item = NormalizedCollect<'a>> {
+    fn normalized_collects<'a>(&'a self, in_exec: SeqNo) -> impl Iterator<Item = Option<&'a CollectData>> {
         //self.collects
         //    .values()
         //    .filter(move |&c| c.incomplete_proof().executing() == in_exec)
         self.collects
             .values()
             .map(move |c| {
-                let has_value = c.incomplete_proof().executing() == in_exec;
-                NormalizedCollect { collect: c, has_value }
+                if c.incomplete_proof().executing() == in_exec {
+                    Some(c)
+                } else {
+                    None
+                }
             })
     }
 }
@@ -710,12 +708,12 @@ fn quorum_highest(
     curr_view: ViewInfo,
     ts: SeqNo,
     value: &Digest,
-    collects: &[NormalizedCollect<'_>],
+    normalized_collects: &[Option<&CollectData>],
 ) -> bool {
-    let appears = collects
+    let appears = normalized_collects
         .iter()
-        .position(|c| {
-            let collect = if c.has_value { c.collect } else { return false };
+        .filter_map(Option::as_ref)
+        .position(|collect| {
             collect
                 .incomplete_proof()
                 .quorum_writes()
@@ -725,10 +723,10 @@ fn quorum_highest(
                 .unwrap_or(false)
         })
         .is_some();
-    let count = collects
+    let count = normalized_collects
         .iter()
-        .filter(move |c| {
-            let collect = if c.has_value { c.collect } else { return false };
+        .filter_map(Option::as_ref)
+        .filter(move |collect| {
             collect
                 .incomplete_proof()
                 .quorum_writes()
