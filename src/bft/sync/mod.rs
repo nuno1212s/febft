@@ -929,6 +929,12 @@ where
                 Ok(wm) => wm,
                 _ => return false,
             };
-            wm.is_valid(node.get_public_key(stored.header().from()))
+            // check if we even have the public key of the node that claims
+            // to have sent this particular message
+            let key = match node.get_public_key(stored.header().from()) {
+                Some(k) => k,
+                None => return false,
+            };
+            wm.is_valid(Some(key))
         })
 }
