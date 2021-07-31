@@ -560,13 +560,6 @@ where
     /// This timeout pertains to a group of client requests awaiting to be decided.
     pub fn client_requests_timed_out(&mut self, seq: SeqNo) -> SynchronizerStatus {
         let ignore_timeout = !self.watching_timeouts
-            //
-            // FIXME: maybe we should continue even after we have
-            // already stopped, since we may need to forward new requests...
-            //
-            // tl;dr remove the `|| self.sent_stop()` line
-            //
-            || self.sent_stop()
             || seq.next() != self.timeout_seq;
 
         if ignore_timeout {
@@ -652,13 +645,6 @@ where
         let next = self.timeout_seq;
         self.timeout_seq = self.timeout_seq.next();
         next
-    }
-
-    fn sent_stop(&self) -> bool {
-        match self.phase {
-            ProtoPhase::Init | ProtoPhase::Stopping(_) => false,
-            _ => true,
-        }
     }
 
     fn stopped_requests(
