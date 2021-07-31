@@ -688,20 +688,19 @@ where
     }
 
     // collects whose in execution cid is different from the given `in_exec` become `None`
-    fn normalized_collects(&mut self, in_exec: SeqNo) -> Vec<Option<CollectData>> {
+    fn normalized_collects<'a>(&'a self, in_exec: SeqNo) -> impl Iterator<Item = Option<&'a CollectData>> {
         //self.collects
         //    .values()
         //    .filter(move |&c| c.incomplete_proof().executing() == in_exec)
         self.collects
-            .drain()
-            .map(move |(_, c)| {
+            .values()
+            .map(move |c| {
                 if c.incomplete_proof().executing() == in_exec {
                     Some(c)
                 } else {
                     None
                 }
             })
-            .collect()
     }
 }
 
@@ -748,7 +747,7 @@ where
 
 fn sound(
     curr_view: ViewInfo,
-    normalized_collects: &[Option<CollectData>],
+    normalized_collects: &[Option<&CollectData>],
 ) -> bool {
     // collect timestamps and values
     let mut timestamps = collections::hash_set();
@@ -795,7 +794,7 @@ fn binds(
     curr_view: ViewInfo,
     ts: SeqNo,
     value: &Digest,
-    normalized_collects: &[Option<CollectData>],
+    normalized_collects: &[Option<&CollectData>],
 ) -> bool {
     if normalized_collects.len() < curr_view.params().quorum() {
         false
@@ -807,7 +806,7 @@ fn binds(
 
 fn unbound(
     curr_view: ViewInfo,
-    normalized_collects: &[Option<CollectData>],
+    normalized_collects: &[Option<&CollectData>],
 ) -> bool {
     if normalized_collects.len() < curr_view.params().quorum() {
         false
@@ -816,7 +815,6 @@ fn unbound(
             .iter()
             .filter(move |maybe_collect| {
                 maybe_collect
-                    .as_ref()
                     .map(|collect| {
                         collect
                             .incomplete_proof()
@@ -851,7 +849,7 @@ fn quorum_highest(
     curr_view: ViewInfo,
     ts: SeqNo,
     value: &Digest,
-    normalized_collects: &[Option<CollectData>],
+    normalized_collects: &[Option<&CollectData>],
 ) -> bool {
     let appears = normalized_collects
         .iter()
@@ -890,7 +888,7 @@ fn certified_value(
     curr_view: ViewInfo,
     ts: SeqNo,
     value: &Digest,
-    normalized_collects: &[Option<CollectData>],
+    normalized_collects: &[Option<&CollectData>],
 ) -> bool {
     let count: usize = normalized_collects
         .iter()
