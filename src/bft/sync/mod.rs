@@ -15,7 +15,6 @@ use std::time::{Instant, Duration};
 
 use crate::bft::crypto::hash::Digest;
 use crate::bft::core::server::ViewInfo;
-use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::{
     Node,
     NodeId
@@ -39,7 +38,6 @@ use crate::bft::timeouts::{
 use crate::bft::collections::{
     self,
     HashMap,
-    HashSet,
 };
 use crate::bft::communication::message::{
     Header,
@@ -921,7 +919,6 @@ fn normalized_collects<'a, O: 'a>(
 }
 
 fn signed_collects<'a, S>(
-    in_exec: SeqNo,
     node: &'a Node<S::Data>,
     collects: impl Iterator<Item = &'a StoredMessage<ViewChangeMessage<Request<S>>>>,
 ) -> impl Iterator<Item = &'a StoredMessage<ViewChangeMessage<Request<S>>>>
