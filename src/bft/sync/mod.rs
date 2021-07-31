@@ -753,7 +753,18 @@ fn sound(
     let mut timestamps = collections::hash_set();
     let mut values = collections::hash_set();
 
-    for c in normalized_collects.iter().filter_map(Option::as_ref) {
+    for maybe_collect in normalized_collects.iter() {
+        // NOTE: BFT-SMaRt assumes normalized values start on view 0,
+        // if their CID is different from the one in execution;
+        // see `LCManager::normalizeCollects` on its code
+        let c = match maybe_collect {
+            Some(c) => c,
+            None => {
+                timestamps.insert(SeqNo::ZERO);
+                continue;
+            },
+        };
+
         // add quorum write timestamp
         timestamps.insert(c
             .incomplete_proof()
@@ -815,9 +826,7 @@ fn unbound(
                             // assumes replicas are on view 0
                             .unwrap_or(true)
                     })
-                    // BFT-SMaRt assumes normalized values start on view 0,
-                    // if their CID is different from the one in execution;
-                    // see `LCManager::normalizeCollects` on its code
+                    // check NOTE above on the `sound` predicate
                     .unwrap_or(true)
             })
             .count();
