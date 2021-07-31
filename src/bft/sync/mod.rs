@@ -914,7 +914,7 @@ fn normalized_collects<'a, O: 'a>(
 
 fn signed_collects<'a, S>(
     in_exec: SeqNo,
-    node: &Node<S::Data>,
+    node: &'a Node<S::Data>,
     collects: impl Iterator<Item = &'a StoredMessage<ViewChangeMessage<Request<S>>>>,
 ) -> impl Iterator<Item = &'a StoredMessage<ViewChangeMessage<Request<S>>>>
 where
@@ -924,7 +924,11 @@ where
     Reply<S>: Send + 'static,
 {
     collects
-        //.filter(|collect| {
-        //    let wm = WireMessage::from_parts(collec
-        //})
+        .filter(move |stored| {
+            let wm = match WireMessage::from_parts(*stored.header(), &[]) {
+                Ok(wm) => wm,
+                _ => return false,
+            };
+            wm.is_valid(node.get_public_key(stored.header().from()))
+        })
 }
