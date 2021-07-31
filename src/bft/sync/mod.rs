@@ -743,6 +743,20 @@ where
 //
 ////////////////////////////////////////////////////////////////////////////////
 
+fn binds(
+    curr_view: ViewInfo,
+    ts: SeqNo,
+    value: &Digest,
+    normalized_collects: &[Option<&CollectData>],
+) -> bool {
+    if normalized_collects.len() < curr_view.params().quorum() {
+        false
+    } else {
+        quorum_highest(curr_view, ts, value, normalized_collects)
+            && certified_value(curr_view, ts, value, normalized_collects)
+    }
+}
+
 fn quorum_highest(
     curr_view: ViewInfo,
     ts: SeqNo,
