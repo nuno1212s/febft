@@ -3,6 +3,7 @@
 //! This code allows a replica to change its view, where a new
 //! leader is elected.
 
+use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 use std::time::{Instant, Duration};
@@ -28,6 +29,7 @@ use crate::bft::ordering::{
 use crate::bft::consensus::log::{
     Log,
     CollectData,
+    ViewDecisionPair,
 };
 use crate::bft::timeouts::{
     TimeoutKind,
@@ -700,6 +702,46 @@ where
                 NormalizedCollect { collect: c, has_value }
             })
     }
+}
+
+// see Cachin's 'Yet Another Visit to Paxos' (April 2011), pages 10-11
+// 'ts' means 'timestamp', and it is equivalent to the sequence number of a view
+fn quorum_highest(
+    curr_view: ViewInfo,
+    ts: SeqNo,
+    value: &Digest,
+    collects: &[NormalizedCollect<'_>],
+) -> bool {
+    let appears = collects
+        .iter()
+        .position(|c| {
+            let c = if c.has_value { c.collect } else { return false };
+            match c.incomplete_proof().quorum_writes() {
+                Some(ViewDecisionPair(other_ts, other_value)) => {
+                    *other_ts == ts && other_value == value
+                },
+                None => false,
+            }
+        })
+        .is_some();
+    let count = collects
+        .iter()
+        .filter(move |c| {
+            let collect = if c.has_value { c.collect } else { return false };
+            collect
+                .incomplete_proof()
+                .quorum_writes()
+                .map(|ViewDecisionPair(other_ts, other_value)| {
+                    match other_ts.cmp(&ts) {
+                        Ordering::Less => true,
+                        Ordering::Equal if other_value == value => true,
+                        _ => false,
+                    }
+                })
+                .unwrap_or(false)
+        })
+        .count();
+    appears && count > curr_view.params().quorum()
 }
 
 impl<S> Deref for Synchronizer<S>
