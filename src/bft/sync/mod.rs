@@ -272,11 +272,8 @@ where
         }
     }
 
-    /// Watch a group of client requests that we received from
-    /// STOP view change messages.
-    pub fn watch_stopped_requests(
+    fn add_stopped_requests(
         &mut self,
-        timeouts: &TimeoutsHandle<S>,
         log: &mut Log<State<S>, Request<S>, Reply<S>>,
     ) {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
@@ -285,10 +282,9 @@ where
             .stopped_requests(None)
             .into_iter()
             .map(|stopped| stopped.into_inner());
-        let phase = TimeoutPhase::Init(Instant::now());
 
         for (header, request) in requests {
-            self.watch_request_impl(phase, header.unique_digest(), timeouts);
+            self.watching.insert(header.unique_digest(), TimeoutPhase::TimedOut);
             log.insert(header, SystemMessage::Request(request));
         }
     }
@@ -464,10 +460,8 @@ where
                     //   messages with TimeoutPhase::Init(_)
                     // - install new view (i.e. update view seq no)
                     // - send STOP-DATA message
-                    self.watch_stopped_requests(
-                        timeouts,
-                        log,
-                    );
+                    self.add_stopped_requests(log);
+                    self.watch_all_requests(timeouts);
 
                     self.phase = ProtoPhase::StoppingData(0);
                     self.install_view(self.view().next_view());
