@@ -242,7 +242,7 @@ impl DecisionLog {
         // seq no will be the last + 1 or 0
         let in_exec = self.last_exec
             .map(|last| SeqNo::from(u32::from(last) + 1))
-            .unwrap_or_else(|| SeqNo::from(0));
+            .unwrap_or(SeqNo::ZERO);
 
         // fetch write set
         let write_set = WriteSet({
@@ -322,7 +322,7 @@ impl DecisionLog {
             // TODO: this code could be improved when `ControlFlow` is stabilized in
             // the Rust standard library
             let mut buf = Vec::new();
-            let mut last_view = SeqNo::from(0);
+            let mut last_view = SeqNo::ZERO;
             let mut found = false;
             for stored in self.prepares.iter().rev() {
                 if !found {
@@ -351,7 +351,7 @@ impl DecisionLog {
         }?;
         let commits = {
             let mut buf = Vec::new();
-            let mut last_view = SeqNo::from(0);
+            let mut last_view = SeqNo::ZERO;
             let mut found = false;
             for stored in self.commits.iter().rev() {
                 if !found {
@@ -402,7 +402,7 @@ impl<S, O, P> Log<S, O, P> {
     pub fn new(batch_size: usize) -> Self {
         Self {
             batch_size,
-            curr_seq: SeqNo::from(0),
+            curr_seq: SeqNo::ZERO,
             declog: DecisionLog::new(),
             deciding: collections::hash_map_capacity(batch_size),
             // TODO: use config value instead of const

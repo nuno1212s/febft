@@ -230,9 +230,9 @@ where
             curr_timeout: base_timeout,
             received_states: collections::hash_map(),
             phase: ProtoPhase::Init,
-            latest_cid: SeqNo::from(0u32),
+            latest_cid: SeqNo::ZERO,
             latest_cid_count: 0,
-            cst_seq: SeqNo::from(0),
+            cst_seq: SeqNo::ZERO,
         }
     }
 
@@ -474,7 +474,7 @@ where
         node: &mut Node<S::Data>,
     ) {
         // reset state of latest seq no. request
-        self.latest_cid = SeqNo::from(0u32);
+        self.latest_cid = SeqNo::ZERO;
         self.latest_cid_count = 0;
 
         let cst_seq = self.next_seq();
