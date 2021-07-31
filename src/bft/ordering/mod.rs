@@ -63,6 +63,9 @@ impl PartialOrd for SeqNo {
 }
 
 impl SeqNo {
+    /// Represents the first available sequence number.
+    pub const ZERO: Self = SeqNo(0);
+
     /// Returns the following sequence number.
     #[inline]
     pub(crate) fn next(self) -> SeqNo {
