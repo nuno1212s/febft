@@ -518,13 +518,15 @@ where
                 self.collects.insert(header.from(), StoredMessage::new(header, message));
 
                 if i == self.view().params().quorum() {
-                    // TODO:
+                    // NOTE:
+                    // - fetch highest CID from consensus proofs
                     // - broadcast SYNC msg with collected
                     //   STOP-DATA proofs so other replicas
                     //   can repeat the leader's computation
+                    let highest_cid = unimplemented!();
 
                     let normalized_collects: Vec<Option<&CollectData>> = self
-                        .normalized_collects(log.decision_log().executing())
+                        .normalized_collects(highest_cid)
                         .collect();
 
                     if !sound(*self.view(), &normalized_collects) {
@@ -540,8 +542,7 @@ where
                     unimplemented!()
                 } else {
                     self.phase = ProtoPhase::StoppingData(i);
-                    //SynchronizerStatus::Nil
-                    unimplemented!()
+                    SynchronizerStatus::Running
                 }
             },
             // TODO: other phases
