@@ -688,19 +688,9 @@ where
     }
 
     // collects whose in execution cid is different from the given `in_exec` become `None`
+    #[inline]
     fn normalized_collects<'a>(&'a self, in_exec: SeqNo) -> impl Iterator<Item = Option<&'a CollectData>> {
-        //self.collects
-        //    .values()
-        //    .filter(move |&c| c.incomplete_proof().executing() == in_exec)
-        self.collects
-            .values()
-            .map(move |c| {
-                if c.incomplete_proof().executing() == in_exec {
-                    Some(c)
-                } else {
-                    None
-                }
-            })
+        normalized_collects(in_exec, self.collects.values())
     }
 }
 
@@ -905,4 +895,18 @@ fn certified_value(
         })
         .sum();
     count > curr_view.params().f()
+}
+
+fn normalized_collects<'a>(
+    in_exec: SeqNo,
+    collects: impl Iterator<Item = &'a CollectData>,
+) -> impl Iterator<Item = Option<&'a CollectData>> {
+    collects
+        .map(move |c| {
+            if c.incomplete_proof().executing() == in_exec {
+                Some(c)
+            } else {
+                None
+            }
+        })
 }
