@@ -239,7 +239,7 @@ impl<O> ViewChangeMessage<O> {
 pub enum ViewChangeMessageKind<O> {
     Stop(Vec<StoredMessage<RequestMessage<O>>>),
     StopData(CollectData),
-    Sync(Vec<CollectData>),
+    Sync(Vec<StoredMessage<ViewChangeMessage<O>>>),
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]

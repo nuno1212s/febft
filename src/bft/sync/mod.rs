@@ -15,6 +15,7 @@ use std::time::{Instant, Duration};
 
 use crate::bft::crypto::hash::Digest;
 use crate::bft::core::server::ViewInfo;
+use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::{
     Node,
     NodeId
@@ -199,7 +200,7 @@ pub struct Synchronizer<S: Service> {
     timeout_seq: SeqNo,
     timeout_dur: Duration,
     stopped: HashMap<NodeId, Vec<StoredMessage<RequestMessage<Request<S>>>>>,
-    collects: HashMap<NodeId, CollectData>,
+    collects: HashMap<NodeId, StoredMessage<ViewChangeMessage<Request<S>>>>,
     watching: HashMap<Digest, TimeoutPhase>,
     tbo: TboQueue<Request<S>>,
 }
@@ -518,11 +519,7 @@ where
                 // the new leader isn't forging messages.
 
                 // store collects from this STOP-DATA
-                let collect = match message.into_kind() {
-                    ViewChangeMessageKind::StopData(collect) => collect,
-                    _ => unreachable!(),
-                };
-                self.collects.insert(header.from(), collect);
+                self.collects.insert(header.from(), StoredMessage::new(header, message));
 
                 if i == self.view().params().quorum() {
                     // TODO:
@@ -897,16 +894,37 @@ fn certified_value(
     count > curr_view.params().f()
 }
 
-fn normalized_collects<'a>(
+fn normalized_collects<'a, O: 'a>(
     in_exec: SeqNo,
-    collects: impl Iterator<Item = &'a CollectData>,
+    collects: impl Iterator<Item = &'a StoredMessage<ViewChangeMessage<O>>>,
 ) -> impl Iterator<Item = Option<&'a CollectData>> {
     collects
-        .map(move |c| {
-            if c.incomplete_proof().executing() == in_exec {
-                Some(c)
+        .map(move |stored| {
+            let collect = match stored.message().kind() {
+                ViewChangeMessageKind::StopData(collects) => collects,
+                _ => return None,
+            };
+            if collect.incomplete_proof().executing() == in_exec {
+                Some(collect)
             } else {
                 None
             }
         })
+}
+
+fn signed_collects<'a, S>(
+    in_exec: SeqNo,
+    node: &Node<S::Data>,
+    collects: impl Iterator<Item = &'a StoredMessage<ViewChangeMessage<Request<S>>>>,
+) -> impl Iterator<Item = &'a StoredMessage<ViewChangeMessage<Request<S>>>>
+where
+    S: Service + Send + 'static,
+    State<S>: Send + Clone + 'static,
+    Request<S>: Send + Clone + 'static,
+    Reply<S>: Send + 'static,
+{
+    collects
+        //.filter(|collect| {
+        //    let wm = WireMessage::from_parts(collec
+        //})
 }
