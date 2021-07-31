@@ -140,6 +140,15 @@ pub struct IncompleteProof {
     quorum_writes: Option<ViewDecisionPair>,
 }
 
+impl WriteSet {
+    /// Iterate over this `WriteSet`.
+    ///
+    /// Convenience method for calling `iter()` on the inner `Vec`.
+    pub fn iter(&self) -> impl Iterator<Item = &ViewDecisionPair> {
+        self.0.iter()
+    }
+}
+
 impl IncompleteProof {
     /// Returns the sequence number of the consensus instance currently
     /// being executed.

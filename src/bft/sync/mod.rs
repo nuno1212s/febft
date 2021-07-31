@@ -738,9 +738,11 @@ where
 // in this consensus algorithm, the WRITE phase is equivalent to the
 // PREPARE phase of PBFT, so we will observe a mismatch of terminology
 //
+// on the arguments of the predicates below, 'ts' means 'timestamp',
+// and it is equivalent to the sequence number of a view
+//
 ////////////////////////////////////////////////////////////////////////////////
 
-// 'ts' means 'timestamp', and it is equivalent to the sequence number of a view
 fn quorum_highest(
     curr_view: ViewInfo,
     ts: SeqNo,
@@ -777,5 +779,28 @@ fn quorum_highest(
                 .unwrap_or(false)
         })
         .count();
-    appears && count > curr_view.params().quorum()
+    appears && count >= curr_view.params().quorum()
+}
+
+fn certified_value(
+    curr_view: ViewInfo,
+    ts: SeqNo,
+    value: &Digest,
+    normalized_collects: &[Option<&CollectData>],
+) -> bool {
+    let count: usize = normalized_collects
+        .iter()
+        .filter_map(Option::as_ref)
+        .map(move |collect| {
+            collect
+                .incomplete_proof()
+                .write_set()
+                .iter()
+                .filter(|ViewDecisionPair(other_ts, other_value)| {
+                    *other_ts >= ts && other_value == value
+                })
+                .count()
+        })
+        .sum();
+    count > curr_view.params().f()
 }
