@@ -375,6 +375,8 @@ where
     }
 
     /// Advances the state of the view change state machine.
+    //
+    // TODO: retransmit STOP msgs
     pub fn process_message(
         &mut self,
         header: Header,
@@ -523,10 +525,24 @@ where
 
                 if i == self.view().params().quorum() {
                     // TODO:
-                    // - pick decision from STOP-DATA msgs
                     // - broadcast SYNC msg with collected
                     //   STOP-DATA proofs so other replicas
                     //   can repeat the leader's computation
+
+                    let normalized_collects: Vec<Option<&CollectData>> = self
+                        .normalized_collects(log.decision_log().executing())
+                        .collect();
+
+                    if !sound(*self.view(), &normalized_collects) {
+                        // FIXME: BFT-SMaRt doesn't do anything if `sound`
+                        // evaluates to false; do we keep the same behavior,
+                        // and wait for a new time out? but then, no other
+                        // consensus messages have been processed... this
+                        // may be a point of contention on the lib!
+                        self.collects.clear();
+                        return SynchronizerStatus::Running;
+                    }
+
                     unimplemented!()
                 } else {
                     self.phase = ProtoPhase::StoppingData(i);

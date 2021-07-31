@@ -235,14 +235,20 @@ impl DecisionLog {
         }
     }
 
+    /// Returns the sequence number of the consensus instance
+    /// currently being executed
+    pub fn executing(&self) -> SeqNo {
+        // we haven't called `finalize_batch` yet, so the in execution
+        // seq no will be the last + 1 or 0
+        self.last_exec
+            .map(|last| SeqNo::from(u32::from(last) + 1))
+            .unwrap_or(SeqNo::ZERO)
+    }
+
     /// Returns an incomplete proof of the consensus
     /// instance currently being decided in this `DecisionLog`.
     pub fn to_be_decided(&self, view: ViewInfo) -> IncompleteProof {
-        // we haven't called `finalize_batch` yet, so the in execution
-        // seq no will be the last + 1 or 0
-        let in_exec = self.last_exec
-            .map(|last| SeqNo::from(u32::from(last) + 1))
-            .unwrap_or(SeqNo::ZERO);
+        let in_exec = self.executing();
 
         // fetch write set
         let write_set = WriteSet({
