@@ -405,6 +405,19 @@ impl ConsensusMessage {
         &self.kind
     }
 
+    /// Checks if a consensus message refers to the digest of the
+    /// proposed value.
+    ///
+    /// Evidently, this predicate is not defined for `PRE-PREPARE` messages.
+    pub fn has_proposed_digest(&self, digest: &Digest) -> Option<bool> {
+        match self.kind {
+            ConsensusMessageKind::PrePrepare(_) => None,
+            ConsensusMessageKind::Prepare(d) | ConsensusMessageKind::Commit(d) => {
+                Some(&d == digest)
+            },
+        }
+    }
+
     /// Returns the sequence number of the view this consensus message belongs to.
     pub fn view(&self) -> SeqNo {
         self.view

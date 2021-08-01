@@ -521,7 +521,7 @@ where
                     // - broadcast SYNC msg with collected
                     //   STOP-DATA proofs so other replicas
                     //   can repeat the leader's computation
-                    let highest_cid = self.highest_proof_cid();
+                    let highest_cid = self.highest_proof_cid(*self.view(), node);
 
                     let normalized_collects: Vec<Option<&CollectData>> = self
                         .normalized_collects(highest_cid)
@@ -699,10 +699,38 @@ where
     // TODO: quorum sizes may differ when we implement reconfiguration
     fn highest_proof_cid(&self, view: ViewInfo, node: &Node<S::Data>) -> SeqNo {
         collect_data(self.collects.values())
-            // TODO: check if COMMIT msgs are signed
-            .filter(|collect| {
-                asd
+            // fetch proofs
+            .filter_map(|collect| collect.last_proof())
+            // check if COMMIT msgs are signed, and all have the same digest
+            //
+            // TODO: check proofs and digests of PREPAREs as well, eventually,
+            // but for now we are replicating the behavior of BFT-SMaRt
+            .filter(move |proof| {
+                let digest = proof
+                    .pre_prepare()
+                    .header()
+                    .digest();
+
+                proof
+                    .commits()
+                    .iter()
+                    .filter(|stored| {
+                        stored
+                            .message()
+                            .has_proposed_digest(digest)
+                            .unwrap_or(false)
+                    })
+                    .filter(move |&stored| validate_signature::<S, _>(node, stored))
+                    .count() >= view.params().quorum()
             })
+            .map(|proof| {
+                proof
+                    .pre_prepare()
+                    .message()
+                    .sequence_number()
+            })
+            .max()
+            .unwrap_or(SeqNo::ZERO)
     }
 }
 
@@ -945,18 +973,28 @@ where
     Request<S>: Send + Clone + 'static,
     Reply<S>: Send + 'static,
 {
-    collects
-        .filter(move |stored| {
-            let wm = match WireMessage::from_parts(*stored.header(), &[]) {
-                Ok(wm) => wm,
-                _ => return false,
-            };
-            // check if we even have the public key of the node that claims
-            // to have sent this particular message
-            let key = match node.get_public_key(stored.header().from()) {
-                Some(k) => k,
-                None => return false,
-            };
-            wm.is_valid(Some(key))
-        })
+    collects.filter(move |&stored| validate_signature::<S, _>(node, stored))
+}
+
+fn validate_signature<'a, S, M>(
+    node: &'a Node<S::Data>,
+    stored: &'a StoredMessage<M>,
+) -> bool
+where
+    S: Service + Send + 'static,
+    State<S>: Send + Clone + 'static,
+    Request<S>: Send + Clone + 'static,
+    Reply<S>: Send + 'static,
+{
+    let wm = match WireMessage::from_parts(*stored.header(), &[]) {
+        Ok(wm) => wm,
+        _ => return false,
+    };
+    // check if we even have the public key of the node that claims
+    // to have sent this particular message
+    let key = match node.get_public_key(stored.header().from()) {
+        Some(k) => k,
+        None => return false,
+    };
+    wm.is_valid(Some(key))
 }

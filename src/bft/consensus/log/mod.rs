@@ -149,6 +149,23 @@ impl WriteSet {
     }
 }
 
+impl Proof {
+    /// Returns the `PRE-PREPARE` message of this `Proof`.
+    pub fn pre_prepare(&self) -> &StoredMessage<ConsensusMessage> {
+        &self.pre_prepare
+    }
+
+    /// Returns the `PREPARE` message of this `Proof`.
+    pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage>] {
+        &self.prepares[..]
+    }
+
+    /// Returns the `COMMIT` message of this `Proof`.
+    pub fn commits(&self) -> &[StoredMessage<ConsensusMessage>] {
+        &self.commits[..]
+    }
+}
+
 impl IncompleteProof {
     /// Returns the sequence number of the consensus instance currently
     /// being executed.
