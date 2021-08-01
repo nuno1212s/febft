@@ -20,6 +20,15 @@
 * send_node on execution layer, so we don't need to go
   through the master channel to send replies to clients
 
+## algorithm to perform research branch changes
+
+1. order changes by level of complexity, from least
+  difficult to most difficult
+2. implement changes in this order, by creating a new
+   branch `research-<feature>` starting from the previous
+   change's branch
+3. the first feature's branch starts from `view-change`
+
 # systems in rust
 
 * https://www.ibr.cs.tu-bs.de/users/ruesch/papers/ruesch-serial19.pdf
