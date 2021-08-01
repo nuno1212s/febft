@@ -521,7 +521,7 @@ where
                     // - broadcast SYNC msg with collected
                     //   STOP-DATA proofs so other replicas
                     //   can repeat the leader's computation
-                    let highest_cid = unimplemented!();
+                    let highest_cid = self.highest_proof_cid();
 
                     let normalized_collects: Vec<Option<&CollectData>> = self
                         .normalized_collects(highest_cid)
@@ -693,7 +693,16 @@ where
     // collects whose in execution cid is different from the given `in_exec` become `None`
     #[inline]
     fn normalized_collects<'a>(&'a self, in_exec: SeqNo) -> impl Iterator<Item = Option<&'a CollectData>> {
-        normalized_collects(in_exec, self.collects.values())
+        normalized_collects(in_exec, collect_data(self.collects.values()))
+    }
+
+    // TODO: quorum sizes may differ when we implement reconfiguration
+    fn highest_proof_cid(&self, view: ViewInfo, node: &Node<S::Data>) -> SeqNo {
+        collect_data(self.collects.values())
+            // TODO: check if COMMIT msgs are signed
+            .filter(|collect| {
+                asd
+            })
     }
 }
 
@@ -900,16 +909,24 @@ fn certified_value(
     count > curr_view.params().f()
 }
 
-fn normalized_collects<'a, O: 'a>(
-    in_exec: SeqNo,
+fn collect_data<'a, O: 'a>(
     collects: impl Iterator<Item = &'a StoredMessage<ViewChangeMessage<O>>>,
+) -> impl Iterator<Item = &'a CollectData> {
+    collects
+        .map(|stored| {
+            match stored.message().kind() {
+                ViewChangeMessageKind::StopData(collects) => collects,
+                _ => unreachable!(),
+            }
+        })
+}
+
+fn normalized_collects<'a>(
+    in_exec: SeqNo,
+    collects: impl Iterator<Item = &'a CollectData>,
 ) -> impl Iterator<Item = Option<&'a CollectData>> {
     collects
-        .map(move |stored| {
-            let collect = match stored.message().kind() {
-                ViewChangeMessageKind::StopData(collects) => collects,
-                _ => return None,
-            };
+        .map(move |collect| {
             if collect.incomplete_proof().executing() == in_exec {
                 Some(collect)
             } else {
