@@ -5,6 +5,9 @@
 
 # changes for the research branch
 
+* view change `hasProof` only checks the sending node's
+  signature, rather than the signature of the consensus
+  messages of all nodes in the proof
 * group flush() calls together, by sorting replies
   per node id
 * remove TLS from clients
