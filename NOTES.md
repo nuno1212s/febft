@@ -1,7 +1,11 @@
 # check what is saved to disk on bft smart
 
-    $ cd /home/sugo/Documents/tese/bft-smart/src/bftsmart
+    $ cd ~/Documents/tese/bft-smart/src/bftsmart
     $ rg -n --heading --color=always File | less
+
+# check use of parallel execs
+
+    $ rg 'submit\(\(\)' ~/Documents/tese/bft-smart/src/bftsmart
 
 # changes for the research branch
 
