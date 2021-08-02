@@ -528,10 +528,13 @@ where
                     // - broadcast SYNC msg with collected
                     //   STOP-DATA proofs so other replicas
                     //   can repeat the leader's computation
-                    let highest_cid = self.highest_proof_cid(*self.view(), node);
+                    let curr_cid = self
+                        .highest_proof_cid(*self.view(), node)
+                        .map(|seq| SeqNo::from(u32::from(seq) + 1))
+                        .unwrap_or(SeqNo::ZERO);
 
                     let normalized_collects: Vec<Option<&CollectData>> = self
-                        .normalized_collects(highest_cid)
+                        .normalized_collects(curr_cid)
                         .collect();
 
                     if !sound(*self.view(), &normalized_collects) {
@@ -594,9 +597,11 @@ where
                 // STOP-DATA phase of Mod-SMaRt
                 if node.id() != self.view().leader() {
                     let signed: Vec<_> = signed_collects::<S>(node, collects);
-                    let highest_cid = highest_proof_cid::<S, _>(*self.view(), node, signed.iter());
+                    let curr_cid = highest_proof_cid::<S, _>(*self.view(), node, signed.iter())
+                        .map(|seq| SeqNo::from(u32::from(seq) + 1))
+                        .unwrap_or(SeqNo::ZERO);
                     let normalized_collects: Vec<_> = {
-                        normalized_collects(highest_cid, collect_data(signed.iter()))
+                        normalized_collects(curr_cid, collect_data(signed.iter()))
                             .collect()
                     };
 
@@ -762,7 +767,7 @@ where
 
     // TODO: quorum sizes may differ when we implement reconfiguration
     #[inline]
-    fn highest_proof_cid(&self, view: ViewInfo, node: &Node<S::Data>) -> SeqNo {
+    fn highest_proof_cid(&self, view: ViewInfo, node: &Node<S::Data>) -> Option<SeqNo> {
         highest_proof_cid::<S, _>(view, node, self.collects.values())
     }
 }
@@ -1039,7 +1044,7 @@ fn highest_proof_cid<'a, S, I>(
     view: ViewInfo,
     node: &'a Node<S::Data>,
     collects: I,
-) -> SeqNo
+) -> Option<SeqNo>
 where
     I: Iterator<Item = &'a StoredMessage<ViewChangeMessage<Request<S>>>>,
     S: Service + Send + 'static,
@@ -1079,5 +1084,4 @@ where
                 .sequence_number()
         })
         .max()
-        .unwrap_or(SeqNo::ZERO)
 }
