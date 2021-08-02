@@ -28,6 +28,7 @@ use crate::bft::ordering::{
 };
 use crate::bft::consensus::log::{
     Log,
+    Proof,
     CollectData,
     ViewDecisionPair,
 };
@@ -522,49 +523,50 @@ where
                 // store collects from this STOP-DATA
                 self.collects.insert(header.from(), StoredMessage::new(header, message));
 
-                if i == self.view().params().quorum() {
-                    // NOTE:
-                    // - fetch highest CID from consensus proofs
-                    // - broadcast SYNC msg with collected
-                    //   STOP-DATA proofs so other replicas
-                    //   can repeat the leader's computation
-                    let curr_cid = self
-                        .highest_proof_cid(*self.view(), node)
-                        .map(|seq| SeqNo::from(u32::from(seq) + 1))
-                        .unwrap_or(SeqNo::ZERO);
-
-                    let normalized_collects: Vec<Option<&CollectData>> = self
-                        .normalized_collects(curr_cid)
-                        .collect();
-
-                    if !sound(*self.view(), &normalized_collects) {
-                        // FIXME: BFT-SMaRt doesn't do anything if `sound`
-                        // evaluates to false; do we keep the same behavior,
-                        // and wait for a new time out? but then, no other
-                        // consensus messages have been processed... this
-                        // may be a point of contention on the lib!
-                        self.collects.clear();
-                        return SynchronizerStatus::Running;
-                    }
-                    drop(normalized_collects);
-
-                    self.phase = ProtoPhase::Syncing;
-
-                    let collects = self.collects
-                        .drain()
-                        .map(|(_, collect)| collect)
-                        .collect();
-                    let message = SystemMessage::ViewChange(ViewChangeMessage::new(
-                        self.view().sequence_number(),
-                        ViewChangeMessageKind::Sync(collects),
-                    ));
-                    let targets = NodeId::targets(0..self.view().params().n());
-                    node.broadcast(message, targets);
-                } else {
+                if i != self.view().params().quorum() {
                     self.phase = ProtoPhase::StoppingData(i);
+                    return SynchronizerStatus::Running;
                 }
 
-                SynchronizerStatus::Running
+                // NOTE:
+                // - fetch highest CID from consensus proofs
+                // - broadcast SYNC msg with collected
+                //   STOP-DATA proofs so other replicas
+                //   can repeat the leader's computation
+                let proof = self.highest_proof(*self.view(), node);
+                let curr_cid = proof
+                    .map(|p| p.pre_prepare().message().sequence_number())
+                    .map(|seq| SeqNo::from(u32::from(seq) + 1))
+                    .unwrap_or(SeqNo::ZERO);
+
+                let normalized_collects: Vec<Option<&CollectData>> = self
+                    .normalized_collects(curr_cid)
+                    .collect();
+
+                if !sound(*self.view(), &normalized_collects) {
+                    // FIXME: BFT-SMaRt doesn't do anything if `sound`
+                    // evaluates to false; do we keep the same behavior,
+                    // and wait for a new time out? but then, no other
+                    // consensus messages have been processed... this
+                    // may be a point of contention on the lib!
+                    self.collects.clear();
+                    return SynchronizerStatus::Running;
+                }
+
+                let collects = self.collects
+                    .values()
+                    .cloned()
+                    .collect();
+                let message = SystemMessage::ViewChange(ViewChangeMessage::new(
+                    self.view().sequence_number(),
+                    ViewChangeMessageKind::Sync(collects),
+                ));
+                let node_id = node.id();
+                let targets = NodeId::targets(0..self.view().params().n())
+                    .filter(move |&id| id != node_id);
+                node.broadcast(message, targets);
+
+                self.finalize(proof, &normalized_collects)
             },
             ProtoPhase::Syncing => {
                 let msg_seq = message.sequence_number();
@@ -595,32 +597,27 @@ where
 
                 // leader has already performed this computation in the
                 // STOP-DATA phase of Mod-SMaRt
-                if node.id() != self.view().leader() {
-                    let signed: Vec<_> = signed_collects::<S>(node, collects);
-                    let curr_cid = highest_proof_cid::<S, _>(*self.view(), node, signed.iter())
-                        .map(|seq| SeqNo::from(u32::from(seq) + 1))
-                        .unwrap_or(SeqNo::ZERO);
-                    let normalized_collects: Vec<_> = {
-                        normalized_collects(curr_cid, collect_data(signed.iter()))
-                            .collect()
-                    };
+                let signed: Vec<_> = signed_collects::<S>(node, collects);
+                let proof = highest_proof::<S, _>(*self.view(), node, signed.iter());
+                let curr_cid = proof
+                    .map(|p| p.pre_prepare().message().sequence_number())
+                    .map(|seq| SeqNo::from(u32::from(seq) + 1))
+                    .unwrap_or(SeqNo::ZERO);
+                let normalized_collects: Vec<_> = {
+                    normalized_collects(curr_cid, collect_data(signed.iter()))
+                        .collect()
+                };
 
-                    if !sound(*self.view(), &normalized_collects) {
-                        // FIXME: BFT-SMaRt doesn't do anything if `sound`
-                        // evaluates to false; do we keep the same behavior,
-                        // and wait for a new time out? but then, no other
-                        // consensus messages have been processed... this
-                        // may be a point of contention on the lib!
-                        return SynchronizerStatus::Running;
-                    }
-                } else {
-                    drop(collects);
+                if !sound(*self.view(), &normalized_collects) {
+                    // FIXME: BFT-SMaRt doesn't do anything if `sound`
+                    // evaluates to false; do we keep the same behavior,
+                    // and wait for a new time out? but then, no other
+                    // consensus messages have been processed... this
+                    // may be a point of contention on the lib!
+                    return SynchronizerStatus::Running;
                 }
 
-                // TODO: select value from collects
-
-                // SynchronizerStatus::Nil
-                unimplemented!()
+                self.finalize(proof, &normalized_collects)
             },
             ProtoPhase::SyncingState => {
                 unimplemented!()
@@ -767,8 +764,26 @@ where
 
     // TODO: quorum sizes may differ when we implement reconfiguration
     #[inline]
-    fn highest_proof_cid(&self, view: ViewInfo, node: &Node<S::Data>) -> Option<SeqNo> {
-        highest_proof_cid::<S, _>(view, node, self.collects.values())
+    fn highest_proof<'a>(&'a self, view: ViewInfo, node: &Node<S::Data>) -> Option<&'a Proof> {
+        highest_proof::<S, _>(view, node, self.collects.values())
+    }
+
+    fn finalize(
+        &self,
+        _proof: Option<&Proof>,
+        _normalized_collects: &[Option<&CollectData>],
+    ) -> SynchronizerStatus {
+        // TODO: return finalize state with things to be updated;
+        //
+        //      FinalizeState { ...: Option<...>, ... }
+        //
+        // this is needed because we have immutable borrows, and
+        // can't mutate `self` from here
+
+        //self.phase = ProtoPhase::Init;
+
+        // SynchronizerStatus::Nil
+        unimplemented!()
     }
 }
 
@@ -1040,11 +1055,11 @@ where
     wm.is_valid(Some(key))
 }
 
-fn highest_proof_cid<'a, S, I>(
+fn highest_proof<'a, S, I>(
     view: ViewInfo,
-    node: &'a Node<S::Data>,
+    node: &Node<S::Data>,
     collects: I,
-) -> Option<SeqNo>
+) -> Option<&'a Proof>
 where
     I: Iterator<Item = &'a StoredMessage<ViewChangeMessage<Request<S>>>>,
     S: Service + Send + 'static,
@@ -1077,11 +1092,10 @@ where
                 .filter(move |&stored| validate_signature::<S, _>(node, stored))
                 .count() >= view.params().quorum()
         })
-        .map(|proof| {
+        .max_by_key(|proof| {
             proof
                 .pre_prepare()
                 .message()
                 .sequence_number()
         })
-        .max()
 }
