@@ -159,7 +159,7 @@ enum ProtoPhase {
     // we are running the STOP-DATA phase of Mod-SMaRt
     StoppingData(usize),
     // we are running the SYNC phase of Mod-SMaRt
-    Syncing(usize),
+    Syncing,
 }
 
 // TODO: finish statuses returned from `process_message`
@@ -359,7 +359,7 @@ where
                     &mut self.tbo.stop_data
                 )
             },
-            ProtoPhase::Syncing(_) => {
+            ProtoPhase::Syncing => {
                 extract_msg!(Request<S> =>
                     &mut self.tbo.get_queue,
                     &mut self.tbo.sync
@@ -538,6 +538,8 @@ where
                     }
                     drop(normalized_collects);
 
+                    self.phase = ProtoPhase::Syncing;
+
                     let collects = self.collects
                         .drain()
                         .map(|(_, collect)| collect)
@@ -554,8 +556,10 @@ where
 
                 SynchronizerStatus::Running
             },
-            // TODO: other phases
-            _ => unimplemented!(),
+            ProtoPhase::Syncing => {
+                // SynchronizerStatus::Nil
+                unimplemented!()
+            },
         }
     }
 
