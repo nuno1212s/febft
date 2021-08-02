@@ -566,6 +566,7 @@ where
                     .filter(move |&id| id != node_id);
                 node.broadcast(message, targets);
 
+                // TODO: call self.collects.clear()
                 self.finalize(proof, &normalized_collects)
             },
             ProtoPhase::Syncing => {
