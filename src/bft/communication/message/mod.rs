@@ -232,6 +232,18 @@ impl<O> ViewChangeMessage<O> {
     pub fn into_kind(self) -> ViewChangeMessageKind<O> {
         self.kind
     }
+
+    /// Takes the collects embedded in this view change message, if they are available.
+    pub fn take_collects(&mut self) -> Option<Vec<StoredMessage<ViewChangeMessage<O>>>> {
+        let kind = std::mem::replace(&mut self.kind, ViewChangeMessageKind::Sync(Vec::new()));
+        match kind {
+            ViewChangeMessageKind::Sync(collects) => Some(collects),
+            _ => {
+                self.kind = kind;
+                None
+            },
+        }
+    }
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]

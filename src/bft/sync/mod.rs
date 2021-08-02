@@ -568,12 +568,12 @@ where
                 let seq = self.view().sequence_number();
 
                 // reject SYNC messages if these were not sent by the leader
-                let _collects = match message.kind() {
+                let collects = match message.kind() {
                     ViewChangeMessageKind::Stop(_) => {
                         self.queue_stop(header, message);
                         return SynchronizerStatus::Running;
                     },
-                    ViewChangeMessageKind::StopData(_)=> {
+                    ViewChangeMessageKind::StopData(_) => {
                         self.queue_stop_data(header, message);
                         return SynchronizerStatus::Running;
                     },
@@ -584,8 +584,35 @@ where
                     ViewChangeMessageKind::Sync(_) if header.from() != self.view().leader() => {
                         return SynchronizerStatus::Running;
                     },
-                    ViewChangeMessageKind::Sync(collects) => collects,
+                    ViewChangeMessageKind::Sync(_) => {
+                        let mut message = message;
+                        message.take_collects().unwrap()
+                    },
                 };
+
+                // leader has already performed this computation in the
+                // STOP-DATA phase of Mod-SMaRt
+                if node.id() != self.view().leader() {
+                    let signed: Vec<_> = signed_collects::<S>(node, collects);
+                    let highest_cid = highest_proof_cid::<S, _>(*self.view(), node, signed.iter());
+                    let normalized_collects: Vec<_> = {
+                        normalized_collects(highest_cid, collect_data(signed.iter()))
+                            .collect()
+                    };
+
+                    if !sound(*self.view(), &normalized_collects) {
+                        // FIXME: BFT-SMaRt doesn't do anything if `sound`
+                        // evaluates to false; do we keep the same behavior,
+                        // and wait for a new time out? but then, no other
+                        // consensus messages have been processed... this
+                        // may be a point of contention on the lib!
+                        return SynchronizerStatus::Running;
+                    }
+                } else {
+                    drop(collects);
+                }
+
+                // TODO: select value from collects
 
                 // SynchronizerStatus::Nil
                 unimplemented!()
@@ -734,40 +761,9 @@ where
     }
 
     // TODO: quorum sizes may differ when we implement reconfiguration
+    #[inline]
     fn highest_proof_cid(&self, view: ViewInfo, node: &Node<S::Data>) -> SeqNo {
-        collect_data(self.collects.values())
-            // fetch proofs
-            .filter_map(|collect| collect.last_proof())
-            // check if COMMIT msgs are signed, and all have the same digest
-            //
-            // TODO: check proofs and digests of PREPAREs as well, eventually,
-            // but for now we are replicating the behavior of BFT-SMaRt
-            .filter(move |proof| {
-                let digest = proof
-                    .pre_prepare()
-                    .header()
-                    .digest();
-
-                proof
-                    .commits()
-                    .iter()
-                    .filter(|stored| {
-                        stored
-                            .message()
-                            .has_proposed_digest(digest)
-                            .unwrap_or(false)
-                    })
-                    .filter(move |&stored| validate_signature::<S, _>(node, stored))
-                    .count() >= view.params().quorum()
-            })
-            .map(|proof| {
-                proof
-                    .pre_prepare()
-                    .message()
-                    .sequence_number()
-            })
-            .max()
-            .unwrap_or(SeqNo::ZERO)
+        highest_proof_cid::<S, _>(view, node, self.collects.values())
     }
 }
 
@@ -1000,17 +996,20 @@ fn normalized_collects<'a>(
         })
 }
 
-fn signed_collects<'a, S>(
-    node: &'a Node<S::Data>,
-    collects: impl Iterator<Item = &'a StoredMessage<ViewChangeMessage<Request<S>>>>,
-) -> impl Iterator<Item = &'a StoredMessage<ViewChangeMessage<Request<S>>>>
+fn signed_collects<S>(
+    node: &Node<S::Data>,
+    collects: Vec<StoredMessage<ViewChangeMessage<Request<S>>>>,
+) -> Vec<StoredMessage<ViewChangeMessage<Request<S>>>>
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
     Request<S>: Send + Clone + 'static,
     Reply<S>: Send + 'static,
 {
-    collects.filter(move |&stored| validate_signature::<S, _>(node, stored))
+    collects
+        .into_iter()
+        .filter(|stored| validate_signature::<S, _>(node, stored))
+        .collect()
 }
 
 fn validate_signature<'a, S, M>(
@@ -1034,4 +1033,51 @@ where
         None => return false,
     };
     wm.is_valid(Some(key))
+}
+
+fn highest_proof_cid<'a, S, I>(
+    view: ViewInfo,
+    node: &'a Node<S::Data>,
+    collects: I,
+) -> SeqNo
+where
+    I: Iterator<Item = &'a StoredMessage<ViewChangeMessage<Request<S>>>>,
+    S: Service + Send + 'static,
+    State<S>: Send + Clone + 'static,
+    Request<S>: Send + Clone + 'static,
+    Reply<S>: Send + 'static,
+{
+    collect_data(collects)
+        // fetch proofs
+        .filter_map(|collect| collect.last_proof())
+        // check if COMMIT msgs are signed, and all have the same digest
+        //
+        // TODO: check proofs and digests of PREPAREs as well, eventually,
+        // but for now we are replicating the behavior of BFT-SMaRt
+        .filter(move |proof| {
+            let digest = proof
+                .pre_prepare()
+                .header()
+                .digest();
+
+            proof
+                .commits()
+                .iter()
+                .filter(|stored| {
+                    stored
+                        .message()
+                        .has_proposed_digest(digest)
+                        .unwrap_or(false)
+                })
+                .filter(move |&stored| validate_signature::<S, _>(node, stored))
+                .count() >= view.params().quorum()
+        })
+        .map(|proof| {
+            proof
+                .pre_prepare()
+                .message()
+                .sequence_number()
+        })
+        .max()
+        .unwrap_or(SeqNo::ZERO)
 }
