@@ -220,6 +220,14 @@ macro_rules! extract_msg {
     };
 }
 
+macro_rules! stop_status {
+    ($self:expr, $i:expr) => {{
+        let f = $self.view().params().f();
+        if $i > f { SynchronizerStatus::Running }
+            else { SynchronizerStatus::Nil }
+    }}
+}
+
 impl<S> Synchronizer<S>
 where
     S: Service + Send + 'static,
@@ -403,31 +411,20 @@ where
                 let i = match message.kind() {
                     ViewChangeMessageKind::Stop(_) if msg_seq != next_seq => {
                         self.queue_stop(header, message);
-
-                        let f = self.view().params().f();
-                        return if i > f { SynchronizerStatus::Running }
-                            else { SynchronizerStatus::Nil };
+                        return stop_status!(self, i);
                     },
                     ViewChangeMessageKind::Stop(_) if self.stopped.contains_key(&header.from()) => {
                         // drop attempts to vote twice
-                        let f = self.view().params().f();
-                        return if i > f { SynchronizerStatus::Running }
-                            else { SynchronizerStatus::Nil };
+                        return stop_status!(self, i);
                     },
                     ViewChangeMessageKind::Stop(_) => i + 1,
                     ViewChangeMessageKind::StopData(_) => {
                         self.queue_stop_data(header, message);
-
-                        let f = self.view().params().f();
-                        return if i > f { SynchronizerStatus::Running }
-                            else { SynchronizerStatus::Nil };
+                        return stop_status!(self, i);
                     },
                     ViewChangeMessageKind::Sync(_) => {
                         self.queue_sync(header, message);
-
-                        let f = self.view().params().f();
-                        return if i > f { SynchronizerStatus::Running }
-                            else { SynchronizerStatus::Nil };
+                        return stop_status!(self, i);
                     },
                 };
 
@@ -482,7 +479,7 @@ where
 
                 // reject STOP-DATA messages if we are not the leader
                 let i = match message.kind() {
-                    ViewChangeMessageKind::Stop(_)=> {
+                    ViewChangeMessageKind::Stop(_) => {
                         self.queue_stop(header, message);
                         return SynchronizerStatus::Running;
                     },
@@ -557,6 +554,29 @@ where
                 SynchronizerStatus::Running
             },
             ProtoPhase::Syncing => {
+                let msg_seq = message.sequence_number();
+                let seq = self.view().sequence_number();
+
+                // reject SYNC messages if these were not sent by the leader
+                let _collects = match message.kind() {
+                    ViewChangeMessageKind::Stop(_) => {
+                        self.queue_stop(header, message);
+                        return SynchronizerStatus::Running;
+                    },
+                    ViewChangeMessageKind::StopData(_)=> {
+                        self.queue_stop_data(header, message);
+                        return SynchronizerStatus::Running;
+                    },
+                    ViewChangeMessageKind::Sync(_) if msg_seq != seq => {
+                        self.queue_sync(header, message);
+                        return SynchronizerStatus::Running;
+                    },
+                    ViewChangeMessageKind::Sync(_) if self.view().leader() != header.from() => {
+                        return SynchronizerStatus::Running;
+                    },
+                    ViewChangeMessageKind::Sync(collects) => collects,
+                };
+
                 // SynchronizerStatus::Nil
                 unimplemented!()
             },
