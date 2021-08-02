@@ -119,6 +119,9 @@ impl ViewInfo {
 /// Represents a replica in `febft`.
 pub struct Replica<S: Service> {
     phase: ReplicaPhase,
+    // this value is primarily used to switch from
+    // state transfer back to a view change
+    phase_stack: Option<ReplicaPhase>,
     timeouts: TimeoutsHandle<S>,
     executor: ExecutorHandle<S>,
     synchronizer: Synchronizer<S>,
@@ -196,6 +199,7 @@ where
             synchronizer: Synchronizer::new(REQ_BASE_DUR, view),
             consensus: Consensus::new(next_consensus_seq, batch_size),
             phase: ReplicaPhase::NormalPhase,
+            phase_stack: None,
             timeouts,
             executor,
             node,
@@ -284,7 +288,9 @@ where
                                     &mut self.executor,
                                     &mut self.consensus,
                                 )?;
-                                self.phase = ReplicaPhase::NormalPhase;
+                                self.phase = self.phase_stack
+                                    .take()
+                                    .unwrap_or(ReplicaPhase::NormalPhase);
                             },
                             CstStatus::SeqNo(seq) => {
                                 if self.consensus.sequence_number() < seq {

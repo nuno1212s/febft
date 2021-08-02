@@ -160,6 +160,10 @@ enum ProtoPhase {
     StoppingData(usize),
     // we are running the SYNC phase of Mod-SMaRt
     Syncing,
+    // we are running the SYNC phase of Mod-SMaRt,
+    // but are paused while waiting for the state
+    // transfer protocol to finish
+    SyncingState,
 }
 
 // TODO: finish statuses returned from `process_message`
@@ -373,6 +377,12 @@ where
                     &mut self.tbo.sync
                 )
             },
+            ProtoPhase::SyncingState => {
+                extract_msg!(Request<S> =>
+                    &mut self.tbo.get_queue,
+                    &mut self.tbo.sync
+                )
+            },
         }
     }
 
@@ -571,13 +581,16 @@ where
                         self.queue_sync(header, message);
                         return SynchronizerStatus::Running;
                     },
-                    ViewChangeMessageKind::Sync(_) if self.view().leader() != header.from() => {
+                    ViewChangeMessageKind::Sync(_) if header.from() != self.view().leader() => {
                         return SynchronizerStatus::Running;
                     },
                     ViewChangeMessageKind::Sync(collects) => collects,
                 };
 
                 // SynchronizerStatus::Nil
+                unimplemented!()
+            },
+            ProtoPhase::SyncingState => {
                 unimplemented!()
             },
         }
