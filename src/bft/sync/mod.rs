@@ -567,7 +567,7 @@ where
                 node.broadcast(message, targets);
 
                 // TODO: call self.collects.clear()
-                self.finalize(proof, &normalized_collects)
+                self.finalize(proof, &normalized_collects, log)
             },
             ProtoPhase::Syncing => {
                 let msg_seq = message.sequence_number();
@@ -618,7 +618,7 @@ where
                     return SynchronizerStatus::Running;
                 }
 
-                self.finalize(proof, &normalized_collects)
+                self.finalize(proof, &normalized_collects, log)
             },
             ProtoPhase::SyncingState => {
                 unimplemented!()
@@ -771,8 +771,9 @@ where
 
     fn finalize(
         &self,
-        _proof: Option<&Proof>,
+        proof: Option<&Proof>,
         _normalized_collects: &[Option<&CollectData>],
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> SynchronizerStatus {
         // TODO: return finalize state with things to be updated;
         //
@@ -780,6 +781,19 @@ where
         //
         // this is needed because we have immutable borrows, and
         // can't mutate `self` from here
+
+        let curr_cid = proof
+            .map(|p| p.pre_prepare().message().sequence_number())
+            .map(|seq| SeqNo::from(u32::from(seq) + 1))
+            .unwrap_or(SeqNo::ZERO);
+
+        if log.decision_log().executing() != curr_cid {
+            // TODO: invoke state transfer
+            unimplemented!()
+        }
+
+        // NOTE: proof is already installed in the log, so we skip
+        // this step BFT-SMaRt takes
 
         //self.phase = ProtoPhase::Init;
 
