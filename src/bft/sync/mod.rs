@@ -57,6 +57,20 @@ use crate::bft::executable::{
     State,
 };
 
+enum Sound<'a> {
+    Unbound(bool),
+    Bound(&'a Digest),
+}
+
+impl Sound<'_> {
+    fn test(&self) -> bool {
+        match self {
+            Sound::Unbound(ok) => *ok,
+            _ => true,
+        }
+    }
+}
+
 /// Represents a queue of view change messages that arrive out of context into a node.
 pub struct TboQueue<O> {
     // the current view
@@ -543,7 +557,8 @@ where
                     .normalized_collects(curr_cid)
                     .collect();
 
-                if !sound(*self.view(), &normalized_collects) {
+                let status = sound(*self.view(), &normalized_collects);
+                if !status.test() {
                     // FIXME: BFT-SMaRt doesn't do anything if `sound`
                     // evaluates to false; do we keep the same behavior,
                     // and wait for a new time out? but then, no other
@@ -609,7 +624,8 @@ where
                         .collect()
                 };
 
-                if !sound(*self.view(), &normalized_collects) {
+                let status = sound(*self.view(), &normalized_collects);
+                if !status.test() {
                     // FIXME: BFT-SMaRt doesn't do anything if `sound`
                     // evaluates to false; do we keep the same behavior,
                     // and wait for a new time out? but then, no other
@@ -843,10 +859,10 @@ where
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-fn sound(
+fn sound<'a>(
     curr_view: ViewInfo,
-    normalized_collects: &[Option<&CollectData>],
-) -> bool {
+    normalized_collects: &[Option<&'a CollectData>],
+) -> Sound<'a> {
     // collect timestamps and values
     let mut timestamps = collections::hash_set();
     let mut values = collections::hash_set();
@@ -880,12 +896,12 @@ fn sound(
     for ts in timestamps {
         for value in values.iter() {
             if binds(curr_view, ts, value, normalized_collects) {
-                return true;
+                return Sound::Bound(value);
             }
         }
     }
 
-    unbound(curr_view, normalized_collects)
+    Sound::Unbound(unbound(curr_view, normalized_collects))
 }
 
 fn binds(
