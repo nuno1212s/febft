@@ -605,6 +605,9 @@ impl<S, O, P> Log<S, O, P> {
         self.checkpoint = match earlier {
             CheckpointState::None => CheckpointState::Partial { seq },
             CheckpointState::Complete(earlier) => CheckpointState::PartialWithEarlier { seq, earlier },
+            // FIXME: this may not be an invalid state after all; we may just be generating
+            // checkpoints too fast for the execution layer to keep up, delivering the
+            // hash digests of the appstate
             _ => return Err("Invalid checkpoint state detected").wrapped(ErrorKind::ConsensusLog),
         };
         Ok(Info::BeginCheckpoint)
