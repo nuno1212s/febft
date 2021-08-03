@@ -582,7 +582,7 @@ where
                 node.broadcast(message, targets);
 
                 // TODO: call self.collects.clear()
-                self.finalize(proof, &normalized_collects, log)
+                self.finalize(proof, &normalized_collects, status, log)
             },
             ProtoPhase::Syncing => {
                 let msg_seq = message.sequence_number();
@@ -634,7 +634,7 @@ where
                     return SynchronizerStatus::Running;
                 }
 
-                self.finalize(proof, &normalized_collects, log)
+                self.finalize(proof, &normalized_collects, status, log)
             },
             ProtoPhase::SyncingState => {
                 unimplemented!()
@@ -789,6 +789,7 @@ where
         &self,
         proof: Option<&Proof>,
         _normalized_collects: &[Option<&CollectData>],
+        _sound: Sound<'_>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> SynchronizerStatus {
         // TODO: return finalize state with things to be updated;
