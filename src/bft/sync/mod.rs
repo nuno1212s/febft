@@ -1026,10 +1026,10 @@ fn collect_data<'a, O: 'a>(
     collects: impl Iterator<Item = &'a StoredMessage<ViewChangeMessage<O>>>,
 ) -> impl Iterator<Item = &'a CollectData> {
     collects
-        .map(|stored| {
+        .filter_map(|stored| {
             match stored.message().kind() {
-                ViewChangeMessageKind::StopData(collects) => collects,
-                _ => unreachable!(),
+                ViewChangeMessageKind::StopData(collects) => Some(collects),
+                _ => None,
             }
         })
 }
