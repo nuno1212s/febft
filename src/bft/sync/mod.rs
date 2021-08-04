@@ -87,7 +87,8 @@ impl<O> LeaderCollects<O> {
 struct FinalizeState;
 
 enum FinalizeStatus {
-    Err,
+    RunCst,
+    NoValue,
     Commit(FinalizeState),
 }
 
@@ -101,7 +102,8 @@ impl FinalizeState {
 impl FinalizeStatus {
     fn apply(self) -> SynchronizerStatus {
         let state = match self {
-            FinalizeStatus::Err => return SynchronizerStatus::Running,
+            FinalizeStatus::NoValue => return SynchronizerStatus::Running,
+            FinalizeStatus::RunCst => return SynchronizerStatus::RunCst,
             FinalizeStatus::Commit(state) => state,
         };
         state.apply();
@@ -237,13 +239,13 @@ enum ProtoPhase {
 pub enum SynchronizerStatus {
     /// We are not running the view change protocol.
     Nil,
-    /// We have received STOP messages, check if we can process them.
-    HaveStops,
     /// The view change protocol is currently running.
     Running,
-    /// We installed a new view, resulted from running the
-    /// view change protocol.
-    NewView(ViewInfo),
+    /// We have received STOP messages, check if we can process them.
+    HaveStops,
+    /// Before we finish the view change protocol, we need
+    /// to run the CST protocol.
+    RunCst,
     /// The following set of client requests timed out.
     ///
     /// We need to invoke the leader change protocol if
@@ -635,7 +637,7 @@ where
                 node.broadcast(message, targets);
 
                 // TODO: call self.collects.clear()
-                self.finalize(proof, &normalized_collects, p, status, log)
+                self.finalize(curr_cid, status, p, log)
                     .apply()
             },
             ProtoPhase::Syncing => {
@@ -688,7 +690,7 @@ where
                     return SynchronizerStatus::Running;
                 }
 
-                self.finalize(proof, &normalized_collects, proposed, status, log)
+                self.finalize(curr_cid, status, proposed, log)
                     .apply()
             },
             ProtoPhase::SyncingState => {
@@ -842,20 +844,16 @@ where
 
     fn finalize(
         &self,
-        proof: Option<&Proof>,
-        _normalized_collects: &[Option<&CollectData>],
-        _proposed: Vec<Digest>,
+        curr_cid: SeqNo,
         _sound: Sound<'_>,
+        _proposed: Vec<Digest>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> FinalizeStatus {
-        let curr_cid = proof
-            .map(|p| p.pre_prepare().message().sequence_number())
-            .map(|seq| SeqNo::from(u32::from(seq) + 1))
-            .unwrap_or(SeqNo::ZERO);
-
         if log.decision_log().executing() != curr_cid {
-            // TODO: invoke state transfer
-            unimplemented!()
+            // TODO:
+            // - store the arguments passed to finalize
+            // - update synchronizer phase to SyncPhase::SyncingState
+            return FinalizeStatus::RunCst;
         }
 
         // NOTE: proof is already installed in the log, so we skip
