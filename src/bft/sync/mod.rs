@@ -694,6 +694,7 @@ where
                     .apply()
             },
             ProtoPhase::SyncingState => {
+                // TODO: call `finalize`
                 unimplemented!()
             },
         }
@@ -849,20 +850,32 @@ where
         _proposed: Vec<Digest>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> FinalizeStatus {
-        if log.decision_log().executing() != curr_cid {
-            // TODO:
-            // - store the arguments passed to finalize
-            // - update synchronizer phase to SyncPhase::SyncingState
-            return FinalizeStatus::RunCst;
+        match self.phase {
+            ProtoPhase::Syncing => {
+                if log.decision_log().executing() != curr_cid {
+                    // TODO:
+                    // - store the arguments passed to finalize
+                    // - update synchronizer phase to SyncPhase::SyncingState
+                    return FinalizeStatus::RunCst;
+                }
+
+                // NOTE: proof is already installed in the log, so we skip
+                // this step BFT-SMaRt takes
+
+                //self.phase = ProtoPhase::Init;
+
+                // SynchronizerStatus::Nil
+                unimplemented!()
+            },
+            ProtoPhase::SyncingState => {
+                // TODO: resume from CST
+                unimplemented!()
+            },
+            // NOTE: we only call `finalize` when we finish
+            // running the view change protocol, so we shouldn't
+            // be able to call this function in any other phase
+            _ => unreachable!(),
         }
-
-        // NOTE: proof is already installed in the log, so we skip
-        // this step BFT-SMaRt takes
-
-        //self.phase = ProtoPhase::Init;
-
-        // SynchronizerStatus::Nil
-        unimplemented!()
     }
 }
 
