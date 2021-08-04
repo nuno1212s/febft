@@ -208,8 +208,9 @@ where
                                 // remaining ones may be correct, therefore we would not be able to
                                 // count at least f+1 identical replies
                                 //
-                                // TODO: change header.payload() to header.payload_digest()
-                                .or_insert(ReplicaVotes { count: 0, digest: header.digest().clone() });
+                                // NOTE: the `digest()` call in the header returns the digest of
+                                // the payload
+                                .or_insert_with(|| ReplicaVotes { count: 0, digest: header.digest().clone() });
 
                             // reply already delivered to application
                             if votes.count > params.f() {
