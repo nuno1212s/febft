@@ -84,6 +84,31 @@ impl<O> LeaderCollects<O> {
     }
 }
 
+struct FinalizeState;
+
+enum FinalizeStatus {
+    Err,
+    Commit(FinalizeState),
+}
+
+impl FinalizeState {
+    fn apply(self) {
+        // TODO: apply state to the log, etc
+        unimplemented!()
+    }
+}
+
+impl FinalizeStatus {
+    fn apply(self) -> SynchronizerStatus {
+        let state = match self {
+            FinalizeStatus::Err => return SynchronizerStatus::Running,
+            FinalizeStatus::Commit(state) => state,
+        };
+        state.apply();
+        SynchronizerStatus::Nil
+    }
+}
+
 enum Sound<'a> {
     Unbound(bool),
     Bound(&'a Digest),
@@ -611,6 +636,7 @@ where
 
                 // TODO: call self.collects.clear()
                 self.finalize(proof, &normalized_collects, p, status, log)
+                    .apply()
             },
             ProtoPhase::Syncing => {
                 let msg_seq = message.sequence_number();
@@ -663,6 +689,7 @@ where
                 }
 
                 self.finalize(proof, &normalized_collects, proposed, status, log)
+                    .apply()
             },
             ProtoPhase::SyncingState => {
                 unimplemented!()
@@ -820,14 +847,7 @@ where
         _proposed: Vec<Digest>,
         _sound: Sound<'_>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
-    ) -> SynchronizerStatus {
-        // TODO: return finalize state with things to be updated;
-        //
-        //      FinalizeState { ...: Option<...>, ... }
-        //
-        // this is needed because we have immutable borrows, and
-        // can't mutate `self` from here
-
+    ) -> FinalizeStatus {
         let curr_cid = proof
             .map(|p| p.pre_prepare().message().sequence_number())
             .map(|seq| SeqNo::from(u32::from(seq) + 1))
