@@ -260,6 +260,9 @@ pub enum SynchronizerPollStatus<O> {
     Recv,
     /// A new view change message is available to be processed.
     NextMessage(Header, ViewChangeMessage<O>),
+    /// We need to resume the view change protocol, after
+    /// running the CST protocol.
+    ResumeViewChange,
 }
 
 // TODO:
@@ -447,10 +450,7 @@ where
                 )
             },
             ProtoPhase::SyncingState => {
-                extract_msg!(Request<S> =>
-                    &mut self.tbo.get_queue,
-                    &mut self.tbo.sync
-                )
+                SynchronizerPollStatus::ResumeViewChange
             },
         }
     }
