@@ -38,6 +38,7 @@ use crate::bft::communication::socket::Socket;
 use crate::bft::executable::UpdateBatchReplies;
 use crate::bft::communication::NodeId;
 use crate::bft::timeouts::TimeoutKind;
+use crate::bft::sync::LeaderCollects;
 use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
 
@@ -234,8 +235,11 @@ impl<O> ViewChangeMessage<O> {
     }
 
     /// Takes the collects embedded in this view change message, if they are available.
-    pub fn take_collects(&mut self) -> Option<Vec<StoredMessage<ViewChangeMessage<O>>>> {
-        let kind = std::mem::replace(&mut self.kind, ViewChangeMessageKind::Sync(Vec::new()));
+    pub fn take_collects(&mut self) -> Option<LeaderCollects<O>> {
+        let kind = std::mem::replace(
+            &mut self.kind,
+            ViewChangeMessageKind::Sync(LeaderCollects::empty()),
+        );
         match kind {
             ViewChangeMessageKind::Sync(collects) => Some(collects),
             _ => {
@@ -251,7 +255,7 @@ impl<O> ViewChangeMessage<O> {
 pub enum ViewChangeMessageKind<O> {
     Stop(Vec<StoredMessage<RequestMessage<O>>>),
     StopData(CollectData),
-    Sync(Vec<StoredMessage<ViewChangeMessage<O>>>),
+    Sync(LeaderCollects<O>),
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]

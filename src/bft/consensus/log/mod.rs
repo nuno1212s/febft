@@ -527,6 +527,16 @@ impl<S, O, P> Log<S, O, P> {
         }
     }
 
+    /// Retrieves a batch of requests to be proposed during a view change.
+    pub fn view_change_propose(&self) -> Vec<Digest> {
+        self.requests
+            .keys()
+            .chain(self.deciding.keys())
+            .take(self.batch_size)
+            .cloned()
+            .collect()
+    }
+
     /// Checks if this `Log` has a particular request with the given `digest`.
     pub fn has_request(&self, digest: &Digest) -> bool {
         match () {

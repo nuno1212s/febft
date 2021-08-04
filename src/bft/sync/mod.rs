@@ -8,6 +8,9 @@ use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 use std::time::{Instant, Duration};
 
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
+
 //use either::{
 //    Left,
 //    Right,
@@ -56,6 +59,30 @@ use crate::bft::executable::{
     Reply,
     State,
 };
+
+/// Contains the `COLLECT` structures the leader received in the `STOP-DATA` phase
+/// of the view change protocol, as well as a value to be proposed in the `SYNC` message.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct LeaderCollects<O> {
+    proposed: Vec<Digest>,
+    collects: Vec<StoredMessage<ViewChangeMessage<O>>>,
+}
+
+impl<O> LeaderCollects<O> {
+    /// Returns an empty `LeaderCollects` value.
+    pub fn empty() -> LeaderCollects<O> {
+        LeaderCollects {
+            proposed: Vec::new(),
+            collects: Vec::new(),
+        }
+    }
+
+    /// Gives up ownership of the inner values of this `LeaderCollects`.
+    pub fn into_inner(self) -> (Vec<Digest>, Vec<StoredMessage<ViewChangeMessage<O>>>) {
+        (self.proposed, self.collects)
+    }
+}
 
 enum Sound<'a> {
     Unbound(bool),
@@ -568,13 +595,14 @@ where
                     return SynchronizerStatus::Running;
                 }
 
+                let p = log.view_change_propose();
                 let collects = self.collects
                     .values()
                     .cloned()
                     .collect();
                 let message = SystemMessage::ViewChange(ViewChangeMessage::new(
                     self.view().sequence_number(),
-                    ViewChangeMessageKind::Sync(collects),
+                    ViewChangeMessageKind::Sync(LeaderCollects { proposed: p.clone(), collects }),
                 ));
                 let node_id = node.id();
                 let targets = NodeId::targets(0..self.view().params().n())
@@ -582,14 +610,14 @@ where
                 node.broadcast(message, targets);
 
                 // TODO: call self.collects.clear()
-                self.finalize(proof, &normalized_collects, status, log)
+                self.finalize(proof, &normalized_collects, p, status, log)
             },
             ProtoPhase::Syncing => {
                 let msg_seq = message.sequence_number();
                 let seq = self.view().sequence_number();
 
                 // reject SYNC messages if these were not sent by the leader
-                let collects = match message.kind() {
+                let (proposed, collects) = match message.kind() {
                     ViewChangeMessageKind::Stop(_) => {
                         self.queue_stop(header, message);
                         return SynchronizerStatus::Running;
@@ -607,7 +635,7 @@ where
                     },
                     ViewChangeMessageKind::Sync(_) => {
                         let mut message = message;
-                        message.take_collects().unwrap()
+                        message.take_collects().unwrap().into_inner()
                     },
                 };
 
@@ -634,7 +662,7 @@ where
                     return SynchronizerStatus::Running;
                 }
 
-                self.finalize(proof, &normalized_collects, status, log)
+                self.finalize(proof, &normalized_collects, proposed, status, log)
             },
             ProtoPhase::SyncingState => {
                 unimplemented!()
@@ -789,6 +817,7 @@ where
         &self,
         proof: Option<&Proof>,
         _normalized_collects: &[Option<&CollectData>],
+        _proposed: Vec<Digest>,
         _sound: Sound<'_>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> SynchronizerStatus {
