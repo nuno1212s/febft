@@ -493,6 +493,7 @@ impl<S, O, P> Log<S, O, P> {
                 let digest = header.unique_digest();
                 let stored = StoredMessage::new(header, message);
                 self.requests.insert(digest, stored);
+                self.deciding.remove(&digest);
             },
             SystemMessage::Consensus(message) => {
                 let stored = StoredMessage::new(header, message);
