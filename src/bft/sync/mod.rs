@@ -869,6 +869,7 @@ where
         //self.phase = ProtoPhase::Init;
 
         // SynchronizerStatus::Nil
+        unimplemented!()
     }
 }
 
