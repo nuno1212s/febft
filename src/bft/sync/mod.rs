@@ -855,6 +855,10 @@ where
         proposed: Vec<Digest>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> FinalizeStatus {
+        if proposed.is_empty() && !sound.test() {
+            return FinalizeStatus::NoValue;
+        }
+
         if let ProtoPhase::Syncing = self.phase {
             //
             // NOTE: this code will not run when we resume
