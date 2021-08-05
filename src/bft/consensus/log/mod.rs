@@ -401,12 +401,32 @@ impl DecisionLog {
         Some(Proof { pre_prepare, prepares, commits })
     }
 
+    /// Clear incomplete proofs from the log, which match the consensus
+    /// with sequence number `in_exec`.
+    ///
+    /// If `value` is `Some(v)`, then a `PRE-PREPARE` message will be
+    /// returned matching the digest `v`.
     pub fn clear_last_occurrences(
         &mut self,
         in_exec: SeqNo,
         value: Option<&Digest>,
     ) -> Option<StoredMessage<ConsensusMessage>> {
         let mut scratch = Vec::with_capacity(8);
+
+        fn clear_log<M>(in_exec: SeqNo, scratch: &mut Vec<usize>, log: &mut Vec<StoredMessage<M>>)
+        where
+            M: Orderable,
+        {
+            for (i, stored) in log.iter().enumerate().rev() {
+                if stored.message().sequence_number() != in_exec {
+                    break;
+                }
+                scratch.push(i);
+            }
+            for i in scratch.drain(..) {
+                log.swap_remove(i);
+            }
+        }
 
         let pre_prepare = {
             let mut pre_prepare_i = None;
@@ -439,14 +459,12 @@ impl DecisionLog {
 
             pre_prepare
         };
+        clear_log(in_exec, &mut scratch, &mut self.prepares);
+        clear_log(in_exec, &mut scratch, &mut self.commits);
 
         pre_prepare
     }
 }
-
-//fn clear_scratch_space<M>(scratch: &mut Vec<usize>, log: &mut Vec<M>) {
-//    asd
-//}
 
 /// Represents a log of messages received by the BFT system.
 pub struct Log<S, O, P> {
