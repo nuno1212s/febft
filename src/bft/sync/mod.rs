@@ -626,7 +626,7 @@ where
 
                 // attempt to finalize the view change protocol
                 let state = FinalizeState { curr_cid, sound, proposed: p };
-                match self.pre_finalize(state, proof, normalized_collects, log) {
+                match self.pre_finalize(state, proof, &normalized_collects, log) {
                     // wait for next timeout
                     FinalizeStatus::NoValue => {
                         self.collects.clear();
@@ -642,7 +642,8 @@ where
                     // we may finish the view change proto
                     FinalizeStatus::Commit(state) => {
                         self.collects.clear();
-                        self.finalize(state, log)
+                        //self.finalize(state, log)
+                        unimplemented!()
                     },
                 }
             },
@@ -696,8 +697,9 @@ where
                     return SynchronizerStatus::Running;
                 }
 
-                self.finalize(curr_cid, sound, proposed, log)
-                    .apply()
+                //self.finalize(curr_cid, sound, proposed, log)
+                //    .apply()
+                unimplemented!()
             },
             ProtoPhase::SyncingState => {
                 // TODO: call `finalize`
