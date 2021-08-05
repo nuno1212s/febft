@@ -400,7 +400,53 @@ impl DecisionLog {
 
         Some(Proof { pre_prepare, prepares, commits })
     }
+
+    pub fn clear_last_occurrences(
+        &mut self,
+        in_exec: SeqNo,
+        value: Option<&Digest>,
+    ) -> Option<StoredMessage<ConsensusMessage>> {
+        let mut scratch = Vec::with_capacity(8);
+
+        let pre_prepare = {
+            let mut pre_prepare_i = None;
+            let mut pre_prepare = None;
+
+            // find which indices to remove, and try to locate PRE-PREPARE
+            for (i, stored) in self.pre_prepares.iter().enumerate().rev() {
+                if stored.message().sequence_number() != in_exec {
+                    break;
+                }
+                scratch.push(i);
+                if let Some(v) = value {
+                    if pre_prepare_i.is_none() && stored.header().digest() == v {
+                        pre_prepare_i = Some(i);
+                    }
+                }
+            }
+
+            // remove indices from scratch space, and retrieve
+            // PRE-PREPARE if available
+            for i in scratch.drain(..) {
+                match pre_prepare_i {
+                    Some(j) if i == j => {
+                        pre_prepare = Some(self.pre_prepares.swap_remove(i));
+                        pre_prepare_i = None;
+                    },
+                    _ => (),
+                }
+            }
+
+            pre_prepare
+        };
+
+        pre_prepare
+    }
 }
+
+//fn clear_scratch_space<M>(scratch: &mut Vec<usize>, log: &mut Vec<M>) {
+//    asd
+//}
 
 /// Represents a log of messages received by the BFT system.
 pub struct Log<S, O, P> {
