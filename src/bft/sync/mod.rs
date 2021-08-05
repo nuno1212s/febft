@@ -84,7 +84,12 @@ impl<O> LeaderCollects<O> {
     }
 }
 
-struct FinalizeState;
+struct FinalizeState {
+    curr_cid: SeqNo,
+    proposed: Vec<Digest>,
+    sound: Sound,
+}
+
 
 enum FinalizeStatus {
     RunCst,
@@ -111,12 +116,12 @@ impl FinalizeStatus {
     }
 }
 
-enum Sound<'a> {
+enum Sound {
     Unbound(bool),
-    Bound(&'a Digest),
+    Bound(Digest),
 }
 
-impl Sound<'_> {
+impl Sound {
     fn test(&self) -> bool {
         match self {
             Sound::Unbound(ok) => *ok,
@@ -846,8 +851,8 @@ where
     fn finalize(
         &self,
         curr_cid: SeqNo,
-        _sound: Sound<'_>,
-        _proposed: Vec<Digest>,
+        sound: Sound,
+        proposed: Vec<Digest>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> FinalizeStatus {
         if let ProtoPhase::Syncing = self.phase {
@@ -917,7 +922,7 @@ where
 fn sound<'a>(
     curr_view: ViewInfo,
     normalized_collects: &[Option<&'a CollectData>],
-) -> Sound<'a> {
+) -> Sound {
     // collect timestamps and values
     let mut timestamps = collections::hash_set();
     let mut values = collections::hash_set();
@@ -951,7 +956,7 @@ fn sound<'a>(
     for ts in timestamps {
         for value in values.iter() {
             if binds(curr_view, ts, value, normalized_collects) {
-                return Sound::Bound(value);
+                return Sound::Bound(**value);
             }
         }
     }
