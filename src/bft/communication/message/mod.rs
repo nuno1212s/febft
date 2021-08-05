@@ -438,6 +438,22 @@ impl ConsensusMessage {
     pub fn view(&self) -> SeqNo {
         self.view
     }
+
+    /// Takes the proposed client requests embedded in this consensus message,
+    /// if they are available.
+    pub fn take_proposed_requests(&mut self) -> Option<Vec<Digest>> {
+        let kind = std::mem::replace(
+            &mut self.kind,
+            ConsensusMessageKind::PrePrepare(Vec::new()),
+        );
+        match kind {
+            ConsensusMessageKind::PrePrepare(v) => Some(v),
+            _ => {
+                self.kind = kind;
+                None
+            },
+        }
+    }
 }
 
 // FIXME: perhaps use references for serializing and deserializing,

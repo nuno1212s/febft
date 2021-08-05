@@ -103,6 +103,13 @@ enum Sound {
 }
 
 impl Sound {
+    fn value(&self) -> Option<&Digest> {
+        match self {
+            Sound::Bound(d) => Some(d),
+            _ => None,
+        }
+    }
+
     fn test(&self) -> bool {
         match self {
             Sound::Unbound(ok) => *ok,
@@ -227,6 +234,8 @@ pub enum SynchronizerStatus {
     Nil,
     /// The view change protocol is currently running.
     Running,
+    /// The view change protocol just finished running.
+    NewView,
     /// We have received STOP messages, check if we can process them.
     HaveStops,
     /// Before we finish the view change protocol, we need
@@ -864,9 +873,6 @@ where
             // the view change protocol after running CST
             //
             if log.decision_log().executing() != state.curr_cid {
-                // TODO:
-                // - store the arguments passed to finalize
-                // - update synchronizer phase to SyncPhase::SyncingState
                 return FinalizeStatus::RunCst(state);
             }
         }
@@ -880,8 +886,22 @@ where
 
     fn finalize(
         &mut self,
+        FinalizeState { curr_cid, proposed, sound }: FinalizeState,
+        log: &mut Log<State<S>, Request<S>, Reply<S>>,
     ) -> SynchronizerStatus {
-        SynchronizerStatus::Nil
+        let proposed = log
+            .decision_log_mut()
+            .clear_last_occurrences(curr_cid, sound.value())
+            .and_then(|stored| {
+                let (_, mut message) = stored.into_inner();
+                message.take_proposed_requests()
+            })
+            .unwrap_or(proposed);
+
+        drop(proposed);
+
+        //SynchronizerStatus::NewView
+        unimplemented!()
     }
 }
 

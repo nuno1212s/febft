@@ -506,6 +506,12 @@ impl<S, O, P> Log<S, O, P> {
         &self.declog
     }
 
+    /// Returns a mutable reference to a subset of this log, containing
+    /// only consensus messages.
+    pub fn decision_log_mut(&mut self) -> &mut DecisionLog {
+        &mut self.declog
+    }
+
     /// Update the log state, received from the CST protocol.
     pub fn install_state(&mut self, last_seq: SeqNo, rs: RecoveryState<S, O>) {
         // FIXME: what to do with `self.deciding`..?
