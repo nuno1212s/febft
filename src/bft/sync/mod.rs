@@ -928,6 +928,7 @@ where
                 Right(s) => s,
                 Left(_) => unreachable!(),
             }
+            // yeah I know this code is ugly innit
         };
         drop(stored);
 
