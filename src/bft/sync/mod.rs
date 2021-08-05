@@ -92,28 +92,9 @@ struct FinalizeState {
 
 
 enum FinalizeStatus {
-    RunCst,
     NoValue,
+    RunCst(FinalizeState),
     Commit(FinalizeState),
-}
-
-impl FinalizeState {
-    fn apply(self) {
-        // TODO: apply state to the log, etc
-        unimplemented!()
-    }
-}
-
-impl FinalizeStatus {
-    fn apply(self) -> SynchronizerStatus {
-        let state = match self {
-            FinalizeStatus::NoValue => return SynchronizerStatus::Running,
-            FinalizeStatus::RunCst => return SynchronizerStatus::RunCst,
-            FinalizeStatus::Commit(state) => state,
-        };
-        state.apply();
-        SynchronizerStatus::Nil
-    }
 }
 
 enum Sound {
@@ -282,6 +263,7 @@ pub struct Synchronizer<S: Service> {
     collects: HashMap<NodeId, StoredMessage<ViewChangeMessage<Request<S>>>>,
     watching: HashMap<Digest, TimeoutPhase>,
     tbo: TboQueue<Request<S>>,
+    finalize_state: Option<FinalizeState>,
 }
 
 macro_rules! extract_msg {
@@ -326,6 +308,7 @@ where
             stopped: collections::hash_map(),
             collects: collections::hash_map(),
             tbo: TboQueue::new(view),
+            finalize_state: None,
         }
     }
 
@@ -616,8 +599,8 @@ where
                     .normalized_collects(curr_cid)
                     .collect();
 
-                let status = sound(*self.view(), &normalized_collects);
-                if !status.test() {
+                let sound = sound(*self.view(), &normalized_collects);
+                if !sound.test() {
                     // FIXME: BFT-SMaRt doesn't do anything if `sound`
                     // evaluates to false; do we keep the same behavior,
                     // and wait for a new time out? but then, no other
@@ -641,9 +624,27 @@ where
                     .filter(move |&id| id != node_id);
                 node.broadcast(message, targets);
 
-                // TODO: call self.collects.clear()
-                self.finalize(curr_cid, status, p, log)
-                    .apply()
+                // attempt to finalize the view change protocol
+                let state = FinalizeState { curr_cid, sound, proposed: p };
+                match self.pre_finalize(state, proof, normalized_collects, log) {
+                    // wait for next timeout
+                    FinalizeStatus::NoValue => {
+                        self.collects.clear();
+                        SynchronizerStatus::Running
+                    },
+                    // we need to run cst before proceeding with view change
+                    FinalizeStatus::RunCst(state) => {
+                        self.collects.clear();
+                        self.finalize_state = Some(state);
+                        self.phase = ProtoPhase::SyncingState;
+                        SynchronizerStatus::RunCst
+                    },
+                    // we may finish the view change proto
+                    FinalizeStatus::Commit(state) => {
+                        self.collects.clear();
+                        self.finalize(state, log)
+                    },
+                }
             },
             ProtoPhase::Syncing => {
                 let msg_seq = message.sequence_number();
@@ -685,8 +686,8 @@ where
                         .collect()
                 };
 
-                let status = sound(*self.view(), &normalized_collects);
-                if !status.test() {
+                let sound = sound(*self.view(), &normalized_collects);
+                if !sound.test() {
                     // FIXME: BFT-SMaRt doesn't do anything if `sound`
                     // evaluates to false; do we keep the same behavior,
                     // and wait for a new time out? but then, no other
@@ -695,7 +696,7 @@ where
                     return SynchronizerStatus::Running;
                 }
 
-                self.finalize(curr_cid, status, proposed, log)
+                self.finalize(curr_cid, sound, proposed, log)
                     .apply()
             },
             ProtoPhase::SyncingState => {
@@ -848,37 +849,37 @@ where
         highest_proof::<S, _>(view, node, self.collects.values())
     }
 
-    fn finalize(
+    fn pre_finalize(
         &self,
-        curr_cid: SeqNo,
-        sound: Sound,
-        proposed: Vec<Digest>,
+        state: FinalizeState,
+        proof: Option<&Proof>,
+        normalized_collects: &[Option<&CollectData>],
         log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> FinalizeStatus {
-        if proposed.is_empty() && !sound.test() {
-            return FinalizeStatus::NoValue;
-        }
-
         if let ProtoPhase::Syncing = self.phase {
             //
             // NOTE: this code will not run when we resume
             // the view change protocol after running CST
             //
-            if log.decision_log().executing() != curr_cid {
+            if log.decision_log().executing() != state.curr_cid {
                 // TODO:
                 // - store the arguments passed to finalize
                 // - update synchronizer phase to SyncPhase::SyncingState
-                return FinalizeStatus::RunCst;
+                return FinalizeStatus::RunCst(state);
             }
         }
 
-        // NOTE: proof is already installed in the log, so we skip
-        // this step BFT-SMaRt takes
+        if state.proposed.is_empty() && !state.sound.test() {
+            return FinalizeStatus::NoValue;
+        }
 
-        //self.phase = ProtoPhase::Init;
+        FinalizeStatus::Commit(state)
+    }
 
-        // SynchronizerStatus::Nil
-        unimplemented!()
+    fn finalize(
+        &mut self,
+    ) -> SynchronizerStatus {
+        SynchronizerStatus::Nil
     }
 }
 
