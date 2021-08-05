@@ -7,6 +7,11 @@ use std::mem::MaybeUninit;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
+use either::{
+    Left,
+    Right,
+    Either,
+};
 use smallvec::{
     SmallVec,
     Array,
@@ -69,6 +74,22 @@ impl<M> StoredMessage<M> {
     /// Return the inner types of this `StoredMessage`.
     pub fn into_inner(self) -> (Header, M) {
         (self.header, self.message)
+    }
+}
+
+impl<S, O, P> StoredMessage<SystemMessage<S, O, P>> {
+    /// Convert the inner `SystemMessage` into a `ConsensusMessage`,
+    /// if possible, else return the original message.
+    pub fn into_consensus(self) -> Either<Self, StoredMessage<ConsensusMessage>> {
+        let (header, message) = self.into_inner();
+        match message {
+            SystemMessage::Consensus(message) => {
+                Right(StoredMessage::new(header, message))
+            },
+            message => {
+                Left(StoredMessage::new(header, message))
+            },
+        }
     }
 }
 

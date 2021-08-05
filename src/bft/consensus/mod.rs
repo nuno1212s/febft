@@ -292,6 +292,20 @@ where
         }
     }
 
+    /// Create a fake `PRE-PREPARE`. This is useful during the view
+    /// change protocol.
+    pub fn forge_propose(
+        &self,
+        requests: Vec<Digest>,
+        synchronizer: &Synchronizer<S>,
+    ) -> SystemMessage<State<S>, Request<S>, Reply<S>> {
+        SystemMessage::Consensus(ConsensusMessage::new(
+            self.sequence_number(),
+            synchronizer.view().sequence_number(),
+            ConsensusMessageKind::PrePrepare(requests),
+        ))
+    }
+
     /// Check if we can process new consensus messages.
     pub fn poll(&mut self, log: &Log<State<S>, Request<S>, Reply<S>>) -> ConsensusPollStatus {
         match self.phase {

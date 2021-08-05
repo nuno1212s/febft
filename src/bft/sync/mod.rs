@@ -11,13 +11,19 @@ use std::time::{Instant, Duration};
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
-//use either::{
-//    Left,
-//    Right,
-//};
+use either::{
+    Left,
+    Right,
+};
 
+use crate::bft::prng;
+use crate::bft::consensus::Consensus;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::core::server::ViewInfo;
+use crate::bft::communication::serialize::{
+    DigestData,
+    Buf,
+};
 use crate::bft::communication::{
     Node,
     NodeId
@@ -886,8 +892,10 @@ where
 
     fn finalize(
         &mut self,
+        myself: NodeId,
         FinalizeState { curr_cid, proposed, sound }: FinalizeState,
         log: &mut Log<State<S>, Request<S>, Reply<S>>,
+        consensus: &mut Consensus<S>,
     ) -> SynchronizerStatus {
         let proposed = log
             .decision_log_mut()
@@ -898,7 +906,30 @@ where
             })
             .unwrap_or(proposed);
 
-        drop(proposed);
+        // TODO:
+        // - have leader somehow sign the PRE-PREPARE
+        //   message we are going to insert in the log
+        // - maybe optimize this
+        let stored = {
+            let mut buf = Buf::new();
+            let m = consensus.forge_propose(proposed, self);
+            let digest = <S::Data as DigestData>::serialize_digest(&m, &mut buf)
+                .unwrap();
+            let mut prng_state = prng::State::new();
+            let (h, _) = WireMessage::new(
+                self.view().leader(),
+                myself,
+                &buf,
+                prng_state.next_state(),
+                Some(digest),
+                None,
+            ).into_inner();
+            match StoredMessage::new(h, m).into_consensus() {
+                Right(s) => s,
+                Left(_) => unreachable!(),
+            }
+        };
+        drop(stored);
 
         //SynchronizerStatus::NewView
         unimplemented!()
