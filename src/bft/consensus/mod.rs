@@ -313,10 +313,25 @@ where
         &mut self,
         digest: Digest,
         synchronizer: &Synchronizer<S>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) {
-        self.current_digest = digest;
+        // update phase
         self.phase = ProtoPhase::Preparing(1);
+
+        // copy digests from PRE-PREPARE
+        self.current_digest = digest;
+
+        let pre_prepares = log.decision_log().pre_prepares();
+        let last = &pre_prepares[pre_prepares.len() - 1];
+
+        match last.message().kind() {
+            ConsensusMessageKind::PrePrepare(digests) => {
+                self.batch_size = digests.len();
+                (&mut self.current[..digests.len()]).copy_from_slice(&digests[..]);
+            },
+            _ => unreachable!(),
+        }
 
         if node.id() != synchronizer.view().leader() {
             let message = SystemMessage::Consensus(ConsensusMessage::new(

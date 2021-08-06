@@ -938,7 +938,7 @@ where
         log.insert(header, message);
 
         // finalize view change by broadcasting a PREPARE msg
-        consensus.finalize_view_change(digest, self, node);
+        consensus.finalize_view_change(digest, self, log, node);
 
         // resume normal phase
         SynchronizerStatus::NewView
