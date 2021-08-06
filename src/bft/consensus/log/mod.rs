@@ -453,7 +453,9 @@ impl DecisionLog {
                         pre_prepare = Some(self.pre_prepares.swap_remove(i));
                         pre_prepare_i = None;
                     },
-                    _ => (),
+                    _ => {
+                        self.pre_prepares.swap_remove(i);
+                    },
                 }
             }
 
