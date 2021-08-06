@@ -173,6 +173,15 @@ impl<O> TboQueue<O> {
         }
     }
 
+    /// Verifies if we have new `STOP` messages to be processed for
+    /// the next view.
+    pub fn can_process_stops(&self) -> bool {
+        self.stop
+            .get(0)
+            .map(|deque| deque.len() > 0)
+            .unwrap_or(false)
+    }
+
     /// Queues a `STOP` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
     fn queue_stop(&mut self, h: Header, m: ViewChangeMessage<O>) {
@@ -242,8 +251,6 @@ pub enum SynchronizerStatus {
     Running,
     /// The view change protocol just finished running.
     NewView,
-    /// We have received STOP messages, check if we can process them.
-    HaveStops,
     /// Before we finish the view change protocol, we need
     /// to run the CST protocol.
     RunCst,
@@ -507,7 +514,7 @@ where
                 match message.kind() {
                     ViewChangeMessageKind::Stop(_) => {
                         self.queue_stop(header, message);
-                        return SynchronizerStatus::HaveStops;
+                        return SynchronizerStatus::Nil;
                     },
                     ViewChangeMessageKind::StopData(_) => {
                         self.queue_stop_data(header, message);
@@ -752,22 +759,31 @@ where
                     node,
                 )
             },
-            ProtoPhase::SyncingState => {
-                let state = self
-                    .finalize_state
-                    .take()
-                    .unwrap();
-                finalize_view_change!(
-                    self,
-                    state,
-                    None,
-                    Vec::new(),
-                    log,
-                    consensus,
-                    node,
-                )
-            },
+            // handled by `resume_view_change()`
+            ProtoPhase::SyncingState => unreachable!(),
         }
+    }
+
+    /// Resume the view change protocol after running the CST protocol.
+    pub fn resume_view_change(
+        &mut self,
+        log: &mut Log<State<S>, Request<S>, Reply<S>>,
+        consensus: &mut Consensus<S>,
+        node: &mut Node<S::Data>,
+    ) {
+        let state = self
+            .finalize_state
+            .take()
+            .unwrap();
+        finalize_view_change!(
+            self,
+            state,
+            None,
+            Vec::new(),
+            log,
+            consensus,
+            node,
+        );
     }
 
     /// Handle a timeout received from the timeouts layer.

@@ -15,6 +15,7 @@ use crate::bft::ordering::{
 use crate::bft::sync::{
     Synchronizer,
     SynchronizerStatus,
+    SynchronizerPollStatus,
 };
 use crate::bft::timeouts::{
     Timeouts,
@@ -243,7 +244,7 @@ where
             match self.phase {
                 ReplicaPhase::RetrievingState => self.update_retrieving_state().await?,
                 ReplicaPhase::NormalPhase => self.update_normal_phase().await?,
-                ReplicaPhase::SyncPhase => self.update_sync_phase().await?,
+                ReplicaPhase::SyncPhase => self.update_sync_phase().await.map(|_| ())?,
             }
         }
     }
@@ -266,9 +267,8 @@ where
                     SystemMessage::Consensus(message) => {
                         self.consensus.queue(header, message);
                     },
-                    SystemMessage::ViewChange(_message) => {
-                        // TODO: handle view change messages
-                        unimplemented!()
+                    SystemMessage::ViewChange(message) => {
+                        self.synchronizer.queue(header, message);
                     },
                     SystemMessage::Cst(message) => {
                         let status = self.cst.process_message(
@@ -356,11 +356,44 @@ where
         Ok(())
     }
 
-    async fn update_sync_phase(&mut self) -> Result<()> {
-        unimplemented!()
+    async fn update_sync_phase(&mut self) -> Result<bool> {
+        // retrieve a view change message to be processed
+        let message = match self.synchronizer.poll() {
+            SynchronizerPollStatus::Recv => {
+                self.node.receive().await?
+            },
+            SynchronizerPollStatus::NextMessage(h, m) => {
+                Message::System(h, SystemMessage::ViewChange(m))
+            },
+            SynchronizerPollStatus::ResumeViewChange => {
+                self.synchronizer.resume_view_change(
+                    &mut self.log,
+                    &mut self.consensus,
+                    &mut self.node,
+                );
+                self.phase = ReplicaPhase::NormalPhase;
+                return Ok(false);
+            },
+        };
+
+        // TODO: handle msg
+        drop(message);
+
+        Ok(true)
     }
 
     async fn update_normal_phase(&mut self) -> Result<()> {
+        // check if we have STOP messages to be processed,
+        // and update our phase when we start installing
+        // the new view
+        if self.synchronizer.can_process_stops() {
+            let running = self.update_sync_phase().await?;
+            if running {
+                self.phase = ReplicaPhase::SyncPhase;
+            }
+            return Ok(());
+        }
+
         // retrieve the next message to be processed.
         //
         // the order of the next consensus message is guaranteed by
@@ -414,12 +447,8 @@ where
                             &mut self.node,
                         );
                         match status {
-                            SynchronizerStatus::HaveStops => {
-                                // momentarily change the phase of this replica, so
-                                // we can process STOP messages
-                                self.phase = ReplicaPhase::SyncPhase;
-                            },
                             SynchronizerStatus::Nil => (),
+                            SynchronizerStatus::Running => self.phase = ReplicaPhase::SyncPhase,
                             // should not happen...
                             _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
                         }
