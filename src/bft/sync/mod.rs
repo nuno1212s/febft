@@ -306,6 +306,38 @@ macro_rules! stop_status {
     }}
 }
 
+macro_rules! finalize_view_change {
+    (
+        $self:expr,
+        $state:expr,
+        $proof:expr,
+        $normalized_collects:expr,
+        $log:expr,
+        $consensus:expr,
+        $node:expr $(,)?
+    ) => {{
+        match $self.pre_finalize($state, $proof, $normalized_collects, $log) {
+            // wait for next timeout
+            FinalizeStatus::NoValue => {
+                $self.collects.clear();
+                SynchronizerStatus::Running
+            },
+            // we need to run cst before proceeding with view change
+            FinalizeStatus::RunCst(state) => {
+                $self.collects.clear();
+                $self.finalize_state = Some(state);
+                $self.phase = ProtoPhase::SyncingState;
+                SynchronizerStatus::RunCst
+            },
+            // we may finish the view change proto
+            FinalizeStatus::Commit(state) => {
+                $self.collects.clear();
+                $self.finalize(state, $log, $consensus, $node)
+            },
+        }
+    }}
+}
+
 impl<S> Synchronizer<S>
 where
     S: Service + Send + 'static,
@@ -467,6 +499,7 @@ where
         message: ViewChangeMessage<Request<S>>,
         timeouts: &TimeoutsHandle<S>,
         log: &mut Log<State<S>, Request<S>, Reply<S>>,
+        consensus: &mut Consensus<S>,
         node: &mut Node<S::Data>,
     ) -> SynchronizerStatus {
         match self.phase {
@@ -639,28 +672,20 @@ where
                     .filter(move |&id| id != node_id);
                 node.broadcast(message, targets);
 
-                // attempt to finalize the view change protocol
-                let state = FinalizeState { curr_cid, sound, proposed: p };
-                match self.pre_finalize(state, proof, &normalized_collects, log) {
-                    // wait for next timeout
-                    FinalizeStatus::NoValue => {
-                        self.collects.clear();
-                        SynchronizerStatus::Running
-                    },
-                    // we need to run cst before proceeding with view change
-                    FinalizeStatus::RunCst(state) => {
-                        self.collects.clear();
-                        self.finalize_state = Some(state);
-                        self.phase = ProtoPhase::SyncingState;
-                        SynchronizerStatus::RunCst
-                    },
-                    // we may finish the view change proto
-                    FinalizeStatus::Commit(state) => {
-                        self.collects.clear();
-                        //self.finalize(state, log)
-                        unimplemented!()
-                    },
-                }
+                let state = FinalizeState {
+                    curr_cid,
+                    sound,
+                    proposed: p,
+                };
+                finalize_view_change!(
+                    self,
+                    state,
+                    proof,
+                    normalized_collects,
+                    log,
+                    consensus,
+                    node,
+                )
             },
             ProtoPhase::Syncing => {
                 let msg_seq = message.sequence_number();
@@ -712,13 +737,35 @@ where
                     return SynchronizerStatus::Running;
                 }
 
-                //self.finalize(curr_cid, sound, proposed, log)
-                //    .apply()
-                unimplemented!()
+                let state = FinalizeState {
+                    curr_cid,
+                    sound,
+                    proposed,
+                };
+                finalize_view_change!(
+                    self,
+                    state,
+                    proof,
+                    normalized_collects,
+                    log,
+                    consensus,
+                    node,
+                )
             },
             ProtoPhase::SyncingState => {
-                // TODO: call `finalize`
-                unimplemented!()
+                let state = self
+                    .finalize_state
+                    .take()
+                    .unwrap();
+                finalize_view_change!(
+                    self,
+                    state,
+                    None,
+                    Vec::new(),
+                    log,
+                    consensus,
+                    node,
+                )
             },
         }
     }
@@ -871,8 +918,8 @@ where
     fn pre_finalize(
         &self,
         state: FinalizeState,
-        proof: Option<&Proof>,
-        normalized_collects: &[Option<&CollectData>],
+        _proof: Option<&Proof>,
+        _normalized_collects: Vec<Option<&CollectData>>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> FinalizeStatus {
         if let ProtoPhase::Syncing = self.phase {
@@ -939,6 +986,11 @@ where
 
         // finalize view change by broadcasting a PREPARE msg
         consensus.finalize_view_change(digest, self, log, node);
+
+        // skip queued messages from the current view change
+        // and update proto phase
+        self.tbo.next_instance_queue();
+        self.phase = ProtoPhase::Init;
 
         // resume normal phase
         SynchronizerStatus::NewView

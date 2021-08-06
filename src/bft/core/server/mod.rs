@@ -410,6 +410,7 @@ where
                             message,
                             &self.timeouts,
                             &mut self.log,
+                            &mut self.consensus,
                             &mut self.node,
                         );
                         match status {
