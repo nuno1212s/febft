@@ -866,6 +866,8 @@ where
         highest_proof::<S, _>(view, node, self.collects.values())
     }
 
+    // this function mostly serves the purpose of consuming
+    // values with immutable references, to allow borrowing data mutably
     fn pre_finalize(
         &self,
         state: FinalizeState,
