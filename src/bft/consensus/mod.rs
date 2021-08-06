@@ -306,6 +306,29 @@ where
         ))
     }
 
+    /// Finalizes the view change protocol, by updating the consensus
+    /// phase to `ProtoPhase::Preparing` and broadcasting a `PREPARE`
+    /// message.
+    pub fn finalize_view_change(
+        &mut self,
+        digest: Digest,
+        synchronizer: &Synchronizer<S>,
+        node: &mut Node<S::Data>,
+    ) {
+        self.current_digest = digest;
+        self.phase = ProtoPhase::Preparing(1);
+
+        if node.id() != synchronizer.view().leader() {
+            let message = SystemMessage::Consensus(ConsensusMessage::new(
+                self.sequence_number(),
+                synchronizer.view().sequence_number(),
+                ConsensusMessageKind::Prepare(self.current_digest.clone()),
+            ));
+            let targets = NodeId::targets(0..synchronizer.view().params().n());
+            node.broadcast(message, targets);
+        }
+    }
+
     /// Check if we can process new consensus messages.
     pub fn poll(&mut self, log: &Log<State<S>, Request<S>, Reply<S>>) -> ConsensusPollStatus {
         match self.phase {

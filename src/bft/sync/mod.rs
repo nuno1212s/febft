@@ -894,11 +894,13 @@ where
 
     fn finalize(
         &mut self,
-        myself: NodeId,
         FinalizeState { curr_cid, proposed, sound }: FinalizeState,
         log: &mut Log<State<S>, Request<S>, Reply<S>>,
         consensus: &mut Consensus<S>,
+        node: &mut Node<S::Data>,
     ) -> SynchronizerStatus {
+        // we will get some value to be proposed because of the
+        // check we did in `pre_finalize()`, guarding against no values
         let proposed = log
             .decision_log_mut()
             .clear_last_occurrences(curr_cid, sound.value())
@@ -908,11 +910,16 @@ where
             })
             .unwrap_or(proposed);
 
-        // TODO:
-        // - have leader somehow sign the PRE-PREPARE
-        //   message we are going to insert in the log
-        // - maybe optimize this
-        let stored = {
+        // store new proposed value in the log
+        let (digest, header, message) = {
+            //
+            // NOTE: yeah I know this code is ugly innit :^)
+            //
+            // TODO:
+            // - have leader somehow sign the PRE-PREPARE
+            //   message we are about to insert in the log?
+            // - maybe optimize this
+            //
             let mut buf = Buf::new();
             let m = consensus.forge_propose(proposed, self);
             let digest = <S::Data as DigestData>::serialize_digest(&m, &mut buf)
@@ -920,22 +927,21 @@ where
             let mut prng_state = prng::State::new();
             let (h, _) = WireMessage::new(
                 self.view().leader(),
-                myself,
+                node.id(),
                 &buf,
                 prng_state.next_state(),
                 Some(digest),
                 None,
             ).into_inner();
-            match StoredMessage::new(h, m).into_consensus() {
-                Right(s) => s,
-                Left(_) => unreachable!(),
-            }
-            // yeah I know this code is ugly innit
+            (digest, h, m)
         };
-        drop(stored);
+        log.insert(header, message);
 
-        //SynchronizerStatus::NewView
-        unimplemented!()
+        // finalize view change by broadcasting a PREPARE msg
+        consensus.finalize_view_change(digest, self, node);
+
+        // resume normal phase
+        SynchronizerStatus::NewView
     }
 }
 
