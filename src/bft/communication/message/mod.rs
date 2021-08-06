@@ -77,6 +77,7 @@ impl<M> StoredMessage<M> {
     }
 }
 
+/*
 impl<S, O, P> StoredMessage<SystemMessage<S, O, P>> {
     /// Convert the inner `SystemMessage` into a `ConsensusMessage`,
     /// if possible, else return the original message.
@@ -92,6 +93,7 @@ impl<S, O, P> StoredMessage<SystemMessage<S, O, P>> {
         }
     }
 }
+*/
 
 /// A header that is sent before a message in transit in the wire.
 ///
