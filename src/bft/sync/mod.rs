@@ -11,10 +11,10 @@ use std::time::{Instant, Duration};
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
-use either::{
-    Left,
-    Right,
-};
+//use either::{
+//    Left,
+//    Right,
+//};
 
 use crate::bft::prng;
 use crate::bft::consensus::Consensus;

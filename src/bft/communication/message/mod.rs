@@ -7,11 +7,6 @@ use std::mem::MaybeUninit;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
-use either::{
-    Left,
-    Right,
-    Either,
-};
 use smallvec::{
     SmallVec,
     Array,
