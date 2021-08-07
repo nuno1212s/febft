@@ -376,8 +376,63 @@ where
             },
         };
 
-        // TODO: handle msg
-        drop(message);
+        match message {
+            Message::System(header, message) => {
+                match message {
+                    SystemMessage::Consensus(message) => {
+                        self.consensus.queue(header, message);
+                    },
+                    SystemMessage::ForwardedRequests(requests) => {
+                        self.forwarded_requests_received(requests);
+                    },
+                    request @ SystemMessage::Request(_) => {
+                        // TODO: start timer for request
+                        self.log.insert(header, request);
+                    },
+                    SystemMessage::Cst(message) => {
+                        let status = self.cst.process_message(
+                            CstProgress::Message(header, message),
+                            &self.synchronizer,
+                            &self.consensus,
+                            &self.log,
+                            &mut self.node,
+                        );
+                        match status {
+                            CstStatus::Nil => (),
+                            // should not happen...
+                            _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+                        }
+                    },
+                    SystemMessage::ViewChange(message) => {
+                        let status = self.synchronizer.process_message(
+                            header,
+                            message,
+                            &self.timeouts,
+                            &mut self.log,
+                            &mut self.consensus,
+                            &mut self.node,
+                        );
+                        match status {
+                            SynchronizerStatus::Nil | SynchronizerStatus::Running => (),
+                            SynchronizerStatus::NewView => {
+                                self.phase = ReplicaPhase::NormalPhase;
+                                return Ok(false);
+                            },
+                            SynchronizerStatus::RunCst => {
+                                self.phase = ReplicaPhase::RetrievingState;
+                                self.phase_stack = Some(ReplicaPhase::SyncPhase);
+                            },
+                            // should not happen...
+                            _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+                        }
+                    },
+                    // TODO: handle other system message kinds
+                    _ => unimplemented!(),
+                }
+            },
+            // TODO: handle other message kinds
+            _ => unimplemented!(),
+        }
 
         Ok(true)
     }
