@@ -426,8 +426,8 @@ where
                             _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
                         }
                     },
-                    // TODO: handle other system message kinds
-                    _ => unimplemented!(),
+                    // FIXME: handle rogue reply messages
+                    SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
                 }
             },
             // TODO: handle other message kinds
