@@ -337,6 +337,12 @@ where
                     SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
                 }
             },
+            ////////
+            //
+            // TODO: check if simply copying the behavior over from the
+            // normal phase is correct here
+            //
+            //
             Message::Timeout(timeout_kind) => {
                 self.timeout_received(timeout_kind);
             },
@@ -430,8 +436,21 @@ where
                     SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
                 }
             },
-            // TODO: handle other message kinds
-            _ => unimplemented!(),
+            Message::Timeout(timeout_kind) => {
+                self.timeout_received(timeout_kind);
+            },
+            Message::ExecutionFinished(batch) => {
+                self.execution_finished(batch);
+            },
+            Message::ExecutionFinishedWithAppstate(batch, appstate) => {
+                self.execution_finished_with_appstate(batch, appstate)?;
+            },
+            Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
+            Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
+            // TODO: node disconnected on send side
+            Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
+            // TODO: node disconnected on receive side
+            Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
         }
 
         Ok(true)
