@@ -337,12 +337,6 @@ where
                     SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
                 }
             },
-            ////////
-            //
-            // TODO: check if simply copying the behavior over from the
-            // normal phase is correct here
-            //
-            //
             Message::Timeout(timeout_kind) => {
                 self.timeout_received(timeout_kind);
             },
@@ -436,6 +430,12 @@ where
                     SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
                 }
             },
+            //////// XXX XXX XXX XXX
+            //
+            // TODO: check if simply copying the behavior over from the
+            // normal phase is correct here
+            //
+            //
             Message::Timeout(timeout_kind) => {
                 self.timeout_received(timeout_kind);
             },
