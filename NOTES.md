@@ -1,3 +1,9 @@
+# handling concurrent view changes
+
+if we time out again whilst running a view change, currently
+we are allowing the older view change to finish, then we may
+run the new view change. is this the correct behavior?
+
 # check what is saved to disk on bft smart
 
     $ cd ~/Documents/tese/bft-smart/src/bftsmart
