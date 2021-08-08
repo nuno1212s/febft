@@ -770,11 +770,10 @@ where
         log: &mut Log<State<S>, Request<S>, Reply<S>>,
         consensus: &mut Consensus<S>,
         node: &mut Node<S::Data>,
-    ) {
+    ) -> Option<()> {
         let state = self
             .finalize_state
-            .take()
-            .unwrap();
+            .take()?;
         finalize_view_change!(
             self,
             state,
@@ -784,6 +783,7 @@ where
             consensus,
             node,
         );
+        Some(())
     }
 
     /// Handle a timeout received from the timeouts layer.
