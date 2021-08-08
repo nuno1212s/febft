@@ -421,6 +421,7 @@ where
                             &mut self.consensus,
                             &mut self.node,
                         );
+                        self.synchronizer.signal();
                         match status {
                             SynchronizerStatus::Nil | SynchronizerStatus::Running => (),
                             SynchronizerStatus::NewView => {
@@ -473,8 +474,8 @@ where
             let running = self.update_sync_phase().await?;
             if running {
                 self.phase = ReplicaPhase::SyncPhase;
+                return Ok(());
             }
-            return Ok(());
         }
 
         // retrieve the next message to be processed.

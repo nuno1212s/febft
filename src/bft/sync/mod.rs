@@ -279,6 +279,9 @@ pub enum SynchronizerPollStatus<O> {
 pub struct Synchronizer<S: Service> {
     watching_timeouts: bool,
     phase: ProtoPhase,
+    // `alt_phase` allows us to handle new views while
+    // we are processing another view change
+    alt_phase: ProtoPhase,
     timeout_seq: SeqNo,
     timeout_dur: Duration,
     stopped: HashMap<NodeId, Vec<StoredMessage<RequestMessage<Request<S>>>>>,
@@ -356,6 +359,7 @@ where
         Self {
             timeout_dur,
             phase: ProtoPhase::Init,
+            alt_phase: ProtoPhase::Init,
             watching_timeouts: false,
             timeout_seq: SeqNo::ZERO,
             watching: collections::hash_map(),
