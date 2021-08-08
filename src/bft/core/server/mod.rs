@@ -614,7 +614,8 @@ where
                 digest,
                 payload,
             ));
-            self.node.send(message, peer_id);
+            let digest = self.node.send(message, peer_id);
+            self.synchronizer.unwatch_request(&digest);
         }
     }
 
