@@ -213,7 +213,10 @@ where
                 Message::System(header, message) => {
                     match message {
                         request @ SystemMessage::Request(_) => {
-                            // TODO: start timer for request
+                            replica.synchronizer.watch_request(
+                                header.unique_digest(), 
+                                &replica.timeouts,
+                            );
                             replica.log.insert(header, request);
                         },
                         SystemMessage::Consensus(message) => {
@@ -261,7 +264,10 @@ where
                         self.forwarded_requests_received(requests);
                     },
                     request @ SystemMessage::Request(_) => {
-                        // TODO: start timer for request
+                        self.synchronizer.watch_request(
+                            header.unique_digest(), 
+                            &self.timeouts,
+                        );
                         self.log.insert(header, request);
                     },
                     SystemMessage::Consensus(message) => {
@@ -386,7 +392,10 @@ where
                         self.forwarded_requests_received(requests);
                     },
                     request @ SystemMessage::Request(_) => {
-                        // TODO: start timer for request
+                        self.synchronizer.watch_request(
+                            header.unique_digest(), 
+                            &self.timeouts,
+                        );
                         self.log.insert(header, request);
                     },
                     SystemMessage::Cst(message) => {
@@ -494,7 +503,10 @@ where
                         self.forwarded_requests_received(requests);
                     },
                     request @ SystemMessage::Request(_) => {
-                        // TODO: start timer for request
+                        self.synchronizer.watch_request(
+                            header.unique_digest(), 
+                            &self.timeouts,
+                        );
                         self.log.insert(header, request);
                     },
                     SystemMessage::Cst(message) => {
