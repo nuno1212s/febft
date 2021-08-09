@@ -561,6 +561,9 @@ where
                             // attributed by the consensus layer to each op,
                             // to execute in order
                             ConsensusStatus::Decided(digests) => {
+                                for digest in digests.iter() {
+                                    self.synchronizer.unwatch_request(digest);
+                                }
                                 let (info, batch) = self.log.finalize_batch(seq, digests)?;
                                 match info {
                                     // normal execution
@@ -616,8 +619,7 @@ where
                 digest,
                 payload,
             ));
-            let digest = self.node.send(message, peer_id);
-            self.synchronizer.unwatch_request(&digest);
+            self.node.send(message, peer_id);
         }
     }
 
