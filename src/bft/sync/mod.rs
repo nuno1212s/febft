@@ -873,6 +873,20 @@ where
         node.broadcast(message, targets);
     }
 
+    /// Forward the requests that timed out, `timed_out`, to all the nodes in the
+    /// current view.
+    pub fn forward_requests(
+        &self,
+        timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+        node: &mut Node<S::Data>,
+    ) {
+        let message = SystemMessage::ForwardedRequests(ForwardedRequestsMessage::new(
+            timed_out,
+        ));
+        let targets = NodeId::targets(0..self.view().params().n());
+        node.broadcast(message, targets);
+    }
+
     /// Returns some information regarding the current view, such as
     /// the number of faulty replicas the system can tolerate.
     pub fn view(&self) -> &ViewInfo {

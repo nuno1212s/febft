@@ -524,21 +524,26 @@ where
                             _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
                         }
                     },
-                    SystemMessage::ViewChange(message) => {
-                        let status = self.synchronizer.process_message(
-                            header,
-                            message,
-                            &self.timeouts,
-                            &mut self.log,
-                            &mut self.consensus,
-                            &mut self.node,
-                        );
-                        match status {
-                            SynchronizerStatus::Nil => (),
-                            SynchronizerStatus::Running => self.phase = ReplicaPhase::SyncPhase,
-                            // should not happen...
-                            _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
-                        }
+                    SystemMessage::ViewChange(_message) => {
+                        // NOTE: we would have had processed STOP messages above,
+                        // so this branch of the code should be unreachable;
+                        // in any case, if we find a bug, we'll keep this code
+                        // here to easily fix it
+                        unreachable!()
+                        //let status = self.synchronizer.process_message(
+                        //    header,
+                        //    message,
+                        //    &self.timeouts,
+                        //    &mut self.log,
+                        //    &mut self.consensus,
+                        //    &mut self.node,
+                        //);
+                        //match status {
+                        //    SynchronizerStatus::Nil => (),
+                        //    SynchronizerStatus::Running => self.phase = ReplicaPhase::SyncPhase,
+                        //    // should not happen...
+                        //    _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+                        //}
                     },
                     SystemMessage::Consensus(message) => {
                         let seq = self.consensus.sequence_number();
@@ -685,17 +690,19 @@ where
                 match status {
                     SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
                         if forwarded.len() > 0 {
-                            let _requests = self.log.clone_requests(&forwarded);
-
-                            // TODO: fetch requests from log and forward them
-                            // to all of our peer nodes
-                            unimplemented!()
+                            let requests = self.log.clone_requests(&forwarded);
+                            self.synchronizer.forward_requests(
+                                requests,
+                                &mut self.node,
+                            );
                         }
                         if stopped.len() > 0 {
-                            let _stopped = self.log.clone_requests(&stopped);
-
-                            // TODO: begin view change
-                            unimplemented!()
+                            let stopped = self.log.clone_requests(&stopped);
+                            self.synchronizer.begin_view_change(
+                                Some(stopped),
+                                &mut self.node,
+                            );
+                            self.phase = ReplicaPhase::SyncPhase;
                         }
                     },
                     // nothing to do
