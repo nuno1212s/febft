@@ -279,9 +279,6 @@ pub enum SynchronizerPollStatus<O> {
 pub struct Synchronizer<S: Service> {
     watching_timeouts: bool,
     phase: ProtoPhase,
-    // `alt_phase` allows us to handle new views while
-    // we are processing another view change
-    alt_phase: ProtoPhase,
     timeout_seq: SeqNo,
     timeout_dur: Duration,
     stopped: HashMap<NodeId, Vec<StoredMessage<RequestMessage<Request<S>>>>>,
@@ -359,7 +356,6 @@ where
         Self {
             timeout_dur,
             phase: ProtoPhase::Init,
-            alt_phase: ProtoPhase::Init,
             watching_timeouts: false,
             timeout_seq: SeqNo::ZERO,
             watching: collections::hash_map(),
@@ -843,17 +839,24 @@ where
         node: &mut Node<S::Data>,
     ) {
         match (&self.phase, &timed_out) {
-            // we have timed out, therefore we should send a STOP msg
-            (ProtoPhase::Init, _) => self.phase = ProtoPhase::Stopping2(0),
             // we have received STOP messages from peer nodes,
-            // but haven't sent our own stop, yet;
+            // but haven't sent our own STOP, yet;
             //
             // when `timed_out` is `None`, we were called from `process_message`,
             // so we need to update our phase with a new received message
             (ProtoPhase::Stopping(i), None) => self.phase = ProtoPhase::Stopping2(*i + 1),
             (ProtoPhase::Stopping(i), _) => self.phase = ProtoPhase::Stopping2(*i),
-            // we are already running the view change proto, and sent a stop
-            _ => return,
+            // we have timed out, therefore we should send a STOP msg;
+            //
+            // note that we might have already been running the view change proto,
+            // and started another view because we timed out again (e.g. because of
+            // a faulty leader during the view change)
+            _ => {
+                // clear state from previous views
+                self.stopped.clear();
+                self.collects.clear();
+                self.phase = ProtoPhase::Stopping2(0);
+            },
         }
 
         // stop all timers
