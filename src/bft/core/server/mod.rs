@@ -524,7 +524,7 @@ where
                             _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
                         }
                     },
-                    SystemMessage::ViewChange(_message) => {
+                    SystemMessage::ViewChange(message) => {
                         let status = self.synchronizer.process_message(
                             header,
                             message,
@@ -533,6 +533,7 @@ where
                             &mut self.consensus,
                             &mut self.node,
                         );
+                        self.synchronizer.signal();
                         match status {
                             SynchronizerStatus::Nil => (),
                             SynchronizerStatus::Running => self.phase = ReplicaPhase::SyncPhase,
