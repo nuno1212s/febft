@@ -323,6 +323,7 @@ macro_rules! finalize_view_change {
         $consensus:expr,
         $node:expr $(,)?
     ) => {{
+        eprintln!("Finalizing view change on node #{}", u32::from($node.id()));
         match $self.pre_finalize($state, $proof, $normalized_collects, $log) {
             // wait for next timeout
             FinalizeStatus::NoValue => {
@@ -838,6 +839,7 @@ where
         timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
         node: &mut Node<S::Data>,
     ) {
+        eprintln!("Beginning view change on node #{}", u32::from(node.id()));
         match (&self.phase, &timed_out) {
             // we have received STOP messages from peer nodes,
             // but haven't sent our own STOP, yet;
