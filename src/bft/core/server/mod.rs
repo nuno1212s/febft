@@ -696,6 +696,7 @@ where
 
                 match status {
                     SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
+                        eprintln!("Requests timed out on #{}...", u32::from(self.node.id()));
                         if forwarded.len() > 0 {
                             eprintln!("Forwarded requests on #{}...", u32::from(self.node.id()));
                             let requests = self.log.clone_requests(&forwarded);
