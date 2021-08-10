@@ -104,7 +104,9 @@ where
     pub fn timeout(&self, dur: Duration, kind: TimeoutKind) {
         let mut system_tx = self.system_tx.clone();
         rt::spawn(async move {
+            eprintln!("Waiting on timeout...");
             Delay::new(dur).await;
+            eprintln!("Timeout triggered!");
             system_tx.send(Message::Timeout(kind)).await.unwrap_or(());
         });
     }

@@ -244,12 +244,14 @@ where
 
     /// The main loop of a replica.
     pub async fn run(&mut self) -> Result<()> {
-        if u32::from(self.node.id()) == 0 && Instant::now().duration_since(self.start) > Duration::from_secs(10) {
-            // artificially stop running initial view leader
-            return Ok(());
-        }
+        const END: Duration = Duration::from_secs(10);
         // TODO: exit condition?
         loop {
+            if u32::from(self.node.id()) == 0 && Instant::now().duration_since(self.start) > END {
+                // artificially stop running initial view leader
+                eprintln!("Stopped running node #0");
+                return Ok(());
+            }
             match self.phase {
                 ReplicaPhase::RetrievingState => self.update_retrieving_state().await?,
                 ReplicaPhase::NormalPhase => self.update_normal_phase().await?,
@@ -662,6 +664,7 @@ where
     }
 
     fn timeout_received(&mut self, timeout_kind: TimeoutKind) {
+        eprintln!("Handling timeout on #{}...", u32::from(self.node.id()));
         match timeout_kind {
             TimeoutKind::Cst(cst_seq) => {
                 let status = self.cst.timed_out(cst_seq);
@@ -694,6 +697,7 @@ where
                 match status {
                     SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
                         if forwarded.len() > 0 {
+                            eprintln!("Forwarded requests on #{}...", u32::from(self.node.id()));
                             let requests = self.log.clone_requests(&forwarded);
                             self.synchronizer.forward_requests(
                                 requests,
@@ -701,6 +705,7 @@ where
                             );
                         }
                         if stopped.len() > 0 {
+                            eprintln!("Sent stopped requests on #{}...", u32::from(self.node.id()));
                             let stopped = self.log.clone_requests(&stopped);
                             self.synchronizer.begin_view_change(
                                 Some(stopped),

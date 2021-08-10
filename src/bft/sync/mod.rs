@@ -795,6 +795,7 @@ where
             || seq.next() != self.timeout_seq;
 
         if ignore_timeout {
+            eprintln!("Ignored timeout");
             return SynchronizerStatus::Nil;
         }
 
