@@ -1,6 +1,6 @@
 //! Contains the server side core protocol logic of `febft`.
 
-use std::time::Duration;
+use std::time::{Instant, Duration};
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
@@ -119,6 +119,7 @@ impl ViewInfo {
 
 /// Represents a replica in `febft`.
 pub struct Replica<S: Service> {
+    start: Instant,
     phase: ReplicaPhase,
     // this value is primarily used to switch from
     // state transfer back to a view change
@@ -196,6 +197,7 @@ where
         const REQ_BASE_DUR: Duration = Duration::from_secs(20);
 
         let mut replica = Replica {
+            start: Instant::now(),
             cst: CollabStateTransfer::new(CST_BASE_DUR),
             synchronizer: Synchronizer::new(REQ_BASE_DUR, view),
             consensus: Consensus::new(next_consensus_seq, batch_size),
@@ -242,6 +244,10 @@ where
 
     /// The main loop of a replica.
     pub async fn run(&mut self) -> Result<()> {
+        if u32::from(self.node.id()) == 0 && Instant::now().duration_since(self.start) > Duration::from_secs(10) {
+            // artificially stop running initial view leader
+            return Ok(());
+        }
         // TODO: exit condition?
         loop {
             match self.phase {
