@@ -193,7 +193,7 @@ where
         // - cst timeout base dur configure param
         // - ask for latest cid when bootstrapping
         const CST_BASE_DUR: Duration = Duration::from_secs(30);
-        const REQ_BASE_DUR: Duration = Duration::from_secs(2 * 60);
+        const REQ_BASE_DUR: Duration = Duration::from_secs(20);
 
         let mut replica = Replica {
             cst: CollabStateTransfer::new(CST_BASE_DUR),
