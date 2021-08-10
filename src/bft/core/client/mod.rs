@@ -249,9 +249,9 @@ where
                 Message::ConnectedTx(id, sock) => node.handle_connected_tx(id, sock),
                 Message::ConnectedRx(id, sock) => node.handle_connected_rx(id, sock),
                 // TODO: node disconnected on send side
-                Message::DisconnectedTx(_id) => unimplemented!(),
+                Message::DisconnectedTx(id) => eprintln!("{:?} disconnected", id),
                 // TODO: node disconnected on receive side
-                Message::DisconnectedRx(_some_id) => unimplemented!(),
+                Message::DisconnectedRx(some_id) => eprintln!("{:?} disconnected", some_id),
                 // we don't receive any other type of messages as a client node
                 _ => (),
             }
