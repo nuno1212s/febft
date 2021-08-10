@@ -206,7 +206,7 @@ impl<O> TboQueue<O> {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 enum TimeoutPhase {
     // we have never received a timeout
     Init(Instant),
@@ -218,6 +218,7 @@ enum TimeoutPhase {
     TimedOut,
 }
 
+#[derive(Debug)]
 enum ProtoPhase {
     // the view change protocol isn't running;
     // we are watching pending client requests for
@@ -510,6 +511,8 @@ where
         consensus: &mut Consensus<S>,
         node: &mut Node<S::Data>,
     ) -> SynchronizerStatus {
+        let id = u32::from(node.id());
+        eprintln!("Processing {:?} on #{}", self.phase, id);
         match self.phase {
             ProtoPhase::Init => {
                 match message.kind() {
@@ -790,7 +793,11 @@ where
     /// Handle a timeout received from the timeouts layer.
     ///
     /// This timeout pertains to a group of client requests awaiting to be decided.
-    pub fn client_requests_timed_out(&mut self, seq: SeqNo) -> SynchronizerStatus {
+    pub fn client_requests_timed_out(
+        &mut self,
+        seq: SeqNo,
+        timeouts: &TimeoutsHandle<S>,
+    ) -> SynchronizerStatus {
         let ignore_timeout = !self.watching_timeouts
             || seq.next() != self.timeout_seq;
 
@@ -824,9 +831,14 @@ where
                     stopped.push(digest.clone());
                     *timeout_phase = TimeoutPhase::TimedOut;
                 },
+                TimeoutPhase::Init(i) => eprintln!("{:?}", now - *i),
                 _ => (),
             }
         }
+
+        // restart timer
+        let seq = self.next_timeout();
+        timeouts.timeout(self.timeout_dur, TimeoutKind::ClientRequests(seq));
 
         SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
     }

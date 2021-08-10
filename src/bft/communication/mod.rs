@@ -601,6 +601,7 @@ where
         }
 
         let mut tx = self.my_tx.clone();
+        let id = self.id;
 
         rt::spawn(async move {
             let mut buf: Buf = Buf::new();
@@ -617,6 +618,7 @@ where
                 if let Err(_) = sock.read_exact(&mut buf[..Header::LENGTH]).await {
                     // errors reading -> faulty connection;
                     // drop this socket
+                    eprintln!("Err receiving: {} <- {}: could not read header", u32::from(id), u32::from(peer_id));
                     break;
                 }
 
@@ -637,6 +639,7 @@ where
                 if let Err(_) = sock.read_exact(&mut buf[..header.payload_length()]).await {
                     // errors reading -> faulty connection;
                     // drop this socket
+                    eprintln!("Err receiving: {} <- {}: could not read payload", u32::from(id), u32::from(peer_id));
                     break;
                 }
 
@@ -646,6 +649,7 @@ where
                     Err(_) => {
                         // errors deserializing -> faulty connection;
                         // drop this socket
+                        eprintln!("Err receiving: {} <- {}: could not deserialize payload", u32::from(id), u32::from(peer_id));
                         break;
                     },
                 };
@@ -981,8 +985,9 @@ where
         // problems; add a timeout
         let mut sock = lock.lock().await;
         if let Err(_) = wm.write_to(&mut *sock).await {
+            eprintln!("Failed sending: #{} -> #{}", u32::from(my_id), u32::from(peer_id));
             // error sending, drop connection
-            tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
+            tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
         }
     }
 }
