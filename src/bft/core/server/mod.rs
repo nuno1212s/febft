@@ -354,9 +354,9 @@ where
             Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
             Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
             // TODO: node disconnected on send side
-            Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
+            Message::DisconnectedTx(id) => eprintln!("{:?} disconnected", id),
             // TODO: node disconnected on receive side
-            Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
+            Message::DisconnectedRx(some_id) => eprintln!("{:?} disconnected", some_id),
         }
 
         Ok(())
@@ -458,9 +458,9 @@ where
             Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
             Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
             // TODO: node disconnected on send side
-            Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
+            Message::DisconnectedTx(id) => eprintln!("{:?} disconnected", id),
             // TODO: node disconnected on receive side
-            Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
+            Message::DisconnectedRx(some_id) => eprintln!("{:?} disconnected", some_id),
         }
 
         Ok(true)
@@ -604,9 +604,9 @@ where
             Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
             Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
             // TODO: node disconnected on send side
-            Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
+            Message::DisconnectedTx(id) => eprintln!("{:?} disconnected", id),
             // TODO: node disconnected on receive side
-            Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
+            Message::DisconnectedRx(some_id) => eprintln!("{:?} disconnected", some_id),
         }
         Ok(())
     }
