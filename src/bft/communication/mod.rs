@@ -280,18 +280,16 @@ where
             match message {
                 Message::ConnectedTx(id, sock) => {
                     node.handle_connected_tx(id, sock);
-                    let id: usize = id.into();
-                    if id < cfg.n {
+                    if id < cfg.first_cli {
                         // not a client connection, increase count
-                        c[id] += 1;
+                        c[usize::from(id)] += 1;
                     }
                 },
                 Message::ConnectedRx(id, sock) => {
                     node.handle_connected_rx(id, sock);
-                    let id: usize = id.into();
-                    if id < cfg.n {
+                    if id < cfg.first_cli {
                         // not a client connection, increase count
-                        c[id] += 1;
+                        c[usize::from(id)] += 1;
                     }
                 },
                 Message::DisconnectedTx(NodeId(i)) => {
