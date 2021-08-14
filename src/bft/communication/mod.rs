@@ -636,20 +636,20 @@ where
                 buf.resize(header.payload_length(), 0);
 
                 // read the peer's payload
-                if let Err(_) = sock.read_exact(&mut buf[..header.payload_length()]).await {
+                if let Err(e) = sock.read_exact(&mut buf[..header.payload_length()]).await {
                     // errors reading -> faulty connection;
                     // drop this socket
-                    eprintln!("Err receiving: {} <- {}: could not read payload", u32::from(id), u32::from(peer_id));
+                    eprintln!("Err receiving: {} <- {}: could not read payload: {}", u32::from(id), u32::from(peer_id), e);
                     break;
                 }
 
                 // deserialize payload
                 let message = match D::deserialize_message(&buf[..header.payload_length()]) {
                     Ok(m) => m,
-                    Err(_) => {
+                    Err(e) => {
                         // errors deserializing -> faulty connection;
                         // drop this socket
-                        eprintln!("Err receiving: {} <- {}: could not deserialize payload", u32::from(id), u32::from(peer_id));
+                        eprintln!("Err receiving: {} <- {}: could not deserialize payload: {}", u32::from(id), u32::from(peer_id), e);
                         break;
                     },
                 };
