@@ -980,7 +980,7 @@ where
         let mut sock = lock.lock().await;
         if let Err(_) = wm.write_to(&mut *sock).await {
             // error sending, drop connection
-            tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
+            tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
         }
     }
 }
