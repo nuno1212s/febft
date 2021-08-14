@@ -683,7 +683,7 @@ where
             },
             TimeoutKind::ClientRequests(timeout_seq) => {
                 let status = self.synchronizer
-                    .client_requests_timed_out(timeout_seq);
+                    .client_requests_timed_out(timeout_seq, &self.timeouts);
 
                 match status {
                     SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {

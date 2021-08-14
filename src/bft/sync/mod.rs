@@ -789,7 +789,17 @@ where
     /// Handle a timeout received from the timeouts layer.
     ///
     /// This timeout pertains to a group of client requests awaiting to be decided.
-    pub fn client_requests_timed_out(&mut self, seq: SeqNo) -> SynchronizerStatus {
+    //
+    //
+    // TODO: fix current timeout impl, as most requests won't actually
+    // have surpassed their defined timeout period, after the timeout event
+    // is fired on the master channel of the core server task
+    //
+    pub fn client_requests_timed_out(
+        &mut self,
+        seq: SeqNo,
+        timeouts: &TimeoutsHandle<S>,
+    ) -> SynchronizerStatus {
         let ignore_timeout = !self.watching_timeouts
             || seq.next() != self.timeout_seq;
 
@@ -825,6 +835,10 @@ where
                 _ => (),
             }
         }
+
+        // restart timer
+        let seq = self.next_timeout();
+        timeouts.timeout(self.timeout_dur, TimeoutKind::ClientRequests(seq));
 
         SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
     }
