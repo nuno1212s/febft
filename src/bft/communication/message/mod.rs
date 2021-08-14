@@ -122,8 +122,10 @@ impl serde::Serialize for Header {
     where
         S: serde::Serializer,
     {
-        let hdr: &[u8; Self::LENGTH] = unsafe { std::mem::transmute(self) };
-        serde_bytes::serialize(&hdr[..], serializer)
+        let mut hdr = vec![0; Self::LENGTH];
+        let hdr_self: &[u8; Self::LENGTH] = unsafe { std::mem::transmute(self) };
+        hdr.copy_from_slice(&hdr_self[..]);
+        serde_bytes::serialize(&hdr, serializer)
     }
 }
 
@@ -133,9 +135,9 @@ impl<'de> serde::Deserialize<'de> for Header {
     where
         D: serde::Deserializer<'de>,
     {
-        let bytes: &[u8] = serde_bytes::deserialize(deserializer)?;
+        let bytes: Vec<_> = serde_bytes::deserialize(deserializer)?;
         let mut hdr: [u8; Self::LENGTH] = [0; Self::LENGTH];
-        hdr.copy_from_slice(bytes);
+        hdr.copy_from_slice(&bytes);
         Ok(unsafe { std::mem::transmute(hdr) })
     }
 }
