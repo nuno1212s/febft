@@ -122,8 +122,11 @@ impl serde::Serialize for Header {
     where
         S: serde::Serializer,
     {
+        // TODO: improve this, to avoid allocating a `Vec`
+        let mut bytes = vec![0; Self::LENGTH];
         let hdr: &[u8; Self::LENGTH] = unsafe { std::mem::transmute(self) };
-        serde_bytes::serialize(&hdr[..], serializer)
+        bytes.copy_from_slice(&hdr[..]);
+        serde_bytes::serialize(&bytes, serializer)
     }
 }
 
@@ -133,9 +136,9 @@ impl<'de> serde::Deserialize<'de> for Header {
     where
         D: serde::Deserializer<'de>,
     {
-        let bytes: &[u8] = serde_bytes::deserialize(deserializer)?;
+        let bytes: Vec<u8> = serde_bytes::deserialize(deserializer)?;
         let mut hdr: [u8; Self::LENGTH] = [0; Self::LENGTH];
-        hdr.copy_from_slice(bytes);
+        hdr.copy_from_slice(&bytes);
         Ok(unsafe { std::mem::transmute(hdr) })
     }
 }
