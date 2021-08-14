@@ -530,15 +530,6 @@ where
     ) -> SendTo<D> {
         let tx = tx.clone();
         let shared = Arc::clone(shared);
-        let sock = match peer_tx {
-            PeerTx::Client(ref lock) => {
-                let map = lock.read();
-                Arc::clone(&map[&peer_id])
-            },
-            PeerTx::Server(ref map) => {
-                Arc::clone(&map[&peer_id])
-            },
-        };
         if my_id == peer_id {
             SendTo::Me {
                 shared,
@@ -546,6 +537,15 @@ where
                 tx,
             }
         } else {
+            let sock = match peer_tx {
+                PeerTx::Client(ref lock) => {
+                    let map = lock.read();
+                    Arc::clone(&map[&peer_id])
+                },
+                PeerTx::Server(ref map) => {
+                    Arc::clone(&map[&peer_id])
+                },
+            };
             SendTo::Peers {
                 sock,
                 shared,
