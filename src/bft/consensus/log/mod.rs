@@ -119,7 +119,7 @@ pub struct Proof {
 /// Contains a collection of `ViewDecisionPair` values,
 /// pertaining to a particular consensus instance.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct WriteSet(pub Vec<ViewDecisionPair>);
 
 /// Contains a sequence number pertaining to a particular view,
@@ -128,12 +128,12 @@ pub struct WriteSet(pub Vec<ViewDecisionPair>);
 ///
 /// Corresponds to the `TimestampValuePair` class in `BFT-SMaRt`.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ViewDecisionPair(pub SeqNo, pub Digest);
 
 /// Represents an incomplete decision from the `DecisionLog`.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct IncompleteProof {
     in_exec: SeqNo,
     write_set: WriteSet,
