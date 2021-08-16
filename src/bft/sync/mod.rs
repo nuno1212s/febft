@@ -584,8 +584,12 @@ where
                     self.add_stopped_requests(log);
                     self.watch_all_requests(timeouts);
 
-                    self.phase = ProtoPhase::StoppingData(0);
                     self.install_view(self.view().next_view());
+                    self.phase = if node.id() != self.view().leader() {
+                        ProtoPhase::Syncing
+                    } else {
+                        ProtoPhase::StoppingData(0)
+                    };
 
                     let collect = log.decision_log().collect_data(*self.view());
                     let message = SystemMessage::ViewChange(ViewChangeMessage::new(
@@ -705,18 +709,22 @@ where
                 // reject SYNC messages if these were not sent by the leader
                 let (proposed, collects) = match message.kind() {
                     ViewChangeMessageKind::Stop(_) => {
+                        eprintln!("Skipping SYNC: msg is STOP");
                         self.queue_stop(header, message);
                         return SynchronizerStatus::Running;
                     },
                     ViewChangeMessageKind::StopData(_) => {
+                        eprintln!("Skipping SYNC: msg is STOP-DATA");
                         self.queue_stop_data(header, message);
                         return SynchronizerStatus::Running;
                     },
                     ViewChangeMessageKind::Sync(_) if msg_seq != seq => {
+                        eprintln!("Skipping SYNC: msg on different view");
                         self.queue_sync(header, message);
                         return SynchronizerStatus::Running;
                     },
                     ViewChangeMessageKind::Sync(_) if header.from() != self.view().leader() => {
+                        eprintln!("Skipping SYNC: msg not from leader");
                         return SynchronizerStatus::Running;
                     },
                     ViewChangeMessageKind::Sync(_) => {
@@ -727,19 +735,25 @@ where
 
                 // leader has already performed this computation in the
                 // STOP-DATA phase of Mod-SMaRt
+                eprintln!("Retrieving signed collects on #{}", u32::from(node.id()));
                 let signed: Vec<_> = signed_collects::<S>(node, collects);
+                eprintln!("Retrieving highest proof on #{}", u32::from(node.id()));
                 let proof = highest_proof::<S, _>(*self.view(), node, signed.iter());
+                eprintln!("Retrieving curr cid on #{}", u32::from(node.id()));
                 let curr_cid = proof
                     .map(|p| p.pre_prepare().message().sequence_number())
                     .map(|seq| SeqNo::from(u32::from(seq) + 1))
                     .unwrap_or(SeqNo::ZERO);
+                eprintln!("Retrieving normalized collects on #{}", u32::from(node.id()));
                 let normalized_collects: Vec<_> = {
                     normalized_collects(curr_cid, collect_data(signed.iter()))
                         .collect()
                 };
 
+                eprintln!("Evaluating sound on #{}", u32::from(node.id()));
                 let sound = sound(*self.view(), &normalized_collects);
                 if !sound.test() {
+                    eprintln!("Sound failed on #{}!!!!!", u32::from(node.id()));
                     // FIXME: BFT-SMaRt doesn't do anything if `sound`
                     // evaluates to false; do we keep the same behavior,
                     // and wait for a new time out? but then, no other
@@ -753,6 +767,7 @@ where
                     sound,
                     proposed,
                 };
+                eprintln!("Running finalize_view_change on #{}", u32::from(node.id()));
                 finalize_view_change!(
                     self,
                     state,
@@ -1045,6 +1060,7 @@ where
         self.phase = ProtoPhase::Init;
 
         // resume normal phase
+        eprintln!("Resuming normal phase on #{}", u32::from(node.id()));
         SynchronizerStatus::NewView
     }
 }
