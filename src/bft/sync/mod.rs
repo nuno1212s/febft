@@ -328,11 +328,13 @@ macro_rules! finalize_view_change {
         match $self.pre_finalize($state, $proof, $normalized_collects, $log) {
             // wait for next timeout
             FinalizeStatus::NoValue => {
+                eprintln!("Finalizing: no value on node #{}!!!!", u32::from($node.id()));
                 $self.collects.clear();
                 SynchronizerStatus::Running
             },
             // we need to run cst before proceeding with view change
             FinalizeStatus::RunCst(state) => {
+                eprintln!("Finalizing: cst needs to run on node #{}!!!!", u32::from($node.id()));
                 $self.collects.clear();
                 $self.finalize_state = Some(state);
                 $self.phase = ProtoPhase::SyncingState;
@@ -657,6 +659,7 @@ where
                     .map(|p| p.pre_prepare().message().sequence_number())
                     .map(|seq| SeqNo::from(u32::from(seq) + 1))
                     .unwrap_or(SeqNo::ZERO);
+                eprintln!("Curr cid on #{} = {:?}", id, curr_cid);
 
                 let normalized_collects: Vec<Option<&CollectData>> = self
                     .normalized_collects(curr_cid)
@@ -678,7 +681,8 @@ where
                     .values()
                     .cloned()
                     .collect();
-                eprintln!("Leader collects: {:?}", collect_data(collects.iter()).collect::<Vec<_>>());
+                eprintln!("Leader ({}) log: {:?}", id, log.decision_log());
+                eprintln!("Leader ({}) collects: {:?}", id, collect_data(collects.iter()).collect::<Vec<_>>());
                 let message = SystemMessage::ViewChange(ViewChangeMessage::new(
                     self.view().sequence_number(),
                     ViewChangeMessageKind::Sync(LeaderCollects { proposed: p.clone(), collects }),
@@ -733,12 +737,14 @@ where
                         message.take_collects().unwrap().into_inner()
                     },
                 };
-                eprintln!("Replica collects: {:?}", collect_data(collects.iter()).collect::<Vec<_>>());
+                eprintln!("Replica ({}) log: {:?}", id, log.decision_log());
+                eprintln!("Replica ({}) collects: {:?}", id, collect_data(collects.iter()).collect::<Vec<_>>());
 
                 // leader has already performed this computation in the
                 // STOP-DATA phase of Mod-SMaRt
                 eprintln!("Retrieving signed collects on #{}", u32::from(node.id()));
                 let signed: Vec<_> = signed_collects::<S>(node, collects);
+                eprintln!("Signed length on #{} = {}", u32::from(node.id()), signed.len());
                 eprintln!("Retrieving highest proof on #{}", u32::from(node.id()));
                 let proof = highest_proof::<S, _>(*self.view(), node, signed.iter());
                 eprintln!("Retrieving curr cid on #{}", u32::from(node.id()));
@@ -746,6 +752,7 @@ where
                     .map(|p| p.pre_prepare().message().sequence_number())
                     .map(|seq| SeqNo::from(u32::from(seq) + 1))
                     .unwrap_or(SeqNo::ZERO);
+                eprintln!("Curr cid on #{} = {:?}", id, curr_cid);
                 eprintln!("Retrieving normalized collects on #{}", u32::from(node.id()));
                 let normalized_collects: Vec<_> = {
                     normalized_collects(curr_cid, collect_data(signed.iter()))
@@ -997,6 +1004,8 @@ where
             // the view change protocol after running CST
             //
             if log.decision_log().executing() != state.curr_cid {
+                eprintln!("Self  CID: {:?}", log.decision_log().executing());
+                eprintln!("State CID: {:?}", state.curr_cid);
                 return FinalizeStatus::RunCst(state);
             }
         }
@@ -1015,6 +1024,8 @@ where
         consensus: &mut Consensus<S>,
         node: &mut Node<S::Data>,
     ) -> SynchronizerStatus {
+        eprintln!("finalize() called on #{}", u32::from(node.id()));
+
         // we will get some value to be proposed because of the
         // check we did in `pre_finalize()`, guarding against no values
         let proposed = log
@@ -1299,7 +1310,7 @@ fn normalized_collects<'a>(
 }
 
 fn signed_collects<S>(
-    node: &Node<S::Data>,
+    _node: &Node<S::Data>,
     collects: Vec<StoredMessage<ViewChangeMessage<Request<S>>>>,
 ) -> Vec<StoredMessage<ViewChangeMessage<Request<S>>>>
 where
@@ -1308,10 +1319,12 @@ where
     Request<S>: Send + Clone + 'static,
     Reply<S>: Send + 'static,
 {
+    // NOTE: disable verifying sigs when testing
     collects
-        .into_iter()
-        .filter(|stored| validate_signature::<S, _>(node, stored))
-        .collect()
+    //collects
+    //    .into_iter()
+    //    .filter(|stored| validate_signature::<S, _>(node, stored))
+    //    .collect()
 }
 
 fn validate_signature<'a, S, M>(
@@ -1371,7 +1384,8 @@ where
                         .has_proposed_digest(digest)
                         .unwrap_or(false)
                 })
-                .filter(move |&stored| validate_signature::<S, _>(node, stored))
+                // NOTE: disable signatures
+                //.filter(move |&stored| validate_signature::<S, _>(node, stored))
                 .count() >= view.params().quorum()
         })
         .max_by_key(|proof| {
