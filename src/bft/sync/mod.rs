@@ -580,8 +580,12 @@ where
                     self.add_stopped_requests(log);
                     self.watch_all_requests(timeouts);
 
-                    self.phase = ProtoPhase::StoppingData(0);
                     self.install_view(self.view().next_view());
+                    self.phase = if node.id() != self.view().leader() {
+                        ProtoPhase::Syncing
+                    } else {
+                        ProtoPhase::StoppingData(0)
+                    };
 
                     let collect = log.decision_log().collect_data(*self.view());
                     let message = SystemMessage::ViewChange(ViewChangeMessage::new(

@@ -423,7 +423,8 @@ where
                         );
                         self.synchronizer.signal();
                         match status {
-                            SynchronizerStatus::Nil | SynchronizerStatus::Running => (),
+                            SynchronizerStatus::Nil => return Ok(false),
+                            SynchronizerStatus::Running => (),
                             SynchronizerStatus::NewView => {
                                 self.phase = ReplicaPhase::NormalPhase;
                                 return Ok(false);
