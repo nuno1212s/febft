@@ -431,8 +431,10 @@ where
                         );
                         self.synchronizer.signal();
                         match status {
-                            SynchronizerStatus::Nil | SynchronizerStatus::Running => (),
+                            SynchronizerStatus::Nil => return Ok(false),
+                            SynchronizerStatus::Running => (),
                             SynchronizerStatus::NewView => {
+                                eprintln!("Installed normal phase on #{}", u32::from(self.node.id()));
                                 self.phase = ReplicaPhase::NormalPhase;
                                 return Ok(false);
                             },

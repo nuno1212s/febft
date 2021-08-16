@@ -342,6 +342,8 @@ where
             let targets = NodeId::targets(0..synchronizer.view().params().n());
             node.broadcast(message, targets);
         }
+
+        self.tbo.get_queue = false;
     }
 
     /// Check if we can process new consensus messages.
