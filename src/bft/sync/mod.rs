@@ -1327,32 +1327,32 @@ where
     //    .collect()
 }
 
-fn validate_signature<'a, S, M>(
-    node: &'a Node<S::Data>,
-    stored: &'a StoredMessage<M>,
-) -> bool
-where
-    S: Service + Send + 'static,
-    State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
-    Reply<S>: Send + 'static,
-{
-    let wm = match WireMessage::from_parts(*stored.header(), &[]) {
-        Ok(wm) => wm,
-        _ => return false,
-    };
-    // check if we even have the public key of the node that claims
-    // to have sent this particular message
-    let key = match node.get_public_key(stored.header().from()) {
-        Some(k) => k,
-        None => return false,
-    };
-    wm.is_valid(Some(key))
-}
+//fn validate_signature<'a, S, M>(
+//    node: &'a Node<S::Data>,
+//    stored: &'a StoredMessage<M>,
+//) -> bool
+//where
+//    S: Service + Send + 'static,
+//    State<S>: Send + Clone + 'static,
+//    Request<S>: Send + Clone + 'static,
+//    Reply<S>: Send + 'static,
+//{
+//    let wm = match WireMessage::from_parts(*stored.header(), &[]) {
+//        Ok(wm) => wm,
+//        _ => return false,
+//    };
+//    // check if we even have the public key of the node that claims
+//    // to have sent this particular message
+//    let key = match node.get_public_key(stored.header().from()) {
+//        Some(k) => k,
+//        None => return false,
+//    };
+//    wm.is_valid(Some(key))
+//}
 
 fn highest_proof<'a, S, I>(
     view: ViewInfo,
-    node: &Node<S::Data>,
+    _node: &Node<S::Data>,
     collects: I,
 ) -> Option<&'a Proof>
 where
