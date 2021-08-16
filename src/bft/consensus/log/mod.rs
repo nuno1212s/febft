@@ -109,7 +109,7 @@ pub struct DecisionLog {
 
 /// Represents a single decision from the `DecisionLog`.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Proof {
     pre_prepare: StoredMessage<ConsensusMessage>,
     prepares: Vec<StoredMessage<ConsensusMessage>>,
@@ -191,7 +191,7 @@ impl IncompleteProof {
 ///
 /// Corresponds to the class of the same name in `BFT-SMaRt`.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CollectData {
     incomplete_proof: IncompleteProof,
     last_proof: Option<Proof>,

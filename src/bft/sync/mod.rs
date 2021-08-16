@@ -1110,6 +1110,8 @@ fn sound<'a>(
     curr_view: ViewInfo,
     normalized_collects: &[Option<&'a CollectData>],
 ) -> Sound {
+    eprintln!("Collects: {:?}", normalized_collects);
+
     // collect timestamps and values
     let mut timestamps = collections::hash_set();
     let mut values = collections::hash_set();
