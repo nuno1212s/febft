@@ -674,10 +674,11 @@ where
                 }
 
                 let p = log.view_change_propose();
-                let collects = self.collects
+                let collects: Vec<_> = self.collects
                     .values()
                     .cloned()
                     .collect();
+                eprintln!("Leader collects: {:?}", collect_data(collects.iter()).collect::<Vec<_>>());
                 let message = SystemMessage::ViewChange(ViewChangeMessage::new(
                     self.view().sequence_number(),
                     ViewChangeMessageKind::Sync(LeaderCollects { proposed: p.clone(), collects }),
@@ -732,6 +733,7 @@ where
                         message.take_collects().unwrap().into_inner()
                     },
                 };
+                eprintln!("Replica collects: {:?}", collect_data(collects.iter()).collect::<Vec<_>>());
 
                 // leader has already performed this computation in the
                 // STOP-DATA phase of Mod-SMaRt
@@ -1110,7 +1112,7 @@ fn sound<'a>(
     curr_view: ViewInfo,
     normalized_collects: &[Option<&'a CollectData>],
 ) -> Sound {
-    eprintln!("Collects: {:?}", normalized_collects);
+    eprintln!("Normalized collects: {:?}", normalized_collects);
 
     // collect timestamps and values
     let mut timestamps = collections::hash_set();

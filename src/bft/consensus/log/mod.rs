@@ -99,7 +99,7 @@ impl<S> Checkpoint<S> {
 
 /// Subset of a `Log`, containing only consensus messages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DecisionLog {
     last_exec: Option<SeqNo>,
     pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
