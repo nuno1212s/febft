@@ -477,6 +477,8 @@ where
     }
 
     async fn update_normal_phase(&mut self) -> Result<()> {
+        eprintln!("Running normal phase on view: {:?}", self.synchronizer.view().sequence_number());
+
         // check if we have STOP messages to be processed,
         // and update our phase when we start installing
         // the new view

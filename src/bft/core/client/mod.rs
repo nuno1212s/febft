@@ -161,6 +161,8 @@ where
         let targets = NodeId::targets(0..self.params.n());
         let digest = self.node.broadcast(message, targets);
 
+        eprintln!("Waiting for reply of request: {:?}", digest);
+
         // await response
         let data = &*self.data;
         ClientRequestFut { digest, data }.await
