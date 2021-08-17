@@ -157,7 +157,6 @@ impl<O> TboQueue<O> {
     }
 
     fn next_instance_queue(&mut self) {
-        self.view = self.view.next_view();
         tbo_advance_message_queue(&mut self.stop);
         tbo_advance_message_queue(&mut self.stop_data);
         tbo_advance_message_queue(&mut self.sync);
