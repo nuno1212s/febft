@@ -44,6 +44,9 @@ run the new view change. is this the correct behavior?
    branch `research-<feature>` starting from the previous
    change's branch
 3. the first feature's branch starts from `view-change`
+4. lastly, try to merge all the changes of `research` into
+   the branch `ycsb`; fix conflicts with an interactive `git`
+   command line tool
 
 # systems in rust
 
