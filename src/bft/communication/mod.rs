@@ -350,6 +350,29 @@ where
         let send_to = Self::send_to(
             self.id,
             target,
+            None,
+            &self.my_tx,
+            &self.peer_tx,
+        );
+        let my_id = self.id;
+        let nonce = self.rng.next_state();
+        Self::send_impl(message, send_to, my_id, target, nonce)
+    }
+
+    /// Send a `SystemMessage` to a single destination.
+    ///
+    /// This method is somewhat more efficient than calling `broadcast()`
+    /// on a single target id.
+    ///
+    /// This variant of `send()` signs the sent message.
+    pub fn send_signed(
+        &mut self,
+        message: SystemMessage<D::State, D::Request, D::Reply>,
+        target: NodeId,
+    ) -> Digest {
+        let send_to = Self::send_to(
+            self.id,
+            target,
             Some(&self.shared),
             &self.my_tx,
             &self.peer_tx,
@@ -390,6 +413,25 @@ where
 
     /// Broadcast a `SystemMessage` to a group of nodes.
     pub fn broadcast(
+        &mut self,
+        message: SystemMessage<D::State, D::Request, D::Reply>,
+        targets: impl Iterator<Item = NodeId>,
+    ) -> Digest {
+        let (mine, others) = Self::send_tos(
+            self.id,
+            &self.peer_tx,
+            &self.my_tx,
+            None,
+            targets,
+        );
+        let nonce = self.rng.next_state();
+        Self::broadcast_impl(message, mine, others, nonce)
+    }
+
+    /// Broadcast a `SystemMessage` to a group of nodes.
+    ///
+    /// This variant of `broadcast()` signs the sent message.
+    pub fn broadcast_signed(
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item = NodeId>,
@@ -842,6 +884,24 @@ where
         let send_to = <Node<D>>::send_to(
             self.id,
             target,
+            None,
+            &self.my_tx,
+            &self.peer_tx,
+        );
+        let my_id = self.id;
+        let nonce = self.rng.next_state();
+        <Node<D>>::send_impl(message, send_to, my_id, target, nonce)
+    }
+
+    /// Check the `send_signed()` documentation for `Node`.
+    pub fn send_signed(
+        &mut self,
+        message: SystemMessage<D::State, D::Request, D::Reply>,
+        target: NodeId,
+    ) -> Digest {
+        let send_to = <Node<D>>::send_to(
+            self.id,
+            target,
             Some(&self.shared),
             &self.my_tx,
             &self.peer_tx,
@@ -853,6 +913,23 @@ where
 
     /// Check the `broadcast()` documentation for `Node`.
     pub fn broadcast(
+        &mut self,
+        message: SystemMessage<D::State, D::Request, D::Reply>,
+        targets: impl Iterator<Item = NodeId>,
+    ) -> Digest {
+        let (mine, others) = <Node<D>>::send_tos(
+            self.id,
+            &self.peer_tx,
+            &self.my_tx,
+            None,
+            targets,
+        );
+        let nonce = self.rng.next_state();
+        <Node<D>>::broadcast_impl(message, mine, others, nonce)
+    }
+
+    /// Check the `broadcast_signed()` documentation for `Node`.
+    pub fn broadcast_signed(
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item = NodeId>,
