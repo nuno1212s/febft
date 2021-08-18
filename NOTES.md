@@ -15,26 +15,28 @@ run the new view change. is this the correct behavior?
 
 # changes for the research branch
 
-* speculatively create (i.e. sign) `COMMIT` msg
-  before the prepared state
 * view change `hasProof` checks for signature of
   `ACCEPT` aka `COMMIT` messages only
+    + sign only `COMMIT` messages
+* speculatively create (i.e. sign) `COMMIT` msg
+  before the prepared state
 * group flush() calls together, by sorting replies
   per node id
 * remove TLS from clients
     + do we need to check hmacs?
-* maybe replicas use non-async communication
-* use MACs instead of pubkey signatures
+* requests are concurrently added to the request queue, and
+  don't go through the master channel (use Mutex)
+* send_node on execution layer, so we don't need to go
+  through the master channel to send replies to clients
 * `PRE-PREPARE` messages include the request bodies, rather than
   just their hash digests
     + blindly add these requests to the log..? this may affect
       the correctness of the sound predicate from Cachin, if
       the leader is forging requests; read BFT-SMaRt code again,
       check if they consult the log for the existence of these reqs
-* requests are concurrently added to the request queue, and
-  don't go through the master channel (use Mutex)
-* send_node on execution layer, so we don't need to go
-  through the master channel to send replies to clients
+* maybe replicas use non-async communication
+    + BFT-SMaRt has a send thread, so we will probably
+      disregard this change
 
 ## algorithm to perform research branch changes
 
