@@ -350,7 +350,7 @@ where
         let send_to = Self::send_to(
             self.id,
             target,
-            &self.shared,
+            Some(&self.shared),
             &self.my_tx,
             &self.peer_tx,
         );
@@ -398,7 +398,7 @@ where
             self.id,
             &self.peer_tx,
             &self.my_tx,
-            &self.shared,
+            Some(&self.shared),
             targets,
         );
         let nonce = self.rng.next_state();
@@ -451,7 +451,7 @@ where
         my_id: NodeId,
         peer_tx: &PeerTx,
         tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
-        shared: &Arc<NodeShared>,
+        shared: Option<&Arc<NodeShared>>,
         targets: impl Iterator<Item = NodeId>,
     ) -> (Option<SendTo<D>>, SendTos<D>) {
         let mut my_send_to = None;
@@ -490,7 +490,7 @@ where
     fn create_send_tos(
         my_id: NodeId,
         tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
-        shared: &Arc<NodeShared>,
+        shared: Option<&Arc<NodeShared>>,
         map: &HashMap<NodeId, Arc<Mutex<TlsStreamCli<Socket>>>>,
         targets: impl Iterator<Item = NodeId>,
         mine: &mut Option<SendTo<D>>,
@@ -501,7 +501,7 @@ where
                 let s = SendTo::Me {
                     my_id,
                     tx: tx.clone(),
-                    shared: Arc::clone(shared),
+                    shared: shared.map(|sh| Arc::clone(sh)),
                 };
                 *mine = Some(s);
             } else {
@@ -511,7 +511,7 @@ where
                     my_id,
                     peer_id: id,
                     tx: tx.clone(),
-                    shared: Arc::clone(shared),
+                    shared: shared.map(|sh| Arc::clone(sh)),
                 };
                 others.push(s);
             }
@@ -522,12 +522,12 @@ where
     fn send_to(
         my_id: NodeId,
         peer_id: NodeId,
-        shared: &Arc<NodeShared>,
+        shared: Option<&Arc<NodeShared>>,
         tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
         peer_tx: &PeerTx,
     ) -> SendTo<D> {
         let tx = tx.clone();
-        let shared = Arc::clone(shared);
+        let shared = shared.map(|sh| Arc::clone(sh));
         if my_id == peer_id {
             SendTo::Me {
                 shared,
@@ -842,7 +842,7 @@ where
         let send_to = <Node<D>>::send_to(
             self.id,
             target,
-            &self.shared,
+            Some(&self.shared),
             &self.my_tx,
             &self.peer_tx,
         );
@@ -861,7 +861,7 @@ where
             self.id,
             &self.peer_tx,
             &self.my_tx,
-            &self.shared,
+            Some(&self.shared),
             targets,
         );
         let nonce = self.rng.next_state();
@@ -881,7 +881,7 @@ enum SendTo<D: SharedData> {
         // our id
         my_id: NodeId,
         // shared data
-        shared: Arc<NodeShared>,
+        shared: Option<Arc<NodeShared>>,
         // a handle to our message channel
         tx: MessageChannelTx<D::State, D::Request, D::Reply>,
     },
@@ -891,7 +891,7 @@ enum SendTo<D: SharedData> {
         // the id of the peer
         peer_id: NodeId,
         // shared data
-        shared: Arc<NodeShared>,
+        shared: Option<Arc<NodeShared>>,
         // handle to socket
         sock: Arc<Mutex<TlsStreamCli<Socket>>>,
         // a handle to our message channel
@@ -912,16 +912,18 @@ where
     ) {
         match self {
             SendTo::Me { my_id, shared: ref sh, ref mut tx } => {
+                let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Right((m, n, d, b)) = m {
-                    Self::me(*my_id, m, n, d, b, &sh.my_key, tx).await
+                    Self::me(*my_id, m, n, d, b, key, tx).await
                 } else {
                     // optimize code path
                     unreachable!()
                 }
             },
             SendTo::Peers { my_id, peer_id, shared: ref sh, ref sock, ref mut tx } => {
+                let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Left((n, d, b)) = m {
-                    Self::peers(*my_id, *peer_id, n, d, b, &sh.my_key, &*sock, tx).await
+                    Self::peers(*my_id, *peer_id, n, d, b, key, &*sock, tx).await
                 } else {
                     // optimize code path
                     unreachable!()
@@ -936,7 +938,7 @@ where
         n: u64,
         d: Digest,
         b: Buf,
-        sk: &KeyPair,
+        sk: Option<&KeyPair>,
         tx: &mut MessageChannelTx<D::State, D::Request, D::Reply>,
     ) {
         // create wire msg
@@ -946,7 +948,7 @@ where
             &b[..],
             n,
             Some(d),
-            Some(sk),
+            sk,
         ).into_inner();
 
         // send
@@ -959,7 +961,7 @@ where
         n: u64,
         d: Digest,
         b: Buf,
-        sk: &KeyPair,
+        sk: Option<&KeyPair>,
         lock: &Mutex<TlsStreamCli<Socket>>,
         tx: &mut MessageChannelTx<D::State, D::Request, D::Reply>,
     ) {
@@ -970,7 +972,7 @@ where
             &b[..],
             n,
             Some(d),
-            Some(sk),
+            sk,
         );
 
         // send
