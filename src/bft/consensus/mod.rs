@@ -578,7 +578,7 @@ where
                         ConsensusMessageKind::Commit(self.current_digest.clone()),
                     ));
                     let targets = NodeId::targets(0..synchronizer.view().params().n());
-                    node.broadcast(message, targets);
+                    node.broadcast_signed(message, targets);
                     ProtoPhase::Committing(0)
                 } else {
                     ProtoPhase::Preparing(i)
