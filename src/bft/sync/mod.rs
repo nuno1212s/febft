@@ -591,7 +591,7 @@ where
                         self.view().sequence_number(),
                         ViewChangeMessageKind::StopData(collect),
                     ));
-                    node.send(message, self.view().leader());
+                    node.send_signed(message, self.view().leader());
                 } else {
                     self.phase = ProtoPhase::Stopping2(i);
                 }
