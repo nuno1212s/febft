@@ -42,6 +42,29 @@ use crate::bft::sync::LeaderCollects;
 use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
 
+pub struct SerializedMessage<M> {
+    original: M,
+    raw: Vec<u8>,
+}
+
+impl<M> SerializedMessage<M> {
+    pub fn new(original: M, raw: Vec<u8>) -> Self {
+        Self { original, raw }
+    }
+
+    pub fn original(&self) -> &M {
+        &self.original
+    }
+
+    pub fn raw(&self) -> &Vec<u8> {
+        &self.raw
+    }
+
+    pub fn into_inner(self) -> (M, Vec<u8>) {
+        (self.original, self.raw)
+    }
+}
+
 /// Contains a system message as well as its respective header.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
