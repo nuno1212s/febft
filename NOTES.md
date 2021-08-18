@@ -17,13 +17,12 @@ run the new view change. is this the correct behavior?
 
 ## done
 
-none
-
-## todo
-
 * view change `hasProof` checks for signature of
   `ACCEPT` aka `COMMIT` messages only
     + sign only `COMMIT` messages
+
+## todo
+
 * speculatively create (i.e. sign) `COMMIT` msg
   before the prepared state
 * group flush() calls together, by sorting replies
