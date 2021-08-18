@@ -15,6 +15,12 @@ run the new view change. is this the correct behavior?
 
 # changes for the research branch
 
+## done
+
+none
+
+## todo
+
 * view change `hasProof` checks for signature of
   `ACCEPT` aka `COMMIT` messages only
     + sign only `COMMIT` messages
