@@ -12,14 +12,18 @@ use either::{
     Right,
 };
 
+use crate::bft::threadpool;
 use crate::bft::cst::RecoveryState;
 use crate::bft::sync::Synchronizer;
 use crate::bft::crypto::hash::Digest;
+use crate::bft::communication::serialize::DigestData;
 use crate::bft::communication::message::{
     Header,
+    WireMessage,
     StoredMessage,
     SystemMessage,
     ConsensusMessage,
+    SerializedMessage,
     ConsensusMessageKind,
     StoredSerializedSystemMessage,
 };
@@ -501,6 +505,54 @@ where
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
                     },
+                }
+                // start speculatively creating COMMIT messages,
+                // which involve potentially expensive signing ops
+                for peer_id in NodeId::targets(0..synchronizer.view().params().n()) {
+                    let my_id = node.id();
+                    let seq = self.sequence_number();
+                    let view = synchronizer.view().sequence_number();
+
+                    let sign_detached = node.sign_detached();
+                    let current_digest = self.current_digest.clone();
+                    let speculative_commits = Arc::clone(&self.speculative_commits);
+
+                    threadpool::execute(move || {
+                        // create COMMIT
+                        let message = SystemMessage::Consensus(ConsensusMessage::new(
+                            seq,
+                            view,
+                            ConsensusMessageKind::Commit(current_digest),
+                        ));
+
+                        // serialize raw msg
+                        let mut buf = Vec::new();
+                        let digest = <S::Data as DigestData>::serialize_digest(
+                            &message,
+                            &mut buf,
+                        ).unwrap();
+
+                        // create header
+                        let (header, _) = WireMessage::new(
+                            my_id,
+                            peer_id,
+                            &buf[..],
+                            // NOTE: nonce not too important here,
+                            // since we already contain enough random
+                            // data with the unique digest of the
+                            // PRE-PREPARE message
+                            0,
+                            Some(digest),
+                            Some(sign_detached.key_pair()),
+                        ).into_inner();
+
+                        // store serialized header + message
+                        let serialized = SerializedMessage::new(message, buf);
+                        let stored = StoredMessage::new(header, serialized);
+
+                        let mut map = speculative_commits.lock();
+                        map.insert(peer_id, stored);
+                    });
                 }
                 // leader can't vote for a PREPARE
                 if node.id() != synchronizer.view().leader() {
