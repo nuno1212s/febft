@@ -40,6 +40,7 @@ use crate::bft::prng;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
 use crate::bft::crypto::hash::Digest;
+use crate::bft::crypto::signature::Signature;
 use crate::bft::collections::{self, HashMap};
 use crate::bft::communication::serialize::{
     Buf,
@@ -139,6 +140,16 @@ enum PeerTx {
 struct NodeShared {
     my_key: KeyPair,
     peer_keys: HashMap<NodeId, PublicKey>,
+}
+
+pub struct SignDetached {
+    shared: Arc<NodeShared>,
+}
+
+impl SignDetached {
+    pub fn sign(&self, message: &[u8]) -> Result<Signature> {
+        self.shared.my_key.sign(message)
+    }
 }
 
 /// Container for handles to other processes in the system.
@@ -314,6 +325,12 @@ where
 
         // success
         Ok((node, rogue))
+    }
+
+    // clone the shared data and pass it to a new object
+    pub fn sign_detached(&self) -> SignDetached {
+        let shared = Arc::clone(&self.shared);
+        SignDetached { shared }
     }
 
     /// Returns the public key of the node with the given id `id`.
