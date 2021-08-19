@@ -55,6 +55,7 @@ use crate::bft::communication::message::{
     Message,
     WireMessage,
     SystemMessage,
+    SerializedMessage,
 };
 use crate::bft::communication::channel::{
     MessageChannelTx,
@@ -976,6 +977,21 @@ enum SendTo<D: SharedData> {
     },
 }
 
+enum SerializedSendTo<D: SharedData> {
+    Me {
+        // a handle to our message channel
+        tx: MessageChannelTx<D::State, D::Request, D::Reply>,
+    },
+    Peers {
+        // the id of the peer
+        peer_id: NodeId,
+        // handle to socket
+        sock: Arc<Mutex<TlsStreamCli<Socket>>>,
+        // a handle to our message channel
+        tx: MessageChannelTx<D::State, D::Request, D::Reply>,
+    },
+}
+
 impl<D> SendTo<D>
 where
     D: SharedData + 'static,
@@ -1051,6 +1067,62 @@ where
             Some(d),
             sk,
         );
+
+        // send
+        //
+        // FIXME: sending may hang forever, because of network
+        // problems; add a timeout
+        let mut sock = lock.lock().await;
+        if let Err(_) = wm.write_to(&mut *sock).await {
+            // error sending, drop connection
+            tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
+        }
+    }
+}
+
+impl<D> SerializedSendTo<D>
+where
+    D: SharedData + 'static,
+    D::State: Send + Clone + 'static,
+    D::Request: Send + 'static,
+    D::Reply: Send + 'static,
+{
+    async fn value(
+        &mut self,
+        h: Header,
+        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
+    ) {
+        match self {
+            SerializedSendTo::Me { ref mut tx } => {
+                Self::me(h, m, tx).await
+            },
+            SerializedSendTo::Peers { peer_id, ref sock, ref mut tx } => {
+                Self::peers(*peer_id, h, m, &*sock, tx).await
+            },
+        }
+    }
+
+    async fn me(
+        h: Header,
+        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
+        tx: &mut MessageChannelTx<D::State, D::Request, D::Reply>,
+    ) {
+        let (original, _) = m.into_inner();
+
+        // send
+        tx.send(Message::System(h, original)).await.unwrap_or(())
+    }
+
+    async fn peers(
+        peer_id: NodeId,
+        h: Header,
+        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
+        lock: &Mutex<TlsStreamCli<Socket>>,
+        tx: &mut MessageChannelTx<D::State, D::Request, D::Reply>,
+    ) {
+        // create wire msg
+        let (_, raw) = m.into_inner();
+        let wm = WireMessage::from_parts(h, &raw[..]).unwrap();
 
         // send
         //
