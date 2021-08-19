@@ -2,10 +2,11 @@
 
 pub mod log;
 
-use std::marker::PhantomData;
+use std::sync::Arc;
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 
+use parking_lot::Mutex;
 use either::{
     Left,
     Right,
@@ -20,11 +21,12 @@ use crate::bft::communication::message::{
     SystemMessage,
     ConsensusMessage,
     ConsensusMessageKind,
+    StoredSerializedSystemMessage,
 };
-//use crate::bft::collections::{
-//    self,
-//    HashSet,
-//};
+use crate::bft::collections::{
+    self,
+    HashMap,
+};
 use crate::bft::communication::{
     Node,
     NodeId,
@@ -169,8 +171,7 @@ pub struct Consensus<S: Service> {
     //voted: HashSet<NodeId>,
     missing_requests: VecDeque<Digest>,
     missing_swapbuf: Vec<usize>,
-    //speculative_commits: Arc<Mutex<HashMap<NodeId, StoredSerialized<S>>>>,
-    _phantom: PhantomData<S>,
+    speculative_commits: Arc<Mutex<HashMap<NodeId, StoredSerializedSystemMessage<S::Data>>>>,
 }
 
 /// Status returned from processing a consensus message.
@@ -213,12 +214,12 @@ where
     pub fn new(initial_seq_no: SeqNo, batch_size: usize) -> Self {
         Self {
             batch_size: 0,
-            _phantom: PhantomData,
             phase: ProtoPhase::Init,
             missing_swapbuf: Vec::new(),
             missing_requests: VecDeque::new(),
             //voted: collections::hash_set(),
             tbo: TboQueue::new(initial_seq_no),
+            speculative_commits: Arc::new(Mutex::new(collections::hash_map())),
             current_digest: Digest::from_bytes(&[0; Digest::LENGTH][..]).unwrap(),
             current: std::iter::repeat_with(|| Digest::from_bytes(&[0; Digest::LENGTH][..]))
                 .flat_map(|d| d) // unwrap
