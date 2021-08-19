@@ -468,6 +468,22 @@ where
         Self::broadcast_impl(message, mine, others, nonce)
     }
 
+    pub fn broadcast_serialized(
+        &mut self,
+        messages: HashMap<NodeId, StoredSerializedSystemMessage<D>>,
+    ) {
+        let headers = messages
+            .values()
+            .map(|stored| stored.header());
+        let (mine, others) = Self::serialized_send_tos(
+            self.id,
+            &self.peer_tx,
+            &self.my_tx,
+            headers,
+        );
+        Self::broadcast_serialized_impl(messages, mine, others);
+    }
+
     #[inline]
     fn broadcast_serialized_impl(
         mut messages: HashMap<NodeId, StoredSerializedSystemMessage<D>>,
@@ -579,6 +595,43 @@ where
                     shared,
                     map,
                     targets,
+                    &mut my_send_to,
+                    &mut other_send_tos,
+                );
+            },
+        };
+
+        (my_send_to, other_send_tos)
+    }
+
+    #[inline]
+    fn serialized_send_tos<'a>(
+        my_id: NodeId,
+        peer_tx: &PeerTx,
+        tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
+        headers: impl Iterator<Item = &'a Header>,
+    ) -> (Option<SerializedSendTo<D>>, SerializedSendTos<D>) {
+        let mut my_send_to = None;
+        let mut other_send_tos = SerializedSendTos::new();
+
+        match peer_tx {
+            PeerTx::Client(ref lock) => {
+                let map = lock.read();
+                Self::create_serialized_send_tos(
+                    my_id,
+                    tx,
+                    &*map,
+                    headers,
+                    &mut my_send_to,
+                    &mut other_send_tos,
+                );
+            },
+            PeerTx::Server(ref map) => {
+                Self::create_serialized_send_tos(
+                    my_id,
+                    tx,
+                    &*map,
+                    headers,
                     &mut my_send_to,
                     &mut other_send_tos,
                 );
