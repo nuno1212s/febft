@@ -449,6 +449,11 @@ where
         // FIXME: do we need to clear the missing requests buffers?
     }
 
+    fn take_speculative_commits(&self) -> HashMap<NodeId, StoredSerializedSystemMessage<S::Data>> {
+        let mut map = self.speculative_commits.lock();
+        std::mem::replace(&mut *map, collections::hash_map())
+    }
+
     /// Process a message for a particular consensus instance.
     pub fn process_message<'a>(
         &'a mut self,
@@ -626,13 +631,22 @@ where
                 // check if we have gathered enough votes,
                 // and transition to a new phase
                 self.phase = if i == synchronizer.view().params().quorum() {
-                    let message = SystemMessage::Consensus(ConsensusMessage::new(
-                        self.sequence_number(),
-                        synchronizer.view().sequence_number(),
-                        ConsensusMessageKind::Commit(self.current_digest.clone()),
-                    ));
-                    let targets = NodeId::targets(0..synchronizer.view().params().n());
-                    node.broadcast_signed(message, targets);
+                    let speculative_commits = self.take_speculative_commits();
+
+                    if speculative_commits.len() == synchronizer.view().params().n() {
+                        // TODO: make sure the COMMIT messages have the same digest
+                        // as the current one
+                        node.broadcast_serialized(speculative_commits);
+                    } else {
+                        let message = SystemMessage::Consensus(ConsensusMessage::new(
+                            self.sequence_number(),
+                            synchronizer.view().sequence_number(),
+                            ConsensusMessageKind::Commit(self.current_digest.clone()),
+                        ));
+                        let targets = NodeId::targets(0..synchronizer.view().params().n());
+                        node.broadcast_signed(message, targets);
+                    }
+
                     ProtoPhase::Committing(0)
                 } else {
                     ProtoPhase::Preparing(i)
