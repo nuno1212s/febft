@@ -20,11 +20,11 @@ run the new view change. is this the correct behavior?
 * view change `hasProof` checks for signature of
   `ACCEPT` aka `COMMIT` messages only
     + sign only `COMMIT` messages
+* speculatively create (i.e. sign) `COMMIT` msg
+  before the prepared state
 
 ## todo
 
-* speculatively create (i.e. sign) `COMMIT` msg
-  before the prepared state
 * group flush() calls together, by sorting replies
   per node id
 * remove TLS from clients
