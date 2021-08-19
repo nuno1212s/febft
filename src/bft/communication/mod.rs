@@ -197,6 +197,8 @@ const NODE_VIEWSIZ: usize = 8;
 
 type SendTos<D> = SmallVec<[SendTo<D>; NODE_VIEWSIZ]>;
 
+type SerializedSendTos<D> = SmallVec<[SerializedSendTo<D>; NODE_VIEWSIZ]>;
+
 impl<D> Node<D>
 where
     D: SharedData + 'static,
@@ -527,6 +529,34 @@ where
         };
 
         (my_send_to, other_send_tos)
+    }
+
+    #[inline]
+    fn create_serialized_send_tos<'a>(
+        my_id: NodeId,
+        tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
+        map: &HashMap<NodeId, Arc<Mutex<TlsStreamCli<Socket>>>>,
+        headers: impl Iterator<Item = &'a Header>,
+        mine: &mut Option<SerializedSendTo<D>>,
+        others: &mut SerializedSendTos<D>,
+    ) {
+        for header in headers {
+            let id = header.to();
+            if id == my_id {
+                let s = SerializedSendTo::Me {
+                    tx: tx.clone(),
+                };
+                *mine = Some(s);
+            } else {
+                let sock = Arc::clone(&map[&id]);
+                let s = SerializedSendTo::Peers {
+                    sock,
+                    peer_id: id,
+                    tx: tx.clone(),
+                };
+                others.push(s);
+            }
+        }
     }
 
     #[inline]
