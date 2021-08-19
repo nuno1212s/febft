@@ -33,13 +33,9 @@ use crate::bft::ordering::{
     SeqNo,
     Orderable,
 };
-use crate::bft::executable::{
-    UpdateBatchReplies,
-    Request,
-    Reply,
-    State,
-};
 use crate::bft::consensus::log::CollectData;
+use crate::bft::executable::UpdateBatchReplies;
+use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::socket::Socket;
 use crate::bft::communication::NodeId;
 use crate::bft::timeouts::TimeoutKind;
@@ -48,9 +44,13 @@ use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
 
 // convenience type
-pub type StoredSerializedSystemMessage<S> = StoredMessage<
+pub type StoredSerializedSystemMessage<D> = StoredMessage<
     SerializedMessage<
-        SystemMessage<State<S>, Request<S>, Reply<S>>
+        SystemMessage<
+            <D as SharedData>::State,
+            <D as SharedData>::Request,
+            <D as SharedData>::Reply
+        >
     >
 >;
 

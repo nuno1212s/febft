@@ -56,6 +56,7 @@ use crate::bft::communication::message::{
     WireMessage,
     SystemMessage,
     SerializedMessage,
+    StoredSerializedSystemMessage,
 };
 use crate::bft::communication::channel::{
     MessageChannelTx,
@@ -452,12 +453,41 @@ where
 
     #[inline]
     fn broadcast_serialized_impl(
-        header: Header,
-        message: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        my_send_to: Option<SendTo<D>>,
-        other_send_tos: SendTos<D>,
-    ) -> Digest {
-        unimplemented!()
+        mut messages: HashMap<NodeId, StoredSerializedSystemMessage<D>>,
+        my_send_to: Option<SerializedSendTo<D>>,
+        other_send_tos: SerializedSendTos<D>,
+    ) {
+        rt::spawn(async move {
+            // send to ourselves
+            if let Some(mut send_to) = my_send_to {
+                let id = match &send_to {
+                    SerializedSendTo::Me { id, .. } => id,
+                    _ => unreachable!(),
+                };
+                let (header, message) = messages
+                    .remove(id)
+                    .map(|stored| stored.into_inner())
+                    .unwrap();
+                rt::spawn(async move {
+                    send_to.value(header, message).await;
+                });
+            }
+
+            // send to others
+            for mut send_to in other_send_tos {
+                let id = match &send_to {
+                    SerializedSendTo::Peers { id, .. } => id,
+                    _ => unreachable!(),
+                };
+                let (header, message) = messages
+                    .remove(id)
+                    .map(|stored| stored.into_inner())
+                    .unwrap();
+                rt::spawn(async move {
+                    send_to.value(header, message).await;
+                });
+            }
+        });
     }
 
     #[inline]
@@ -554,14 +584,15 @@ where
             let id = header.to();
             if id == my_id {
                 let s = SerializedSendTo::Me {
+                    id,
                     tx: tx.clone(),
                 };
                 *mine = Some(s);
             } else {
                 let sock = Arc::clone(&map[&id]);
                 let s = SerializedSendTo::Peers {
+                    id,
                     sock,
-                    peer_id: id,
                     tx: tx.clone(),
                 };
                 others.push(s);
@@ -1019,12 +1050,14 @@ enum SendTo<D: SharedData> {
 
 enum SerializedSendTo<D: SharedData> {
     Me {
+        // our id
+        id: NodeId,
         // a handle to our message channel
         tx: MessageChannelTx<D::State, D::Request, D::Reply>,
     },
     Peers {
         // the id of the peer
-        peer_id: NodeId,
+        id: NodeId,
         // handle to socket
         sock: Arc<Mutex<TlsStreamCli<Socket>>>,
         // a handle to our message channel
@@ -1133,11 +1166,11 @@ where
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
     ) {
         match self {
-            SerializedSendTo::Me { ref mut tx } => {
+            SerializedSendTo::Me { ref mut tx, .. } => {
                 Self::me(h, m, tx).await
             },
-            SerializedSendTo::Peers { peer_id, ref sock, ref mut tx } => {
-                Self::peers(*peer_id, h, m, &*sock, tx).await
+            SerializedSendTo::Peers { id, ref sock, ref mut tx } => {
+                Self::peers(*id, h, m, &*sock, tx).await
             },
         }
     }
