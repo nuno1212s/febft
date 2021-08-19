@@ -40,7 +40,6 @@ use crate::bft::prng;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
 use crate::bft::crypto::hash::Digest;
-use crate::bft::crypto::signature::Signature;
 use crate::bft::collections::{self, HashMap};
 use crate::bft::communication::serialize::{
     Buf,
@@ -147,8 +146,8 @@ pub struct SignDetached {
 }
 
 impl SignDetached {
-    pub fn sign(&self, message: &[u8]) -> Result<Signature> {
-        self.shared.my_key.sign(message)
+    pub fn key_pair(&self) -> &KeyPair {
+        &self.shared.my_key
     }
 }
 
