@@ -17,7 +17,6 @@ use crate::bft::crypto::hash::Digest;
 use crate::bft::communication::message::{
     Header,
     StoredMessage,
-    SerializedMessage,
     SystemMessage,
     ConsensusMessage,
     ConsensusMessageKind,
@@ -156,12 +155,6 @@ enum ProtoPhase {
     /// the number of votes received.
     Committing(usize),
 }
-
-type StoredSerialized<S> = StoredMessage<
-    SerializedMessage<
-        SystemMessage<State<S>, Request<S>, Reply<S>>
-    >
->;
 
 /// Contains the state of an active consensus instance, as well
 /// as future instances.

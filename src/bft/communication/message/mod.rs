@@ -33,14 +33,26 @@ use crate::bft::ordering::{
     SeqNo,
     Orderable,
 };
+use crate::bft::executable::{
+    UpdateBatchReplies,
+    Request,
+    Reply,
+    State,
+};
 use crate::bft::consensus::log::CollectData;
 use crate::bft::communication::socket::Socket;
-use crate::bft::executable::UpdateBatchReplies;
 use crate::bft::communication::NodeId;
 use crate::bft::timeouts::TimeoutKind;
 use crate::bft::sync::LeaderCollects;
 use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
+
+// convenience type
+pub type StoredSerializedSystemMessage<S> = StoredMessage<
+    SerializedMessage<
+        SystemMessage<State<S>, Request<S>, Reply<S>>
+    >
+>;
 
 pub struct SerializedMessage<M> {
     original: M,

@@ -451,6 +451,16 @@ where
     }
 
     #[inline]
+    fn broadcast_serialized_impl(
+        header: Header,
+        message: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
+        my_send_to: Option<SendTo<D>>,
+        other_send_tos: SendTos<D>,
+    ) -> Digest {
+        unimplemented!()
+    }
+
+    #[inline]
     fn broadcast_impl(
         message: SystemMessage<D::State, D::Request, D::Reply>,
         my_send_to: Option<SendTo<D>>,
