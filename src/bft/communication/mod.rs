@@ -68,6 +68,10 @@ use crate::bft::crypto::signature::{
     KeyPair,
 };
 
+//pub trait HijackMessage {
+//    fn hijack_message(&self, stored: ) -> Either<M
+//}
+
 /// A `NodeId` represents the id of a process in the BFT system.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
