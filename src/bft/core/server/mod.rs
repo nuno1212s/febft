@@ -613,14 +613,27 @@ where
     }
 
     fn execution_finished(&mut self, batch: UpdateBatchReplies<Reply<S>>) {
+        // sort batch by node ids
+        let mut batch = batch.into_inner();
+        batch.sort_by_key(|update_reply| update_reply.to());
+
+        // keep track of the last node we sent a reply to,
+        // so we can flush writes when this value changes
+        let mut last_node = batch[0].to();
+        let last_reply_index = batch.len() - 1;
+
         // deliver replies to clients
-        for update_reply in batch.into_inner() {
+        for (i, update_reply) in batch.into_iter().enumerate() {
             let (peer_id, digest, payload) = update_reply.into_inner();
             let message = SystemMessage::Reply(ReplyMessage::new(
                 digest,
                 payload,
             ));
-            self.node.send(message, peer_id, true);
+
+            let flush = peer_id != last_node || i == last_reply_index;
+            last_node = peer_id;
+
+            self.node.send(message, peer_id, flush);
         }
     }
 

@@ -312,6 +312,10 @@ impl<P> UpdateBatchReplies<P> {
 }
 
 impl<P> UpdateReply<P> {
+    pub fn to(&self) -> NodeId {
+        self.to
+    }
+
     /// Returns the inner types stored in this `UpdateReply`.
     pub fn into_inner(self) -> (NodeId, Digest, P) {
         (self.to, self.digest, self.payload)
