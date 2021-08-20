@@ -620,7 +620,7 @@ where
                 digest,
                 payload,
             ));
-            self.node.send(message, peer_id);
+            self.node.send(message, peer_id, true);
         }
     }
 

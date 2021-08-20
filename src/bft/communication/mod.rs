@@ -366,8 +366,10 @@ where
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         target: NodeId,
+        flush: bool,
     ) -> Digest {
         let send_to = Self::send_to(
+            flush,
             self.id,
             target,
             None,
@@ -391,6 +393,7 @@ where
         target: NodeId,
     ) -> Digest {
         let send_to = Self::send_to(
+            true,
             self.id,
             target,
             Some(&self.shared),
@@ -693,6 +696,7 @@ where
                     sock,
                     my_id,
                     peer_id: id,
+                    flush: true,
                     tx: tx.clone(),
                     shared: shared.map(|sh| Arc::clone(sh)),
                 };
@@ -703,6 +707,7 @@ where
 
     #[inline]
     fn send_to(
+        flush: bool,
         my_id: NodeId,
         peer_id: NodeId,
         shared: Option<&Arc<NodeShared>>,
@@ -728,6 +733,7 @@ where
                 },
             };
             SendTo::Peers {
+                flush,
                 sock,
                 shared,
                 peer_id,
@@ -1021,8 +1027,10 @@ where
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         target: NodeId,
+        flush: bool,
     ) -> Digest {
         let send_to = <Node<D>>::send_to(
+            flush,
             self.id,
             target,
             None,
@@ -1041,6 +1049,7 @@ where
         target: NodeId,
     ) -> Digest {
         let send_to = <Node<D>>::send_to(
+            true,
             self.id,
             target,
             Some(&self.shared),
@@ -1104,6 +1113,8 @@ enum SendTo<D: SharedData> {
         tx: MessageChannelTx<D::State, D::Request, D::Reply>,
     },
     Peers {
+        // should we flush write calls?
+        flush: bool,
         // our id
         my_id: NodeId,
         // the id of the peer
@@ -1155,10 +1166,10 @@ where
                     unreachable!()
                 }
             },
-            SendTo::Peers { my_id, peer_id, shared: ref sh, ref sock, ref mut tx } => {
+            SendTo::Peers { flush, my_id, peer_id, shared: ref sh, ref sock, ref mut tx } => {
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Left((n, d, b)) = m {
-                    Self::peers(*my_id, *peer_id, n, d, b, key, &*sock, tx).await
+                    Self::peers(*flush, *my_id, *peer_id, n, d, b, key, &*sock, tx).await
                 } else {
                     // optimize code path
                     unreachable!()
@@ -1191,6 +1202,7 @@ where
     }
 
     async fn peers(
+        flush: bool,
         my_id: NodeId,
         peer_id: NodeId,
         n: u64,
@@ -1215,7 +1227,7 @@ where
         // FIXME: sending may hang forever, because of network
         // problems; add a timeout
         let mut sock = lock.lock().await;
-        if let Err(_) = wm.write_to(&mut *sock, true).await {
+        if let Err(_) = wm.write_to(&mut *sock, flush).await {
             // error sending, drop connection
             tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
         }

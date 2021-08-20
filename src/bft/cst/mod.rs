@@ -263,7 +263,7 @@ where
             message.sequence_number(),
             CstMessageKind::ReplyState(snapshot),
         ));
-        node.send(reply, header.from());
+        node.send(reply, header.from(), true);
     }
 
     /// Advances the state of the CST state machine.
@@ -292,7 +292,7 @@ where
                             message.sequence_number(),
                             kind,
                         ));
-                        node.send(reply, header.from());
+                        node.send(reply, header.from(), true);
                     },
                     CstMessageKind::RequestState => {
                         self.process_reply_state(header, message, synchronizer, log, node);
