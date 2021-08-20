@@ -22,11 +22,11 @@ run the new view change. is this the correct behavior?
     + sign only `COMMIT` messages
 * speculatively create (i.e. sign) `COMMIT` msg
   before the prepared state
+* group flush() calls together, by sorting replies
+  per node id
 
 ## todo
 
-* group flush() calls together, by sorting replies
-  per node id
 * remove TLS from clients
     + do we need to check hmacs?
 * requests are concurrently added to the request queue, and
