@@ -22,8 +22,6 @@ use rustls::{
     ServerConfig,
 };
 use async_tls::{
-    server::TlsStream as TlsStreamSrv,
-    client::TlsStream as TlsStreamCli,
     TlsConnector,
     TlsAcceptor,
 };
@@ -49,6 +47,8 @@ use crate::bft::communication::serialize::{
 use crate::bft::communication::socket::{
     Socket,
     Listener,
+    SecureSocketSend,
+    SecureSocketRecv,
 };
 use crate::bft::communication::message::{
     Header,
@@ -130,10 +130,10 @@ enum PeerTx {
     // lock allows us to take ownership of a copy of the socket, so we
     // don't block the thread with the guard of the first lock waiting
     // on the second one
-    Client(Arc<RwLock<HashMap<NodeId, Arc<Mutex<TlsStreamCli<Socket>>>>>>),
+    Client(Arc<RwLock<HashMap<NodeId, Arc<Mutex<SecureSocketSend>>>>>),
     // replicas don't need shared access to the hashmap, so
     // we only need one lock (to restrict I/O to one producer at a time)
-    Server(HashMap<NodeId, Arc<Mutex<TlsStreamCli<Socket>>>>),
+    Server(HashMap<NodeId, Arc<Mutex<SecureSocketSend>>>),
 }
 
 struct NodeShared {
@@ -251,6 +251,7 @@ where
         let mut rng = prng::State::new();
         Self::tx_side_connect(
             cfg.n as u32,
+            cfg.first_cli,
             id,
             connector.clone(),
             tx.clone(),
@@ -647,7 +648,7 @@ where
     fn create_serialized_send_tos<'a>(
         my_id: NodeId,
         tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
-        map: &HashMap<NodeId, Arc<Mutex<TlsStreamCli<Socket>>>>,
+        map: &HashMap<NodeId, Arc<Mutex<SecureSocketSend>>>,
         headers: impl Iterator<Item = &'a Header>,
         mine: &mut Option<SerializedSendTo<D>>,
         others: &mut SerializedSendTos<D>,
@@ -677,7 +678,7 @@ where
         my_id: NodeId,
         tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
         shared: Option<&Arc<NodeShared>>,
-        map: &HashMap<NodeId, Arc<Mutex<TlsStreamCli<Socket>>>>,
+        map: &HashMap<NodeId, Arc<Mutex<SecureSocketSend>>>,
         targets: impl Iterator<Item = NodeId>,
         mine: &mut Option<SendTo<D>>,
         others: &mut SendTos<D>,
@@ -749,7 +750,7 @@ where
     }
 
     /// Method called upon a `Message::ConnectedTx`.
-    pub fn handle_connected_tx(&mut self, peer_id: NodeId, sock: TlsStreamCli<Socket>) {
+    pub fn handle_connected_tx(&mut self, peer_id: NodeId, sock: SecureSocketSend) {
         match &mut self.peer_tx {
             PeerTx::Server(ref mut peer_tx) => {
                 peer_tx.insert(peer_id, Arc::new(Mutex::new(sock)));
@@ -762,7 +763,7 @@ where
     }
 
     /// Method called upon a `Message::ConnectedRx`.
-    pub fn handle_connected_rx(&mut self, peer_id: NodeId, mut sock: TlsStreamSrv<Socket>) {
+    pub fn handle_connected_rx(&mut self, peer_id: NodeId, mut sock: SecureSocketRecv) {
         // we are a server node
         if let PeerTx::Server(ref peer_tx) = &self.peer_tx {
             // the node whose conn we accepted is a client
@@ -778,6 +779,7 @@ where
                 let nonce = self.rng.next_state();
                 rt::spawn(Self::tx_side_connect_task(
                     self.id,
+                    self.first_cli,
                     peer_id,
                     nonce,
                     self.connector.clone(),
@@ -848,6 +850,7 @@ where
     #[inline]
     fn tx_side_connect(
         n: u32,
+        first_cli: NodeId,
         my_id: NodeId,
         connector: TlsConnector,
         tx: MessageChannelTx<D::State, D::Request, D::Reply>,
@@ -862,12 +865,13 @@ where
             let addr = addrs[&peer_id].clone();
             let connector = connector.clone();
             let nonce = rng.next_state();
-            rt::spawn(Self::tx_side_connect_task(my_id, peer_id, nonce, connector, tx, addr));
+            rt::spawn(Self::tx_side_connect_task(my_id, first_cli, peer_id, nonce, connector, tx, addr));
         }
     }
 
     async fn tx_side_connect_task(
         my_id: NodeId,
+        first_cli: NodeId,
         peer_id: NodeId,
         nonce: u64,
         connector: TlsConnector,
@@ -886,13 +890,7 @@ where
         // 2) try to connect up to `RETRY` times, then announce
         // failure with a channel send op
         for _ in 0..RETRY {
-            if let Ok(sock) = socket::connect(addr).await {
-                // TLS handshake; drop connection if it fails
-                let mut sock = match connector.connect(hostname, sock).await {
-                    Ok(s) => s,
-                    Err(_) => break,
-                };
-
+            if let Ok(mut sock) = socket::connect(addr).await {
                 // create header
                 let (header, _) = WireMessage::new(
                     my_id,
@@ -913,6 +911,21 @@ where
                     // drop this socket
                     break;
                 }
+                if let Err(_) = sock.flush().await {
+                    // errors flushing -> faulty connection;
+                    // drop this socket
+                    break;
+                }
+
+                // TLS handshake; drop connection if it fails
+                let sock = if peer_id >= first_cli || my_id >= first_cli {
+                    SecureSocketSend::Plain(sock)
+                } else {
+                    match connector.connect(hostname, sock).await {
+                        Ok(s) => SecureSocketSend::Tls(s),
+                        Err(_) => break,
+                    }
+                };
 
                 // success
                 tx.send(Message::ConnectedTx(peer_id, sock)).await.unwrap_or(());
@@ -949,7 +962,7 @@ where
         first_cli: NodeId,
         my_id: NodeId,
         acceptor: TlsAcceptor,
-        sock: Socket,
+        mut sock: Socket,
         mut tx: MessageChannelTx<D::State, D::Request, D::Reply>,
     ) {
         let mut buf_header = [0; Header::LENGTH];
@@ -957,12 +970,6 @@ where
         // this loop is just a trick;
         // the `break` instructions act as a `goto` statement
         loop {
-            // TLS handshake; drop connection if it fails
-            let mut sock = match acceptor.accept(sock).await {
-                Ok(s) => s,
-                Err(_) => break,
-            };
-
             // read the peer's header
             if let Err(_) = sock.read_exact(&mut buf_header[..]).await {
                 // errors reading -> faulty connection;
@@ -983,6 +990,16 @@ where
                 Ok(wm) => wm.header().from(),
                 // drop connections with invalid headers
                 Err(_) => break,
+            };
+
+            // TLS handshake; drop connection if it fails
+            let sock = if peer_id >= first_cli || my_id >= first_cli {
+                SecureSocketRecv::Plain(sock)
+            } else {
+                match acceptor.accept(sock).await {
+                    Ok(s) => SecureSocketRecv::Tls(s),
+                    Err(_) => break,
+                }
             };
 
             tx.send(Message::ConnectedRx(peer_id, sock)).await.unwrap_or(());
@@ -1122,7 +1139,7 @@ enum SendTo<D: SharedData> {
         // shared data
         shared: Option<Arc<NodeShared>>,
         // handle to socket
-        sock: Arc<Mutex<TlsStreamCli<Socket>>>,
+        sock: Arc<Mutex<SecureSocketSend>>,
         // a handle to our message channel
         tx: MessageChannelTx<D::State, D::Request, D::Reply>,
     },
@@ -1139,7 +1156,7 @@ enum SerializedSendTo<D: SharedData> {
         // the id of the peer
         id: NodeId,
         // handle to socket
-        sock: Arc<Mutex<TlsStreamCli<Socket>>>,
+        sock: Arc<Mutex<SecureSocketSend>>,
         // a handle to our message channel
         tx: MessageChannelTx<D::State, D::Request, D::Reply>,
     },
@@ -1209,7 +1226,7 @@ where
         d: Digest,
         b: Buf,
         sk: Option<&KeyPair>,
-        lock: &Mutex<TlsStreamCli<Socket>>,
+        lock: &Mutex<SecureSocketSend>,
         tx: &mut MessageChannelTx<D::State, D::Request, D::Reply>,
     ) {
         // create wire msg
@@ -1271,7 +1288,7 @@ where
         peer_id: NodeId,
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        lock: &Mutex<TlsStreamCli<Socket>>,
+        lock: &Mutex<SecureSocketSend>,
         tx: &mut MessageChannelTx<D::State, D::Request, D::Reply>,
     ) {
         // create wire msg

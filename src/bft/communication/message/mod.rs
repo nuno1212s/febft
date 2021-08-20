@@ -11,10 +11,6 @@ use smallvec::{
     SmallVec,
     Array,
 };
-use async_tls::{
-    server::TlsStream as TlsStreamSrv,
-    client::TlsStream as TlsStreamCli,
-};
 use futures::io::{
     AsyncWriteExt,
     AsyncWrite,
@@ -33,10 +29,13 @@ use crate::bft::ordering::{
     SeqNo,
     Orderable,
 };
+use crate::bft::communication::socket::{
+    SecureSocketSend,
+    SecureSocketRecv,
+};
 use crate::bft::consensus::log::CollectData;
 use crate::bft::executable::UpdateBatchReplies;
 use crate::bft::communication::serialize::SharedData;
-use crate::bft::communication::socket::Socket;
 use crate::bft::communication::NodeId;
 use crate::bft::timeouts::TimeoutKind;
 use crate::bft::sync::LeaderCollects;
@@ -201,10 +200,10 @@ pub enum Message<S, O, P> {
     System(Header, SystemMessage<S, O, P>),
     /// A client with id `NodeId` has finished connecting to the socket `Socket`.
     /// This socket should only perform write operations.
-    ConnectedTx(NodeId, TlsStreamCli<Socket>),
+    ConnectedTx(NodeId, SecureSocketSend),
     /// A client with id `NodeId` has finished connecting to the socket `Socket`.
     /// This socket should only perform read operations.
-    ConnectedRx(NodeId, TlsStreamSrv<Socket>),
+    ConnectedRx(NodeId, SecureSocketRecv),
     /// Send half of node with id `NodeId` has disconnected.
     DisconnectedTx(NodeId),
     /// Receive half of node with id `Some(NodeId)` has disconnected.
