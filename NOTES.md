@@ -24,11 +24,11 @@ run the new view change. is this the correct behavior?
   before the prepared state
 * group flush() calls together, by sorting replies
   per node id
+* remove TLS from clients
+    + do we need to check hmacs?
 
 ## todo
 
-* remove TLS from clients
-    + do we need to check hmacs?
 * requests are concurrently added to the request queue, and
   don't go through the master channel (use Mutex)
 * send_node on execution layer, so we don't need to go
