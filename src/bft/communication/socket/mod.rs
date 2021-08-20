@@ -15,6 +15,10 @@ use std::net::SocketAddr;
 use std::task::{Poll, Context};
 
 use futures::io::{AsyncRead, AsyncWrite};
+use async_tls::{
+    server::TlsStream as TlsStreamSrv,
+    client::TlsStream as TlsStreamCli,
+};
 
 use crate::bft::error;
 
@@ -131,5 +135,81 @@ impl AsyncWrite for Socket {
     ) -> Poll<io::Result<()>>
     {
         Pin::new(&mut self.inner).poll_close(cx)
+    }
+}
+
+pub enum SecureSocketRecv {
+    Plain(Socket),
+    Tls(TlsStreamSrv<Socket>),
+}
+
+pub enum SecureSocketSend {
+    Plain(Socket),
+    Tls(TlsStreamCli<Socket>),
+}
+
+impl AsyncRead for SecureSocketRecv {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8]
+    ) -> Poll<io::Result<usize>>
+    {
+        match &mut *self {
+            SecureSocketRecv::Plain(inner) => {
+                Pin::new(inner).poll_read(cx, buf)
+            },
+            SecureSocketRecv::Tls(inner) => {
+                Pin::new(inner).poll_read(cx, buf)
+            },
+        }
+    }
+}
+
+impl AsyncWrite for SecureSocketSend {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8]
+    ) -> Poll<io::Result<usize>>
+    {
+        match &mut *self {
+            SecureSocketSend::Plain(inner) => {
+                Pin::new(inner).poll_write(cx, buf)
+            },
+            SecureSocketSend::Tls(inner) => {
+                Pin::new(inner).poll_write(cx, buf)
+            },
+        }
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>
+    ) -> Poll<io::Result<()>>
+    {
+        match &mut *self {
+            SecureSocketSend::Plain(inner) => {
+                Pin::new(inner).poll_flush(cx)
+            },
+            SecureSocketSend::Tls(inner) => {
+                Pin::new(inner).poll_flush(cx)
+            },
+        }
+    }
+
+    fn poll_close(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>
+    ) -> Poll<io::Result<()>>
+    {
+        match &mut *self {
+            SecureSocketSend::Plain(inner) => {
+                Pin::new(inner).poll_close(cx)
+            },
+            SecureSocketSend::Tls(inner) => {
+                Pin::new(inner).poll_close(cx)
+            },
+        }
     }
 }
