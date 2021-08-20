@@ -790,7 +790,7 @@ impl<'a> WireMessage<'a> {
     }
 
     /// Serialize a `WireMessage` into an async writer.
-    pub async fn write_to<W: AsyncWrite + Unpin>(&self, mut w: W) -> io::Result<()> {
+    pub async fn write_to<W: AsyncWrite + Unpin>(&self, mut w: W, flush: bool) -> io::Result<()> {
         let mut buf = [0; Header::LENGTH];
         self.header.serialize_into(&mut buf[..]).unwrap();
 
@@ -799,7 +799,9 @@ impl<'a> WireMessage<'a> {
         if self.payload.len() > 0 {
             w.write_all(&self.payload).await?;
         }
-        w.flush().await?;
+        if flush {
+            w.flush().await?;
+        }
 
         Ok(())
     }

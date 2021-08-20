@@ -1215,7 +1215,7 @@ where
         // FIXME: sending may hang forever, because of network
         // problems; add a timeout
         let mut sock = lock.lock().await;
-        if let Err(_) = wm.write_to(&mut *sock).await {
+        if let Err(_) = wm.write_to(&mut *sock, true).await {
             // error sending, drop connection
             tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
         }
@@ -1271,7 +1271,7 @@ where
         // FIXME: sending may hang forever, because of network
         // problems; add a timeout
         let mut sock = lock.lock().await;
-        if let Err(_) = wm.write_to(&mut *sock).await {
+        if let Err(_) = wm.write_to(&mut *sock, true).await {
             // error sending, drop connection
             tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
         }
