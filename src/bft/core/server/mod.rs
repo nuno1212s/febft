@@ -615,7 +615,7 @@ where
     fn execution_finished(&mut self, batch: UpdateBatchReplies<Reply<S>>) {
         // sort batch by node ids
         let mut batch = batch.into_inner();
-        batch.sort_by_key(|update_reply| update_reply.to());
+        batch.sort_unstable_by_key(|update_reply| update_reply.to());
 
         // keep track of the last node we sent a reply to,
         // so we can flush writes when this value changes
