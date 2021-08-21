@@ -55,6 +55,7 @@ use crate::bft::communication::message::{
     Message,
     WireMessage,
     SystemMessage,
+    StoredMessage,
     SerializedMessage,
     StoredSerializedSystemMessage,
 };
@@ -68,9 +69,14 @@ use crate::bft::crypto::signature::{
     KeyPair,
 };
 
-//pub trait HijackMessage {
-//    fn hijack_message(&self, stored: ) -> Either<M
-//}
+pub trait HijackMessage {
+    type Message;
+
+    fn hijack_message(
+        &self,
+        stored: StoredMessage<Self::Message>,
+    ) -> Either<StoredMessage<Self::Message>, ()>;
+}
 
 /// A `NodeId` represents the id of a process in the BFT system.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
@@ -221,6 +227,8 @@ where
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
+    fn test_hijack(_h: Box<dyn HijackMessage<Message = SystemMessage<D::State, D::Request, D::Reply>>>) {}
+
     /// Bootstrap a `Node`, i.e. create connections between itself and its
     /// peer nodes.
     ///
