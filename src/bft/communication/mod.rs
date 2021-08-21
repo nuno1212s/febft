@@ -175,6 +175,7 @@ pub struct Node<D: SharedData> {
     peer_tx: PeerTx,
     connector: TlsConnector,
     peer_addrs: HashMap<NodeId, (SocketAddr, String)>,
+    hijacker: Option<Box<dyn Send + HijackMessage<Message = SystemMessage<D::State, D::Request, D::Reply>>>>,
 }
 
 /// Represents a configuration used to bootstrap a `Node`.
@@ -227,7 +228,12 @@ where
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
-    fn test_hijack(_h: Box<dyn HijackMessage<Message = SystemMessage<D::State, D::Request, D::Reply>>>) {}
+    pub fn add_hijacker(
+        &mut self,
+        h: Box<dyn Send + HijackMessage<Message = SystemMessage<D::State, D::Request, D::Reply>>>,
+    ) {
+        self.hijacker = Some(h);
+    }
 
     /// Bootstrap a `Node`, i.e. create connections between itself and its
     /// peer nodes.
@@ -289,6 +295,7 @@ where
             my_tx: tx,
             my_rx: rx,
             connector,
+            hijacker: None,
             peer_addrs: cfg.addrs,
             first_cli: cfg.first_cli,
         };
