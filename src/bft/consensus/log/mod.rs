@@ -589,7 +589,10 @@ impl<S, O, P> Log<S, O, P> {
     /// Retrieves the next batch of requests available for proposing, if any.
     pub fn next_batch(&mut self) -> Option<Vec<Digest>> {
         for _ in 0..self.batch_size {
-            if let Some((digest, stored)) = self.requests.lock().pop_front() {
+            if let Some((digest, stored)) = {
+                let mut requests = self.requests.lock();
+                requests.pop_front()
+            } {
                 self.deciding.insert(digest, stored);
                 continue;
             }
