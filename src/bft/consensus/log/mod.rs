@@ -1,10 +1,13 @@
 //! A module to manage the `febft` message log.
 
+use std::sync::Arc;
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
+
+use parking_lot::Mutex;
 
 use crate::bft::error::*;
 use crate::bft::cst::RecoveryState;
@@ -473,7 +476,7 @@ pub struct Log<S, O, P> {
     curr_seq: SeqNo,
     batch_size: usize,
     declog: DecisionLog,
-    requests: OrderedMap<Digest, StoredMessage<RequestMessage<O>>>,
+    requests: Arc<Mutex<OrderedMap<Digest, StoredMessage<RequestMessage<O>>>>>,
     deciding: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
     decided: Vec<O>,
     checkpoint: CheckpointState<S>,
@@ -496,7 +499,7 @@ impl<S, O, P> Log<S, O, P> {
             deciding: collections::hash_map_capacity(batch_size),
             // TODO: use config value instead of const
             decided: Vec::with_capacity(PERIOD as usize),
-            requests: collections::ordered_map(),
+            requests: Arc::new(Mutex::new(collections::ordered_map())),
             checkpoint: CheckpointState::None,
             _marker: PhantomData,
         }
@@ -564,7 +567,10 @@ impl<S, O, P> Log<S, O, P> {
             SystemMessage::Request(message) => {
                 let digest = header.unique_digest();
                 let stored = StoredMessage::new(header, message);
-                self.requests.insert(digest, stored);
+                {
+                    let mut requests = self.requests.lock();
+                    requests.insert(digest, stored);
+                }
                 self.deciding.remove(&digest);
             },
             SystemMessage::Consensus(message) => {
@@ -582,7 +588,7 @@ impl<S, O, P> Log<S, O, P> {
 
     /// Retrieves the next batch of requests available for proposing, if any.
     pub fn next_batch(&mut self) -> Option<Vec<Digest>> {
-        let (digest, stored) = self.requests.pop_front()?;
+        let (digest, stored) = self.requests.lock().pop_front()?;
         self.deciding.insert(digest, stored);
         // TODO:
         // - we may include another condition here to decide on a
@@ -603,6 +609,7 @@ impl<S, O, P> Log<S, O, P> {
     /// Retrieves a batch of requests to be proposed during a view change.
     pub fn view_change_propose(&self) -> Vec<Digest> {
         self.requests
+            .lock()
             .keys()
             .chain(self.deciding.keys())
             .take(self.batch_size)
@@ -614,7 +621,7 @@ impl<S, O, P> Log<S, O, P> {
     pub fn has_request(&self, digest: &Digest) -> bool {
         match () {
             _ if self.deciding.contains_key(digest) => true,
-            _ if self.requests.contains_key(digest) => true,
+            _ if self.requests.lock().contains_key(digest) => true,
             _ => false,
         }
     }
@@ -626,8 +633,12 @@ impl<S, O, P> Log<S, O, P> {
     {
         digests
             .iter()
-            .flat_map(|d| self.deciding.get(d).or_else(|| self.requests.get(d)))
-            .cloned()
+            .flat_map(|d|
+                self.deciding
+                    .get(d)
+                    .cloned()
+                    .or_else(|| self.requests.lock().get(d).cloned())
+            )
             .collect()
     }
 
@@ -645,7 +656,7 @@ impl<S, O, P> Log<S, O, P> {
         for digest in digests {
             let (header, message) = self.deciding
                 .remove(digest)
-                .or_else(|| self.requests.remove(digest))
+                .or_else(|| self.requests.lock().remove(digest))
                 .map(StoredMessage::into_inner)
                 .ok_or(Error::simple(ErrorKind::ConsensusLog))?;
             batch.add(header.from(), digest.clone(), message.into_inner());
