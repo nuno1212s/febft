@@ -33,9 +33,21 @@ use crate::bft::ordering::{
     Orderable,
 };
 
-pub struct HashRequests<'a, O> {
+pub struct HasRequests<'a, O> {
     requests: MutexGuard<'a, RawMutex, OrderedMap<Digest, StoredMessage<RequestMessage<O>>>>,
     deciding: &'a HashMap<Digest, StoredMessage<RequestMessage<O>>>,
+}
+
+
+impl<'a, O> HasRequests<'a, O> {
+    /// Checks if this `Log` has a particular request with the given `digest`.
+    pub fn has_request(&self, digest: &Digest) -> bool {
+        match () {
+            _ if self.deciding.contains_key(digest) => true,
+            _ if self.requests.contains_key(digest) => true,
+            _ => false,
+        }
+    }
 }
 
 /// Checkpoint period.
@@ -632,19 +644,10 @@ impl<S, O, P> Log<S, O, P> {
             .collect()
     }
 
-    pub fn has_requests<'a>(&'a self) -> HashRequests<'a, O> {
+    pub fn has_requests<'a>(&'a self) -> HasRequests<'a, O> {
         let requests = self.requests.lock();
         let deciding = &self.deciding;
-        HashRequests { requests, deciding }
-    }
-
-    /// Checks if this `Log` has a particular request with the given `digest`.
-    pub fn has_request(&self, digest: &Digest) -> bool {
-        match () {
-            _ if self.deciding.contains_key(digest) => true,
-            _ if self.requests.lock().contains_key(digest) => true,
-            _ => false,
-        }
+        HasRequests { requests, deciding }
     }
 
     /// Clone the requests corresponding to the provided list of hash digests.

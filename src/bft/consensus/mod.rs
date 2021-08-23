@@ -367,13 +367,15 @@ where
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.pre_prepares)
             },
             ProtoPhase::PreparingRequests => {
+                let hr = log.has_requests();
                 let iterator = self.missing_requests
                     .iter()
                     .enumerate()
-                    .filter(|(_index, digest)| log.has_request(digest));
+                    .filter(|(_index, digest)| hr.has_request(digest));
                 for (index, _) in iterator {
                     self.missing_swapbuf.push(index);
                 }
+                drop(hr);
                 for index in self.missing_swapbuf.drain(..) {
                     self.missing_requests.swap_remove_back(index);
                 }
@@ -572,9 +574,11 @@ where
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
                 // try entering preparing phase
-                for digest in self.current.iter().filter(|d| !log.has_request(d)) {
+                let hr = log.has_requests();
+                for digest in self.current.iter().filter(|d| !hr.has_request(d)) {
                     self.missing_requests.push_back(digest.clone());
                 }
+                drop(hr);
                 self.phase = if self.missing_requests.is_empty() {
                     ProtoPhase::Preparing(1)
                 } else {
