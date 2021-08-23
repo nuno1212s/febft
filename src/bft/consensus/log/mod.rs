@@ -7,7 +7,8 @@ use std::marker::PhantomData;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
-use parking_lot::Mutex;
+use lock_api::MutexGuard;
+use parking_lot::{Mutex, RawMutex};
 
 use crate::bft::error::*;
 use crate::bft::cst::RecoveryState;
@@ -31,6 +32,11 @@ use crate::bft::ordering::{
     SeqNo,
     Orderable,
 };
+
+pub struct HashRequests<'a, O> {
+    requests: MutexGuard<'a, RawMutex, OrderedMap<Digest, StoredMessage<RequestMessage<O>>>>,
+    deciding: &'a HashMap<Digest, StoredMessage<RequestMessage<O>>>,
+}
 
 /// Checkpoint period.
 ///
@@ -588,16 +594,16 @@ impl<S, O, P> Log<S, O, P> {
 
     /// Retrieves the next batch of requests available for proposing, if any.
     pub fn next_batch(&mut self) -> Option<Vec<Digest>> {
+        let mut requests = self.requests.lock();
+
         for _ in 0..self.batch_size {
-            if let Some((digest, stored)) = {
-                let mut requests = self.requests.lock();
-                requests.pop_front()
-            } {
+            if let Some((digest, stored)) = requests.pop_front() {
                 self.deciding.insert(digest, stored);
                 continue;
             }
             break;
         }
+        drop(requests);
 
         // TODO:
         // - we may include another condition here to decide on a
@@ -626,6 +632,12 @@ impl<S, O, P> Log<S, O, P> {
             .collect()
     }
 
+    pub fn has_requests<'a>(&'a self) -> HashRequests<'a, O> {
+        let requests = self.requests.lock();
+        let deciding = &self.deciding;
+        HashRequests { requests, deciding }
+    }
+
     /// Checks if this `Log` has a particular request with the given `digest`.
     pub fn has_request(&self, digest: &Digest) -> bool {
         match () {
@@ -640,13 +652,14 @@ impl<S, O, P> Log<S, O, P> {
     where
         O: Clone,
     {
+        let requests = self.requests.lock();
         digests
             .iter()
             .flat_map(|d|
                 self.deciding
                     .get(d)
                     .cloned()
-                    .or_else(|| self.requests.lock().get(d).cloned())
+                    .or_else(|| requests.get(d).cloned())
             )
             .collect()
     }
@@ -662,14 +675,17 @@ impl<S, O, P> Log<S, O, P> {
         O: Clone,
     {
         let mut batch = UpdateBatch::new();
+        let mut requests = self.requests.lock();
+
         for digest in digests {
             let (header, message) = self.deciding
                 .remove(digest)
-                .or_else(|| self.requests.lock().remove(digest))
+                .or_else(|| requests.remove(digest))
                 .map(StoredMessage::into_inner)
                 .ok_or(Error::simple(ErrorKind::ConsensusLog))?;
             batch.add(header.from(), digest.clone(), message.into_inner());
         }
+        drop(requests);
 
         // TODO: optimize batch cloning, as this can take
         // several ms if the batch size is large, and each
