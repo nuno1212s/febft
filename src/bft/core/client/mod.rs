@@ -247,7 +247,7 @@ where
                     }
                 },
                 Message::ConnectedTx(id, sock) => node.handle_connected_tx(id, sock),
-                Message::ConnectedRx(id, sock) => node.handle_connected_rx(id, sock),
+                Message::ConnectedRx(id, sock) => node.handle_connected_rx(id, sock, None),
                 // TODO: node disconnected on send side
                 Message::DisconnectedTx(_id) => unimplemented!(),
                 // TODO: node disconnected on receive side

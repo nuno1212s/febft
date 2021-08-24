@@ -175,7 +175,7 @@ pub struct Node<D: SharedData> {
     peer_tx: PeerTx,
     connector: TlsConnector,
     peer_addrs: HashMap<NodeId, (SocketAddr, String)>,
-    hijacker: Option<Box<dyn Send + HijackMessage<Message = SystemMessage<D::State, D::Request, D::Reply>>>>,
+    hijacker: Option<Arc<dyn Send + Sync + HijackMessage<Message = SystemMessage<D::State, D::Request, D::Reply>>>>,
 }
 
 /// Represents a configuration used to bootstrap a `Node`.
@@ -230,7 +230,7 @@ where
 {
     pub fn add_hijacker(
         &mut self,
-        h: Box<dyn Send + HijackMessage<Message = SystemMessage<D::State, D::Request, D::Reply>>>,
+        h: Arc<dyn Send + Sync + HijackMessage<Message = SystemMessage<D::State, D::Request, D::Reply>>>,
     ) {
         self.hijacker = Some(h);
     }
@@ -320,7 +320,7 @@ where
                     }
                 },
                 Message::ConnectedRx(id, sock) => {
-                    node.handle_connected_rx(id, sock);
+                    node.handle_connected_rx(id, sock, node.hijacker());
                     if id < cfg.first_cli {
                         // not a client connection, increase count
                         c[usize::from(id)] += 1;
@@ -344,6 +344,10 @@ where
 
         // success
         Ok((node, rogue))
+    }
+
+    pub fn hijacker(&self) -> Option<Arc<dyn Send + Sync + HijackMessage<Message = SystemMessage<D::State, D::Request, D::Reply>>>> {
+        self.hijacker.as_ref().map(|h| Arc::clone(h))
     }
 
     // clone the shared data and pass it to a new object
@@ -782,7 +786,12 @@ where
     }
 
     /// Method called upon a `Message::ConnectedRx`.
-    pub fn handle_connected_rx(&mut self, peer_id: NodeId, mut sock: SecureSocketRecv) {
+    pub fn handle_connected_rx(
+        &mut self,
+        peer_id: NodeId,
+        mut sock: SecureSocketRecv,
+        hijacker: Option<Arc<dyn Send + Sync + HijackMessage<Message = SystemMessage<D::State, D::Request, D::Reply>>>>,
+    ) {
         // we are a server node
         if let PeerTx::Server(ref peer_tx) = &self.peer_tx {
             // the node whose conn we accepted is a client
@@ -858,7 +867,16 @@ where
                     },
                 };
 
-                tx.send(Message::System(header, message)).await.unwrap_or(());
+                // try to hijack msg
+                if let Some(h) = &hijacker {
+                    let stored = StoredMessage::new(header, message);
+                    if let Left(stored) = h.hijack_message(stored) {
+                        let (header, message) = stored.into_inner();
+                        tx.send(Message::System(header, message)).await.unwrap_or(());
+                    }
+                } else {
+                    tx.send(Message::System(header, message)).await.unwrap_or(());
+                }
             }
 
             // announce we have disconnected

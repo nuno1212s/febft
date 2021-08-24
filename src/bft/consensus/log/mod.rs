@@ -555,6 +555,13 @@ impl<S, O, P> Log<S, O, P> {
         }
     }
 
+    pub fn requests_hijacker(&self) -> RequestsHijacker<S, O, P> {
+        RequestsHijacker {
+            requests: Arc::clone(&self.requests),
+            _phantom: PhantomData,
+        }
+    }
+
     /// Returns a reference to a subset of this log, containing only
     /// consensus messages.
     pub fn decision_log(&self) -> &DecisionLog {

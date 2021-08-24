@@ -1,5 +1,6 @@
 //! Contains the server side core protocol logic of `febft`.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(feature = "serialize_serde")]
@@ -151,10 +152,10 @@ pub struct ReplicaConfig<S> {
 
 impl<S> Replica<S>
 where
-    S: Service + Send + 'static,
-    State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
-    Reply<S>: Send + 'static,
+    S: Service + Send + Sync + 'static,
+    State<S>: Send + Sync + Clone + 'static,
+    Request<S>: Send + Sync + Clone + 'static,
+    Reply<S>: Send + Sync + 'static,
 {
     /// Bootstrap a replica in `febft`.
     pub async fn bootstrap(cfg: ReplicaConfig<S>) -> Result<Self> {
@@ -206,6 +207,11 @@ where
             node,
             log,
         };
+
+        // hijack client requests, so we can process them faster instead
+        // of having to wait for them to go through the master channel of
+        // this replica
+        replica.node.add_hijacker(Arc::new(replica.log.requests_hijacker()));
 
         // handle rogue messages
         for message in rogue {
@@ -352,7 +358,7 @@ where
                 self.execution_finished(batch);
             },
             Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
-            Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
+            Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock, self.node.hijacker()),
             // TODO: node disconnected on send side
             Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
             // TODO: node disconnected on receive side
@@ -457,7 +463,7 @@ where
                 self.execution_finished_with_appstate(batch, appstate)?;
             },
             Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
-            Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
+            Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock, self.node.hijacker()),
             // TODO: node disconnected on send side
             Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
             // TODO: node disconnected on receive side
@@ -603,7 +609,7 @@ where
                 self.execution_finished_with_appstate(batch, appstate)?;
             },
             Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
-            Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
+            Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock, self.node.hijacker()),
             // TODO: node disconnected on send side
             Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
             // TODO: node disconnected on receive side
