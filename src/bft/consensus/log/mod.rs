@@ -26,7 +26,6 @@ use crate::bft::communication::message::{
 use crate::bft::collections::{
     self,
     HashMap,
-    OrderedMap,
 };
 use crate::bft::ordering::{
     SeqNo,
@@ -34,7 +33,7 @@ use crate::bft::ordering::{
 };
 
 pub struct HasRequests<'a, O> {
-    requests: MutexGuard<'a, RawMutex, OrderedMap<Digest, StoredMessage<RequestMessage<O>>>>,
+    requests: MutexGuard<'a, RawMutex, HashMap<Digest, StoredMessage<RequestMessage<O>>>>,
     deciding: &'a HashMap<Digest, StoredMessage<RequestMessage<O>>>,
 }
 
@@ -494,7 +493,7 @@ pub struct Log<S, O, P> {
     curr_seq: SeqNo,
     batch_size: usize,
     declog: DecisionLog,
-    requests: Arc<Mutex<OrderedMap<Digest, StoredMessage<RequestMessage<O>>>>>,
+    requests: Arc<Mutex<HashMap<Digest, StoredMessage<RequestMessage<O>>>>>,
     deciding: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
     decided: Vec<O>,
     checkpoint: CheckpointState<S>,
@@ -517,7 +516,7 @@ impl<S, O, P> Log<S, O, P> {
             deciding: collections::hash_map_capacity(batch_size),
             // TODO: use config value instead of const
             decided: Vec::with_capacity(PERIOD as usize),
-            requests: Arc::new(Mutex::new(collections::ordered_map())),
+            requests: Arc::new(Mutex::new(collections::hash_map())),
             checkpoint: CheckpointState::None,
             _marker: PhantomData,
         }
@@ -606,16 +605,10 @@ impl<S, O, P> Log<S, O, P> {
 
     /// Retrieves the next batch of requests available for proposing, if any.
     pub fn next_batch(&mut self) -> Option<Vec<Digest>> {
-        let mut requests = self.requests.lock();
-
-        for _ in 0..self.batch_size {
-            if let Some((digest, stored)) = requests.pop_front() {
-                self.deciding.insert(digest, stored);
-                continue;
-            }
-            break;
+        {
+            let mut requests = self.requests.lock();
+            self.deciding.extend(requests.drain().take(self.batch_size));
         }
-        drop(requests);
 
         // TODO:
         // - we may include another condition here to decide on a
