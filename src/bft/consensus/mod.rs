@@ -575,7 +575,7 @@ where
                 log.insert(header, SystemMessage::Consensus(message));
                 // try entering preparing phase
                 let hr = log.has_requests();
-                for digest in self.current.iter().filter(|d| !hr.has_request(d)) {
+                for digest in self.current.iter().take(self.batch_size).filter(|d| !hr.has_request(d)) {
                     self.missing_requests.push_back(digest.clone());
                 }
                 drop(hr);
