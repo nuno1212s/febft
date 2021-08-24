@@ -9,12 +9,15 @@ use serde::{Serialize, Deserialize};
 
 use lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
+use either::Either;
 
 use crate::bft::error::*;
+use crate::bft::threadpool;
 use crate::bft::cst::RecoveryState;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::executable::UpdateBatch;
+use crate::bft::communication::HijackMessage;
 use crate::bft::communication::message::{
     Header,
     StoredMessage,
@@ -485,6 +488,36 @@ impl DecisionLog {
         clear_log(in_exec, &mut scratch, &mut self.commits);
 
         pre_prepare
+    }
+}
+
+pub struct RequestsHijacker<S, O, P> {
+    requests: Arc<Mutex<HashMap<Digest, StoredMessage<RequestMessage<O>>>>>,
+    _phantom: PhantomData<(S, P)>,
+}
+
+impl<S, O, P> HijackMessage for RequestsHijacker<S, O, P>
+where
+    O: 'static + Send,
+{
+    type Message = SystemMessage<S, O, P>;
+
+    fn hijack_message(
+        &self,
+        stored: StoredMessage<Self::Message>,
+    ) -> Either<StoredMessage<Self::Message>, ()> {
+        stored
+            .into_request()
+            .map_right(|stored| {
+                let requests_mutex = Arc::clone(&self.requests);
+                threadpool::execute(move || {
+                    let header = *stored.header();
+                    let digest = header.unique_digest();
+                    let mut requests = requests_mutex.lock();
+                    requests.insert(digest, stored);
+                });
+                ()
+            })
     }
 }
 

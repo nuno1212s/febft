@@ -7,6 +7,11 @@ use std::mem::MaybeUninit;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
+use either::{
+    Left,
+    Right,
+    Either,
+};
 use smallvec::{
     SmallVec,
     Array,
@@ -123,6 +128,22 @@ impl<S, O, P> StoredMessage<SystemMessage<S, O, P>> {
     }
 }
 */
+
+impl<S, O, P> StoredMessage<SystemMessage<S, O, P>> {
+    /// Convert the inner `SystemMessage` into a `RequestMessage`,
+    /// if possible, else return the original message.
+    pub fn into_request(self) -> Either<Self, StoredMessage<RequestMessage<O>>> {
+        let (header, message) = self.into_inner();
+        match message {
+            SystemMessage::Request(message) => {
+                Right(StoredMessage::new(header, message))
+            },
+            message => {
+                Left(StoredMessage::new(header, message))
+            },
+        }
+    }
+}
 
 /// A header that is sent before a message in transit in the wire.
 ///
