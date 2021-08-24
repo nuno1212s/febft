@@ -572,7 +572,7 @@ where
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
                 // try entering preparing phase
-                for digest in self.current.iter().filter(|d| !log.has_request(d)) {
+                for digest in self.current.iter().take(self.batch_size).filter(|d| !log.has_request(d)) {
                     self.missing_requests.push_back(digest.clone());
                 }
                 self.phase = if self.missing_requests.is_empty() {
