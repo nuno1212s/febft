@@ -22,7 +22,6 @@ use crate::bft::communication::message::{
 use crate::bft::collections::{
     self,
     HashMap,
-    OrderedMap,
 };
 use crate::bft::ordering::{
     SeqNo,
@@ -473,7 +472,7 @@ pub struct Log<S, O, P> {
     curr_seq: SeqNo,
     batch_size: usize,
     declog: DecisionLog,
-    requests: OrderedMap<Digest, StoredMessage<RequestMessage<O>>>,
+    requests: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
     deciding: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
     decided: Vec<O>,
     checkpoint: CheckpointState<S>,
@@ -496,7 +495,7 @@ impl<S, O, P> Log<S, O, P> {
             deciding: collections::hash_map_capacity(batch_size),
             // TODO: use config value instead of const
             decided: Vec::with_capacity(PERIOD as usize),
-            requests: collections::ordered_map(),
+            requests: collections::hash_map(),
             checkpoint: CheckpointState::None,
             _marker: PhantomData,
         }
@@ -582,14 +581,13 @@ impl<S, O, P> Log<S, O, P> {
 
     /// Retrieves the next batch of requests available for proposing, if any.
     pub fn next_batch(&mut self) -> Option<Vec<Digest>> {
-        let (digest, stored) = self.requests.pop_front()?;
-        self.deciding.insert(digest, stored);
+        self.deciding.extend(self.requests.drain().take(self.batch_size));
         // TODO:
         // - we may include another condition here to decide on a
         // smaller batch size, so that client request latency is lower
         // - prevent non leader replicas from collecting a batch of digests,
         // as only the leader will actually propose!
-        if self.deciding.len() >= self.batch_size {
+        if self.deciding.len() > 0 {
             Some(self.deciding
                 .keys()
                 .copied()
