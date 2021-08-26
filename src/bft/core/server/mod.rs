@@ -55,6 +55,7 @@ use crate::bft::communication::message::{
     ForwardedRequestsMessage,
     SystemMessage,
     ReplyMessage,
+    RequestMessage,
     StoredMessage,
     Message,
     Header,
@@ -213,13 +214,7 @@ where
         for message in rogue {
             match message {
                 Message::RequestBatch(batch) => {
-                    let batch = batch
-                        .into_iter()
-                        .map(StoredMessage::into_inner);
-
-                    for (header, request) in batch {
-                        replica.request_received(header, SystemMessage::Request(request));
-                    }
+                    replica.batch_received(batch);
                 },
                 Message::System(header, message) => {
                     match message {
@@ -263,6 +258,9 @@ where
         let message = self.node.receive(Some(self.log.batch_size())).await?;
 
         match message {
+            Message::RequestBatch(batch) => {
+                self.batch_received(batch);
+            },
             Message::System(header, message) => {
                 match message {
                     SystemMessage::ForwardedRequests(requests) => {
@@ -386,6 +384,9 @@ where
         };
 
         match message {
+            Message::RequestBatch(batch) => {
+                self.batch_received(batch);
+            },
             Message::System(header, message) => {
                 match message {
                     SystemMessage::Consensus(message) => {
@@ -498,6 +499,9 @@ where
         };
 
         match message {
+            Message::RequestBatch(batch) => {
+                self.batch_received(batch);
+            },
             Message::System(header, message) => {
                 match message {
                     SystemMessage::ForwardedRequests(requests) => {
@@ -725,5 +729,15 @@ where
             &self.timeouts,
         );
         self.log.insert(h, r);
+    }
+
+    fn batch_received(&mut self, batch: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
+        let batch = batch
+            .into_iter()
+            .map(StoredMessage::into_inner);
+
+        for (header, request) in batch {
+            self.request_received(header, SystemMessage::Request(request));
+        }
     }
 }
