@@ -55,7 +55,9 @@ use crate::bft::communication::message::{
     ForwardedRequestsMessage,
     SystemMessage,
     ReplyMessage,
+    StoredMessage,
     Message,
+    Header,
 };
 
 enum ReplicaPhase {
@@ -210,14 +212,19 @@ where
         // handle rogue messages
         for message in rogue {
             match message {
+                Message::RequestBatch(batch) => {
+                    let batch = batch
+                        .into_iter()
+                        .map(StoredMessage::into_inner);
+
+                    for (header, request) in batch {
+                        replica.request_received(header, SystemMessage::Request(request));
+                    }
+                },
                 Message::System(header, message) => {
                     match message {
                         request @ SystemMessage::Request(_) => {
-                            replica.synchronizer.watch_request(
-                                header.unique_digest(), 
-                                &replica.timeouts,
-                            );
-                            replica.log.insert(header, request);
+                            replica.request_received(header, request);
                         },
                         SystemMessage::Consensus(message) => {
                             replica.consensus.queue(header, message);
@@ -264,11 +271,7 @@ where
                         self.forwarded_requests_received(requests);
                     },
                     request @ SystemMessage::Request(_) => {
-                        self.synchronizer.watch_request(
-                            header.unique_digest(), 
-                            &self.timeouts,
-                        );
-                        self.log.insert(header, request);
+                        self.request_received(header, request);
                     },
                     SystemMessage::Consensus(message) => {
                         self.consensus.queue(header, message);
@@ -392,11 +395,7 @@ where
                         self.forwarded_requests_received(requests);
                     },
                     request @ SystemMessage::Request(_) => {
-                        self.synchronizer.watch_request(
-                            header.unique_digest(), 
-                            &self.timeouts,
-                        );
-                        self.log.insert(header, request);
+                        self.request_received(header, request);
                     },
                     SystemMessage::Cst(message) => {
                         let status = self.cst.process_message(
@@ -505,11 +504,7 @@ where
                         self.forwarded_requests_received(requests);
                     },
                     request @ SystemMessage::Request(_) => {
-                        self.synchronizer.watch_request(
-                            header.unique_digest(), 
-                            &self.timeouts,
-                        );
-                        self.log.insert(header, request);
+                        self.request_received(header, request);
                     },
                     SystemMessage::Cst(message) => {
                         let status = self.cst.process_message(
@@ -722,5 +717,13 @@ where
                 }
             },
         }
+    }
+
+    fn request_received(&mut self, h: Header, r: SystemMessage<State<S>, Request<S>, Reply<S>>) {
+        self.synchronizer.watch_request(
+            h.unique_digest(), 
+            &self.timeouts,
+        );
+        self.log.insert(h, r);
     }
 }

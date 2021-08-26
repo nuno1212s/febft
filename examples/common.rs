@@ -81,6 +81,7 @@ pub fn debug_msg(m: Message<f32, Action, f32>) -> &'static str {
             SystemMessage::Request(_) => "Req",
             _ => unreachable!(),
         },
+        Message::RequestBatch(_) => "RqB",
         Message::ConnectedTx(_, _) => "CTx",
         Message::ConnectedRx(_, _) => "CRx",
         Message::DisconnectedTx(_) => "DTx",

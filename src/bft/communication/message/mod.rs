@@ -852,6 +852,9 @@ impl<S, O, P> Message<S, O, P> {
             Message::Timeout(_) =>
                 Err("Expected System found Timeout")
                     .wrapped(ErrorKind::CommunicationMessage),
+            Message::RequestBatch(_) =>
+                Err("Expected System found RequestBatch")
+                    .wrapped(ErrorKind::CommunicationMessage),
         }
     }
 }
