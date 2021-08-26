@@ -172,8 +172,15 @@ where
         let f = node_config.f;
         let view = ViewInfo::new(view, n, f)?;
 
+        // TODO: get log from persistent storage
+        let log = Log::new(batch_size);
+
+        // hijack client requests, so we can process them faster instead
+        // of having to wait for them to go through the master channel of
+        // this replica
+
         // connect to peer nodes
-        let (node, rogue) = Node::bootstrap(node_config).await?;
+        let (node, rogue) = Node::bootstrap(node_config, Some(Arc::new(log.requests_hijacker()))).await?;
 
         // start executor
         let executor = Executor::new(
@@ -185,9 +192,6 @@ where
         let timeouts = Timeouts::new(
             node.master_channel(),
         );
-
-        // TODO: get log from persistent storage
-        let log = Log::new(batch_size);
 
         // TODO:
         // - client req timeout base dur configure param
@@ -207,11 +211,6 @@ where
             node,
             log,
         };
-
-        // hijack client requests, so we can process them faster instead
-        // of having to wait for them to go through the master channel of
-        // this replica
-        replica.node.add_hijacker(Arc::new(replica.log.requests_hijacker()));
 
         // handle rogue messages
         for message in rogue {

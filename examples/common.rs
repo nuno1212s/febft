@@ -159,7 +159,7 @@ pub async fn setup_node(
     pk: HashMap<NodeId, PublicKey>,
 ) -> Result<(Node<CalcData>, Vec<Message<f32, Action, f32>>)> {
     let conf = node_config(&t, id, sk, addrs, pk).await;
-    Node::bootstrap(conf).await
+    Node::bootstrap(conf, None).await
 }
 
 async fn get_server_config(t: &ThreadPool, id: NodeId) -> ServerConfig {

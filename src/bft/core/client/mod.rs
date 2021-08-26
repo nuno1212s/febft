@@ -122,7 +122,7 @@ where
         // FIXME: can the client receive rogue reply messages?
         // perhaps when it reconnects to a replica after experiencing
         // network problems? for now ignore rogue messages...
-        let (node, _rogue) = Node::bootstrap(node_config).await?;
+        let (node, _rogue) = Node::bootstrap(node_config, None).await?;
 
         // create shared data
         let data = Arc::new(ClientData {

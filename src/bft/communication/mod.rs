@@ -228,13 +228,6 @@ where
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
-    pub fn add_hijacker(
-        &mut self,
-        h: Arc<dyn Send + Sync + HijackMessage<Message = SystemMessage<D::State, D::Request, D::Reply>>>,
-    ) {
-        self.hijacker = Some(h);
-    }
-
     /// Bootstrap a `Node`, i.e. create connections between itself and its
     /// peer nodes.
     ///
@@ -242,6 +235,7 @@ where
     /// are returned in a `Vec`.
     pub async fn bootstrap(
         cfg: NodeConfig,
+        hijacker: Option<Arc<dyn Send + Sync + HijackMessage<Message = SystemMessage<D::State, D::Request, D::Reply>>>>,
     ) -> Result<(Self, Vec<Message<D::State, D::Request, D::Reply>>)> {
         let id = cfg.id;
 
@@ -295,7 +289,7 @@ where
             my_tx: tx,
             my_rx: rx,
             connector,
-            hijacker: None,
+            hijacker,
             peer_addrs: cfg.addrs,
             first_cli: cfg.first_cli,
         };
@@ -871,6 +865,9 @@ where
                 if let Some(h) = &hijacker {
                     let stored = StoredMessage::new(header, message);
                     if let Left(stored) = h.hijack_message(stored) {
+                        if matches!(stored.message(), SystemMessage::Request(_)) {
+                            eprintln!("failed to hijack request msg");
+                        }
                         let (header, message) = stored.into_inner();
                         tx.send(Message::System(header, message)).await.unwrap_or(());
                     }

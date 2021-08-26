@@ -368,6 +368,7 @@ where
             },
             ProtoPhase::PreparingRequests => {
                 let hr = log.has_requests();
+                eprintln!("polling preparing requests");
                 let iterator = self.missing_requests
                     .iter()
                     .enumerate()
@@ -376,6 +377,7 @@ where
                     self.missing_swapbuf.push(index);
                 }
                 drop(hr);
+                eprintln!("new = {}, missing = {}, current = {}", self.missing_swapbuf.len(), self.missing_requests.len(), self.batch_size);
                 for index in self.missing_swapbuf.drain(..) {
                     self.missing_requests.swap_remove_back(index);
                 }
@@ -582,11 +584,13 @@ where
                 self.phase = if self.missing_requests.is_empty() {
                     ProtoPhase::Preparing(1)
                 } else {
+                    eprintln!("entering preparing requests with {} missing", self.missing_requests.len());
                     ProtoPhase::PreparingRequests
                 };
                 ConsensusStatus::Deciding
             },
             ProtoPhase::PreparingRequests => {
+                eprintln!("processing preparing requests");
                 // can't do anything while waiting for client requests,
                 // queue the message for later
                 match message.kind() {
