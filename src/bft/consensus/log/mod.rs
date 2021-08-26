@@ -501,6 +501,10 @@ impl<S, O, P> Log<S, O, P> {
         }
     }
 
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
+    }
+
     /// Returns a reference to a subset of this log, containing only
     /// consensus messages.
     pub fn decision_log(&self) -> &DecisionLog {

@@ -294,7 +294,7 @@ where
             .enumerate()
             .any(|(id, &n)| id != usize::from(node.id) && n != 2_i32)
         {
-            let message = node.my_rx.recv().await.unwrap();
+            let message = node.my_rx.recv(None).await.unwrap();
 
             match message {
                 Message::ConnectedTx(id, sock) => {
@@ -749,8 +749,8 @@ where
     }
 
     /// Receive one message from peer nodes or ourselves.
-    pub async fn receive(&mut self) -> Result<Message<D::State, D::Request, D::Reply>> {
-        self.my_rx.recv().await
+    pub async fn receive(&mut self, batch: Option<usize>) -> Result<Message<D::State, D::Request, D::Reply>> {
+        self.my_rx.recv(batch).await
     }
 
     /// Method called upon a `Message::ConnectedTx`.

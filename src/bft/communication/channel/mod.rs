@@ -18,11 +18,11 @@ use futures::future::FusedFuture;
 
 use crate::bft::error::*;
 use crate::bft::communication::message::{
-    Header,
     Message,
     SystemMessage,
     RequestMessage,
     ReplyMessage,
+    StoredMessage,
     ConsensusMessage,
 };
 
@@ -102,6 +102,11 @@ impl<T> ChannelRx<T> {
         let inner = self.inner.recv();
         ChannelRxFut { inner }
     }
+
+    #[inline]
+    pub fn drain_into(&mut self, _buf: &mut Vec<T>, _up_to: usize) {
+        unimplemented!()
+    }
 }
 
 impl<'a, T> Future for ChannelRxFut<'a, T> {
@@ -125,17 +130,17 @@ impl<'a, T> FusedFuture for ChannelRxFut<'a, T> {
 /// The handle can be cloned as many times as needed for cheap.
 pub struct MessageChannelTx<S, O, P> {
     other: ChannelTx<Message<S, O, P>>,
-    requests: ChannelTx<(Header, RequestMessage<O>)>,
-    replies: ChannelTx<(Header, ReplyMessage<P>)>,
-    consensus: ChannelTx<(Header, ConsensusMessage)>,
+    requests: ChannelTx<StoredMessage<RequestMessage<O>>>,
+    replies: ChannelTx<StoredMessage<ReplyMessage<P>>>,
+    consensus: ChannelTx<StoredMessage<ConsensusMessage>>,
 }
 
 /// Represents the receiving half of a `Message` channel.
 pub struct MessageChannelRx<S, O, P> {
     other: ChannelRx<Message<S, O, P>>,
-    requests: ChannelRx<(Header, RequestMessage<O>)>,
-    replies: ChannelRx<(Header, ReplyMessage<P>)>,
-    consensus: ChannelRx<(Header, ConsensusMessage)>,
+    requests: ChannelRx<StoredMessage<RequestMessage<O>>>,
+    replies: ChannelRx<StoredMessage<ReplyMessage<P>>>,
+    consensus: ChannelRx<StoredMessage<ConsensusMessage>>,
 }
 
 /// Creates a new channel that can queue up to `bound` messages
@@ -177,13 +182,13 @@ impl<S, O, P> MessageChannelTx<S, O, P> {
             Message::System(header, message) => {
                 match message {
                     SystemMessage::Request(message) => {
-                        self.requests.send((header, message)).await
+                        self.requests.send(StoredMessage::new(header, message)).await
                     },
                     SystemMessage::Reply(message) => {
-                        self.replies.send((header, message)).await
+                        self.replies.send(StoredMessage::new(header, message)).await
                     },
                     SystemMessage::Consensus(message) => {
-                        self.consensus.send((header, message)).await
+                        self.consensus.send(StoredMessage::new(header, message)).await
                     },
                     message @ SystemMessage::Cst(_) => {
                         self.other.send(Message::System(header, message)).await
@@ -204,18 +209,31 @@ impl<S, O, P> MessageChannelTx<S, O, P> {
 }
 
 impl<S, O, P> MessageChannelRx<S, O, P> {
-    pub async fn recv(&mut self) -> Result<Message<S, O, P>> {
+    pub async fn recv(&mut self, batch: Option<usize>) -> Result<Message<S, O, P>> {
         let message = select! {
             result = self.consensus.recv() => {
-                let (h, c) = result?;
+                let (h, c) = result?.into_inner();
                 Message::System(h, SystemMessage::Consensus(c))
             },
             result = self.requests.recv() => {
-                let (h, r) = result?;
-                Message::System(h, SystemMessage::Request(r))
+                match batch.and_then(|size| size.checked_sub(1)) {
+                    Some(size) => {
+                        let stored = result?;
+                        let mut batch = Vec::with_capacity(size + 1);
+
+                        batch.push(stored);
+                        self.requests.drain_into(&mut batch, size);
+
+                        Message::RequestBatch(batch)
+                    },
+                    None => {
+                        let (h, r) = result?.into_inner();
+                        Message::System(h, SystemMessage::Request(r))
+                    },
+                }
             },
             result = self.replies.recv() => {
-                let (h, r) = result?;
+                let (h, r) = result?.into_inner();
                 Message::System(h, SystemMessage::Reply(r))
             },
             result = self.other.recv() => {

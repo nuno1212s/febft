@@ -196,6 +196,8 @@ pub struct OwnedWireMessage<T> {
 /// asynchronous tasks in the system.
 ///
 pub enum Message<S, O, P> {
+    /// We received a new batch of client requests.
+    RequestBatch(Vec<StoredMessage<RequestMessage<O>>>),
     /// Client requests and process sub-protocol messages.
     System(Header, SystemMessage<S, O, P>),
     /// A client with id `NodeId` has finished connecting to the socket `Socket`.

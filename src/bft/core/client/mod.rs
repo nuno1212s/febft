@@ -174,7 +174,7 @@ where
         let mut earlier = Instant::now();
         let mut votes: HashMap<Digest, ReplicaVotes> = collections::hash_map();
 
-        while let Ok(message) = node.receive().await {
+        while let Ok(message) = node.receive(None).await {
             match message {
                 Message::System(header, message) => {
                     match message {

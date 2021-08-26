@@ -253,7 +253,7 @@ where
     }
 
     async fn update_retrieving_state(&mut self) -> Result<()> {
-        let message = self.node.receive().await?;
+        let message = self.node.receive(Some(self.log.batch_size())).await?;
 
         match message {
             Message::System(header, message) => {
@@ -366,7 +366,7 @@ where
         // retrieve a view change message to be processed
         let message = match self.synchronizer.poll() {
             SynchronizerPollStatus::Recv => {
-                self.node.receive().await?
+                self.node.receive(Some(self.log.batch_size())).await?
             },
             SynchronizerPollStatus::NextMessage(h, m) => {
                 Message::System(h, SystemMessage::ViewChange(m))
@@ -485,7 +485,7 @@ where
         // `TboQueue`, in the consensus module.
         let message = match self.consensus.poll(&self.log) {
             ConsensusPollStatus::Recv => {
-                self.node.receive().await?
+                self.node.receive(Some(self.log.batch_size())).await?
             },
             ConsensusPollStatus::NextMessage(h, m) => {
                 Message::System(h, SystemMessage::Consensus(m))
@@ -494,7 +494,7 @@ where
                 if let Some(digests) = self.log.next_batch() {
                     self.consensus.propose(digests, &self.synchronizer, &mut self.node);
                 }
-                self.node.receive().await?
+                self.node.receive(Some(self.log.batch_size())).await?
             },
         };
 
