@@ -46,6 +46,14 @@ impl<T> ChannelRx<T> {
         let inner = self.inner.recv_async();
         ChannelRxFut { inner }
     }
+
+    #[inline]
+    pub fn drain_into(&mut self, buf: &mut Vec<T>, up_to: usize) {
+        let messages = self.inner
+            .drain()
+            .take(up_to);
+        buf.extend(messages);
+    }
 }
 
 impl<'a, T> Future for ChannelRxFut<'a, T> {

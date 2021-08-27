@@ -66,6 +66,11 @@ impl<T> ChannelRx<T> {
         let inner = &mut self.inner;
         ChannelRxFut { inner }
     }
+
+    #[inline]
+    pub fn drain_into(&mut self, _buf: &mut Vec<T>, _up_to: usize) {
+        unimplemented!()
+    }
 }
 
 impl<'a, T> Future for ChannelRxFut<'a, T> {

@@ -104,8 +104,8 @@ impl<T> ChannelRx<T> {
     }
 
     #[inline]
-    pub fn drain_into(&mut self, _buf: &mut Vec<T>, _up_to: usize) {
-        unimplemented!()
+    pub fn drain_into(&mut self, buf: &mut Vec<T>, up_to: usize) {
+        self.inner.drain_into(buf, up_to)
     }
 }
 
