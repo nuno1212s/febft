@@ -50,7 +50,7 @@ impl<T> ChannelRx<T> {
     #[inline]
     pub fn drain_into(&mut self, buf: &mut Vec<T>, up_to: usize) {
         let messages = self.inner
-            .drain()
+            .try_iter()
             .take(up_to);
         buf.extend(messages);
     }
