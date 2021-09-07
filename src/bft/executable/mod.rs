@@ -98,6 +98,9 @@ pub trait Service {
 
     /// Process a user request, producing a matching reply,
     /// meanwhile updating the application state.
+    ///
+    /// This method may not be implemented, if the user implements
+    /// `update_batch()` instead.
     fn update(
         &mut self,
         state: &mut State<Self>,
