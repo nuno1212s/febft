@@ -116,9 +116,11 @@ pub trait Service {
         let mut reply_batch = UpdateBatchReplies::with_capacity(batch.len());
 
         for update in batch.into_inner() {
+            eprintln!("update loop begin");
             let (peer_id, dig, req) = update.into_inner();
             let reply = self.update(state, req);
             reply_batch.add(peer_id, dig, reply);
+            eprintln!("update loop end");
         }
 
         reply_batch

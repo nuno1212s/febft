@@ -165,6 +165,7 @@ enum ProtoPhase {
 /// Contains the state of an active consensus instance, as well
 /// as future instances.
 pub struct Consensus<S: Service> {
+    id: NodeId,
     // can be smaller than the config's max batch size,
     // but never longer
     batch_size: usize,
@@ -215,8 +216,9 @@ where
     Reply<S>: Send + 'static,
 {
     /// Starts a new consensus protocol tracker.
-    pub fn new(initial_seq_no: SeqNo, batch_size: usize) -> Self {
+    pub fn new(id: NodeId, initial_seq_no: SeqNo, batch_size: usize) -> Self {
         Self {
+            id,
             batch_size: 0,
             phase: ProtoPhase::Init,
             missing_swapbuf: Vec::new(),
@@ -352,6 +354,7 @@ where
 
     /// Check if we can process new consensus messages.
     pub fn poll(&mut self, log: &Log<State<S>, Request<S>, Reply<S>>) -> ConsensusPollStatus {
+        eprintln!("Called poll() on phase {:?} of consensus {:?} in replica {:?}", self.phase, self.sequence_number(), self.id);
         match self.phase {
             ProtoPhase::Init if self.tbo.get_queue => {
                 extract_msg!(
@@ -583,6 +586,7 @@ where
                 ConsensusStatus::Deciding
             },
             ProtoPhase::PreparingRequests => {
+                eprintln!("{:?} missing {} requests...", self.id, self.missing_requests.len());
                 // can't do anything while waiting for client requests,
                 // queue the message for later
                 match message.kind() {

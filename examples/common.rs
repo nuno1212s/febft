@@ -144,7 +144,7 @@ pub async fn setup_replica(
     let node = node_config(&t, id, sk, addrs, pk).await;
     let conf = ReplicaConfig {
         node,
-        batch_size: 1024,
+        batch_size: 8,
         next_consensus_seq: SeqNo::ZERO,
         view: SeqNo::ZERO,
         service: CalcService(id, 0),

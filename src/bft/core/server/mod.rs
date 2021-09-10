@@ -198,10 +198,11 @@ where
         const CST_BASE_DUR: Duration = Duration::from_secs(30);
         const REQ_BASE_DUR: Duration = Duration::from_secs(2 * 60);
 
+        let id = node.id();
         let mut replica = Replica {
             cst: CollabStateTransfer::new(CST_BASE_DUR),
             synchronizer: Synchronizer::new(REQ_BASE_DUR, view),
-            consensus: Consensus::new(next_consensus_seq, batch_size),
+            consensus: Consensus::new(id, next_consensus_seq, batch_size),
             phase: ReplicaPhase::NormalPhase,
             phase_stack: None,
             timeouts,
@@ -632,6 +633,7 @@ where
             let flush = peer_id != last_node || i == last_reply_index;
             last_node = peer_id;
 
+            eprintln!("{:?} sent reply to {:?} (flushed={})", self.node.id(), peer_id, flush);
             self.node.send(message, peer_id, flush);
         }
     }
@@ -670,6 +672,9 @@ where
 
     fn timeout_received(&mut self, timeout_kind: TimeoutKind) {
         match timeout_kind {
+            TimeoutKind::Ping => {
+                eprintln!("PING -> PONG; Requests queued = {}; Deciding queued = {}", self.log.r(), self.log.d());
+            },
             TimeoutKind::Cst(cst_seq) => {
                 let status = self.cst.timed_out(cst_seq);
 

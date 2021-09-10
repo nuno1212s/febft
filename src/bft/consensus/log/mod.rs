@@ -483,6 +483,14 @@ pub struct Log<S, O, P> {
 // - garbage collect the log
 // - save the log to persistent storage
 impl<S, O, P> Log<S, O, P> {
+    pub fn r(&self) -> usize {
+        self.requests.len()
+    }
+
+    pub fn d(&self) -> usize {
+        self.deciding.len()
+    }
+
     /// Creates a new message log.
     ///
     /// The value `batch_size` represents the maximum number of

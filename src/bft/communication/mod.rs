@@ -38,6 +38,7 @@ use crate::bft::prng;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
 use crate::bft::crypto::hash::Digest;
+use crate::bft::timeouts::TimeoutKind;
 use crate::bft::collections::{self, HashMap};
 use crate::bft::communication::serialize::{
     Buf,
@@ -326,6 +327,15 @@ where
                 m => rogue.push(m),
             }
         }
+
+        // spawn ping
+        let mut pinger = node.master_channel();
+        rt::spawn(async move {
+            loop {
+                Delay::new(Duration::from_secs(10)).await;
+                pinger.send(Message::Timeout(TimeoutKind::Ping)).await.unwrap();
+            }
+        });
 
         // success
         Ok((node, rogue))

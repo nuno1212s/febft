@@ -13,6 +13,7 @@ use super::SystemParams;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
 use crate::bft::crypto::hash::Digest;
+use crate::bft::timeouts::TimeoutKind;
 use crate::bft::collections::{self, HashMap};
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::message::{
@@ -161,6 +162,8 @@ where
         let targets = NodeId::targets(0..self.params.n());
         let digest = self.node.broadcast(message, targets);
 
+        eprintln!("Sent new update");
+
         // await response
         let data = &*self.data;
         ClientRequestFut { digest, data }.await
@@ -176,6 +179,9 @@ where
 
         while let Ok(message) = node.receive(None).await {
             match message {
+                Message::Timeout(TimeoutKind::Ping) => {
+                    eprintln!("PING -> PONG; Waiting for {} replies...", votes.len());
+                },
                 Message::System(header, message) => {
                     match message {
                         SystemMessage::Reply(message) => {

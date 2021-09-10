@@ -27,6 +27,7 @@ type SeqNo = u64;
 type AtomicSeqNo = AtomicU64;
 
 pub enum TimeoutKind {
+    Ping,
     /// Timeout pertaining toe the `CST` protocol.
     Cst(ordering::SeqNo),
     /// Timeout pertaining to a group of client requests
