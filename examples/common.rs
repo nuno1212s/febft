@@ -254,7 +254,7 @@ fn open_file(path: &str) -> BufReader<File> {
 
 pub struct CalcData;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Action {
     Sqrt,
     MultiplyByTwo,

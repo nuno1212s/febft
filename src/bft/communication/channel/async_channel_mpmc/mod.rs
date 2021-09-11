@@ -61,6 +61,11 @@ impl<T> ChannelRx<T> {
     pub fn drain_into(&mut self, _buf: &mut Vec<T>, _up_to: usize) {
         unimplemented!()
     }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        unimplemented!()
+    }
 }
 
 impl<'a, T> Future for ChannelRxFut<'a, T> {

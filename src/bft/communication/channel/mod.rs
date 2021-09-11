@@ -107,6 +107,11 @@ impl<T> ChannelRx<T> {
     pub fn drain_into(&mut self, buf: &mut Vec<T>, up_to: usize) {
         self.inner.drain_into(buf, up_to)
     }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
 }
 
 impl<'a, T> Future for ChannelRxFut<'a, T> {
@@ -221,8 +226,10 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
                         let stored = result?;
                         let mut batch = Vec::with_capacity(size + 1);
 
+                        eprintln!("BUFFERED IN CHAN = {}", self.requests.len());
                         batch.push(stored);
                         self.requests.drain_into(&mut batch, size);
+                        eprintln!("REQUESTS DRAINED FROM CHANNEL");
 
                         Message::RequestBatch(batch)
                     },

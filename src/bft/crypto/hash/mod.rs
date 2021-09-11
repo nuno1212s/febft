@@ -6,6 +6,8 @@ mod ring_sha2;
 #[cfg(feature = "crypto_hash_blake3_blake3")]
 mod blake3_blake3;
 
+use std::fmt;
+
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
@@ -93,6 +95,13 @@ impl Digest {
 impl AsRef<[u8]> for Digest {
     fn as_ref(&self) -> &[u8] {
         self.inner.as_ref()
+    }
+}
+
+impl fmt::Debug for Digest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let d = self.as_ref();
+        write!(f, "{:02x}{:02x}{:02x}{:02x}", d[0], d[1], d[2], d[3])
     }
 }
 

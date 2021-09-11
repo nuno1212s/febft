@@ -54,6 +54,11 @@ impl<T> ChannelRx<T> {
             .take(up_to);
         buf.extend(messages);
     }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
 }
 
 impl<'a, T> Future for ChannelRxFut<'a, T> {

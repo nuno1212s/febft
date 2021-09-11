@@ -491,6 +491,14 @@ impl<S, O, P> Log<S, O, P> {
         self.deciding.len()
     }
 
+    pub fn dec(&self) -> &HashMap<Digest, StoredMessage<RequestMessage<O>>> {
+        &self.deciding
+    }
+
+    pub fn req(&self) -> &HashMap<Digest, StoredMessage<RequestMessage<O>>> {
+        &self.requests
+    }
+
     /// Creates a new message log.
     ///
     /// The value `batch_size` represents the maximum number of

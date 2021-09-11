@@ -348,7 +348,7 @@ impl<S> Synchronizer<S>
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
+    Request<S>: Send + Clone + std::fmt::Debug + 'static,
     Reply<S>: Send + 'static,
 {
     pub fn new(timeout_dur: Duration, view: ViewInfo) -> Self {
@@ -1287,7 +1287,7 @@ fn signed_collects<S>(
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
+    Request<S>: Send + Clone + std::fmt::Debug + 'static,
     Reply<S>: Send + 'static,
 {
     collects
@@ -1303,7 +1303,7 @@ fn validate_signature<'a, S, M>(
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
+    Request<S>: Send + Clone + std::fmt::Debug + 'static,
     Reply<S>: Send + 'static,
 {
     let wm = match WireMessage::from_parts(*stored.header(), &[]) {
@@ -1328,7 +1328,7 @@ where
     I: Iterator<Item = &'a StoredMessage<ViewChangeMessage<Request<S>>>>,
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
+    Request<S>: Send + Clone + std::fmt::Debug + 'static,
     Reply<S>: Send + 'static,
 {
     collect_data(collects)

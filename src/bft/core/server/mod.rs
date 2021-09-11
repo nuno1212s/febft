@@ -156,7 +156,7 @@ impl<S> Replica<S>
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
+    Request<S>: Send + Clone + std::fmt::Debug + 'static,
     Reply<S>: Send + 'static,
 {
     /// Bootstrap a replica in `febft`.

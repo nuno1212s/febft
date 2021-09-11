@@ -83,7 +83,7 @@ pub fn install_recovery_state<S>(
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
+    Request<S>: Send + Clone + std::fmt::Debug + 'static,
     Reply<S>: Send + 'static,
 {
     // TODO: maybe try to optimize this, to avoid clone(),
@@ -220,7 +220,7 @@ impl<S> CollabStateTransfer<S>
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
+    Request<S>: Send + Clone + std::fmt::Debug + 'static,
     Reply<S>: Send + 'static,
 {
     /// Craete a new instance of `CollabStateTransfer`.

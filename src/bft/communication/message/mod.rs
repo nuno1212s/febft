@@ -53,6 +53,7 @@ pub type StoredSerializedSystemMessage<D> = StoredMessage<
     >
 >;
 
+#[derive(Debug)]
 pub struct SerializedMessage<M> {
     original: M,
     raw: Vec<u8>,
@@ -78,7 +79,7 @@ impl<M> SerializedMessage<M> {
 
 /// Contains a system message as well as its respective header.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct StoredMessage<M> {
     header: Header,
     message: M,
@@ -370,7 +371,7 @@ impl<S, O> CstMessage<S, O> {
 /// The `O` type argument symbolizes the client operation to be performed
 /// over the replicated state.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RequestMessage<O> {
     operation: O,
 }

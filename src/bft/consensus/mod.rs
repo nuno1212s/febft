@@ -212,7 +212,7 @@ impl<S> Consensus<S>
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
+    Request<S>: Send + Clone + std::fmt::Debug + 'static,
     Reply<S>: Send + 'static,
 {
     /// Starts a new consensus protocol tracker.
@@ -370,6 +370,7 @@ where
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.pre_prepares)
             },
             ProtoPhase::PreparingRequests => {
+                eprintln!("{:?} MISSING => M={:?} D={:?} R={:?}", self.id, self.missing_requests, log.dec().keys().collect::<Vec<_>>(), log.req().keys().collect::<Vec<_>>());
                 let iterator = self.missing_requests
                     .iter()
                     .enumerate()
