@@ -29,8 +29,6 @@ run the new view change. is this the correct behavior?
 
 ## todo
 
-* requests are concurrently added to the request queue, and
-  don't go through the master channel (use Mutex)
 * send_node on execution layer, so we don't need to go
   through the master channel to send replies to clients
 * `PRE-PREPARE` messages include the request bodies, rather than
@@ -39,6 +37,8 @@ run the new view change. is this the correct behavior?
       the correctness of the sound predicate from Cachin, if
       the leader is forging requests; read BFT-SMaRt code again,
       check if they consult the log for the existence of these reqs
+* requests are concurrently added to the request queue, and
+  don't go through the master channel (use Mutex)
 * maybe replicas use non-async communication
     + BFT-SMaRt has a send thread, so we will probably
       disregard this change
