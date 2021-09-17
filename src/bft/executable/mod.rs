@@ -105,6 +105,19 @@ pub trait Service {
     ) -> Reply<Self>;
 
     /// Much like `update()`, but processes a batch of requests.
+    ///
+    /// If `update_batch()` is defined by the user, then `update()` may
+    /// simply be defined as such:
+    ///
+    /// ```rust
+    /// fn update(
+    ///     &mut self,
+    ///     state: &mut State<Self>,
+    ///     request: Request<Self>,
+    /// ) -> Reply<Self> {
+    ///     unimplemented!()
+    /// }
+    /// ```
     fn update_batch(
         &mut self,
         state: &mut State<Self>,
