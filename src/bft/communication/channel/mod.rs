@@ -218,9 +218,11 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
         let message = select! {
             result = self.consensus.recv() => {
                 let (h, c) = result?.into_inner();
+                eprintln!("PULLING from consensus ({:?})", c);
                 Message::System(h, SystemMessage::Consensus(c))
             },
             result = self.requests.recv() => {
+                eprintln!("PULLING from requests");
                 match batch.and_then(|size| size.checked_sub(1)) {
                     Some(size) => {
                         let stored = result?;
@@ -240,10 +242,12 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
                 }
             },
             result = self.replies.recv() => {
+                eprintln!("PULLING from replies");
                 let (h, r) = result?.into_inner();
                 Message::System(h, SystemMessage::Reply(r))
             },
             result = self.other.recv() => {
+                eprintln!("PULLING from other");
                 let message = result?;
                 message
             },

@@ -391,7 +391,7 @@ pub struct ReplyMessage<P> {
 /// Different types of consensus messages are represented in the `ConsensusMessageKind`
 /// type.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ConsensusMessage {
     seq: SeqNo,
     view: SeqNo,
@@ -400,7 +400,7 @@ pub struct ConsensusMessage {
 
 /// Represents one of many different consensus stages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum ConsensusMessageKind {
     /// Pre-prepare a request, according to the BFT consensus protocol.
     ///

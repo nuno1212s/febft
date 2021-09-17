@@ -208,6 +208,15 @@ macro_rules! extract_msg {
     };
 }
 
+macro_rules! debug_msg {
+    ($n:expr, $m:expr) => {
+        eprintln!("From {:?} => {:?}", $n.id(), match $m {
+            SystemMessage::Consensus(ref m) => m,
+            _ => unreachable!(),
+        })
+    }
+}
+
 impl<S> Consensus<S>
 where
     S: Service + Send + 'static,
@@ -289,6 +298,7 @@ where
             ConsensusMessageKind::PrePrepare(digests),
         ));
         let targets = NodeId::targets(0..synchronizer.view().params().n());
+        debug_msg!(node, message);
         node.broadcast(message, targets);
     }
 
@@ -571,6 +581,7 @@ where
                         ConsensusMessageKind::Prepare(self.current_digest.clone()),
                     ));
                     let targets = NodeId::targets(0..synchronizer.view().params().n());
+                    debug_msg!(node, message);
                     node.broadcast(message, targets);
                 }
                 // add message to the log
@@ -641,6 +652,7 @@ where
                     if speculative_commits.len() == synchronizer.view().params().n() {
                         // TODO: make sure the COMMIT messages have the same digest
                         // as the current one
+                        eprintln!("From {:?} => {} speculative commits", node.id(), speculative_commits.len());
                         node.broadcast_serialized(speculative_commits);
                     } else {
                         let message = SystemMessage::Consensus(ConsensusMessage::new(
@@ -649,6 +661,7 @@ where
                             ConsensusMessageKind::Commit(self.current_digest.clone()),
                         ));
                         let targets = NodeId::targets(0..synchronizer.view().params().n());
+                        debug_msg!(node, message);
                         node.broadcast_signed(message, targets);
                     }
 
