@@ -103,6 +103,23 @@ pub trait Service {
         state: &mut State<Self>,
         request: Request<Self>,
     ) -> Reply<Self>;
+
+    /// Much like `update()`, but processes a batch of requests.
+    fn update_batch(
+        &mut self,
+        state: &mut State<Self>,
+        batch: UpdateBatch<Request<Self>>,
+    ) -> UpdateBatchReplies<Reply<Self>> {
+        let mut reply_batch = UpdateBatchReplies::with_capacity(batch.len());
+
+        for update in batch.into_inner() {
+            let (peer_id, dig, req) = update.into_inner();
+            let reply = self.update(state, req);
+            reply_batch.add(peer_id, dig, reply);
+        }
+
+        reply_batch
+    }
 }
 
 /// Stateful data of the task responsible for executing
@@ -196,13 +213,7 @@ where
                         }
                     },
                     ExecutionRequest::Update(batch) => {
-                        let mut reply_batch = UpdateBatchReplies::with_capacity(batch.len());
-
-                        for update in batch.into_inner() {
-                            let (peer_id, dig, req) = update.into_inner();
-                            let reply = exec.service.update(&mut exec.state, req);
-                            reply_batch.add(peer_id, dig, reply);
-                        }
+                        let reply_batch = exec.service.update_batch(&mut exec.state, batch);
 
                         // deliver replies
                         let mut system_tx = exec.system_tx.clone();
