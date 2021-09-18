@@ -130,6 +130,10 @@ impl From<NodeId> for u32 {
 // hashmap between two async tasks on the client
 #[derive(Clone)]
 enum PeerTx {
+    // NOTE: comments below are invalid because of the changes we made to
+    // the research branch; we now share a `SendNode` with the execution
+    // layer, to allow faster reply delivery!
+    //
     // clients need shared access to the hashmap; the `Arc` on the second
     // lock allows us to take ownership of a copy of the socket, so we
     // don't block the thread with the guard of the first lock waiting
@@ -137,7 +141,7 @@ enum PeerTx {
     Client(Arc<RwLock<HashMap<NodeId, Arc<Mutex<SecureSocketSend>>>>>),
     // replicas don't need shared access to the hashmap, so
     // we only need one lock (to restrict I/O to one producer at a time)
-    Server(HashMap<NodeId, Arc<Mutex<SecureSocketSend>>>),
+    Server(Arc<RwLock<HashMap<NodeId, Arc<Mutex<SecureSocketSend>>>>>),
 }
 
 struct NodeShared {
@@ -267,7 +271,7 @@ where
         let peer_tx = if id >= cfg.first_cli {
             PeerTx::Client(Arc::new(RwLock::new(collections::hash_map())))
         } else {
-            PeerTx::Server(collections::hash_map())
+            PeerTx::Server(Arc::new(RwLock::new(collections::hash_map())))
         };
         let shared = Arc::new(NodeShared{
             my_key: cfg.sk,
@@ -595,12 +599,13 @@ where
                     &mut other_send_tos,
                 );
             },
-            PeerTx::Server(ref map) => {
+            PeerTx::Server(ref lock) => {
+                let map = lock.read();
                 Self::create_send_tos(
                     my_id,
                     tx,
                     shared,
-                    map,
+                    &*map,
                     targets,
                     &mut my_send_to,
                     &mut other_send_tos,
@@ -633,7 +638,8 @@ where
                     &mut other_send_tos,
                 );
             },
-            PeerTx::Server(ref map) => {
+            PeerTx::Server(ref lock) => {
+                let map = lock.read();
                 Self::create_serialized_send_tos(
                     my_id,
                     tx,
@@ -733,7 +739,8 @@ where
                     let map = lock.read();
                     Arc::clone(&map[&peer_id])
                 },
-                PeerTx::Server(ref map) => {
+                PeerTx::Server(ref lock) => {
+                    let map = lock.read();
                     Arc::clone(&map[&peer_id])
                 },
             };
@@ -756,7 +763,8 @@ where
     /// Method called upon a `Message::ConnectedTx`.
     pub fn handle_connected_tx(&mut self, peer_id: NodeId, sock: SecureSocketSend) {
         match &mut self.peer_tx {
-            PeerTx::Server(ref mut peer_tx) => {
+            PeerTx::Server(ref lock) => {
+                let mut peer_tx = lock.write();
                 peer_tx.insert(peer_id, Arc::new(Mutex::new(sock)));
             },
             PeerTx::Client(ref lock) => {
@@ -769,10 +777,14 @@ where
     /// Method called upon a `Message::ConnectedRx`.
     pub fn handle_connected_rx(&mut self, peer_id: NodeId, mut sock: SecureSocketRecv) {
         // we are a server node
-        if let PeerTx::Server(ref peer_tx) = &self.peer_tx {
+        if let PeerTx::Server(ref lock) = &self.peer_tx {
+            let peer_tx = lock.read();
+
             // the node whose conn we accepted is a client
             // and we aren't connected to it yet
             if peer_id >= self.first_cli && !peer_tx.contains_key(&peer_id) {
+                drop(peer_tx);
+
                 // fetch client address
                 //
                 // FIXME: this line can crash the program if the user
