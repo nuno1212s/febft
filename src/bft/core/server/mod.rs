@@ -177,13 +177,13 @@ where
 
         // start executor
         let executor = Executor::new(
-            node.master_channel(),
+            node.master_channel().clone(),
             service,
         )?;
 
         // start timeouts handler
         let timeouts = Timeouts::new(
-            node.master_channel(),
+            node.master_channel().clone(),
         );
 
         // TODO: get log from persistent storage

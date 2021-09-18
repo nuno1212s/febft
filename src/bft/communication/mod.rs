@@ -363,8 +363,8 @@ where
     }
 
     /// Returns a handle to the master channel of this `Node`.
-    pub fn master_channel(&self) -> MessageChannelTx<D::State, D::Request, D::Reply> {
-        self.my_tx.clone()
+    pub fn master_channel(&self) -> &MessageChannelTx<D::State, D::Request, D::Reply> {
+        &self.my_tx
     }
 
     /// Send a `SystemMessage` to a single destination.
