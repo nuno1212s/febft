@@ -33,6 +33,9 @@ run the new view change. is this the correct behavior?
 
 * `PRE-PREPARE` messages include the request bodies, rather than
   just their hash digests
+    + clients should maintain a separate sequence number used
+      to discard requests that have already been processed,
+      the operation id as used in BFT-SMaRt
     + blindly add these requests to the log..? this may affect
       the correctness of the sound predicate from Cachin, if
       the leader is forging requests; read BFT-SMaRt code again,
