@@ -26,11 +26,11 @@ run the new view change. is this the correct behavior?
   per node id
 * remove TLS from clients
     + do we need to check hmacs?
+* send_node on execution layer, so we don't need to go
+  through the master channel to send replies to clients
 
 ## todo
 
-* send_node on execution layer, so we don't need to go
-  through the master channel to send replies to clients
 * `PRE-PREPARE` messages include the request bodies, rather than
   just their hash digests
     + blindly add these requests to the log..? this may affect
