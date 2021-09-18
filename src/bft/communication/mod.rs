@@ -1055,6 +1055,11 @@ where
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
+    /// Check the `master_channel()` documentation for `Node`.
+    pub fn master_channel(&self) -> &MessageChannelTx<D::State, D::Request, D::Reply> {
+        &self.my_tx
+    }
+
     /// Check the `send()` documentation for `Node`.
     pub fn send(
         &mut self,
