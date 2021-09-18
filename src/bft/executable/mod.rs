@@ -6,12 +6,18 @@ use std::sync::mpsc;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
 use crate::bft::crypto::hash::Digest;
-use crate::bft::communication::NodeId;
-use crate::bft::communication::message::Message;
-use crate::bft::communication::channel::MessageChannelTx;
 use crate::bft::communication::serialize::{
     //ReplicaDurability,
     SharedData,
+};
+use crate::bft::communication::message::{
+    Message,
+    ReplyMessage,
+    SystemMessage,
+};
+use crate::bft::communication::{
+    NodeId,
+    SendNode,
 };
 
 /// Represents a single client update request, to be executed.
@@ -141,7 +147,7 @@ pub struct Executor<S: Service> {
     service: S,
     state: State<S>,
     e_rx: mpsc::Receiver<ExecutionRequest<State<S>, Request<S>>>,
-    system_tx: MessageChannelTx<State<S>, Request<S>, Reply<S>>,
+    send_node: SendNode<S::Data>,
 }
 
 /// Represents a handle to the client request executor.
@@ -195,10 +201,8 @@ where
     Reply<S>: Send + 'static,
 {
     /// Spawns a new service executor into the async runtime.
-    ///
-    /// A handle to the master message channel, `system_tx`, should be provided.
     pub fn new(
-        system_tx: MessageChannelTx<State<S>, Request<S>, Reply<S>>,
+        send_node: SendNode<S::Data>,
         mut service: S,
     ) -> Result<ExecutorHandle<S>> {
         let (e_tx, e_rx) = mpsc::channel();
@@ -206,7 +210,7 @@ where
         let state = service.initial_state()?;
         let mut exec = Executor {
             e_rx,
-            system_tx,
+            send_node,
             service,
             state,
         };
@@ -229,31 +233,16 @@ where
                         let reply_batch = exec.service.update_batch(&mut exec.state, batch);
 
                         // deliver replies
-                        let mut system_tx = exec.system_tx.clone();
-                        rt::spawn(async move {
-                            let m = Message::ExecutionFinished(reply_batch);
-                            system_tx.send(m).await.unwrap();
-                        });
+                        exec.execution_finished(reply_batch);
                     },
                     ExecutionRequest::UpdateAndGetAppstate(batch) => {
-                        let mut reply_batch = UpdateBatchReplies::with_capacity(batch.len());
+                        let reply_batch = exec.service.update_batch(&mut exec.state, batch);
 
-                        for update in batch.into_inner() {
-                            let (peer_id, dig, req) = update.into_inner();
-                            let reply = exec.service.update(&mut exec.state, req);
-                            reply_batch.add(peer_id, dig, reply);
-                        }
-                        let cloned_state = exec.state.clone();
+                        // deliver checkpoint state to the replica
+                        exec.deliver_checkpoint_state();
 
                         // deliver replies
-                        let mut system_tx = exec.system_tx.clone();
-                        rt::spawn(async move {
-                            let m = Message::ExecutionFinishedWithAppstate(
-                                reply_batch,
-                                cloned_state,
-                            );
-                            system_tx.send(m).await.unwrap();
-                        });
+                        exec.execution_finished(reply_batch);
                     },
                     ExecutionRequest::Read(_peer_id) => {
                         unimplemented!()
@@ -263,6 +252,41 @@ where
         });
 
         Ok(ExecutorHandle { e_tx })
+    }
+
+    fn deliver_checkpoint_state(&self) {
+        let cloned_state = self.state.clone();
+        let mut system_tx = self.send_node.master_channel().clone();
+
+        rt::spawn(async move {
+            let m = Message::ExecutionFinishedWithAppstate(cloned_state);
+            system_tx.send(m).await.unwrap();
+        });
+    }
+
+    fn execution_finished(&mut self, batch: UpdateBatchReplies<Reply<S>>) {
+        // sort batch by node ids
+        let mut batch = batch.into_inner();
+        batch.sort_unstable_by_key(|update_reply| update_reply.to());
+
+        // keep track of the last node we sent a reply to,
+        // so we can flush writes when this value changes
+        let mut last_node = batch[0].to();
+        let last_reply_index = batch.len() - 1;
+
+        // deliver replies to clients
+        for (i, update_reply) in batch.into_iter().enumerate() {
+            let (peer_id, digest, payload) = update_reply.into_inner();
+            let message = SystemMessage::Reply(ReplyMessage::new(
+                digest,
+                payload,
+            ));
+
+            let flush = peer_id != last_node || i == last_reply_index;
+            last_node = peer_id;
+
+            self.send_node.send(message, peer_id, flush);
+        }
     }
 }
 

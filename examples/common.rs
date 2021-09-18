@@ -85,8 +85,7 @@ pub fn debug_msg(m: Message<f32, Action, f32>) -> &'static str {
         Message::ConnectedRx(_, _) => "CRx",
         Message::DisconnectedTx(_) => "DTx",
         Message::DisconnectedRx(_) => "DRx",
-        Message::ExecutionFinished(_) => "Exe",
-        Message::ExecutionFinishedWithAppstate(_, _) => "ExA",
+        Message::ExecutionFinishedWithAppstate(_) => "ExA",
         Message::Timeout(_) => "Tim",
     }
 }

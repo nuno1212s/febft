@@ -34,7 +34,6 @@ use crate::bft::communication::socket::{
     SecureSocketRecv,
 };
 use crate::bft::consensus::log::CollectData;
-use crate::bft::executable::UpdateBatchReplies;
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::NodeId;
 use crate::bft::timeouts::TimeoutKind;
@@ -210,15 +209,11 @@ pub enum Message<S, O, P> {
     ///
     /// The id is only equal to `None` during a `Node` bootstrap process.
     DisconnectedRx(Option<NodeId>),
-    /// A batch of client requests has finished executing.
-    ///
-    /// The type of the payload delivered to the clients is `P`.
-    ExecutionFinished(UpdateBatchReplies<P>),
     /// Same as `Message::ExecutionFinished`, but includes a snapshot of
     /// the application state.
     ///
     /// This is useful for local checkpoints.
-    ExecutionFinishedWithAppstate(UpdateBatchReplies<P>, S),
+    ExecutionFinishedWithAppstate(S),
     /// We received a timeout from the timeouts layer.
     Timeout(TimeoutKind),
 }
@@ -841,10 +836,7 @@ impl<S, O, P> Message<S, O, P> {
             Message::DisconnectedRx(_) =>
                 Err("Expected System found DisconnectedRx")
                     .wrapped(ErrorKind::CommunicationMessage),
-            Message::ExecutionFinished(_) =>
-                Err("Expected System found ExecutionFinished")
-                    .wrapped(ErrorKind::CommunicationMessage),
-            Message::ExecutionFinishedWithAppstate(_, _) =>
+            Message::ExecutionFinishedWithAppstate(_) =>
                 Err("Expected System found ExecutionFinishedWithAppstate")
                     .wrapped(ErrorKind::CommunicationMessage),
             Message::Timeout(_) =>

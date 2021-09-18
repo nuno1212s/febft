@@ -44,7 +44,6 @@ use crate::bft::executable::{
     Service,
     Executor,
     ExecutorHandle,
-    UpdateBatchReplies,
 };
 use crate::bft::communication::{
     Node,
@@ -54,7 +53,6 @@ use crate::bft::communication::{
 use crate::bft::communication::message::{
     ForwardedRequestsMessage,
     SystemMessage,
-    ReplyMessage,
     Message,
     Header,
 };
@@ -177,7 +175,7 @@ where
 
         // start executor
         let executor = Executor::new(
-            node.master_channel().clone(),
+            node.send_node(),
             service,
         )?;
 
@@ -339,10 +337,9 @@ where
             Message::Timeout(timeout_kind) => {
                 self.timeout_received(timeout_kind);
             },
-            Message::ExecutionFinished(batch) | Message::ExecutionFinishedWithAppstate(batch, _) => {
+            Message::ExecutionFinishedWithAppstate(_) => {
                 // TODO: verify if ignoring the checkpoint state while
                 // receiving state from peer nodes is correct
-                self.execution_finished(batch);
             },
             Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
             Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
@@ -439,11 +436,8 @@ where
             Message::Timeout(timeout_kind) => {
                 self.timeout_received(timeout_kind);
             },
-            Message::ExecutionFinished(batch) => {
-                self.execution_finished(batch);
-            },
-            Message::ExecutionFinishedWithAppstate(batch, appstate) => {
-                self.execution_finished_with_appstate(batch, appstate)?;
+            Message::ExecutionFinishedWithAppstate(appstate) => {
+                self.execution_finished_with_appstate(appstate)?;
             },
             Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
             Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
@@ -581,11 +575,8 @@ where
             Message::Timeout(timeout_kind) => {
                 self.timeout_received(timeout_kind);
             },
-            Message::ExecutionFinished(batch) => {
-                self.execution_finished(batch);
-            },
-            Message::ExecutionFinishedWithAppstate(batch, appstate) => {
-                self.execution_finished_with_appstate(batch, appstate)?;
+            Message::ExecutionFinishedWithAppstate(appstate) => {
+                self.execution_finished_with_appstate(appstate)?;
             },
             Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
             Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
@@ -597,38 +588,11 @@ where
         Ok(())
     }
 
-    fn execution_finished(&mut self, batch: UpdateBatchReplies<Reply<S>>) {
-        // sort batch by node ids
-        let mut batch = batch.into_inner();
-        batch.sort_unstable_by_key(|update_reply| update_reply.to());
-
-        // keep track of the last node we sent a reply to,
-        // so we can flush writes when this value changes
-        let mut last_node = batch[0].to();
-        let last_reply_index = batch.len() - 1;
-
-        // deliver replies to clients
-        for (i, update_reply) in batch.into_iter().enumerate() {
-            let (peer_id, digest, payload) = update_reply.into_inner();
-            let message = SystemMessage::Reply(ReplyMessage::new(
-                digest,
-                payload,
-            ));
-
-            let flush = peer_id != last_node || i == last_reply_index;
-            last_node = peer_id;
-
-            self.node.send(message, peer_id, flush);
-        }
-    }
-
     fn execution_finished_with_appstate(
         &mut self,
-        batch: UpdateBatchReplies<Reply<S>>,
         appstate: State<S>,
     ) -> Result<()> {
         self.log.finalize_checkpoint(appstate)?;
-        self.execution_finished(batch);
         if self.cst.needs_checkpoint() {
             // status should return CstStatus::Nil,
             // which does not need to be handled
