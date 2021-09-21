@@ -36,6 +36,7 @@ run the new view change. is this the correct behavior?
     + clients should maintain a separate sequence number used
       to discard requests that have already been processed,
       the operation id as used in BFT-SMaRt
+        - use operation id in place of prng?
     + blindly add these requests to the log..? this may affect
       the correctness of the sound predicate from Cachin, if
       the leader is forging requests; read BFT-SMaRt code again,
