@@ -33,7 +33,7 @@ run the new view change. is this the correct behavior?
 
 * `PRE-PREPARE` messages include the request bodies, rather than
   just their hash digests
-    + clients should maintain a separate sequence number used
+    + TODO: clients should maintain a separate sequence number used
       to discard requests that have already been processed,
       the operation id as used in BFT-SMaRt
         - use operation id in place of prng?
