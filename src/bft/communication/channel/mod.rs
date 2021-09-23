@@ -127,7 +127,7 @@ pub struct MessageChannelTx<S, O, P> {
     other: ChannelTx<Message<S, O, P>>,
     requests: ChannelTx<(Header, RequestMessage<O>)>,
     replies: ChannelTx<(Header, ReplyMessage<P>)>,
-    consensus: ChannelTx<(Header, ConsensusMessage)>,
+    consensus: ChannelTx<(Header, ConsensusMessage<O>)>,
 }
 
 /// Represents the receiving half of a `Message` channel.
@@ -135,7 +135,7 @@ pub struct MessageChannelRx<S, O, P> {
     other: ChannelRx<Message<S, O, P>>,
     requests: ChannelRx<(Header, RequestMessage<O>)>,
     replies: ChannelRx<(Header, ReplyMessage<P>)>,
-    consensus: ChannelRx<(Header, ConsensusMessage)>,
+    consensus: ChannelRx<(Header, ConsensusMessage<O>)>,
 }
 
 /// Creates a new channel that can queue up to `bound` messages

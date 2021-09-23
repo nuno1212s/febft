@@ -1288,7 +1288,7 @@ fn collect_data<'a, O: 'a>(
         })
 }
 
-fn normalized_collects<'a, O>(
+fn normalized_collects<'a, O: 'a>(
     in_exec: SeqNo,
     collects: impl Iterator<Item = &'a CollectData<O>>,
 ) -> impl Iterator<Item = Option<&'a CollectData<O>>> {

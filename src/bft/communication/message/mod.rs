@@ -304,7 +304,7 @@ impl<O> ViewChangeMessage<O> {
 #[derive(Clone)]
 pub enum ViewChangeMessageKind<O> {
     Stop(Vec<StoredMessage<RequestMessage<O>>>),
-    StopData(CollectData),
+    StopData(CollectData<O>),
     Sync(LeaderCollects<O>),
 }
 
@@ -452,7 +452,7 @@ impl<P> ReplyMessage<P> {
     }
 }
 
-impl Orderable for ConsensusMessage {
+impl<O> Orderable for ConsensusMessage<O> {
     /// Returns the sequence number of this consensus message.
     fn sequence_number(&self) -> SeqNo {
         self.seq
