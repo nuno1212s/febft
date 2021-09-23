@@ -304,7 +304,7 @@ where
     /// change protocol.
     pub fn forge_propose(
         &self,
-        requests: Vec<Digest>,
+        requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         synchronizer: &Synchronizer<S>,
     ) -> SystemMessage<State<S>, Request<S>, Reply<S>> {
         SystemMessage::Consensus(ConsensusMessage::new(
@@ -502,7 +502,7 @@ where
                     },
                     ConsensusMessageKind::PrePrepare(request_batch) => {
                         let digests = request_batch_received(
-                            request_batch,
+                            request_batch.clone(),
                             synchronizer,
                             timeouts,
                             log,

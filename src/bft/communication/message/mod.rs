@@ -491,7 +491,7 @@ impl<O> ConsensusMessage<O> {
 
     /// Takes the proposed client requests embedded in this consensus message,
     /// if they are available.
-    pub fn take_proposed_requests(&mut self) -> Option<Vec<Digest>> {
+    pub fn take_proposed_requests(&mut self) -> Option<Vec<StoredMessage<RequestMessage<O>>>> {
         let kind = std::mem::replace(
             &mut self.kind,
             ConsensusMessageKind::PrePrepare(Vec::new()),

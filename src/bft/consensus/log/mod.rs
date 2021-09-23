@@ -207,7 +207,7 @@ impl<O> CollectData<O> {
     }
 }
 
-impl<O> DecisionLog<O> {
+impl<O: Clone> DecisionLog<O> {
     /// Returns a brand new `DecisionLog`.
     pub fn new() -> Self {
         Self {
@@ -483,7 +483,7 @@ pub struct Log<S, O, P> {
 // TODO:
 // - garbage collect the log
 // - save the log to persistent storage
-impl<S, O, P> Log<S, O, P> {
+impl<S, O: Clone, P> Log<S, O, P> {
     /// Creates a new message log.
     ///
     /// The value `batch_size` represents the maximum number of
