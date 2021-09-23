@@ -272,7 +272,7 @@ where
     /// in the phase `ProtoPhase::Init`.
     pub fn propose(
         &mut self,
-        digests: Vec<Digest>,
+        requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         synchronizer: &Synchronizer<S>,
         node: &mut Node<S::Data>,
     ) {
@@ -286,7 +286,7 @@ where
         let message = SystemMessage::Consensus(ConsensusMessage::new(
             self.sequence_number(),
             synchronizer.view().sequence_number(),
-            ConsensusMessageKind::PrePrepare(digests),
+            ConsensusMessageKind::PrePrepare(requests),
         ));
         let targets = NodeId::targets(0..synchronizer.view().params().n());
         node.broadcast(message, targets);
@@ -711,7 +711,7 @@ impl<S> Deref for Consensus<S>
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
-    Request<S>: Send + 'static,
+    Request<S>: Send + Clone + 'static,
     Reply<S>: Send + 'static,
 {
     type Target = TboQueue<Request<S>>;
@@ -726,7 +726,7 @@ impl<S> DerefMut for Consensus<S>
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
-    Request<S>: Send + 'static,
+    Request<S>: Send + Clone + 'static,
     Reply<S>: Send + 'static,
 {
     #[inline]
@@ -744,7 +744,7 @@ fn request_batch_received<S>(
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
-    Request<S>: Send + 'static,
+    Request<S>: Send + Clone + 'static,
     Reply<S>: Send + 'static,
 {
     synchronizer.watch_request_batch(

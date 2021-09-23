@@ -474,8 +474,8 @@ where
                 Message::System(h, SystemMessage::Consensus(m))
             },
             ConsensusPollStatus::TryProposeAndRecv => {
-                if let Some(digests) = self.log.next_batch() {
-                    self.consensus.propose(digests, &self.synchronizer, &mut self.node);
+                if let Some(requests) = self.log.next_batch() {
+                    self.consensus.propose(requests, &self.synchronizer, &mut self.node);
                 }
                 self.node.receive().await?
             },

@@ -71,7 +71,7 @@ use crate::bft::executable::{
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct LeaderCollects<O> {
-    proposed: Vec<Digest>,
+    proposed: Vec<StoredMessage<RequestMessage<O>>>,
     collects: Vec<StoredMessage<ViewChangeMessage<O>>>,
 }
 
@@ -85,22 +85,22 @@ impl<O> LeaderCollects<O> {
     }
 
     /// Gives up ownership of the inner values of this `LeaderCollects`.
-    pub fn into_inner(self) -> (Vec<Digest>, Vec<StoredMessage<ViewChangeMessage<O>>>) {
+    pub fn into_inner(self) -> (Vec<StoredMessage<RequestMessage<O>>>, Vec<StoredMessage<ViewChangeMessage<O>>>) {
         (self.proposed, self.collects)
     }
 }
 
-struct FinalizeState {
+struct FinalizeState<O> {
     curr_cid: SeqNo,
-    proposed: Vec<Digest>,
+    proposed: Vec<StoredMessage<RequestMessage<O>>>,
     sound: Sound,
 }
 
 
-enum FinalizeStatus {
+enum FinalizeStatus<O> {
     NoValue,
-    RunCst(FinalizeState),
-    Commit(FinalizeState),
+    RunCst(FinalizeState<O>),
+    Commit(FinalizeState<O>),
 }
 
 enum Sound {
@@ -284,7 +284,7 @@ pub struct Synchronizer<S: Service> {
     collects: HashMap<NodeId, StoredMessage<ViewChangeMessage<Request<S>>>>,
     watching: HashMap<Digest, TimeoutPhase>,
     tbo: TboQueue<Request<S>>,
-    finalize_state: Option<FinalizeState>,
+    finalize_state: Option<FinalizeState<Request<S>>>,
 }
 
 macro_rules! extract_msg {
@@ -993,11 +993,11 @@ where
     // values with immutable references, to allow borrowing data mutably
     fn pre_finalize(
         &self,
-        state: FinalizeState,
+        state: FinalizeState<Request<S>>,
         _proof: Option<&Proof<Request<S>>>,
         _normalized_collects: Vec<Option<&CollectData<Request<S>>>>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
-    ) -> FinalizeStatus {
+    ) -> FinalizeStatus<Request<S>> {
         if let ProtoPhase::Syncing = self.phase {
             //
             // NOTE: this code will not run when we resume
@@ -1017,7 +1017,7 @@ where
 
     fn finalize(
         &mut self,
-        FinalizeState { curr_cid, proposed, sound }: FinalizeState,
+        FinalizeState { curr_cid, proposed, sound }: FinalizeState<Request<S>>,
         log: &mut Log<State<S>, Request<S>, Reply<S>>,
         consensus: &mut Consensus<S>,
         node: &mut Node<S::Data>,

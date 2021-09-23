@@ -581,7 +581,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
     }
 
     /// Retrieves the next batch of requests available for proposing, if any.
-    pub fn next_batch(&mut self) -> Option<Vec<Digest>> {
+    pub fn next_batch(&mut self) -> Option<Vec<StoredMessage<RequestMessage<O>>>> {
         let (digest, stored) = self.requests.pop_front()?;
         self.deciding.insert(digest, stored);
         // TODO:
@@ -591,8 +591,8 @@ impl<S, O: Clone, P> Log<S, O, P> {
         // as only the leader will actually propose!
         if self.deciding.len() >= self.batch_size {
             Some(self.deciding
-                .keys()
-                .copied()
+                .values()
+                .cloned()
                 .take(self.batch_size)
                 .collect())
         } else {
@@ -601,10 +601,10 @@ impl<S, O: Clone, P> Log<S, O, P> {
     }
 
     /// Retrieves a batch of requests to be proposed during a view change.
-    pub fn view_change_propose(&self) -> Vec<Digest> {
+    pub fn view_change_propose(&self) -> Vec<StoredMessage<RequestMessage<O>>> {
         self.requests
-            .keys()
-            .chain(self.deciding.keys())
+            .values()
+            .chain(self.deciding.values())
             .take(self.batch_size)
             .cloned()
             .collect()
