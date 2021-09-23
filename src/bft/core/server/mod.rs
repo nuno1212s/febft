@@ -526,8 +526,8 @@ where
                         let status = self.consensus.process_message(
                             header,
                             message,
-                            &self.synchronizer,
                             &self.timeouts,
+                            &mut self.synchronizer,
                             &mut self.log,
                             &mut self.node,
                         );

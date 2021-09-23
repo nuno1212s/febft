@@ -334,9 +334,12 @@ where
         let last = &pre_prepares[pre_prepares.len() - 1];
 
         match last.message().kind() {
-            ConsensusMessageKind::PrePrepare(digests) => {
-                self.batch_size = digests.len();
-                (&mut self.current[..digests.len()]).copy_from_slice(&digests[..]);
+            ConsensusMessageKind::PrePrepare(requests) => {
+                self.batch_size = requests.len();
+
+                for (i, stored) in requests.iter().enumerate() {
+                    self.current[i] = stored.header().unique_digest();
+                }
             },
             _ => unreachable!(),
         }
@@ -461,8 +464,8 @@ where
         &'a mut self,
         header: Header,
         message: ConsensusMessage<Request<S>>,
-        synchronizer: &Synchronizer<S>,
         timeouts: &TimeoutsHandle<S>,
+        synchronizer: &mut Synchronizer<S>,
         log: &mut Log<State<S>, Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) -> ConsensusStatus<'a> {
@@ -503,8 +506,8 @@ where
                     ConsensusMessageKind::PrePrepare(request_batch) => {
                         let digests = request_batch_received(
                             request_batch.clone(),
-                            synchronizer,
                             timeouts,
+                            synchronizer,
                             log,
                         );
                         self.batch_size = digests.len();
@@ -737,8 +740,8 @@ where
 
 fn request_batch_received<S>(
     requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
-    synchronizer: &Synchronizer<S>,
     timeouts: &TimeoutsHandle<S>,
+    synchronizer: &mut Synchronizer<S>,
     log: &mut Log<State<S>, Request<S>, Reply<S>>,
 ) -> Vec<Digest>
 where
