@@ -675,7 +675,7 @@ where
                     .map(|seq| SeqNo::from(u32::from(seq) + 1))
                     .unwrap_or(SeqNo::ZERO);
 
-                let normalized_collects: Vec<Option<&CollectData>> = self
+                let normalized_collects: Vec<Option<&CollectData<Request<S>>>> = self
                     .normalized_collects(curr_cid)
                     .collect();
 
@@ -979,13 +979,13 @@ where
 
     // collects whose in execution cid is different from the given `in_exec` become `None`
     #[inline]
-    fn normalized_collects<'a>(&'a self, in_exec: SeqNo) -> impl Iterator<Item = Option<&'a CollectData>> {
+    fn normalized_collects<'a>(&'a self, in_exec: SeqNo) -> impl Iterator<Item = Option<&'a CollectData<Request<S>>>> {
         normalized_collects(in_exec, collect_data(self.collects.values()))
     }
 
     // TODO: quorum sizes may differ when we implement reconfiguration
     #[inline]
-    fn highest_proof<'a>(&'a self, view: ViewInfo, node: &Node<S::Data>) -> Option<&'a Proof> {
+    fn highest_proof<'a>(&'a self, view: ViewInfo, node: &Node<S::Data>) -> Option<&'a Proof<Request<S>>> {
         highest_proof::<S, _>(view, node, self.collects.values())
     }
 
@@ -994,8 +994,8 @@ where
     fn pre_finalize(
         &self,
         state: FinalizeState,
-        _proof: Option<&Proof>,
-        _normalized_collects: Vec<Option<&CollectData>>,
+        _proof: Option<&Proof<Request<S>>>,
+        _normalized_collects: Vec<Option<&CollectData<Request<S>>>>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> FinalizeStatus {
         if let ProtoPhase::Syncing = self.phase {
@@ -1114,9 +1114,9 @@ where
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-fn sound<'a>(
+fn sound<'a, O>(
     curr_view: ViewInfo,
-    normalized_collects: &[Option<&'a CollectData>],
+    normalized_collects: &[Option<&'a CollectData<O>>],
 ) -> Sound {
     // collect timestamps and values
     let mut timestamps = collections::hash_set();
@@ -1159,11 +1159,11 @@ fn sound<'a>(
     Sound::Unbound(unbound(curr_view, normalized_collects))
 }
 
-fn binds(
+fn binds<O>(
     curr_view: ViewInfo,
     ts: SeqNo,
     value: &Digest,
-    normalized_collects: &[Option<&CollectData>],
+    normalized_collects: &[Option<&CollectData<O>>],
 ) -> bool {
     if normalized_collects.len() < curr_view.params().quorum() {
         false
@@ -1173,9 +1173,9 @@ fn binds(
     }
 }
 
-fn unbound(
+fn unbound<O>(
     curr_view: ViewInfo,
-    normalized_collects: &[Option<&CollectData>],
+    normalized_collects: &[Option<&CollectData<O>>],
 ) -> bool {
     if normalized_collects.len() < curr_view.params().quorum() {
         false
@@ -1214,11 +1214,11 @@ fn unbound(
 //
 // therefore, our code *should* be correct :)
 
-fn quorum_highest(
+fn quorum_highest<O>(
     curr_view: ViewInfo,
     ts: SeqNo,
     value: &Digest,
-    normalized_collects: &[Option<&CollectData>],
+    normalized_collects: &[Option<&CollectData<O>>],
 ) -> bool {
     let appears = normalized_collects
         .iter()
@@ -1253,11 +1253,11 @@ fn quorum_highest(
     appears && count >= curr_view.params().quorum()
 }
 
-fn certified_value(
+fn certified_value<O>(
     curr_view: ViewInfo,
     ts: SeqNo,
     value: &Digest,
-    normalized_collects: &[Option<&CollectData>],
+    normalized_collects: &[Option<&CollectData<O>>],
 ) -> bool {
     let count: usize = normalized_collects
         .iter()
@@ -1278,7 +1278,7 @@ fn certified_value(
 
 fn collect_data<'a, O: 'a>(
     collects: impl Iterator<Item = &'a StoredMessage<ViewChangeMessage<O>>>,
-) -> impl Iterator<Item = &'a CollectData> {
+) -> impl Iterator<Item = &'a CollectData<O>> {
     collects
         .filter_map(|stored| {
             match stored.message().kind() {
@@ -1288,10 +1288,10 @@ fn collect_data<'a, O: 'a>(
         })
 }
 
-fn normalized_collects<'a>(
+fn normalized_collects<'a, O>(
     in_exec: SeqNo,
-    collects: impl Iterator<Item = &'a CollectData>,
-) -> impl Iterator<Item = Option<&'a CollectData>> {
+    collects: impl Iterator<Item = &'a CollectData<O>>,
+) -> impl Iterator<Item = Option<&'a CollectData<O>>> {
     collects
         .map(move |collect| {
             if collect.incomplete_proof().executing() == in_exec {
@@ -1345,7 +1345,7 @@ fn highest_proof<'a, S, I>(
     view: ViewInfo,
     node: &Node<S::Data>,
     collects: I,
-) -> Option<&'a Proof>
+) -> Option<&'a Proof<Request<S>>>
 where
     I: Iterator<Item = &'a StoredMessage<ViewChangeMessage<Request<S>>>>,
     S: Service + Send + 'static,

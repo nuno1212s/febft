@@ -100,20 +100,20 @@ impl<S> Checkpoint<S> {
 /// Subset of a `Log`, containing only consensus messages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct DecisionLog {
+pub struct DecisionLog<O> {
     last_exec: Option<SeqNo>,
-    pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
-    prepares: Vec<StoredMessage<ConsensusMessage>>,
-    commits: Vec<StoredMessage<ConsensusMessage>>,
+    pre_prepares: Vec<StoredMessage<ConsensusMessage<O>>>,
+    prepares: Vec<StoredMessage<ConsensusMessage<O>>>,
+    commits: Vec<StoredMessage<ConsensusMessage<O>>>,
 }
 
 /// Represents a single decision from the `DecisionLog`.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct Proof {
-    pre_prepare: StoredMessage<ConsensusMessage>,
-    prepares: Vec<StoredMessage<ConsensusMessage>>,
-    commits: Vec<StoredMessage<ConsensusMessage>>,
+pub struct Proof<O> {
+    pre_prepare: StoredMessage<ConsensusMessage<O>>,
+    prepares: Vec<StoredMessage<ConsensusMessage<O>>>,
+    commits: Vec<StoredMessage<ConsensusMessage<O>>>,
 }
 
 /// Contains a collection of `ViewDecisionPair` values,
@@ -149,19 +149,19 @@ impl WriteSet {
     }
 }
 
-impl Proof {
+impl<O> Proof<O> {
     /// Returns the `PRE-PREPARE` message of this `Proof`.
-    pub fn pre_prepare(&self) -> &StoredMessage<ConsensusMessage> {
+    pub fn pre_prepare(&self) -> &StoredMessage<ConsensusMessage<O>> {
         &self.pre_prepare
     }
 
     /// Returns the `PREPARE` message of this `Proof`.
-    pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage>] {
+    pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
         &self.prepares[..]
     }
 
     /// Returns the `COMMIT` message of this `Proof`.
-    pub fn commits(&self) -> &[StoredMessage<ConsensusMessage>] {
+    pub fn commits(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
         &self.commits[..]
     }
 }
@@ -192,22 +192,22 @@ impl IncompleteProof {
 /// Corresponds to the class of the same name in `BFT-SMaRt`.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct CollectData {
+pub struct CollectData<O> {
     incomplete_proof: IncompleteProof,
-    last_proof: Option<Proof>,
+    last_proof: Option<Proof<O>>,
 }
 
-impl CollectData {
+impl<O> CollectData<O> {
     pub fn incomplete_proof(&self) -> &IncompleteProof {
         &self.incomplete_proof
     }
 
-    pub fn last_proof(&self) -> Option<&Proof> {
+    pub fn last_proof(&self) -> Option<&Proof<O>> {
         self.last_proof.as_ref()
     }
 }
 
-impl DecisionLog {
+impl<O> DecisionLog<O> {
     /// Returns a brand new `DecisionLog`.
     pub fn new() -> Self {
         Self {
@@ -228,24 +228,24 @@ impl DecisionLog {
 
     /// Returns the list of `PRE-PREPARE` messages after the last checkpoint
     /// at the moment of the creation of this `DecisionLog`.
-    pub fn pre_prepares(&self) -> &[StoredMessage<ConsensusMessage>] {
+    pub fn pre_prepares(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
         &self.pre_prepares[..]
     }
 
     /// Returns the list of `PREPARE` messages after the last checkpoint
     /// at the moment of the creation of this `DecisionLog`.
-    pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage>] {
+    pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
         &self.prepares[..]
     }
 
     /// Returns the list of `COMMIT` messages after the last checkpoint
     /// at the moment of the creation of this `DecisionLog`.
-    pub fn commits(&self) -> &[StoredMessage<ConsensusMessage>] {
+    pub fn commits(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
         &self.commits[..]
     }
 
     // TODO: quorum sizes may differ when we implement reconfiguration
-    pub fn collect_data(&self, view: ViewInfo) -> CollectData {
+    pub fn collect_data(&self, view: ViewInfo) -> CollectData<O> {
         CollectData {
             incomplete_proof: self.to_be_decided(view),
             last_proof: self.last_decision(view),
@@ -328,7 +328,7 @@ impl DecisionLog {
 
     /// Returns the proof of the last executed consensus
     /// instance registered in this `DecisionLog`.
-    pub fn last_decision(&self, view: ViewInfo) -> Option<Proof> {
+    pub fn last_decision(&self, view: ViewInfo) -> Option<Proof<O>> {
         let last_exec = self.last_exec?;
 
         let pre_prepare = 'outer: loop {
@@ -410,7 +410,7 @@ impl DecisionLog {
         &mut self,
         in_exec: SeqNo,
         value: Option<&Digest>,
-    ) -> Option<StoredMessage<ConsensusMessage>> {
+    ) -> Option<StoredMessage<ConsensusMessage<O>>> {
         let mut scratch = Vec::with_capacity(8);
 
         fn clear_log<M>(in_exec: SeqNo, scratch: &mut Vec<usize>, log: &mut Vec<StoredMessage<M>>)
@@ -472,7 +472,7 @@ impl DecisionLog {
 pub struct Log<S, O, P> {
     curr_seq: SeqNo,
     batch_size: usize,
-    declog: DecisionLog,
+    declog: DecisionLog<O>,
     requests: OrderedMap<Digest, StoredMessage<RequestMessage<O>>>,
     deciding: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
     decided: Vec<O>,
@@ -504,13 +504,13 @@ impl<S, O, P> Log<S, O, P> {
 
     /// Returns a reference to a subset of this log, containing only
     /// consensus messages.
-    pub fn decision_log(&self) -> &DecisionLog {
+    pub fn decision_log(&self) -> &DecisionLog<O> {
         &self.declog
     }
 
     /// Returns a mutable reference to a subset of this log, containing
     /// only consensus messages.
-    pub fn decision_log_mut(&mut self) -> &mut DecisionLog {
+    pub fn decision_log_mut(&mut self) -> &mut DecisionLog<O> {
         &mut self.declog
     }
 

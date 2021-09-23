@@ -69,7 +69,7 @@ pub struct RecoveryState<S, O> {
     // the request batches have been concatenated,
     // for memory efficiency
     pub(crate) requests: Vec<O>,
-    pub(crate) declog: DecisionLog,
+    pub(crate) declog: DecisionLog<O>,
 }
 
 /// Allow a replica to recover from the state received by peer nodes.
@@ -113,7 +113,7 @@ impl<S, O> RecoveryState<S, O> {
         view: ViewInfo,
         checkpoint: Checkpoint<S>,
         requests: Vec<O>,
-        declog: DecisionLog,
+        declog: DecisionLog<O>,
     ) -> Self {
         Self {
             view,
@@ -140,7 +140,7 @@ impl<S, O> RecoveryState<S, O> {
     }
 
     /// Returns a reference to the decided consensus messages of this recovery state.
-    pub fn decision_log(&self) -> &DecisionLog {
+    pub fn decision_log(&self) -> &DecisionLog<O> {
         &self.declog
     }
 }
