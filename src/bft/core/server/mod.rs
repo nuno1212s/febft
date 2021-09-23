@@ -527,6 +527,7 @@ where
                             header,
                             message,
                             &self.synchronizer,
+                            &self.timeouts,
                             &mut self.log,
                             &mut self.node,
                         );

@@ -395,6 +395,28 @@ where
         }
     }
 
+    pub fn watch_request_batch(
+        &mut self,
+        requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+        timeouts: &TimeoutsHandle<S>,
+        log: &mut Log<State<S>, Request<S>, Reply<S>>,
+    ) -> Vec<Digest> {
+        let mut digests = Vec::new();
+        let phase = TimeoutPhase::Init(Instant::now());
+        let requests = requests
+            .into_iter()
+            .map(StoredMessage::into_inner);
+
+        for (header, request) in requests {
+            let digest = header.unique_digest();
+            self.watch_request_impl(phase, digest, timeouts);
+            log.insert(header, SystemMessage::Request(request));
+            digests.push(digest);
+        }
+
+        digests
+    }
+
     fn add_stopped_requests(
         &mut self,
         log: &mut Log<State<S>, Request<S>, Reply<S>>,

@@ -229,7 +229,7 @@ pub enum SystemMessage<S, O, P> {
     // TODO: ReadRequest,
     Request(RequestMessage<O>),
     Reply(ReplyMessage<P>),
-    Consensus(ConsensusMessage),
+    Consensus(ConsensusMessage<O>),
     Cst(CstMessage<S, O>),
     ViewChange(ViewChangeMessage<O>),
     ForwardedRequests(ForwardedRequestsMessage<O>),
@@ -384,21 +384,21 @@ pub struct ReplyMessage<P> {
 /// type.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct ConsensusMessage {
+pub struct ConsensusMessage<O> {
     seq: SeqNo,
     view: SeqNo,
-    kind: ConsensusMessageKind,
+    kind: ConsensusMessageKind<O>,
 }
 
 /// Represents one of many different consensus stages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub enum ConsensusMessageKind {
+pub enum ConsensusMessageKind<O> {
     /// Pre-prepare a request, according to the BFT consensus protocol.
     ///
     /// The value `Vec<Digest>` contains a batch of hash digests of the
     /// serialized client requests to be proposed.
-    PrePrepare(Vec<Digest>),
+    PrePrepare(Vec<StoredMessage<RequestMessage<O>>>),
     /// Prepare a batch of requests.
     ///
     /// The `Digest` represents the hash of the serialized `PRE-PREPARE`,
@@ -459,15 +459,15 @@ impl Orderable for ConsensusMessage {
     }
 }
 
-impl ConsensusMessage {
+impl<O> ConsensusMessage<O> {
     /// Creates a new `ConsensusMessage` with sequence number `seq`,
     /// and of the kind `kind`.
-    pub fn new(seq: SeqNo, view: SeqNo, kind: ConsensusMessageKind) -> Self {
+    pub fn new(seq: SeqNo, view: SeqNo, kind: ConsensusMessageKind<O>) -> Self {
         Self { seq, view, kind }
     }
 
     /// Returns a reference to the consensus message kind.
-    pub fn kind(&self) -> &ConsensusMessageKind {
+    pub fn kind(&self) -> &ConsensusMessageKind<O> {
         &self.kind
     }
 

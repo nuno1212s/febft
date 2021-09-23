@@ -16,12 +16,14 @@ use crate::bft::threadpool;
 use crate::bft::cst::RecoveryState;
 use crate::bft::sync::Synchronizer;
 use crate::bft::crypto::hash::Digest;
+use crate::bft::timeouts::TimeoutsHandle;
 use crate::bft::communication::serialize::DigestData;
 use crate::bft::communication::message::{
     Header,
     WireMessage,
     StoredMessage,
     SystemMessage,
+    RequestMessage,
     ConsensusMessage,
     SerializedMessage,
     ConsensusMessageKind,
@@ -53,7 +55,7 @@ use crate::bft::consensus::log::{
 };
 
 /// Represents the status of calling `poll()` on a `Consensus`.
-pub enum ConsensusPollStatus {
+pub enum ConsensusPollStatus<O> {
     /// The `Replica` associated with this `Consensus` should
     /// poll its main channel for more messages.
     Recv,
@@ -65,7 +67,7 @@ pub enum ConsensusPollStatus {
     /// execution.
     TryProposeAndRecv,
     /// A new consensus message is available to be processed.
-    NextMessage(Header, ConsensusMessage),
+    NextMessage(Header, ConsensusMessage<O>),
 }
 
 /// Represents a queue of messages to be ordered in a consensus instance.
@@ -74,22 +76,22 @@ pub enum ConsensusPollStatus {
 /// context, e.g. for the same consensus instance, a `PRE-PREPARE` reaches
 /// a node after a `PREPARE`. A `TboQueue` arranges these messages to be
 /// processed in the correct order.
-pub struct TboQueue {
+pub struct TboQueue<O> {
     curr_seq: SeqNo,
     get_queue: bool,
-    pre_prepares: VecDeque<VecDeque<StoredMessage<ConsensusMessage>>>,
-    prepares: VecDeque<VecDeque<StoredMessage<ConsensusMessage>>>,
-    commits: VecDeque<VecDeque<StoredMessage<ConsensusMessage>>>,
+        pre_prepares: VecDeque<VecDeque<StoredMessage<ConsensusMessage<O>>>>,
+        prepares: VecDeque<VecDeque<StoredMessage<ConsensusMessage<O>>>>,
+        commits: VecDeque<VecDeque<StoredMessage<ConsensusMessage<O>>>>,
 }
 
-impl Orderable for TboQueue {
+impl<O> Orderable for TboQueue<O> {
     /// Reports the id of the consensus this `TboQueue` is tracking.
     fn sequence_number(&self) -> SeqNo {
         self.curr_seq
     }
 }
 
-impl TboQueue {
+impl<O> TboQueue<O> {
     fn new(curr_seq: SeqNo) -> Self {
         Self {
             curr_seq,
@@ -116,7 +118,7 @@ impl TboQueue {
 
     /// Queues a consensus message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
-    pub fn queue(&mut self, h: Header, m: ConsensusMessage) {
+    pub fn queue(&mut self, h: Header, m: ConsensusMessage<O>) {
         match m.kind() {
             ConsensusMessageKind::PrePrepare(_) => self.queue_pre_prepare(h, m),
             ConsensusMessageKind::Prepare(_) => self.queue_prepare(h, m),
@@ -126,19 +128,19 @@ impl TboQueue {
 
     /// Queues a `PRE-PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
-    fn queue_pre_prepare(&mut self, h: Header, m: ConsensusMessage) {
+    fn queue_pre_prepare(&mut self, h: Header, m: ConsensusMessage<O>) {
         tbo_queue_message(self.curr_seq, &mut self.pre_prepares, StoredMessage::new(h, m))
     }
 
     /// Queues a `PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
-    fn queue_prepare(&mut self, h: Header, m: ConsensusMessage) {
+    fn queue_prepare(&mut self, h: Header, m: ConsensusMessage<O>) {
         tbo_queue_message(self.curr_seq, &mut self.prepares, StoredMessage::new(h, m))
     }
 
     /// Queues a `COMMIT` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
-    fn queue_commit(&mut self, h: Header, m: ConsensusMessage) {
+    fn queue_commit(&mut self, h: Header, m: ConsensusMessage<O>) {
         tbo_queue_message(self.curr_seq, &mut self.commits, StoredMessage::new(h, m))
     }
 }
@@ -169,7 +171,7 @@ pub struct Consensus<S: Service> {
     // but never longer
     batch_size: usize,
     phase: ProtoPhase,
-    tbo: TboQueue,
+    tbo: TboQueue<Request<S>>,
     current: Vec<Digest>,
     current_digest: Digest,
     //voted: HashSet<NodeId>,
@@ -196,7 +198,7 @@ macro_rules! extract_msg {
     };
 
     ($opt:block, $g:expr, $q:expr) => {
-        if let Some(stored) = tbo_pop_message::<ConsensusMessage>($q) {
+        if let Some(stored) = tbo_pop_message::<ConsensusMessage<_>>($q) {
             $opt
             let (header, message) = stored.into_inner();
             ConsensusPollStatus::NextMessage(header, message)
@@ -351,7 +353,7 @@ where
     }
 
     /// Check if we can process new consensus messages.
-    pub fn poll(&mut self, log: &Log<State<S>, Request<S>, Reply<S>>) -> ConsensusPollStatus {
+    pub fn poll(&mut self, log: &Log<State<S>, Request<S>, Reply<S>>) -> ConsensusPollStatus<Request<S>> {
         match self.phase {
             ProtoPhase::Init if self.tbo.get_queue => {
                 extract_msg!(
@@ -458,8 +460,9 @@ where
     pub fn process_message<'a>(
         &'a mut self,
         header: Header,
-        message: ConsensusMessage,
+        message: ConsensusMessage<Request<S>>,
         synchronizer: &Synchronizer<S>,
+        timeouts: &TimeoutsHandle<S>,
         log: &mut Log<State<S>, Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) -> ConsensusStatus<'a> {
@@ -497,7 +500,13 @@ where
                         self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     },
-                    ConsensusMessageKind::PrePrepare(digests) => {
+                    ConsensusMessageKind::PrePrepare(request_batch) => {
+                        let digests = request_batch_received(
+                            request_batch,
+                            synchronizer,
+                            timeouts,
+                            log,
+                        );
                         self.batch_size = digests.len();
                         self.current_digest = header.digest().clone();
                         (&mut self.current[..digests.len()]).copy_from_slice(&digests[..]);
@@ -572,14 +581,15 @@ where
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
                 // try entering preparing phase
-                for digest in self.current.iter().take(self.batch_size).filter(|d| !log.has_request(d)) {
-                    self.missing_requests.push_back(digest.clone());
-                }
-                self.phase = if self.missing_requests.is_empty() {
-                    ProtoPhase::Preparing(1)
-                } else {
-                    ProtoPhase::PreparingRequests
-                };
+                //for digest in self.current.iter().take(self.batch_size).filter(|d| !log.has_request(d)) {
+                //    self.missing_requests.push_back(digest.clone());
+                //}
+                //self.phase = if self.missing_requests.is_empty() {
+                //    ProtoPhase::Preparing(1)
+                //} else {
+                //    ProtoPhase::PreparingRequests
+                //};
+                self.phase = ProtoPhase::Preparing(1);
                 ConsensusStatus::Deciding
             },
             ProtoPhase::PreparingRequests => {
@@ -704,10 +714,10 @@ where
     Request<S>: Send + 'static,
     Reply<S>: Send + 'static,
 {
-    type Target = TboQueue;
+    type Target = TboQueue<Request<S>>;
 
     #[inline]
-    fn deref(&self) -> &TboQueue {
+    fn deref(&self) -> &Self::Target {
         &self.tbo
     }
 }
@@ -720,7 +730,26 @@ where
     Reply<S>: Send + 'static,
 {
     #[inline]
-    fn deref_mut(&mut self) -> &mut TboQueue {
+    fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.tbo
     }
+}
+
+fn request_batch_received<S>(
+    requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+    synchronizer: &Synchronizer<S>,
+    timeouts: &TimeoutsHandle<S>,
+    log: &mut Log<State<S>, Request<S>, Reply<S>>,
+) -> Vec<Digest>
+where
+    S: Service + Send + 'static,
+    State<S>: Send + Clone + 'static,
+    Request<S>: Send + 'static,
+    Reply<S>: Send + 'static,
+{
+    synchronizer.watch_request_batch(
+        requests,
+        timeouts,
+        log,
+    )
 }
