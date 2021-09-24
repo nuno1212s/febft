@@ -6,6 +6,8 @@ use std::marker::PhantomData;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
+use intmap::IntMap;
+
 use crate::bft::error::*;
 use crate::bft::cst::RecoveryState;
 use crate::bft::crypto::hash::Digest;
@@ -473,6 +475,7 @@ pub struct Log<S, O, P> {
     curr_seq: SeqNo,
     batch_size: usize,
     declog: DecisionLog<O>,
+    latest_op: IntMap<SeqNo>,
     requests: OrderedMap<Digest, StoredMessage<RequestMessage<O>>>,
     deciding: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
     decided: Vec<O>,
@@ -492,6 +495,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
         Self {
             batch_size,
             curr_seq: SeqNo::ZERO,
+            latest_op: IntMap::new(),
             declog: DecisionLog::new(),
             deciding: collections::hash_map_capacity(batch_size),
             // TODO: use config value instead of const
@@ -562,8 +566,20 @@ impl<S, O: Clone, P> Log<S, O, P> {
     pub fn insert(&mut self, header: Header, message: SystemMessage<S, O, P>) {
         match message {
             SystemMessage::Request(message) => {
+                let id: u64 = header.from().into();
+                let seq_no = self.latest_op
+                    .get(id)
+                    .copied()
+                    .unwrap_or(SeqNo::ZERO);
+
+                // avoid executing earlier requests twice
+                if message.sequence_number() < seq_no {
+                    return;
+                }
+
                 let digest = header.unique_digest();
                 let stored = StoredMessage::new(header, message);
+
                 self.requests.insert(digest, stored);
                 self.deciding.remove(&digest);
             },
@@ -648,7 +664,18 @@ impl<S, O: Clone, P> Log<S, O, P> {
                 .or_else(|| self.requests.remove(digest))
                 .map(StoredMessage::into_inner)
                 .ok_or(Error::simple(ErrorKind::ConsensusLog))?;
-            batch.add(header.from(), digest.clone(), message.into_inner());
+
+            let id: u64 = header.from().into();
+            let seq_no = self.latest_op
+                .get(id)
+                .copied()
+                .unwrap_or(SeqNo::ZERO);
+
+            if message.sequence_number() > seq_no {
+                self.latest_op.insert(id, message.sequence_number());
+            }
+
+            batch.add(header.from(), digest.clone(), message.into_inner_operation());
         }
 
         // TODO: optimize batch cloning, as this can take

@@ -119,6 +119,13 @@ impl From<NodeId> for usize {
     }
 }
 
+impl From<NodeId> for u64 {
+    #[inline]
+    fn from(id: NodeId) -> u64 {
+        id.0 as u64
+    }
+}
+
 impl From<NodeId> for u32 {
     #[inline]
     fn from(id: NodeId) -> u32 {

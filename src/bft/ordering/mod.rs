@@ -33,8 +33,8 @@ pub(crate) enum InvalidSeqNo {
 impl From<u32> for SeqNo {
     #[inline]
     fn from(sequence_number: u32) -> SeqNo {
-        // FIXME: is this correct?
-        SeqNo(sequence_number as i32)
+        const MAX: u32 = i32::MAX as u32;
+        SeqNo((sequence_number % MAX) as i32)
     }
 }
 
@@ -49,6 +49,13 @@ impl From<SeqNo> for usize {
     #[inline]
     fn from(sequence_number: SeqNo) -> usize {
         sequence_number.0 as usize
+    }
+}
+
+impl From<SeqNo> for u64 {
+    #[inline]
+    fn from(sequence_number: SeqNo) -> u64 {
+        sequence_number.0 as u64
     }
 }
 

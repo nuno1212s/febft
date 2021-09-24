@@ -3,8 +3,9 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::future::Future;
-use std::task::{Poll, Waker, Context};
 use std::time::{Instant, Duration};
+use std::task::{Poll, Waker, Context};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use parking_lot::Mutex;
 
@@ -28,6 +29,7 @@ use crate::bft::communication::{
 };
 
 struct ClientData<P> {
+    operation_counter: AtomicU32,
     wakers: Mutex<HashMap<Digest, Waker>>,
     ready: Mutex<HashMap<Digest, P>>,
 }
@@ -126,6 +128,7 @@ where
 
         // create shared data
         let data = Arc::new(ClientData {
+            operation_counter: AtomicU32::new(0),
             wakers: Mutex::new(collections::hash_map()),
             ready: Mutex::new(collections::hash_map()),
         });
@@ -153,7 +156,9 @@ where
     //
     // TODO: request timeout
     pub async fn update(&mut self, operation: D::Request) -> D::Reply {
+        let id = self.data.operation_counter.fetch_add(1, Ordering::Relaxed);
         let message = SystemMessage::Request(RequestMessage::new(
+            id.into(),
             operation,
         ));
 

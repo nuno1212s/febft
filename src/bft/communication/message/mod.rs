@@ -365,6 +365,7 @@ impl<S, O> CstMessage<S, O> {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct RequestMessage<O> {
+    operation_id: SeqNo,
     operation: O,
 }
 
@@ -412,10 +413,16 @@ pub enum ConsensusMessageKind<O> {
     Commit(Digest),
 }
 
+impl<O> Orderable for RequestMessage<O> {
+    fn sequence_number(&self) -> SeqNo {
+        self.operation_id
+    }
+}
+
 impl<O> RequestMessage<O> {
     /// Creates a new `RequestMessage`.
-    pub fn new(operation: O) -> Self {
-        Self { operation }
+    pub fn new(id: SeqNo, operation: O) -> Self {
+        Self { operation, operation_id: id }
     }
 
     /// Returns a reference to the operation of type `O`.
@@ -424,7 +431,7 @@ impl<O> RequestMessage<O> {
     }
 
     /// Unwraps this `RequestMessage`.
-    pub fn into_inner(self) -> O {
+    pub fn into_inner_operation(self) -> O {
         self.operation
     }
 }
