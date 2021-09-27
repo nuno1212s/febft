@@ -22,6 +22,7 @@ use crate::bft::communication::message::{
 use crate::bft::collections::{
     self,
     HashMap,
+    HashSet,
     OrderedMap,
 };
 use crate::bft::ordering::{
@@ -475,6 +476,7 @@ pub struct Log<S, O, P> {
     declog: DecisionLog<O>,
     requests: OrderedMap<Digest, StoredMessage<RequestMessage<O>>>,
     deciding: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
+    executed: HashSet<Digest>,
     decided: Vec<O>,
     checkpoint: CheckpointState<S>,
     _marker: PhantomData<P>,
@@ -493,6 +495,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
             batch_size,
             curr_seq: SeqNo::ZERO,
             declog: DecisionLog::new(),
+            executed: collections::hash_set(),
             deciding: collections::hash_map_capacity(batch_size),
             // TODO: use config value instead of const
             decided: Vec::with_capacity(PERIOD as usize),
@@ -563,6 +566,9 @@ impl<S, O: Clone, P> Log<S, O, P> {
         match message {
             SystemMessage::Request(message) => {
                 let digest = header.unique_digest();
+                if self.executed.remove(&digest) {
+                    return;
+                }
                 let stored = StoredMessage::new(header, message);
                 self.requests.insert(digest, stored);
                 self.deciding.remove(&digest);
@@ -648,6 +654,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
                 .or_else(|| self.requests.remove(digest))
                 .map(StoredMessage::into_inner)
                 .ok_or(Error::simple(ErrorKind::ConsensusLog))?;
+            self.executed.insert(header.unique_digest());
             batch.add(header.from(), digest.clone(), message.into_inner());
         }
 
