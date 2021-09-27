@@ -47,6 +47,10 @@ run the new view change. is this the correct behavior?
 
 ## todo
 
+* propose requests as soon as possible
+    + pull up to `BATCH_SIZE` requests from the queue, with
+      a minimum of 1, then start proposing immediately; this
+      improves the request processing latency
 * requests are concurrently added to the request queue, and
   don't go through the master channel (use Mutex)
 * maybe replicas use non-async communication
