@@ -12,6 +12,7 @@ use parking_lot::Mutex;
 use super::SystemParams;
 
 use crate::bft::error::*;
+use crate::bft::ordering::SeqNo;
 use crate::bft::async_runtime as rt;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::collections::{self, HashMap};
@@ -29,7 +30,7 @@ use crate::bft::communication::{
 };
 
 struct ClientData<P> {
-    operation_counter: AtomicU32,
+    session_counter: AtomicU32,
     wakers: Mutex<HashMap<Digest, Waker>>,
     ready: Mutex<HashMap<Digest, P>>,
 }
@@ -37,6 +38,8 @@ struct ClientData<P> {
 /// Represents a client node in `febft`.
 // TODO: maybe make the clone impl more efficient
 pub struct Client<D: SharedData> {
+    session_id: SeqNo,
+    operation_counter: SeqNo,
     data: Arc<ClientData<D::Reply>>,
     params: SystemParams,
     node: SendNode<D>,
@@ -44,10 +47,17 @@ pub struct Client<D: SharedData> {
 
 impl<D: SharedData> Clone for Client<D> {
     fn clone(&self) -> Self {
+        let session_id = self.data
+            .session_counter
+            .fetch_add(1, Ordering::Relaxed)
+            .into();
+
         Self {
+            session_id,
             params: self.params,
             node: self.node.clone(),
             data: Arc::clone(&self.data),
+            operation_counter: SeqNo::ZERO,
         }
     }
 }
@@ -128,7 +138,7 @@ where
 
         // create shared data
         let data = Arc::new(ClientData {
-            operation_counter: AtomicU32::new(0),
+            session_counter: AtomicU32::new(0),
             wakers: Mutex::new(collections::hash_map()),
             ready: Mutex::new(collections::hash_map()),
         });
@@ -144,10 +154,17 @@ where
             node,
         ));
 
+        let session_id = data
+            .session_counter
+            .fetch_add(1, Ordering::Relaxed)
+            .into();
+
         Ok(Client {
             data,
             params,
+            session_id,
             node: send_node,
+            operation_counter: SeqNo::ZERO,
         })
     }
 
@@ -156,9 +173,9 @@ where
     //
     // TODO: request timeout
     pub async fn update(&mut self, operation: D::Request) -> D::Reply {
-        let id = self.data.operation_counter.fetch_add(1, Ordering::Relaxed);
         let message = SystemMessage::Request(RequestMessage::new(
-            id.into(),
+            self.session_id,
+            self.next_operation_id(),
             operation,
         ));
 
@@ -169,6 +186,12 @@ where
         // await response
         let data = &*self.data;
         ClientRequestFut { digest, data }.await
+    }
+
+    fn next_operation_id(&mut self) -> SeqNo {
+        let id = self.operation_counter;
+        self.operation_counter = self.operation_counter.next();
+        id
     }
 
     async fn message_recv_task(

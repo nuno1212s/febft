@@ -562,13 +562,22 @@ impl<S, O: Clone, P> Log<S, O, P> {
     }
 */
 
+    fn operation_key(&self, header: &Header, message: &RequestMessage<O>) -> u64 {
+        // both of these values are 32-bit in width
+        let client_id: u64 = header.from().into();
+        let session_id: u64 = message.session_id().into();
+
+        // therefore this is safe, and will not delete any bits
+        client_id | (session_id << 32)
+    }
+
     /// Adds a new `message` and its respective `header` to the log.
     pub fn insert(&mut self, header: Header, message: SystemMessage<S, O, P>) {
         match message {
             SystemMessage::Request(message) => {
-                let id: u64 = header.from().into();
+                let key = self.operation_key(&header, &message);
                 let seq_no = self.latest_op
-                    .get(id)
+                    .get(key)
                     .copied()
                     .unwrap_or(SeqNo::ZERO);
 
@@ -665,14 +674,14 @@ impl<S, O: Clone, P> Log<S, O, P> {
                 .map(StoredMessage::into_inner)
                 .ok_or(Error::simple(ErrorKind::ConsensusLog))?;
 
-            let id: u64 = header.from().into();
+            let key = self.operation_key(&header, &message);
             let seq_no = self.latest_op
-                .get(id)
+                .get(key)
                 .copied()
                 .unwrap_or(SeqNo::ZERO);
 
             if message.sequence_number() > seq_no {
-                self.latest_op.insert(id, message.sequence_number());
+                self.latest_op.insert(key, message.sequence_number());
             }
 
             batch.add(header.from(), digest.clone(), message.into_inner_operation());

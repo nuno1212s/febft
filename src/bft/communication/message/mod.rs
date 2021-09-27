@@ -365,6 +365,7 @@ impl<S, O> CstMessage<S, O> {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct RequestMessage<O> {
+    session_id: SeqNo,
     operation_id: SeqNo,
     operation: O,
 }
@@ -421,13 +422,17 @@ impl<O> Orderable for RequestMessage<O> {
 
 impl<O> RequestMessage<O> {
     /// Creates a new `RequestMessage`.
-    pub fn new(id: SeqNo, operation: O) -> Self {
-        Self { operation, operation_id: id }
+    pub fn new(sess: SeqNo, id: SeqNo, operation: O) -> Self {
+        Self { operation, operation_id: id, session_id: sess }
     }
 
     /// Returns a reference to the operation of type `O`.
     pub fn operation(&self) -> &O {
         &self.operation
+    }
+
+    pub fn session_id(&self) -> SeqNo {
+        self.session_id
     }
 
     /// Unwraps this `RequestMessage`.
