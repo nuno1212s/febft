@@ -28,19 +28,25 @@ run the new view change. is this the correct behavior?
     + do we need to check hmacs?
 * send_node on execution layer, so we don't need to go
   through the master channel to send replies to clients
-
-## todo
-
 * `PRE-PREPARE` messages include the request bodies, rather than
   just their hash digests
-    + TODO: clients should maintain a separate sequence number used
+    + clients should maintain a separate sequence number used
       to discard requests that have already been processed,
       the operation id as used in BFT-SMaRt
-        - use operation id in place of prng?
+        - this mechanism didn't work as expected, because
+          in FeBFT clients may send async requests, which
+          ruin the operation id timeline (i.e. the one which
+          allows a replica to drop older requests); maybe we
+          could keep a session id per each logical client
+          sending async requests... then for each session,
+          we'd keep track of the last request
     + blindly add these requests to the log..? this may affect
       the correctness of the sound predicate from Cachin, if
       the leader is forging requests; read BFT-SMaRt code again,
       check if they consult the log for the existence of these reqs
+
+## todo
+
 * requests are concurrently added to the request queue, and
   don't go through the master channel (use Mutex)
 * maybe replicas use non-async communication
