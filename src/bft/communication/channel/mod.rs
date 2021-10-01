@@ -10,6 +10,7 @@ mod flume_mpmc;
 mod async_channel_mpmc;
 
 use std::pin::Pin;
+//use std::sync::Arc;
 use std::future::Future;
 use std::task::{Poll, Context};
 
@@ -18,11 +19,11 @@ use futures::future::FusedFuture;
 
 use crate::bft::error::*;
 use crate::bft::communication::message::{
-    Header,
     Message,
     SystemMessage,
     RequestMessage,
     ReplyMessage,
+    StoredMessage,
     ConsensusMessage,
 };
 
@@ -125,17 +126,17 @@ impl<'a, T> FusedFuture for ChannelRxFut<'a, T> {
 /// The handle can be cloned as many times as needed for cheap.
 pub struct MessageChannelTx<S, O, P> {
     other: ChannelTx<Message<S, O, P>>,
-    requests: ChannelTx<(Header, RequestMessage<O>)>,
-    replies: ChannelTx<(Header, ReplyMessage<P>)>,
-    consensus: ChannelTx<(Header, ConsensusMessage<O>)>,
+    requests: ChannelTx<StoredMessage<RequestMessage<O>>>,
+    replies: ChannelTx<StoredMessage<ReplyMessage<P>>>,
+    consensus: ChannelTx<StoredMessage<ConsensusMessage<O>>>,
 }
 
 /// Represents the receiving half of a `Message` channel.
 pub struct MessageChannelRx<S, O, P> {
     other: ChannelRx<Message<S, O, P>>,
-    requests: ChannelRx<(Header, RequestMessage<O>)>,
-    replies: ChannelRx<(Header, ReplyMessage<P>)>,
-    consensus: ChannelRx<(Header, ConsensusMessage<O>)>,
+    requests: ChannelRx<StoredMessage<RequestMessage<O>>>,
+    replies: ChannelRx<StoredMessage<ReplyMessage<P>>>,
+    consensus: ChannelRx<StoredMessage<ConsensusMessage<O>>>,
 }
 
 /// Creates a new channel that can queue up to `bound` messages
@@ -177,13 +178,16 @@ impl<S, O, P> MessageChannelTx<S, O, P> {
             Message::System(header, message) => {
                 match message {
                     SystemMessage::Request(message) => {
-                        self.requests.send((header, message)).await
+                        let m = StoredMessage::new(header, message);
+                        self.requests.send(m).await
                     },
                     SystemMessage::Reply(message) => {
-                        self.replies.send((header, message)).await
+                        let m = StoredMessage::new(header, message);
+                        self.replies.send(m).await
                     },
                     SystemMessage::Consensus(message) => {
-                        self.consensus.send((header, message)).await
+                        let m = StoredMessage::new(header, message);
+                        self.consensus.send(m).await
                     },
                     message @ SystemMessage::Cst(_) => {
                         self.other.send(Message::System(header, message)).await
@@ -207,15 +211,15 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
     pub async fn recv(&mut self) -> Result<Message<S, O, P>> {
         let message = select! {
             result = self.consensus.recv() => {
-                let (h, c) = result?;
+                let (h, c) = result?.into_inner();
                 Message::System(h, SystemMessage::Consensus(c))
             },
             result = self.requests.recv() => {
-                let (h, r) = result?;
+                let (h, r) = result?.into_inner();
                 Message::System(h, SystemMessage::Request(r))
             },
             result = self.replies.recv() => {
-                let (h, r) = result?;
+                let (h, r) = result?.into_inner();
                 Message::System(h, SystemMessage::Reply(r))
             },
             result = self.other.recv() => {
