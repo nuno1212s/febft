@@ -216,6 +216,7 @@ pub enum Message<S, O, P> {
     ExecutionFinishedWithAppstate(S),
     /// We received a timeout from the timeouts layer.
     Timeout(TimeoutKind),
+    RequestBatch(Vec<StoredMessage<RequestMessage<O>>>),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
@@ -841,6 +842,9 @@ impl<S, O, P> Message<S, O, P> {
                     .wrapped(ErrorKind::CommunicationMessage),
             Message::Timeout(_) =>
                 Err("Expected System found Timeout")
+                    .wrapped(ErrorKind::CommunicationMessage),
+            Message::RequestBatch(_) =>
+                Err("Expected System found RequestBatch")
                     .wrapped(ErrorKind::CommunicationMessage),
         }
     }
