@@ -692,7 +692,6 @@ where
     }
 
     fn requests_received(&mut self, reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
-        eprintln!("Processed batch ({})", reqs.len());
         for (h, r) in reqs.into_iter().map(StoredMessage::into_inner) {
             self.request_received(h, SystemMessage::Request(r))
         }

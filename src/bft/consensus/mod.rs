@@ -469,7 +469,6 @@ where
         log: &mut Log<State<S>, Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) -> ConsensusStatus<'a> {
-        eprintln!("{:?} -> {:?}", node.id(), self.phase);
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just
         // the amount of votes received

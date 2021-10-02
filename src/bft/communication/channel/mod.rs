@@ -160,7 +160,6 @@ impl<O: Send + 'static> RequestBatcher<O> {
                 select! {
                     _ = Delay::new(BATCH_POLL).fuse() => {
                         if self.current_batch.len() > 0 {
-                            eprintln!("Sent batch on poll");
                             self.send_batch().await;
                         }
                     },
@@ -171,7 +170,6 @@ impl<O: Send + 'static> RequestBatcher<O> {
                         };
                         self.current_batch.push(request);
                         if self.current_batch.len() == batch_size {
-                            eprintln!("Sent batch on full");
                             self.send_batch().await;
                         }
                     },
@@ -273,7 +271,6 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
             },
             result = self.requests.recv() => {
                 let batch = result?;
-                eprintln!("Received batch ({})", batch.len());
                 Message::RequestBatch(batch)
             },
             result = self.replies.recv() => {
