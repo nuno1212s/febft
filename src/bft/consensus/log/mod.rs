@@ -607,14 +607,18 @@ impl<S, O: Clone, P> Log<S, O, P> {
 
     /// Retrieves the next batch of requests available for proposing, if any.
     pub fn next_batch(&mut self) -> Option<Vec<StoredMessage<RequestMessage<O>>>> {
-        let (digest, stored) = self.requests.pop_front()?;
-        self.deciding.insert(digest, stored);
+        while let Some((digest, stored)) = self.requests.pop_front() {
+            self.deciding.insert(digest, stored);
+            if self.deciding.len() >= self.batch_size {
+                break;
+            }
+        }
         // TODO:
         // - we may include another condition here to decide on a
         // smaller batch size, so that client request latency is lower
         // - prevent non leader replicas from collecting a batch of digests,
         // as only the leader will actually propose!
-        if self.deciding.len() >= self.batch_size {
+        if self.deciding.len() > 0 {
             Some(self.deciding
                 .values()
                 .cloned()

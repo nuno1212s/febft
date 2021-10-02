@@ -182,7 +182,6 @@ impl<O: Send + 'static> RequestBatcher<O> {
 
     async fn send_batch(&mut self) {
         let batch = std::mem::replace(&mut self.current_batch, Vec::new());
-        eprintln!("Batch length = {}", batch.len());
         self.batcher.send(batch).await.unwrap_or(());
     }
 }
@@ -274,6 +273,7 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
             },
             result = self.requests.recv() => {
                 let batch = result?;
+                eprintln!("Received batch ({})", batch.len());
                 Message::RequestBatch(batch)
             },
             result = self.replies.recv() => {
