@@ -52,7 +52,9 @@ use crate::bft::communication::{
 };
 use crate::bft::communication::message::{
     ForwardedRequestsMessage,
+    RequestMessage,
     SystemMessage,
+    StoredMessage,
     Message,
     Header,
 };
@@ -227,6 +229,9 @@ where
                         SystemMessage::ForwardedRequests(_) => panic!("Rogue forwarded requests message detected"),
                     }
                 },
+                Message::RequestBatch(batch) => {
+                    replica.requests_received(batch);
+                },
                 // ignore other messages for now
                 _ => (),
             }
@@ -251,6 +256,9 @@ where
         let message = self.node.receive().await?;
 
         match message {
+            Message::RequestBatch(batch) => {
+                self.requests_received(batch);
+            },
             Message::System(header, message) => {
                 match message {
                     SystemMessage::ForwardedRequests(requests) => {
@@ -373,6 +381,9 @@ where
         };
 
         match message {
+            Message::RequestBatch(batch) => {
+                self.requests_received(batch);
+            },
             Message::System(header, message) => {
                 match message {
                     SystemMessage::Consensus(message) => {
@@ -482,6 +493,9 @@ where
         };
 
         match message {
+            Message::RequestBatch(batch) => {
+                self.requests_received(batch);
+            },
             Message::System(header, message) => {
                 match message {
                     SystemMessage::ForwardedRequests(requests) => {
@@ -671,6 +685,12 @@ where
                     _ => (),
                 }
             },
+        }
+    }
+
+    fn requests_received(&mut self, reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
+        for (h, r) in reqs.into_iter().map(StoredMessage::into_inner) {
+            self.request_received(h, SystemMessage::Request(r))
         }
     }
 

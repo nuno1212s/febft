@@ -28,19 +28,22 @@ run the new view change. is this the correct behavior?
     + do we need to check hmacs?
 * send_node on execution layer, so we don't need to go
   through the master channel to send replies to clients
-
-## todo
-
 * `PRE-PREPARE` messages include the request bodies, rather than
   just their hash digests
-    + TODO: clients should maintain a separate sequence number used
+    + clients should maintain a separate sequence number used
       to discard requests that have already been processed,
       the operation id as used in BFT-SMaRt
-        - use operation id in place of prng?
     + blindly add these requests to the log..? this may affect
       the correctness of the sound predicate from Cachin, if
       the leader is forging requests; read BFT-SMaRt code again,
       check if they consult the log for the existence of these reqs
+
+## todo
+
+* propose requests as soon as possible
+    + pull up to `BATCH_SIZE` requests from the queue, with
+      a minimum of 1, then start proposing immediately; this
+      improves the request processing latency
 * requests are concurrently added to the request queue, and
   don't go through the master channel (use Mutex)
 * maybe replicas use non-async communication
