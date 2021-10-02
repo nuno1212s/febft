@@ -10,14 +10,19 @@ mod flume_mpmc;
 mod async_channel_mpmc;
 
 use std::pin::Pin;
-//use std::sync::Arc;
 use std::future::Future;
 use std::task::{Poll, Context};
+use std::time::Duration;
 
 use futures::select;
-use futures::future::FusedFuture;
+use futures_timer::Delay;
+use futures::future::{
+    FusedFuture,
+    FutureExt,
+};
 
 use crate::bft::error::*;
+use crate::bft::async_runtime as rt;
 use crate::bft::communication::message::{
     Message,
     SystemMessage,
@@ -134,31 +139,84 @@ pub struct MessageChannelTx<S, O, P> {
 /// Represents the receiving half of a `Message` channel.
 pub struct MessageChannelRx<S, O, P> {
     other: ChannelRx<Message<S, O, P>>,
-    requests: ChannelRx<StoredMessage<RequestMessage<O>>>,
+    requests: ChannelRx<Vec<StoredMessage<RequestMessage<O>>>>,
     replies: ChannelRx<StoredMessage<ReplyMessage<P>>>,
     consensus: ChannelRx<StoredMessage<ConsensusMessage<O>>>,
 }
 
+pub struct RequestBatcher<O> {
+    current_batch: Vec<StoredMessage<RequestMessage<O>>>,
+    receiver: ChannelRx<StoredMessage<RequestMessage<O>>>,
+    batcher: ChannelTx<Vec<StoredMessage<RequestMessage<O>>>>,
+}
+
+impl<O: Send + 'static> RequestBatcher<O> {
+    pub fn spawn(mut self, batch_size: usize) {
+        rt::spawn(async move {
+            // TODO: make this customizable
+            const BATCH_POLL: Duration = Duration::from_millis(10);
+
+            loop {
+                select! {
+                    _ = Delay::new(BATCH_POLL).fuse() => {
+                        if self.current_batch.len() > 0 {
+                            eprintln!("Sent batch on poll");
+                            self.send_batch().await;
+                        }
+                    },
+                    result = self.receiver.recv() => {
+                        let request = match result {
+                            Ok(r) => r,
+                            Err(_) => return,
+                        };
+                        self.current_batch.push(request);
+                        if self.current_batch.len() == batch_size {
+                            eprintln!("Sent batch on full");
+                            self.send_batch().await;
+                        }
+                    },
+                }
+            }
+        });
+    }
+
+    async fn send_batch(&mut self) {
+        let batch = std::mem::replace(&mut self.current_batch, Vec::new());
+        eprintln!("Batch length = {}", batch.len());
+        self.batcher.send(batch).await.unwrap_or(());
+    }
+}
+
 /// Creates a new channel that can queue up to `bound` messages
 /// from different async senders.
-pub fn new_message_channel<S, O, P>(bound: usize) -> (MessageChannelTx<S, O, P>, MessageChannelRx<S, O, P>) {
+pub fn new_message_channel<S, O, P>(
+    bound: usize,
+) -> (MessageChannelTx<S, O, P>, MessageChannelRx<S, O, P>, RequestBatcher<O>) {
     let (c_tx, c_rx) = new_bounded(bound);
-    let (r_tx, r_rx) = new_bounded(bound);
     let (rr_tx, rr_rx) = new_bounded(bound);
     let (o_tx, o_rx) = new_bounded(bound);
+
+    let (req_tx, req_rx) = new_bounded(bound);
+    let (reqbatch_tx, reqbatch_rx) = new_bounded(bound);
+
+    let batcher = RequestBatcher {
+        receiver: req_rx,
+        batcher: reqbatch_tx,
+        current_batch: Vec::new(),
+    };
     let tx = MessageChannelTx {
         consensus: c_tx,
-        requests: r_tx,
+        requests: req_tx,
         replies: rr_tx,
         other: o_tx,
     };
     let rx = MessageChannelRx {
         consensus: c_rx,
-        requests: r_rx,
+        requests: reqbatch_rx,
         replies: rr_rx,
         other: o_rx,
     };
-    (tx, rx)
+    (tx, rx, batcher)
 }
 
 impl<S, O, P> Clone for MessageChannelTx<S, O, P> {
@@ -215,8 +273,8 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
                 Message::System(h, SystemMessage::Consensus(c))
             },
             result = self.requests.recv() => {
-                let (h, r) = result?.into_inner();
-                Message::System(h, SystemMessage::Request(r))
+                let batch = result?;
+                Message::RequestBatch(batch)
             },
             result = self.replies.recv() => {
                 let (h, r) = result?.into_inner();

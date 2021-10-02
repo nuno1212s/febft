@@ -173,7 +173,10 @@ where
         let view = ViewInfo::new(view, n, f)?;
 
         // connect to peer nodes
-        let (node, rogue) = Node::bootstrap(node_config).await?;
+        let (node, batcher, rogue) = Node::bootstrap(node_config).await?;
+
+        // start batcher
+        batcher.spawn(batch_size);
 
         // start executor
         let executor = Executor::new(
