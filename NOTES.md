@@ -1,9 +1,3 @@
-# handling concurrent view changes
-
-if we time out again whilst running a view change, currently
-we are allowing the older view change to finish, then we may
-run the new view change. is this the correct behavior?
-
 # check what is saved to disk on bft smart
 
     $ cd ~/Documents/tese/bft-smart/src/bftsmart
@@ -13,9 +7,15 @@ run the new view change. is this the correct behavior?
 
     $ rg 'submit\(\(\)' ~/Documents/tese/bft-smart/src/bftsmart
 
-# changes for the research branch
+# changes done to the research branch
 
-## done
+## to be resolved
+
+the system appears to hang after an undeterminate amount of time,
+causing the request processing to halt completely, and the
+throughput to become 0
+
+## implemented
 
 * view change `hasProof` checks for signature of
   `ACCEPT` aka `COMMIT` messages only
@@ -37,13 +37,13 @@ run the new view change. is this the correct behavior?
       the correctness of the sound predicate from Cachin, if
       the leader is forging requests; read BFT-SMaRt code again,
       check if they consult the log for the existence of these reqs
-
-## todo
-
 * propose requests as soon as possible
     + pull up to `BATCH_SIZE` requests from the queue, with
       a minimum of 1, then start proposing immediately; this
       improves the request processing latency
+
+## given up
+
 * requests are concurrently added to the request queue, and
   don't go through the master channel (use Mutex)
 * maybe replicas use non-async communication
