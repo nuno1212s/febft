@@ -153,8 +153,8 @@ pub struct RequestBatcher<O> {
 impl<O: Send + 'static> RequestBatcher<O> {
     pub fn spawn(mut self, batch_size: usize) {
         rt::spawn(async move {
-            // TODO: make this customizable
-            const BATCH_POLL: Duration = Duration::from_millis(10);
+            // each cop node takes around 120-200 µs to ping each other
+            const BATCH_POLL: Duration = Duration::from_micros(100);
 
             loop {
                 select! {
