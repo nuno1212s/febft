@@ -6,6 +6,9 @@ mod crossbeam;
 #[cfg(feature = "threadpool_cthpool")]
 mod cthpool;
 
+use crate::bft::globals::Global;
+use crate::bft::error::*;
+
 /// A thread pool type, used to run intensive CPU tasks.
 ///
 /// The thread pool implements `Clone` with a cheap reference
@@ -72,4 +75,49 @@ impl ThreadPool {
     pub fn join(&self) {
         self.inner.join()
     }
+}
+
+static mut POOL: Global<ThreadPool> = Global::new();
+
+macro_rules! pool {
+    () => {
+        match unsafe { POOL.get() } {
+	        Some(ref pool) => pool,
+            None => panic!("Global thread pool wasn't initialized"),
+        }
+    }
+}
+
+/// This function initializes the global thread pool.
+///
+/// It should be called once before the core protocol starts executing.
+pub unsafe fn init(num_threads: usize) -> Result<()> {
+    let pool = Builder::new()
+        .num_threads(num_threads)
+        .build();
+    POOL.set(pool);
+    Ok(())
+}
+
+/// This function drops the global thread pool.
+///
+/// It shouldn't be needed to be called manually called, as the
+/// `InitGuard` should take care of calling this.
+pub unsafe fn drop() -> Result<()> {
+    POOL.drop();
+    Ok(())
+}
+
+/// Spawns a new job into the global thread pool.
+pub fn execute<F>(job: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    pool!().execute(job)
+}
+
+/// Synchronously waits for all the jobs queued in the
+/// global thread pool to complete.
+pub fn join() {
+    pool!().join()
 }

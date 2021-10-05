@@ -3,11 +3,15 @@
 pub mod client;
 pub mod server;
 
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
+
 use crate::bft::error::*;
 
 /// This struct contains the system parameters of
 /// a replica or client in `febft`, i.e. `n` and `f`
 /// such that `n >= 3*f + 1`.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Copy, Clone)]
 pub struct SystemParams {
     n: usize,
@@ -27,7 +31,9 @@ impl SystemParams {
     /// Returns the quorum size associated with these
     /// `SystemParams`.
     pub fn quorum(&self) -> usize {
-        2*self.f + 1
+        //2*self.f + 1
+        //self.n - self.f
+        (self.f << 1) + 1
     }
 
     /// Returns the `n` parameter.

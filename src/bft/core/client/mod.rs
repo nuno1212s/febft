@@ -3,14 +3,16 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::future::Future;
-use std::task::{Poll, Waker, Context};
 use std::time::{Instant, Duration};
+use std::task::{Poll, Waker, Context};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use parking_lot::Mutex;
 
 use super::SystemParams;
 
 use crate::bft::error::*;
+use crate::bft::ordering::SeqNo;
 use crate::bft::async_runtime as rt;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::collections::{self, HashMap};
@@ -28,6 +30,7 @@ use crate::bft::communication::{
 };
 
 struct ClientData<P> {
+    session_counter: AtomicU32,
     wakers: Mutex<HashMap<Digest, Waker>>,
     ready: Mutex<HashMap<Digest, P>>,
 }
@@ -35,6 +38,8 @@ struct ClientData<P> {
 /// Represents a client node in `febft`.
 // TODO: maybe make the clone impl more efficient
 pub struct Client<D: SharedData> {
+    session_id: SeqNo,
+    operation_counter: SeqNo,
     data: Arc<ClientData<D::Reply>>,
     params: SystemParams,
     node: SendNode<D>,
@@ -42,10 +47,17 @@ pub struct Client<D: SharedData> {
 
 impl<D: SharedData> Clone for Client<D> {
     fn clone(&self) -> Self {
+        let session_id = self.data
+            .session_counter
+            .fetch_add(1, Ordering::Relaxed)
+            .into();
+
         Self {
+            session_id,
             params: self.params,
             node: self.node.clone(),
             data: Arc::clone(&self.data),
+            operation_counter: SeqNo::ZERO,
         }
     }
 }
@@ -88,11 +100,13 @@ pub struct ClientConfig {
 
 struct ReplicaVotes {
     count: usize,
+    digest: Digest,
 }
 
 impl<D> Client<D>
 where
     D: SharedData + 'static,
+    D::State: Send + Clone + 'static,
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
@@ -120,10 +134,11 @@ where
         // FIXME: can the client receive rogue reply messages?
         // perhaps when it reconnects to a replica after experiencing
         // network problems? for now ignore rogue messages...
-        let (node, _rogue) = Node::bootstrap(node_config).await?;
+        let (node, _batcher, _rogue) = Node::bootstrap(node_config).await?;
 
         // create shared data
         let data = Arc::new(ClientData {
+            session_counter: AtomicU32::new(0),
             wakers: Mutex::new(collections::hash_map()),
             ready: Mutex::new(collections::hash_map()),
         });
@@ -139,10 +154,17 @@ where
             node,
         ));
 
+        let session_id = data
+            .session_counter
+            .fetch_add(1, Ordering::Relaxed)
+            .into();
+
         Ok(Client {
             data,
             params,
+            session_id,
             node: send_node,
+            operation_counter: SeqNo::ZERO,
         })
     }
 
@@ -152,6 +174,8 @@ where
     // TODO: request timeout
     pub async fn update(&mut self, operation: D::Request) -> D::Reply {
         let message = SystemMessage::Request(RequestMessage::new(
+            self.session_id,
+            self.next_operation_id(),
             operation,
         ));
 
@@ -164,6 +188,12 @@ where
         ClientRequestFut { digest, data }.await
     }
 
+    fn next_operation_id(&mut self) -> SeqNo {
+        let id = self.operation_counter;
+        self.operation_counter = self.operation_counter.next();
+        id
+    }
+
     async fn message_recv_task(
         params: SystemParams,
         data: Arc<ClientData<D::Reply>>,
@@ -174,7 +204,7 @@ where
 
         while let Ok(message) = node.receive().await {
             match message {
-                Message::System(_, message) => {
+                Message::System(header, message) => {
                     match message {
                         SystemMessage::Reply(message) => {
                             let now = Instant::now();
@@ -187,7 +217,7 @@ where
                                 let mut to_remove = Vec::new();
 
                                 for (dig, v) in votes.iter() {
-                                    if v.count >= params.quorum() {
+                                    if v.count > params.f() {
                                         to_remove.push(dig.clone());
                                     }
                                 }
@@ -201,17 +231,30 @@ where
                             let (digest, payload) = message.into_inner();
                             let votes = votes
                                 .entry(digest)
-                                .or_insert(ReplicaVotes { count: 0 });
+                                // FIXME: cache every reply's digest, instead of just the first one
+                                // we receive, because the first reply may be faulty, while the
+                                // remaining ones may be correct, therefore we would not be able to
+                                // count at least f+1 identical replies
+                                //
+                                // NOTE: the `digest()` call in the header returns the digest of
+                                // the payload
+                                .or_insert_with(|| ReplicaVotes { count: 0, digest: header.digest().clone() });
+
+                            // reply already delivered to application
+                            if votes.count > params.f() {
+                                continue;
+                            }
 
                             // register new reply received
-                            votes.count += 1;
+                            if &votes.digest == header.digest() {
+                                votes.count += 1;
+                            }
 
-                            // TODO: check if we got equivalent responses by
-                            // verifying the digest; furthermore, check if
-                            // a replica hasn't voted twice for the same
-                            // digest
+                            // TODO: check if a replica hasn't voted
+                            // twice for the same digest
 
-                            if votes.count == params.quorum() {
+                            // wait for at least f+1 identical replies
+                            if votes.count > params.f() {
                                 // register response
                                 {
                                     let mut ready = data.ready.lock();

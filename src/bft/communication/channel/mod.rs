@@ -12,17 +12,23 @@ mod async_channel_mpmc;
 use std::pin::Pin;
 use std::future::Future;
 use std::task::{Poll, Context};
+use std::time::Duration;
 
 use futures::select;
-use futures::future::FusedFuture;
+use futures_timer::Delay;
+use futures::future::{
+    FusedFuture,
+    FutureExt,
+};
 
 use crate::bft::error::*;
+use crate::bft::async_runtime as rt;
 use crate::bft::communication::message::{
-    Header,
     Message,
     SystemMessage,
     RequestMessage,
     ReplyMessage,
+    StoredMessage,
     ConsensusMessage,
 };
 
@@ -123,44 +129,94 @@ impl<'a, T> FusedFuture for ChannelRxFut<'a, T> {
 /// Represents the sending half of a `Message` channel.
 ///
 /// The handle can be cloned as many times as needed for cheap.
-pub struct MessageChannelTx<O, P> {
-    other: ChannelTx<Message<O, P>>,
-    requests: ChannelTx<(Header, RequestMessage<O>)>,
-    replies: ChannelTx<(Header, ReplyMessage<P>)>,
-    consensus: ChannelTx<(Header, ConsensusMessage)>,
+pub struct MessageChannelTx<S, O, P> {
+    other: ChannelTx<Message<S, O, P>>,
+    requests: ChannelTx<StoredMessage<RequestMessage<O>>>,
+    replies: ChannelTx<StoredMessage<ReplyMessage<P>>>,
+    consensus: ChannelTx<StoredMessage<ConsensusMessage<O>>>,
 }
 
 /// Represents the receiving half of a `Message` channel.
-pub struct MessageChannelRx<O, P> {
-    other: ChannelRx<Message<O, P>>,
-    requests: ChannelRx<(Header, RequestMessage<O>)>,
-    replies: ChannelRx<(Header, ReplyMessage<P>)>,
-    consensus: ChannelRx<(Header, ConsensusMessage)>,
+pub struct MessageChannelRx<S, O, P> {
+    other: ChannelRx<Message<S, O, P>>,
+    requests: ChannelRx<Vec<StoredMessage<RequestMessage<O>>>>,
+    replies: ChannelRx<StoredMessage<ReplyMessage<P>>>,
+    consensus: ChannelRx<StoredMessage<ConsensusMessage<O>>>,
+}
+
+pub struct RequestBatcher<O> {
+    current_batch: Vec<StoredMessage<RequestMessage<O>>>,
+    receiver: ChannelRx<StoredMessage<RequestMessage<O>>>,
+    batcher: ChannelTx<Vec<StoredMessage<RequestMessage<O>>>>,
+}
+
+impl<O: Send + 'static> RequestBatcher<O> {
+    pub fn spawn(mut self, batch_size: usize) {
+        rt::spawn(async move {
+            // TODO: make this customizable
+            const BATCH_POLL: Duration = Duration::from_millis(10);
+
+            loop {
+                select! {
+                    _ = Delay::new(BATCH_POLL).fuse() => {
+                        if self.current_batch.len() > 0 {
+                            self.send_batch().await;
+                        }
+                    },
+                    result = self.receiver.recv() => {
+                        let request = match result {
+                            Ok(r) => r,
+                            Err(_) => return,
+                        };
+                        self.current_batch.push(request);
+                        if self.current_batch.len() == batch_size {
+                            self.send_batch().await;
+                        }
+                    },
+                }
+            }
+        });
+    }
+
+    async fn send_batch(&mut self) {
+        let batch = std::mem::replace(&mut self.current_batch, Vec::new());
+        self.batcher.send(batch).await.unwrap_or(());
+    }
 }
 
 /// Creates a new channel that can queue up to `bound` messages
 /// from different async senders.
-pub fn new_message_channel<O, P>(bound: usize) -> (MessageChannelTx<O, P>, MessageChannelRx<O, P>) {
+pub fn new_message_channel<S, O, P>(
+    bound: usize,
+) -> (MessageChannelTx<S, O, P>, MessageChannelRx<S, O, P>, RequestBatcher<O>) {
     let (c_tx, c_rx) = new_bounded(bound);
-    let (r_tx, r_rx) = new_bounded(bound);
     let (rr_tx, rr_rx) = new_bounded(bound);
     let (o_tx, o_rx) = new_bounded(bound);
+
+    let (req_tx, req_rx) = new_bounded(bound);
+    let (reqbatch_tx, reqbatch_rx) = new_bounded(bound);
+
+    let batcher = RequestBatcher {
+        receiver: req_rx,
+        batcher: reqbatch_tx,
+        current_batch: Vec::new(),
+    };
     let tx = MessageChannelTx {
         consensus: c_tx,
-        requests: r_tx,
+        requests: req_tx,
         replies: rr_tx,
         other: o_tx,
     };
     let rx = MessageChannelRx {
         consensus: c_rx,
-        requests: r_rx,
+        requests: reqbatch_rx,
         replies: rr_rx,
         other: o_rx,
     };
-    (tx, rx)
+    (tx, rx, batcher)
 }
 
-impl<O, P> Clone for MessageChannelTx<O, P> {
+impl<S, O, P> Clone for MessageChannelTx<S, O, P> {
     fn clone(&self) -> Self {
         Self {
             consensus: self.consensus.clone(),
@@ -171,19 +227,31 @@ impl<O, P> Clone for MessageChannelTx<O, P> {
     }
 }
 
-impl<O, P> MessageChannelTx<O, P> {
-    pub async fn send(&mut self, message: Message<O, P>) -> Result<()> {
+impl<S, O, P> MessageChannelTx<S, O, P> {
+    pub async fn send(&mut self, message: Message<S, O, P>) -> Result<()> {
         match message {
             Message::System(header, message) => {
                 match message {
                     SystemMessage::Request(message) => {
-                        self.requests.send((header, message)).await
+                        let m = StoredMessage::new(header, message);
+                        self.requests.send(m).await
                     },
                     SystemMessage::Reply(message) => {
-                        self.replies.send((header, message)).await
+                        let m = StoredMessage::new(header, message);
+                        self.replies.send(m).await
                     },
                     SystemMessage::Consensus(message) => {
-                        self.consensus.send((header, message)).await
+                        let m = StoredMessage::new(header, message);
+                        self.consensus.send(m).await
+                    },
+                    message @ SystemMessage::Cst(_) => {
+                        self.other.send(Message::System(header, message)).await
+                    },
+                    message @ SystemMessage::ViewChange(_) => {
+                        self.other.send(Message::System(header, message)).await
+                    },
+                    message @ SystemMessage::ForwardedRequests(_) => {
+                        self.other.send(Message::System(header, message)).await
                     },
                 }
             },
@@ -194,19 +262,19 @@ impl<O, P> MessageChannelTx<O, P> {
     }
 }
 
-impl<O, P> MessageChannelRx<O, P> {
-    pub async fn recv(&mut self) -> Result<Message<O, P>> {
+impl<S, O, P> MessageChannelRx<S, O, P> {
+    pub async fn recv(&mut self) -> Result<Message<S, O, P>> {
         let message = select! {
             result = self.consensus.recv() => {
-                let (h, c) = result?;
+                let (h, c) = result?.into_inner();
                 Message::System(h, SystemMessage::Consensus(c))
             },
             result = self.requests.recv() => {
-                let (h, r) = result?;
-                Message::System(h, SystemMessage::Request(r))
+                let batch = result?;
+                Message::RequestBatch(batch)
             },
             result = self.replies.recv() => {
-                let (h, r) = result?;
+                let (h, r) = result?.into_inner();
                 Message::System(h, SystemMessage::Reply(r))
             },
             result = self.other.recv() => {

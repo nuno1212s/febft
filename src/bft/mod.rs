@@ -9,12 +9,15 @@ pub mod collections;
 pub mod executable;
 pub mod threadpool;
 pub mod consensus;
+pub mod ordering;
+pub mod timeouts;
 pub mod globals;
-pub mod history;
 pub mod crypto;
 pub mod error;
 pub mod prng;
 pub mod core;
+pub mod sync;
+pub mod cst;
 
 use std::ops::Drop;
 
@@ -27,6 +30,8 @@ static INITIALIZED: Flag = Flag::new();
 pub struct InitConfig {
     /// Number of threads used by the async runtime.
     pub async_threads: usize,
+    /// Number of threads used by the global thread pool.
+    pub pool_threads: usize,
 }
 
 /// Handle to the global data.
@@ -42,6 +47,7 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
     if INITIALIZED.test() {
         return Ok(None);
     }
+    threadpool::init(c.pool_threads)?;
     async_runtime::init(c.async_threads)?;
     communication::socket::init()?;
     INITIALIZED.set();
@@ -56,6 +62,7 @@ impl Drop for InitGuard {
 
 unsafe fn drop() -> Result<()> {
     INITIALIZED.unset();
+    threadpool::drop()?;
     async_runtime::drop()?;
     communication::socket::drop()?;
     Ok(())

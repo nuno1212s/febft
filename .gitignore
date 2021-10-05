@@ -3,4 +3,4 @@
 /Cargo.lock
 
 # ignore vim :mksession
-/session.vim
+/*.vim
