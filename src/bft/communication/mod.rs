@@ -790,9 +790,7 @@ where
     /// Method called upon a `Message::ConnectedRx`.
     pub fn handle_connected_rx(&mut self, peer_id: NodeId, mut sock: SecureSocketRecv) {
         // we are a server node
-        if let PeerTx::Server(ref lock) = &self.peer_tx {
-            let peer_tx = lock.read();
-
+        if let PeerTx::Server(_) = &self.peer_tx {
             // the node whose conn we accepted is a client
             // and we aren't connected to it yet
             if peer_id >= self.first_cli {
