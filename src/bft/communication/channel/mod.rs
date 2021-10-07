@@ -178,7 +178,6 @@ impl<O: Send + 'static> RequestBatcher<O> {
                     {
                         let mut current_batch = shared.current_batch.lock();
                         if current_batch.len() > 0 {
-                            eprintln!("Batch: {}", current_batch.len());
                             break std::mem::take(&mut *current_batch);
                         }
                     }
