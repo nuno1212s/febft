@@ -10,16 +10,16 @@ mod flume_mpmc;
 mod async_channel_mpmc;
 
 use std::pin::Pin;
+use std::sync::Arc;
 use std::future::Future;
 use std::task::{Poll, Context};
-use std::time::Duration;
+use std::time::{Instant, Duration};
 
 use futures::select;
 use futures_timer::Delay;
-use futures::future::{
-    FusedFuture,
-    FutureExt,
-};
+use event_listener::Event;
+use futures::future::FusedFuture;
+use parking_lot::Mutex;
 
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
@@ -144,43 +144,105 @@ pub struct MessageChannelRx<S, O, P> {
     consensus: ChannelRx<StoredMessage<ConsensusMessage<O>>>,
 }
 
+struct RequestBatcherShared<O> {
+    event: Event,
+    current_batch: Mutex<Vec<StoredMessage<RequestMessage<O>>>>,
+}
+
 pub struct RequestBatcher<O> {
-    current_batch: Vec<StoredMessage<RequestMessage<O>>>,
+    shared: Arc<RequestBatcherShared<O>>,
     receiver: ChannelRx<StoredMessage<RequestMessage<O>>>,
     batcher: ChannelTx<Vec<StoredMessage<RequestMessage<O>>>>,
 }
 
+enum Batch<O> {
+    Now(Vec<StoredMessage<RequestMessage<O>>>),
+    Notify,
+    Wait,
+}
+
 impl<O: Send + 'static> RequestBatcher<O> {
     pub fn spawn(mut self, batch_size: usize) {
-        rt::spawn(async move {
-            // each cop node takes around 120-200 µs to ping each other
-            const BATCH_POLL: Duration = Duration::from_micros(100);
+        // TODO: fine tune these vals
+        const TIMEOUT: Duration = Duration::from_secs(5);
+        const BATCH_UNTIL: Duration = Duration::from_millis(1000);
 
+        let mut batcher = self.batcher.clone();
+        let shared = Arc::clone(&self.shared);
+
+        // handle events to prepare new batch
+        rt::spawn(async move {
             loop {
-                select! {
-                    _ = Delay::new(BATCH_POLL).fuse() => {
-                        if self.current_batch.len() > 0 {
-                            self.send_batch().await;
+                let batch = loop {
+                    // check if batch is ready...
+                    {
+                        let mut current_batch = shared.current_batch.lock();
+                        if current_batch.len() > 0 {
+                            break std::mem::take(&mut *current_batch);
                         }
-                    },
-                    result = self.receiver.recv() => {
-                        let request = match result {
-                            Ok(r) => r,
-                            Err(_) => return,
-                        };
-                        self.current_batch.push(request);
-                        if self.current_batch.len() == batch_size {
-                            self.send_batch().await;
+                    }
+
+                    // listen for batch changes
+                    shared.event.listen().await;
+                };
+
+                let _ = batcher.send(batch).await;
+            }
+        });
+
+        let shared = Arc::clone(&self.shared);
+        let mut batch_until = Instant::now() + BATCH_UNTIL;
+        let mut last_request = None;
+
+        // spuriously wake up event listeners
+        rt::spawn(async move {
+            loop {
+                Delay::new(TIMEOUT).await;
+                shared.event.notify(1);
+            }
+        });
+
+        // handle reception of requests
+        rt::spawn(async move {
+            loop {
+                let result = self.receiver.recv().await;
+                let request = match result {
+                    Ok(r) => r,
+                    Err(_) => return,
+                };
+
+                let batch = {
+                    let now = Instant::now();
+                    let mut current_batch = self.shared
+                        .current_batch
+                        .lock();
+
+                    current_batch.push(request);
+
+                    let batch = if current_batch.len() == batch_size {
+                        Batch::Now(std::mem::take(&mut *current_batch))
+                    } else {
+                        let last_request = last_request.unwrap_or(now);
+
+                        if last_request < batch_until {
+                            Batch::Wait
+                        } else {
+                            batch_until = now + BATCH_UNTIL;
+                            Batch::Notify
                         }
-                    },
+                    };
+
+                    last_request = Some(now);
+                    batch
+                };
+
+                match batch {
+                    Batch::Now(batch) => self.batcher.send(batch).await.unwrap_or(()),
+                    Batch::Notify => self.shared.event.notify(1),
+                    Batch::Wait => (),
                 }
             }
         });
-    }
-
-    async fn send_batch(&mut self) {
-        let batch = std::mem::replace(&mut self.current_batch, Vec::new());
-        self.batcher.send(batch).await.unwrap_or(());
     }
 }
 
@@ -199,7 +261,10 @@ pub fn new_message_channel<S, O, P>(
     let batcher = RequestBatcher {
         receiver: req_rx,
         batcher: reqbatch_tx,
-        current_batch: Vec::new(),
+        shared: Arc::new(RequestBatcherShared {
+            event: Event::new(),
+            current_batch: Mutex::new(Vec::new()),
+        }),
     };
     let tx = MessageChannelTx {
         consensus: c_tx,
