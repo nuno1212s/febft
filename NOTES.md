@@ -1,3 +1,9 @@
+# dynamic batch size
+
+implement dynamic instrospection of the batch size being used,
+and introspect the time between each constructed batch,
+to minimize request latency and maximize the system throughput
+
 # check what is saved to disk on bft smart
 
     $ cd ~/Documents/tese/bft-smart/src/bftsmart
