@@ -178,6 +178,7 @@ impl<O: Send + 'static> RequestBatcher<O> {
                     {
                         let mut current_batch = shared.current_batch.lock();
                         if current_batch.len() > 0 {
+                            eprintln!("Batch: {}", current_batch.len());
                             break std::mem::take(&mut *current_batch);
                         }
                     }
@@ -192,7 +193,6 @@ impl<O: Send + 'static> RequestBatcher<O> {
 
         let shared = Arc::clone(&self.shared);
         let mut batch_until = Instant::now() + BATCH_UNTIL;
-        let mut last_request = None;
 
         // spuriously wake up event listeners
         rt::spawn(async move {
@@ -220,19 +220,15 @@ impl<O: Send + 'static> RequestBatcher<O> {
                     current_batch.push(request);
 
                     let batch = if current_batch.len() == batch_size {
+                        batch_until = now + BATCH_UNTIL;
                         Batch::Now(std::mem::take(&mut *current_batch))
+                    } else if now < batch_until {
+                        Batch::Wait
                     } else {
-                        let last_request = last_request.unwrap_or(now);
-
-                        if last_request < batch_until {
-                            Batch::Wait
-                        } else {
-                            batch_until = now + BATCH_UNTIL;
-                            Batch::Notify
-                        }
+                        batch_until = now + BATCH_UNTIL;
+                        Batch::Notify
                     };
 
-                    last_request = Some(now);
                     batch
                 };
 
