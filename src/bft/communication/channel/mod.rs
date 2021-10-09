@@ -144,9 +144,38 @@ pub struct MessageChannelRx<S, O, P> {
     consensus: ChannelRx<StoredMessage<ConsensusMessage<O>>>,
 }
 
+impl<O> BatcherData<O> {
+    // num of secs to batch until
+    const BATCH_UNTIL: f64 = 1.0;
+
+    fn default_timeout() -> Duration {
+        Duration::from_secs_f64(Self::BATCH_UNTIL)
+    }
+
+    fn update_timeout(&mut self) -> Duration {
+        let current_batch_size = self.batch.len() as f64;
+        let last_batch_size = self.last_batch_size as f64;
+
+        self.last_timeout = (current_batch_size / last_batch_size) * self.last_timeout;
+        self.last_batch_size = self.batch.len();
+
+        if self.last_timeout > Self::BATCH_UNTIL {
+            self.last_timeout = Self::BATCH_UNTIL;
+        }
+
+        Duration::from_secs_f64(self.last_timeout)
+    }
+}
+
+struct BatcherData<O> {
+    last_timeout: f64,
+    last_batch_size: usize,
+    batch: Vec<StoredMessage<RequestMessage<O>>>,
+}
+
 struct RequestBatcherShared<O> {
     event: Event,
-    current_batch: Mutex<Vec<StoredMessage<RequestMessage<O>>>>,
+    current: Mutex<BatcherData<O>>,
 }
 
 pub struct RequestBatcher<O> {
@@ -165,7 +194,6 @@ impl<O: Send + 'static> RequestBatcher<O> {
     pub fn spawn(mut self, batch_size: usize) {
         // TODO: fine tune these vals
         const TIMEOUT: Duration = Duration::from_secs(5);
-        const BATCH_UNTIL: Duration = Duration::from_millis(1000);
 
         let mut batcher = self.batcher.clone();
         let shared = Arc::clone(&self.shared);
@@ -176,9 +204,10 @@ impl<O: Send + 'static> RequestBatcher<O> {
                 let batch = loop {
                     // check if batch is ready...
                     {
-                        let mut current_batch = shared.current_batch.lock();
-                        if current_batch.len() > 0 {
-                            break std::mem::take(&mut *current_batch);
+                        let mut current = shared.current.lock();
+                        if current.batch.len() > 0 {
+                            eprintln!("Timeout: {:.3} | Batch: {}", current.last_timeout, current.batch.len());
+                            break std::mem::take(&mut current.batch);
                         }
                     }
 
@@ -191,7 +220,7 @@ impl<O: Send + 'static> RequestBatcher<O> {
         });
 
         let shared = Arc::clone(&self.shared);
-        let mut batch_until = Instant::now() + BATCH_UNTIL;
+        let mut batch_until = Instant::now() + BatcherData::<O>::default_timeout();
 
         // spuriously wake up event listeners
         rt::spawn(async move {
@@ -212,19 +241,20 @@ impl<O: Send + 'static> RequestBatcher<O> {
 
                 let batch = {
                     let now = Instant::now();
-                    let mut current_batch = self.shared
-                        .current_batch
+                    let mut current = self.shared
+                        .current
                         .lock();
 
-                    current_batch.push(request);
+                    current.batch.push(request);
 
-                    let batch = if current_batch.len() == batch_size {
-                        batch_until = now + BATCH_UNTIL;
-                        Batch::Now(std::mem::take(&mut *current_batch))
+                    let batch = if current.batch.len() == batch_size {
+                        eprintln!("Timeout: {:.3} | Batch: {}", current.last_timeout, current.batch.len());
+                        batch_until = now + current.update_timeout();
+                        Batch::Now(std::mem::take(&mut current.batch))
                     } else if now < batch_until {
                         Batch::Wait
                     } else {
-                        batch_until = now + BATCH_UNTIL;
+                        batch_until = now + current.update_timeout();
                         Batch::Notify
                     };
 
@@ -258,7 +288,11 @@ pub fn new_message_channel<S, O, P>(
         batcher: reqbatch_tx,
         shared: Arc::new(RequestBatcherShared {
             event: Event::new(),
-            current_batch: Mutex::new(Vec::new()),
+            current: Mutex::new(BatcherData {
+                last_timeout: BatcherData::<O>::BATCH_UNTIL,
+                last_batch_size: 1,
+                batch: Vec::new(),
+            }),
         }),
     };
     let tx = MessageChannelTx {
