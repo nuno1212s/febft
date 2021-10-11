@@ -217,10 +217,10 @@ pub struct NodeConfig {
 }
 
 // max no. of messages allowed in the channel
-const NODE_CHAN_BOUND: usize = 128;
+const NODE_CHAN_BOUND: usize = 50000;
 
 // max no. of SendTo's to inline before doing a heap alloc
-const NODE_VIEWSIZ: usize = 8;
+const NODE_VIEWSIZ: usize = 16;
 
 type SendTos<D> = SmallVec<[SendTo<D>; NODE_VIEWSIZ]>;
 
