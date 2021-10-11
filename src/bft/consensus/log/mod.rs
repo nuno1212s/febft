@@ -35,7 +35,7 @@ use crate::bft::ordering::{
 ///
 /// Every `PERIOD` messages, the message log is cleared,
 /// and a new log checkpoint is initiated.
-pub const PERIOD: u32 = i32::MAX as u32;
+pub const PERIOD: u32 = 120_000_000;
 
 /// Information reported after a logging operation.
 pub enum Info {
