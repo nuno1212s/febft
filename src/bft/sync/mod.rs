@@ -436,23 +436,23 @@ where
 
     fn watch_request_impl(
         &mut self,
-        phase: TimeoutPhase,
-        digest: Digest,
-        timeouts: &TimeoutsHandle<S>,
+        _phase: TimeoutPhase,
+        _digest: Digest,
+        _timeouts: &TimeoutsHandle<S>,
     ) {
-        if !self.watching_timeouts {
-            let seq = self.next_timeout();
-            timeouts.timeout(self.timeout_dur, TimeoutKind::ClientRequests(seq));
-            self.watching_timeouts = true;
-        }
-        self.watching.insert(digest, phase);
+        //if !self.watching_timeouts {
+        //    let seq = self.next_timeout();
+        //    timeouts.timeout(self.timeout_dur, TimeoutKind::ClientRequests(seq));
+        //    self.watching_timeouts = true;
+        //}
+        //self.watching.insert(digest, phase);
     }
 
     /// Remove a client request with digest `digest` from the watched list
     /// of requests.
-    pub fn unwatch_request(&mut self, digest: &Digest) {
-        self.watching.remove(digest);
-        self.watching_timeouts = !self.watching.is_empty();
+    pub fn unwatch_request(&mut self, _digest: &Digest) {
+        //self.watching.remove(digest);
+        //self.watching_timeouts = !self.watching.is_empty();
     }
 
     /// Stop watching all pending client requests.
@@ -463,16 +463,16 @@ where
     }
 
     /// Start watching all pending client requests.
-    pub fn watch_all_requests(&mut self, timeouts: &TimeoutsHandle<S>) {
-        let phase = TimeoutPhase::Init(Instant::now());
-        for timeout_phase in self.watching.values_mut() {
-            *timeout_phase = phase;
-        }
-        self.watching_timeouts = !self.watching.is_empty();
-        if self.watching_timeouts {
-            let seq = self.next_timeout();
-            timeouts.timeout(self.timeout_dur, TimeoutKind::ClientRequests(seq));
-        }
+    pub fn watch_all_requests(&mut self, _timeouts: &TimeoutsHandle<S>) {
+        //let phase = TimeoutPhase::Init(Instant::now());
+        //for timeout_phase in self.watching.values_mut() {
+        //    *timeout_phase = phase;
+        //}
+        //self.watching_timeouts = !self.watching.is_empty();
+        //if self.watching_timeouts {
+        //    let seq = self.next_timeout();
+        //    timeouts.timeout(self.timeout_dur, TimeoutKind::ClientRequests(seq));
+        //}
     }
 
     /// Install a new view received from the CST protocol, or from
@@ -822,50 +822,51 @@ where
     //
     pub fn client_requests_timed_out(
         &mut self,
-        seq: SeqNo,
-        timeouts: &TimeoutsHandle<S>,
+        _seq: SeqNo,
+        _timeouts: &TimeoutsHandle<S>,
     ) -> SynchronizerStatus {
-        let ignore_timeout = !self.watching_timeouts
-            || seq.next() != self.timeout_seq;
+        SynchronizerStatus::Nil
+        //let ignore_timeout = !self.watching_timeouts
+        //    || seq.next() != self.timeout_seq;
 
-        if ignore_timeout {
-            return SynchronizerStatus::Nil;
-        }
+        //if ignore_timeout {
+        //    return SynchronizerStatus::Nil;
+        //}
 
-        // iterate over list of watched pending requests,
-        // and select the ones to be stopped or forwarded
-        // to peer nodes
-        let mut forwarded = Vec::new();
-        let mut stopped = Vec::new();
-        let now = Instant::now();
+        //// iterate over list of watched pending requests,
+        //// and select the ones to be stopped or forwarded
+        //// to peer nodes
+        //let mut forwarded = Vec::new();
+        //let mut stopped = Vec::new();
+        //let now = Instant::now();
 
-        for (digest, timeout_phase) in self.watching.iter_mut() {
-            // NOTE:
-            // =====================================================
-            // - on the first timeout we forward pending requests to
-            //   the leader
-            // - on the second timeout, we start a view change by
-            //   broadcasting a STOP message
-            match timeout_phase {
-                TimeoutPhase::Init(i) if now.duration_since(*i) > self.timeout_dur => {
-                    forwarded.push(digest.clone());
-                    // NOTE: we don't update the timeout phase here, because this is
-                    // done with the message we receive locally containing the forwarded
-                    // requests, on `watch_forwarded_requests`
-                },
-                TimeoutPhase::TimedOutOnce(i) if now.duration_since(*i) > self.timeout_dur => {
-                    stopped.push(digest.clone());
-                    *timeout_phase = TimeoutPhase::TimedOut;
-                },
-                _ => (),
-            }
-        }
+        //for (digest, timeout_phase) in self.watching.iter_mut() {
+        //    // NOTE:
+        //    // =====================================================
+        //    // - on the first timeout we forward pending requests to
+        //    //   the leader
+        //    // - on the second timeout, we start a view change by
+        //    //   broadcasting a STOP message
+        //    match timeout_phase {
+        //        TimeoutPhase::Init(i) if now.duration_since(*i) > self.timeout_dur => {
+        //            forwarded.push(digest.clone());
+        //            // NOTE: we don't update the timeout phase here, because this is
+        //            // done with the message we receive locally containing the forwarded
+        //            // requests, on `watch_forwarded_requests`
+        //        },
+        //        TimeoutPhase::TimedOutOnce(i) if now.duration_since(*i) > self.timeout_dur => {
+        //            stopped.push(digest.clone());
+        //            *timeout_phase = TimeoutPhase::TimedOut;
+        //        },
+        //        _ => (),
+        //    }
+        //}
 
-        // restart timer
-        let seq = self.next_timeout();
-        timeouts.timeout(self.timeout_dur, TimeoutKind::ClientRequests(seq));
+        //// restart timer
+        //let seq = self.next_timeout();
+        //timeouts.timeout(self.timeout_dur, TimeoutKind::ClientRequests(seq));
 
-        SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
+        //SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
     }
 
     /// Trigger a view change locally.

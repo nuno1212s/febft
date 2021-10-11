@@ -668,31 +668,31 @@ where
                     _ => (),
                 }
             },
-            TimeoutKind::ClientRequests(timeout_seq) => {
-                let status = self.synchronizer
-                    .client_requests_timed_out(timeout_seq, &self.timeouts);
+            TimeoutKind::ClientRequests(_timeout_seq) => {
+                //let status = self.synchronizer
+                //    .client_requests_timed_out(timeout_seq, &self.timeouts);
 
-                match status {
-                    SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
-                        if forwarded.len() > 0 {
-                            let requests = self.log.clone_requests(&forwarded);
-                            self.synchronizer.forward_requests(
-                                requests,
-                                &mut self.node,
-                            );
-                        }
-                        if stopped.len() > 0 {
-                            let stopped = self.log.clone_requests(&stopped);
-                            self.synchronizer.begin_view_change(
-                                Some(stopped),
-                                &mut self.node,
-                            );
-                            self.phase = ReplicaPhase::SyncPhase;
-                        }
-                    },
-                    // nothing to do
-                    _ => (),
-                }
+                //match status {
+                //    SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
+                //        if forwarded.len() > 0 {
+                //            let requests = self.log.clone_requests(&forwarded);
+                //            self.synchronizer.forward_requests(
+                //                requests,
+                //                &mut self.node,
+                //            );
+                //        }
+                //        if stopped.len() > 0 {
+                //            let stopped = self.log.clone_requests(&stopped);
+                //            self.synchronizer.begin_view_change(
+                //                Some(stopped),
+                //                &mut self.node,
+                //            );
+                //            self.phase = ReplicaPhase::SyncPhase;
+                //        }
+                //    },
+                //    // nothing to do
+                //    _ => (),
+                //}
             },
         }
     }
