@@ -144,33 +144,113 @@ pub struct MessageChannelRx<S, O, P> {
     consensus: ChannelRx<StoredMessage<ConsensusMessage<O>>>,
 }
 
-impl<O> BatcherData<O> {
-    // num of secs to batch until
-    const BATCH_UNTIL: f64 = 1.0;
-
-    fn default_timeout() -> Duration {
-        Duration::from_secs_f64(Self::BATCH_UNTIL)
-    }
-
-    fn update_timeout(&mut self) -> Duration {
-        let current_batch_size = self.batch.len() as f64;
-        let last_batch_size = self.last_batch_size as f64;
-
-        self.last_timeout = (current_batch_size / last_batch_size) * self.last_timeout;
-        self.last_batch_size = self.batch.len();
-
-        if self.last_timeout > Self::BATCH_UNTIL {
-            self.last_timeout = Self::BATCH_UNTIL;
-        }
-
-        Duration::from_secs_f64(self.last_timeout)
-    }
+struct BatcherData<O> {
+    batch: Vec<StoredMessage<RequestMessage<O>>>,
 }
 
-struct BatcherData<O> {
-    last_timeout: f64,
-    last_batch_size: usize,
-    batch: Vec<StoredMessage<RequestMessage<O>>>,
+struct BatcherTimer {
+    current_load: f32,
+    current_request_count: usize,
+    now: Instant,
+    batch_until: Instant,
+    batch_fill_start: Instant,
+    last_load_time: Instant,
+    batch_load_size: [Option<usize>; 5],
+}
+
+impl BatcherTimer {
+    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(1);
+
+    fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            now,
+            current_load: 0.0,
+            last_load_time: now,
+            batch_fill_start: now,
+            current_request_count: 0,
+            batch_until: now + Self::DEFAULT_TIMEOUT,
+            batch_load_size: [None, None, None, None, None],
+        }
+    }
+
+    fn update(&mut self, max_batch_size: usize) {
+        self.current_request_count += 1;
+        self.now = Instant::now();
+
+        if self.now.duration_since(self.last_load_time) >= Duration::from_secs(1) {
+            let reqs = if self.current_request_count > max_batch_size {
+                max_batch_size as f32
+            } else {
+                self.current_request_count as f32
+            };
+
+            self.current_load = reqs / (max_batch_size as f32);
+            self.current_request_count = 0;
+            self.last_load_time = self.now;
+        }
+    }
+
+    fn wait(&self) -> bool {
+        if self.now < self.batch_until {
+            eprintln!("Waiting: {:?}", self.batch_until - self.now);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn batch_filled<O: Send + 'static>(
+        &mut self,
+        shared: &Arc<RequestBatcherShared<O>>,
+        batch_size: usize,
+        max_batch_size: usize,
+    ) {
+        let elapsed = self.now
+            .duration_since(self.batch_fill_start)
+            .as_secs_f32();
+
+        let curr_batch = batch_size as f32;
+        let last_batch = self.get_batch(max_batch_size) as f32;
+
+        let next_timeout = (curr_batch / last_batch) * elapsed;
+        let next_timeout = Duration::from_secs_f32(next_timeout);
+
+        self.batch_until = self.now + next_timeout;
+        self.batch_fill_start = self.now;
+        self.set_batch(batch_size);
+
+        let shared = Arc::clone(shared);
+
+        // spuriously wake up event listeners
+        rt::spawn(async move {
+            loop {
+                Delay::new(next_timeout).await;
+                shared.event.notify(1);
+            }
+        });
+    }
+
+    fn set_batch(&mut self, batch_size: usize) {
+        self.batch_load_size[self.load_setting()] = Some(batch_size);
+        eprintln!("Batch history: {:?}", self.batch_load_size);
+    }
+
+    fn get_batch(&self, max_batch_size: usize) -> usize {
+        self.batch_load_size[self.load_setting()]
+            .unwrap_or_else(|| (self.current_load * (max_batch_size as f32)) as usize)
+    }
+
+    fn load_setting(&self) -> usize {
+        let load = self.current_load;
+        match () {
+            _ if load < 0.1 => 0,
+            _ if load < 0.3 => 1,
+            _ if load < 0.6 => 2,
+            _ if load < 0.8 => 3,
+            _  => 4,
+        }
+    }
 }
 
 struct RequestBatcherShared<O> {
@@ -192,9 +272,6 @@ enum Batch<O> {
 
 impl<O: Send + 'static> RequestBatcher<O> {
     pub fn spawn(mut self, batch_size: usize) {
-        // TODO: fine tune these vals
-        const TIMEOUT: Duration = Duration::from_secs(5);
-
         let mut batcher = self.batcher.clone();
         let shared = Arc::clone(&self.shared);
 
@@ -206,7 +283,7 @@ impl<O: Send + 'static> RequestBatcher<O> {
                     {
                         let mut current = shared.current.lock();
                         if current.batch.len() > 0 {
-                            eprintln!("Timeout: {:.3} | Batch: {}", current.last_timeout, current.batch.len());
+                            eprintln!("Batch: {}", current.batch.len());
                             break std::mem::take(&mut current.batch);
                         }
                     }
@@ -219,19 +296,10 @@ impl<O: Send + 'static> RequestBatcher<O> {
             }
         });
 
-        let shared = Arc::clone(&self.shared);
-        let mut batch_until = Instant::now() + BatcherData::<O>::default_timeout();
-
-        // spuriously wake up event listeners
-        rt::spawn(async move {
-            loop {
-                Delay::new(TIMEOUT).await;
-                shared.event.notify(1);
-            }
-        });
-
         // handle reception of requests
         rt::spawn(async move {
+            let mut timer = BatcherTimer::new();
+
             loop {
                 let result = self.receiver.recv().await;
                 let request = match result {
@@ -240,7 +308,10 @@ impl<O: Send + 'static> RequestBatcher<O> {
                 };
 
                 let batch = {
-                    let now = Instant::now();
+                    // update the calc of the load of the system
+                    timer.update(batch_size);
+
+                    eprintln!("LOCK");
                     let mut current = self.shared
                         .current
                         .lock();
@@ -248,18 +319,21 @@ impl<O: Send + 'static> RequestBatcher<O> {
                     current.batch.push(request);
 
                     let batch = if current.batch.len() == batch_size {
-                        eprintln!("Timeout: {:.3} | Batch: {}", current.last_timeout, current.batch.len());
-                        batch_until = now + current.update_timeout();
+                        eprintln!("Batch: {} | Load: {:.3}", current.batch.len(), timer.current_load);
+                        timer.batch_filled(&self.shared, batch_size, batch_size);
                         Batch::Now(std::mem::take(&mut current.batch))
-                    } else if now < batch_until {
+                    } else if timer.wait() {
+                        eprintln!("WAIT");
                         Batch::Wait
                     } else {
-                        batch_until = now + current.update_timeout();
+                        eprintln!("Batch: {} | Load: {:.3}", current.batch.len(), timer.current_load);
+                        timer.batch_filled(&self.shared, current.batch.len(), batch_size);
                         Batch::Notify
                     };
 
                     batch
                 };
+                eprintln!("UNLOCK");
 
                 match batch {
                     Batch::Now(batch) => self.batcher.send(batch).await.unwrap_or(()),
@@ -289,8 +363,6 @@ pub fn new_message_channel<S, O, P>(
         shared: Arc::new(RequestBatcherShared {
             event: Event::new(),
             current: Mutex::new(BatcherData {
-                last_timeout: BatcherData::<O>::BATCH_UNTIL,
-                last_batch_size: 1,
                 batch: Vec::new(),
             }),
         }),
