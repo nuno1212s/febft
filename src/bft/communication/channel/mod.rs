@@ -149,28 +149,26 @@ struct BatcherData<O> {
 }
 
 struct BatcherTimer {
+    timer_seq: u32,
     current_load: f32,
     current_request_count: usize,
     now: Instant,
     batch_until: Instant,
-    batch_fill_start: Instant,
     last_load_time: Instant,
-    batch_load_size: [Option<usize>; 5],
 }
 
 impl BatcherTimer {
-    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(1);
+    const DEFAULT_TIMEOUT_SECS: f32 = 2.0;
 
     fn new() -> Self {
         let now = Instant::now();
         Self {
             now,
+            timer_seq: 0,
             current_load: 0.0,
             last_load_time: now,
-            batch_fill_start: now,
             current_request_count: 0,
-            batch_until: now + Self::DEFAULT_TIMEOUT,
-            batch_load_size: [None, None, None, None, None],
+            batch_until: now + Duration::from_secs_f32(Self::DEFAULT_TIMEOUT_SECS),
         }
     }
 
@@ -191,65 +189,35 @@ impl BatcherTimer {
         }
     }
 
-    fn wait(&self) -> bool {
+    fn wait(&mut self, notifier: &ChannelTx<u32>) -> bool {
         if self.now < self.batch_until {
-            eprintln!("Waiting: {:?}", self.batch_until - self.now);
             true
         } else {
+            self.batch_until = self.now + self.delta();
+            self.launch_timer(notifier);
             false
         }
     }
 
-    fn batch_filled<O: Send + 'static>(
-        &mut self,
-        shared: &Arc<RequestBatcherShared<O>>,
-        batch_size: usize,
-        max_batch_size: usize,
-    ) {
-        let elapsed = self.now
-            .duration_since(self.batch_fill_start)
-            .as_secs_f32();
+    fn launch_timer(&mut self, notifier: &ChannelTx<u32>) {
+        let delay = self.delta();
+        let seq = self.timer_seq;
+        let mut notifier = notifier.clone();
 
-        let curr_batch = batch_size as f32;
-        let last_batch = self.get_batch(max_batch_size) as f32;
+        self.timer_seq += 1;
 
-        let next_timeout = (curr_batch / last_batch) * elapsed;
-        let next_timeout = Duration::from_secs_f32(next_timeout);
-
-        self.batch_until = self.now + next_timeout;
-        self.batch_fill_start = self.now;
-        self.set_batch(batch_size);
-
-        let shared = Arc::clone(shared);
-
-        // spuriously wake up event listeners
         rt::spawn(async move {
-            loop {
-                Delay::new(next_timeout).await;
-                shared.event.notify(1);
-            }
+            Delay::new(delay).await;
+            let _ = notifier.send(seq).await;
         });
     }
 
-    fn set_batch(&mut self, batch_size: usize) {
-        self.batch_load_size[self.load_setting()] = Some(batch_size);
-        eprintln!("Batch history: {:?}", self.batch_load_size);
+    fn is_next_seq(&self, seq: u32) -> bool {
+        seq + 1 == self.timer_seq
     }
 
-    fn get_batch(&self, max_batch_size: usize) -> usize {
-        self.batch_load_size[self.load_setting()]
-            .unwrap_or_else(|| (self.current_load * (max_batch_size as f32)) as usize)
-    }
-
-    fn load_setting(&self) -> usize {
-        let load = self.current_load;
-        match () {
-            _ if load < 0.1 => 0,
-            _ if load < 0.3 => 1,
-            _ if load < 0.6 => 2,
-            _ if load < 0.8 => 3,
-            _  => 4,
-        }
+    fn delta(&self) -> Duration {
+        Duration::from_secs_f32(Self::DEFAULT_TIMEOUT_SECS * self.current_load)
     }
 }
 
@@ -262,6 +230,8 @@ pub struct RequestBatcher<O> {
     shared: Arc<RequestBatcherShared<O>>,
     receiver: ChannelRx<StoredMessage<RequestMessage<O>>>,
     batcher: ChannelTx<Vec<StoredMessage<RequestMessage<O>>>>,
+    timeout_notifier: ChannelTx<u32>,
+    timeout_receiver: ChannelRx<u32>,
 }
 
 enum Batch<O> {
@@ -283,7 +253,6 @@ impl<O: Send + 'static> RequestBatcher<O> {
                     {
                         let mut current = shared.current.lock();
                         if current.batch.len() > 0 {
-                            eprintln!("Batch: {}", current.batch.len());
                             break std::mem::take(&mut current.batch);
                         }
                     }
@@ -301,17 +270,26 @@ impl<O: Send + 'static> RequestBatcher<O> {
             let mut timer = BatcherTimer::new();
 
             loop {
-                let result = self.receiver.recv().await;
-                let request = match result {
-                    Ok(r) => r,
-                    Err(_) => return,
+                let request = select! {
+                    result = self.receiver.recv() => {
+                        match result {
+                            Ok(r) => Some(r),
+                            Err(_) => return,
+                        }
+                    },
+                    result = self.timeout_receiver.recv() => {
+                        match result {
+                            Ok(seq) if timer.is_next_seq(seq) => None,
+                            Ok(_) => continue,
+                            Err(_) => return,
+                        }
+                    },
                 };
 
-                let batch = {
+                let batch = request.map(|request| {
                     // update the calc of the load of the system
                     timer.update(batch_size);
 
-                    eprintln!("LOCK");
                     let mut current = self.shared
                         .current
                         .lock();
@@ -319,21 +297,16 @@ impl<O: Send + 'static> RequestBatcher<O> {
                     current.batch.push(request);
 
                     let batch = if current.batch.len() == batch_size {
-                        eprintln!("Batch: {} | Load: {:.3}", current.batch.len(), timer.current_load);
-                        timer.batch_filled(&self.shared, batch_size, batch_size);
                         Batch::Now(std::mem::take(&mut current.batch))
-                    } else if timer.wait() {
-                        eprintln!("WAIT");
+                    } else if timer.wait(&self.timeout_notifier) {
+                        timer.launch_timer(&self.timeout_notifier);
                         Batch::Wait
                     } else {
-                        eprintln!("Batch: {} | Load: {:.3}", current.batch.len(), timer.current_load);
-                        timer.batch_filled(&self.shared, current.batch.len(), batch_size);
                         Batch::Notify
                     };
 
                     batch
-                };
-                eprintln!("UNLOCK");
+                }).unwrap_or(Batch::Notify);
 
                 match batch {
                     Batch::Now(batch) => self.batcher.send(batch).await.unwrap_or(()),
@@ -357,7 +330,11 @@ pub fn new_message_channel<S, O, P>(
     let (req_tx, req_rx) = new_bounded(bound);
     let (reqbatch_tx, reqbatch_rx) = new_bounded(bound);
 
+    let (timeout_notifier, timeout_receiver) = new_bounded(bound);
+
     let batcher = RequestBatcher {
+        timeout_notifier,
+        timeout_receiver,
         receiver: req_rx,
         batcher: reqbatch_tx,
         shared: Arc::new(RequestBatcherShared {
