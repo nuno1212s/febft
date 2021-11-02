@@ -2,6 +2,7 @@
 //! between the system processes.
 
 use std::io;
+use std::time::SystemTime;
 use std::mem::MaybeUninit;
 
 #[cfg(feature = "serialize_serde")]
@@ -216,7 +217,7 @@ pub enum Message<S, O, P> {
     ExecutionFinishedWithAppstate(S),
     /// We received a timeout from the timeouts layer.
     Timeout(TimeoutKind),
-    RequestBatch(Vec<StoredMessage<RequestMessage<O>>>),
+    RequestBatch(SystemTime, Vec<StoredMessage<RequestMessage<O>>>),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
@@ -855,7 +856,7 @@ impl<S, O, P> Message<S, O, P> {
             Message::Timeout(_) =>
                 Err("Expected System found Timeout")
                     .wrapped(ErrorKind::CommunicationMessage),
-            Message::RequestBatch(_) =>
+            Message::RequestBatch(_, _) =>
                 Err("Expected System found RequestBatch")
                     .wrapped(ErrorKind::CommunicationMessage),
         }

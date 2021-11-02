@@ -1,6 +1,6 @@
 //! Contains the server side core protocol logic of `febft`.
 
-use std::time::Duration;
+use std::time::{SystemTime, Duration};
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
@@ -232,8 +232,8 @@ where
                         SystemMessage::ForwardedRequests(_) => panic!("Rogue forwarded requests message detected"),
                     }
                 },
-                Message::RequestBatch(batch) => {
-                    replica.requests_received(batch);
+                Message::RequestBatch(time, batch) => {
+                    replica.requests_received(time, batch);
                 },
                 // ignore other messages for now
                 _ => (),
@@ -259,8 +259,8 @@ where
         let message = self.node.receive().await?;
 
         match message {
-            Message::RequestBatch(batch) => {
-                self.requests_received(batch);
+            Message::RequestBatch(time, batch) => {
+                self.requests_received(time, batch);
             },
             Message::System(header, message) => {
                 match message {
@@ -386,8 +386,8 @@ where
         };
 
         match message {
-            Message::RequestBatch(batch) => {
-                self.requests_received(batch);
+            Message::RequestBatch(time, batch) => {
+                self.requests_received(time, batch);
             },
             Message::System(header, message) => {
                 match message {
@@ -500,8 +500,8 @@ where
         };
 
         match message {
-            Message::RequestBatch(batch) => {
-                self.requests_received(batch);
+            Message::RequestBatch(time, batch) => {
+                self.requests_received(time, batch);
             },
             Message::System(header, message) => {
                 match message {
@@ -697,7 +697,8 @@ where
         }
     }
 
-    fn requests_received(&mut self, reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
+    fn requests_received(&mut self, t: SystemTime, reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
+        self.log.batch_meta().reception_time = t;
         for (h, r) in reqs.into_iter().map(StoredMessage::into_inner) {
             self.request_received(h, SystemMessage::Request(r))
         }

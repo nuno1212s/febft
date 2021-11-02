@@ -13,7 +13,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::future::Future;
 use std::task::{Poll, Context};
-use std::time::{Instant, Duration};
+use std::time::{SystemTime, Instant, Duration};
 
 use futures::select;
 use futures_timer::Delay;
@@ -414,7 +414,7 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
             },
             result = self.requests.recv() => {
                 let batch = result?;
-                Message::RequestBatch(batch)
+                Message::RequestBatch(SystemTime::now(), batch)
             },
             result = self.replies.recv() => {
                 let (h, r) = result?.into_inner();
