@@ -36,7 +36,9 @@ impl BenchmarkHelper {
 
         let count: i64 = (&values[limit..(values.len() - limit)])
             .iter()
-            .sum();
+            .copied()
+            .reduce(|x, y| x.wrapping_add(y))
+            .unwrap_or(0);
 
         (count as f64) / ((values.len() - 2*limit) as f64)
     }
@@ -53,7 +55,8 @@ impl BenchmarkHelper {
         let med = self.average(percent);
         let quad: i64 = (&self.values[limit..(self.values.len() - limit)])
             .iter()
-            .map(|&x| x.wrapping_mul(x))
+            .copied()
+            .map(|x| x.wrapping_mul(x))
             .reduce(|x, y| x.wrapping_add(y))
             .unwrap_or(0);
         let quad = quad as f64;
