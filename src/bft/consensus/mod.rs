@@ -3,6 +3,7 @@
 pub mod log;
 
 use std::sync::Arc;
+use std::time::SystemTime;
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 
@@ -356,9 +357,10 @@ where
     }
 
     /// Check if we can process new consensus messages.
-    pub fn poll(&mut self, log: &Log<State<S>, Request<S>, Reply<S>>) -> ConsensusPollStatus<Request<S>> {
+    pub fn poll(&mut self, log: &mut Log<State<S>, Request<S>, Reply<S>>) -> ConsensusPollStatus<Request<S>> {
         match self.phase {
             ProtoPhase::Init if self.tbo.get_queue => {
+                log.batch_meta().consensus_start_time = SystemTime::now();
                 extract_msg!(
                     { self.phase = ProtoPhase::PrePreparing; },
                     &mut self.tbo.get_queue,
@@ -366,6 +368,7 @@ where
                 )
             },
             ProtoPhase::Init => {
+                log.batch_meta().consensus_start_time = SystemTime::now();
                 ConsensusPollStatus::TryProposeAndRecv
             },
             ProtoPhase::PrePreparing if self.tbo.get_queue => {
@@ -474,6 +477,7 @@ where
         // the amount of votes received
         match self.phase {
             ProtoPhase::Init => {
+                log.batch_meta().consensus_start_time = SystemTime::now();
                 // in the init phase, we can't do anything,
                 // queue the message for later
                 match message.kind() {
@@ -581,6 +585,7 @@ where
                     let targets = NodeId::targets(0..synchronizer.view().params().n());
                     node.broadcast(message, targets);
                 }
+                log.batch_meta().prepare_sent_time = SystemTime::now();
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
                 // try entering preparing phase
@@ -660,6 +665,8 @@ where
                         node.broadcast_signed(message, targets);
                     }
 
+                    log.batch_meta().commit_sent_time = SystemTime::now();
+
                     ProtoPhase::Committing(0)
                 } else {
                     ProtoPhase::Preparing(i)
@@ -700,6 +707,7 @@ where
                     // we have reached a decision,
                     // notify core protocol
                     self.phase = ProtoPhase::Init;
+                    log.batch_meta().consensus_decision_time = SystemTime::now();
                     ConsensusStatus::Decided(&self.current[..self.batch_size])
                 } else {
                     self.phase = ProtoPhase::Committing(i);

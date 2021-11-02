@@ -11,6 +11,7 @@ use intmap::IntMap;
 use crate::bft::error::*;
 use crate::bft::cst::RecoveryState;
 use crate::bft::crypto::hash::Digest;
+use crate::bft::benchmarks::BatchMeta;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::executable::UpdateBatch;
 use crate::bft::communication::message::{
@@ -480,6 +481,7 @@ pub struct Log<S, O, P> {
     deciding: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
     decided: Vec<O>,
     checkpoint: CheckpointState<S>,
+    meta: BatchMeta,
     _marker: PhantomData<P>,
 }
 
@@ -502,8 +504,13 @@ impl<S, O: Clone, P> Log<S, O, P> {
             decided: Vec::with_capacity(PERIOD as usize),
             requests: collections::ordered_map(),
             checkpoint: CheckpointState::None,
+            meta: BatchMeta::new(),
             _marker: PhantomData,
         }
+    }
+
+    pub fn batch_meta(&mut self) -> &mut BatchMeta {
+        &mut self.meta
     }
 
     /// Returns a reference to a subset of this log, containing only

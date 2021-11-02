@@ -1,10 +1,27 @@
 use std::time::{Instant, SystemTime};
 
-pub struct RequestMeta {
-    reception_time: SystemTime,
-    consensus_start_time: SystemTime,
-    consensus_decision_time: SystemTime,
-    execution_time: SystemTime,
+#[derive(Copy, Clone)]
+pub struct BatchMeta {
+    pub consensus_start_time: SystemTime,
+    pub consensus_decision_time: SystemTime,
+    pub prepare_sent_time: SystemTime,
+    pub commit_sent_time: SystemTime,
+    pub reception_time: SystemTime,
+    pub execution_time: SystemTime,
+}
+
+impl BatchMeta {
+    pub fn new() -> Self {
+        let now = SystemTime::now();
+        Self {
+            consensus_start_time: now,
+            consensus_decision_time: now,
+            prepare_sent_time: now,
+            commit_sent_time: now,
+            reception_time: now,
+            execution_time: now,
+        }
+    }
 }
 
 pub struct BenchmarkHelper {
