@@ -40,6 +40,27 @@ impl BenchmarkHelper {
 
         (count as f64) / ((values.len() - 2*limit) as f64)
     }
+
+    pub fn standard_deviation(&mut self, percent: bool) -> f64 {
+        if self.values.len() <= 1 {
+            return 0.0;
+        }
+
+        self.values.sort_unstable();
+
+        let limit = if percent { self.values.len() / 10 } else { 0 };
+        let num = (self.values.len() - (limit << 1)) as f64;
+        let med = self.average(percent);
+        let quad: i64 = (&self.values[limit..(self.values.len() - limit)])
+            .iter()
+            .map(|&x| x.wrapping_mul(x))
+            .reduce(|x, y| x.wrapping_add(y))
+            .unwrap_or(0);
+        let quad = quad as f64;
+        let var = (quad - (num*(med*med)))/(num-1.0);
+
+        var.sqrt()
+    }
 }
 
 impl BenchmarkHelperStore for (SystemTime, SystemTime) {
