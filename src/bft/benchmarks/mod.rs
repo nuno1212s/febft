@@ -16,7 +16,8 @@ pub trait BenchmarkHelperStore {
 }
 
 // this code was more or less 1:1 translated from BFT-SMaRt,
-// even its oddities, such as cloning the values array
+// even its oddities, such as cloning the values array,
+// and bugs (overflowing standard deviation)
 impl BenchmarkHelper {
     pub fn new(capacity: usize) -> Self {
         Self {
