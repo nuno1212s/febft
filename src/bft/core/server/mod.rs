@@ -701,6 +701,8 @@ where
 
     fn requests_received(&mut self, t: SystemTime, reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
         self.log.batch_meta().reception_time = t;
+        self.log.batch_meta().batch_size = reqs.len();
+
         for (h, r) in reqs.into_iter().map(StoredMessage::into_inner) {
             self.request_received(h, SystemMessage::Request(r))
         }

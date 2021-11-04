@@ -1,5 +1,7 @@
 //! User application execution business logic.
 
+// XXX: maybe `Box<(BatchMeta, UpdateBatch<O>)>`
+
 use std::thread;
 use std::sync::mpsc;
 
