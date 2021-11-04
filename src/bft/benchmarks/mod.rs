@@ -104,7 +104,7 @@ impl BenchmarkHelperStore for (SystemTime, SystemTime) {
     fn store(self, bench: &mut BenchmarkHelper) {
         const MAX: u128 = i64::MAX as u128;
 
-        let (start, end) = self;
+        let (end, start) = self;
         let duration = end
             .duration_since(start)
             .expect("Non-monotonic time detected!")
@@ -118,7 +118,7 @@ impl BenchmarkHelperStore for (Instant, Instant) {
     fn store(self, bench: &mut BenchmarkHelper) {
         const MAX: u128 = i64::MAX as u128;
 
-        let (start, end) = self;
+        let (end, start) = self;
         let duration = end
             .duration_since(start)
             .as_nanos();
