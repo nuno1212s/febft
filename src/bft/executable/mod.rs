@@ -6,6 +6,7 @@ use std::sync::mpsc;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
 use crate::bft::crypto::hash::Digest;
+use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::serialize::{
     //ReplicaDurability,
     SharedData,
@@ -52,10 +53,10 @@ enum ExecutionRequest<S, O> {
     // install state from state transfer protocol
     InstallState(S, Vec<O>),
     // update the state of the service
-    Update(UpdateBatch<O>),
+    Update(BatchMeta, UpdateBatch<O>),
     // same as above, and include the application state
     // in the reply, used for local checkpoints
-    UpdateAndGetAppstate(UpdateBatch<O>),
+    UpdateAndGetAppstate(BatchMeta, UpdateBatch<O>),
     // read the state of the service
     Read(NodeId),
 }
@@ -128,6 +129,7 @@ pub trait Service {
         &mut self,
         state: &mut State<Self>,
         batch: UpdateBatch<Request<Self>>,
+        _meta: BatchMeta,
     ) -> UpdateBatchReplies<Reply<Self>> {
         let mut reply_batch = UpdateBatchReplies::with_capacity(batch.len());
 
@@ -168,8 +170,8 @@ where
     }
 
     /// Queues a batch of requests `batch` for execution.
-    pub fn queue_update(&mut self, batch: UpdateBatch<Request<S>>) -> Result<()> {
-        self.e_tx.send(ExecutionRequest::Update(batch))
+    pub fn queue_update(&mut self, meta: BatchMeta, batch: UpdateBatch<Request<S>>) -> Result<()> {
+        self.e_tx.send(ExecutionRequest::Update(meta, batch))
             .simple(ErrorKind::Executable)
     }
 
@@ -179,9 +181,10 @@ where
     /// This is useful during local checkpoints.
     pub fn queue_update_and_get_appstate(
         &mut self,
+        meta: BatchMeta,
         batch: UpdateBatch<Request<S>>,
     ) -> Result<()> {
-        self.e_tx.send(ExecutionRequest::UpdateAndGetAppstate(batch))
+        self.e_tx.send(ExecutionRequest::UpdateAndGetAppstate(meta, batch))
             .simple(ErrorKind::Executable)
     }
 }
@@ -229,14 +232,14 @@ where
                             exec.service.update(&mut exec.state, req);
                         }
                     },
-                    ExecutionRequest::Update(batch) => {
-                        let reply_batch = exec.service.update_batch(&mut exec.state, batch);
+                    ExecutionRequest::Update(meta, batch) => {
+                        let reply_batch = exec.service.update_batch(&mut exec.state, batch, meta);
 
                         // deliver replies
                         exec.execution_finished(reply_batch);
                     },
-                    ExecutionRequest::UpdateAndGetAppstate(batch) => {
-                        let reply_batch = exec.service.update_batch(&mut exec.state, batch);
+                    ExecutionRequest::UpdateAndGetAppstate(meta, batch) => {
+                        let reply_batch = exec.service.update_batch(&mut exec.state, batch, meta);
 
                         // deliver checkpoint state to the replica
                         exec.deliver_checkpoint_state();

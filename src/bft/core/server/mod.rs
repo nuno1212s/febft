@@ -570,10 +570,12 @@ where
                                 match info {
                                     // normal execution
                                     Info::Nil => self.executor.queue_update(
+                                        *self.log.batch_meta(),
                                         batch,
                                     )?,
                                     // execute and begin local checkpoint
                                     Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
+                                        *self.log.batch_meta(),
                                         batch,
                                     )?,
                                 }

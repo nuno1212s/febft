@@ -1,7 +1,21 @@
+use std::default::Default;
 use std::time::{Instant, SystemTime};
+
+#[derive(Default)]
+pub struct Measurements {
+    pub total_latency: BenchmarkHelper,
+    pub consensus_latency: BenchmarkHelper,
+    pub pre_cons_latency: BenchmarkHelper,
+    pub pos_cons_latency: BenchmarkHelper,
+    pub pre_prepare_latency: BenchmarkHelper,
+    pub prepare_latency: BenchmarkHelper,
+    pub commit_latency: BenchmarkHelper,
+    pub batch_size: BenchmarkHelper,
+}
 
 #[derive(Copy, Clone)]
 pub struct BatchMeta {
+    pub batch_size: usize,
     pub consensus_start_time: SystemTime,
     pub consensus_decision_time: SystemTime,
     pub prepare_sent_time: SystemTime,
@@ -14,6 +28,7 @@ impl BatchMeta {
     pub fn new() -> Self {
         let now = SystemTime::now();
         Self {
+            batch_size: 0,
             consensus_start_time: now,
             consensus_decision_time: now,
             prepare_sent_time: now,
@@ -24,6 +39,7 @@ impl BatchMeta {
     }
 }
 
+#[derive(Default)]
 pub struct BenchmarkHelper {
     values: Vec<i64>,
 }
