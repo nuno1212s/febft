@@ -98,6 +98,25 @@ impl BenchmarkHelper {
 
         var.sqrt()
     }
+
+    #[inline(always)]
+    pub fn log_latency(&mut self, name: &str) {
+        println!("{} latency = {} (+/- {}) us",
+            name,
+            self.average(false) / 1000.0,
+            self.standard_deviation(false) / 1000.0,
+        );
+        self.reset();
+    }
+
+    #[inline(always)]
+    pub fn log_batch(&mut self) {
+        println!("Batch average size = {} (+/- {}) requests",
+            self.average(false),
+            self.standard_deviation(false),
+        );
+        self.reset();
+    }
 }
 
 impl BenchmarkHelperStore for (SystemTime, SystemTime) {
