@@ -168,6 +168,11 @@ where
         })
     }
 
+    #[inline]
+    pub fn id(&self) -> NodeId {
+        self.node.id()
+    }
+
     /// Updates the replicated state of the application running
     /// on top of `febft`.
     //

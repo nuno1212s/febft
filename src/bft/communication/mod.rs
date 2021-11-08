@@ -1064,6 +1064,10 @@ where
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
+    pub fn id(&self) -> NodeId {
+        self.id
+    }
+
     /// Check the `master_channel()` documentation for `Node`.
     pub fn master_channel(&self) -> &MessageChannelTx<D::State, D::Request, D::Reply> {
         &self.my_tx

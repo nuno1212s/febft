@@ -243,6 +243,11 @@ where
         Ok(replica)
     }
 
+    #[inline]
+    pub fn id(&self) -> NodeId {
+        self.node.id()
+    }
+
     /// The main loop of a replica.
     pub async fn run(&mut self) -> Result<()> {
         // TODO: exit condition?
