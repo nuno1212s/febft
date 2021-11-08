@@ -62,6 +62,19 @@ impl BenchmarkHelper {
         self.values.clear();
     }
 
+    pub fn max(&self, percent: bool) -> i64 {
+        let mut values = self.values.clone();
+        let limit = if percent { values.len() / 10 } else { 0 };
+
+        values.sort_unstable();
+
+        (&values[limit..(values.len() - limit)])
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0)
+    }
+
     pub fn average(&self, percent: bool) -> f64 {
         let mut values = self.values.clone();
         let limit = if percent { values.len() / 10 } else { 0 };
