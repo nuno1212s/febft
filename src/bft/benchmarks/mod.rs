@@ -1,5 +1,7 @@
-use std::time::Instant;
 use std::default::Default;
+
+use chrono::DateTime;
+use chrono::offset::Utc;
 
 #[derive(Default)]
 pub struct Measurements {
@@ -16,17 +18,17 @@ pub struct Measurements {
 #[derive(Copy, Clone)]
 pub struct BatchMeta {
     pub batch_size: usize,
-    pub consensus_start_time: Instant,
-    pub consensus_decision_time: Instant,
-    pub prepare_sent_time: Instant,
-    pub commit_sent_time: Instant,
-    pub reception_time: Instant,
-    pub execution_time: Instant,
+    pub consensus_start_time: DateTime<Utc>,
+    pub consensus_decision_time: DateTime<Utc>,
+    pub prepare_sent_time: DateTime<Utc>,
+    pub commit_sent_time: DateTime<Utc>,
+    pub reception_time: DateTime<Utc>,
+    pub execution_time: DateTime<Utc>,
 }
 
 impl BatchMeta {
     pub fn new() -> Self {
-        let now = Instant::now();
+        let now = Utc::now();
         Self {
             batch_size: 0,
             consensus_start_time: now,
@@ -132,16 +134,15 @@ impl BenchmarkHelper {
     }
 }
 
-impl BenchmarkHelperStore for (Instant, Instant) {
+impl BenchmarkHelperStore for (DateTime<Utc>, DateTime<Utc>) {
     fn store(self, bench: &mut BenchmarkHelper) {
-        const MAX: u128 = i64::MAX as u128;
-
         let (end, start) = self;
         let duration = end
-            .duration_since(start)
-            .as_nanos();
+            .signed_duration_since(start)
+            .num_nanoseconds()
+            .unwrap_or(i64::MAX);
 
-        bench.values.push((duration & MAX) as i64);
+        bench.values.push(duration);
     }
 }
 

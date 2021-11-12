@@ -12,11 +12,10 @@ mod async_channel_mpmc;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::future::Future;
-use std::time::Instant;
 use std::task::{Poll, Context};
 
+use chrono::offset::Utc;
 use futures::select;
-use futures_timer::Delay;
 use event_listener::Event;
 use futures::future::FusedFuture;
 use parking_lot::Mutex;
@@ -191,6 +190,7 @@ impl<O: Send + 'static> RequestBatcher<O> {
 
         // handle reception of requests
         rt::spawn(async move {
+            #[allow(unused_assignments)]
             let mut batch_size = 0;
 
             loop {
@@ -208,7 +208,6 @@ impl<O: Send + 'static> RequestBatcher<O> {
                     batch_size = current.batch.len();
 
                     let batch = if batch_size == max_batch_size {
-                        batch_size = 0;
                         Batch::Now(std::mem::take(&mut current.batch))
                     } else {
                         Batch::Notify
@@ -318,7 +317,7 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
             },
             result = self.requests.recv() => {
                 let batch = result?;
-                Message::RequestBatch(Instant::now(), batch)
+                Message::RequestBatch(Utc::now(), batch)
             },
             result = self.replies.recv() => {
                 let (h, r) = result?.into_inner();

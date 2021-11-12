@@ -1,9 +1,12 @@
 //! Contains the server side core protocol logic of `febft`.
 
-use std::time::{Instant, Duration};
+use std::time::Duration;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
+
+use chrono::DateTime;
+use chrono::offset::Utc;
 
 use super::SystemParams;
 use crate::bft::error::*;
@@ -704,7 +707,7 @@ where
         }
     }
 
-    fn requests_received(&mut self, t: Instant, reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
+    fn requests_received(&mut self, t: DateTime<Utc>, reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
         self.log.batch_meta().reception_time = t;
         self.log.batch_meta().batch_size = reqs.len();
 

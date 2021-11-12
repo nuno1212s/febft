@@ -42,7 +42,7 @@ use crate::bft::consensus::log::{
     ViewDecisionPair,
 };
 use crate::bft::timeouts::{
-    TimeoutKind,
+    //TimeoutKind,
     TimeoutsHandle,
 };
 use crate::bft::collections::{

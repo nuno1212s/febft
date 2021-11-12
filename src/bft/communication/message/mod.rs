@@ -2,8 +2,10 @@
 //! between the system processes.
 
 use std::io;
-use std::time::Instant;
 use std::mem::MaybeUninit;
+
+use chrono::DateTime;
+use chrono::offset::Utc;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
@@ -217,7 +219,7 @@ pub enum Message<S, O, P> {
     ExecutionFinishedWithAppstate(S),
     /// We received a timeout from the timeouts layer.
     Timeout(TimeoutKind),
-    RequestBatch(Instant, Vec<StoredMessage<RequestMessage<O>>>),
+    RequestBatch(DateTime<Utc>, Vec<StoredMessage<RequestMessage<O>>>),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
