@@ -1,5 +1,5 @@
+use std::time::Instant;
 use std::default::Default;
-use std::time::{Instant, SystemTime};
 
 #[derive(Default)]
 pub struct Measurements {
@@ -16,17 +16,17 @@ pub struct Measurements {
 #[derive(Copy, Clone)]
 pub struct BatchMeta {
     pub batch_size: usize,
-    pub consensus_start_time: SystemTime,
-    pub consensus_decision_time: SystemTime,
-    pub prepare_sent_time: SystemTime,
-    pub commit_sent_time: SystemTime,
-    pub reception_time: SystemTime,
-    pub execution_time: SystemTime,
+    pub consensus_start_time: Instant,
+    pub consensus_decision_time: Instant,
+    pub prepare_sent_time: Instant,
+    pub commit_sent_time: Instant,
+    pub reception_time: Instant,
+    pub execution_time: Instant,
 }
 
 impl BatchMeta {
     pub fn new() -> Self {
-        let now = SystemTime::now();
+        let now = Instant::now();
         Self {
             batch_size: 0,
             consensus_start_time: now,
@@ -129,20 +129,6 @@ impl BenchmarkHelper {
             self.standard_deviation(false),
         );
         self.reset();
-    }
-}
-
-impl BenchmarkHelperStore for (SystemTime, SystemTime) {
-    fn store(self, bench: &mut BenchmarkHelper) {
-        const MAX: u128 = i64::MAX as u128;
-
-        let (end, start) = self;
-        let duration = end
-            .duration_since(start)
-            .expect("Non-monotonic time detected!")
-            .as_nanos();
-
-        bench.values.push((duration & MAX) as i64);
     }
 }
 

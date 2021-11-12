@@ -12,7 +12,7 @@ mod async_channel_mpmc;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::future::Future;
-use std::time::SystemTime;
+use std::time::Instant;
 use std::task::{Poll, Context};
 
 use futures::select;
@@ -318,7 +318,7 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
             },
             result = self.requests.recv() => {
                 let batch = result?;
-                Message::RequestBatch(SystemTime::now(), batch)
+                Message::RequestBatch(Instant::now(), batch)
             },
             result = self.replies.recv() => {
                 let (h, r) = result?.into_inner();

@@ -2,7 +2,7 @@
 //! between the system processes.
 
 use std::io;
-use std::time::SystemTime;
+use std::time::Instant;
 use std::mem::MaybeUninit;
 
 #[cfg(feature = "serialize_serde")]
@@ -217,7 +217,7 @@ pub enum Message<S, O, P> {
     ExecutionFinishedWithAppstate(S),
     /// We received a timeout from the timeouts layer.
     Timeout(TimeoutKind),
-    RequestBatch(SystemTime, Vec<StoredMessage<RequestMessage<O>>>),
+    RequestBatch(Instant, Vec<StoredMessage<RequestMessage<O>>>),
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
