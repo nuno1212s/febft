@@ -12,8 +12,8 @@ mod async_channel_mpmc;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::future::Future;
+use std::time::SystemTime;
 use std::task::{Poll, Context};
-use std::time::{SystemTime, Instant, Duration};
 
 use futures::select;
 use futures_timer::Delay;
@@ -148,25 +148,6 @@ struct BatcherData<O> {
     batch: Vec<StoredMessage<RequestMessage<O>>>,
 }
 
-struct BatcherTimer;
-
-impl BatcherTimer {
-    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
-
-    fn launch(notifier: &mut Option<ChannelTx<()>>) {
-        let mut notifier = notifier
-            .take()
-            .unwrap();
-
-        rt::spawn(async move {
-            loop {
-                Delay::new(Self::DEFAULT_TIMEOUT).await;
-                let _ = notifier.send(()).await;
-            }
-        });
-    }
-}
-
 struct RequestBatcherShared<O> {
     event: Event,
     current: Mutex<BatcherData<O>>,
@@ -176,14 +157,11 @@ pub struct RequestBatcher<O> {
     shared: Arc<RequestBatcherShared<O>>,
     receiver: ChannelRx<StoredMessage<RequestMessage<O>>>,
     batcher: ChannelTx<Vec<StoredMessage<RequestMessage<O>>>>,
-    timeout_notifier: Option<ChannelTx<()>>,
-    timeout_receiver: ChannelRx<()>,
 }
 
 enum Batch<O> {
     Now(Vec<StoredMessage<RequestMessage<O>>>),
     Notify,
-    Wait,
 }
 
 impl<O: Send + 'static> RequestBatcher<O> {
@@ -214,26 +192,14 @@ impl<O: Send + 'static> RequestBatcher<O> {
         // handle reception of requests
         rt::spawn(async move {
             let mut batch_size = 0;
-            BatcherTimer::launch(&mut self.timeout_notifier);
 
             loop {
-                let request = select! {
-                    result = self.receiver.recv() => {
-                        match result {
-                            Ok(r) => Some(r),
-                            Err(_) => return,
-                        }
-                    },
-                    result = self.timeout_receiver.recv() => {
-                        match result {
-                            Ok(_) if batch_size > 0 => None,
-                            Ok(_) => continue,
-                            Err(_) => return,
-                        }
-                    },
+                let request = match self.receiver.recv().await {
+                    Ok(r) => r,
+                    Err(_) => return,
                 };
 
-                let batch = request.map(|request| {
+                let batch = {
                     let mut current = self.shared
                         .current
                         .lock();
@@ -245,16 +211,15 @@ impl<O: Send + 'static> RequestBatcher<O> {
                         batch_size = 0;
                         Batch::Now(std::mem::take(&mut current.batch))
                     } else {
-                        Batch::Wait
+                        Batch::Notify
                     };
 
                     batch
-                }).unwrap_or(Batch::Notify);
+                };
 
                 match batch {
                     Batch::Now(batch) => self.batcher.send(batch).await.unwrap_or(()),
                     Batch::Notify => self.shared.event.notify(1),
-                    Batch::Wait => (),
                 }
             }
         });
@@ -273,12 +238,7 @@ pub fn new_message_channel<S, O, P>(
     let (req_tx, req_rx) = new_bounded(bound);
     let (reqbatch_tx, reqbatch_rx) = new_bounded(bound);
 
-    let (timeout_notifier, timeout_receiver) = new_bounded(bound);
-    let timeout_notifier = Some(timeout_notifier);
-
     let batcher = RequestBatcher {
-        timeout_notifier,
-        timeout_receiver,
         receiver: req_rx,
         batcher: reqbatch_tx,
         shared: Arc::new(RequestBatcherShared {
