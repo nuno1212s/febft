@@ -3,6 +3,7 @@ use std::pin::Pin;
 use std::net::SocketAddr;
 use std::task::{Poll, Context};
 
+use tokio::io::BufWriter;
 use tokio::net::{TcpStream, TcpListener};
 use futures::io::{AsyncRead, AsyncWrite};
 use tokio_util::compat::{
@@ -11,7 +12,7 @@ use tokio_util::compat::{
 };
 
 pub struct Socket {
-    inner: Compat<TcpStream>,
+    inner: Compat<BufWriter<TcpStream>>,
 }
 
 pub struct Listener {
@@ -27,7 +28,7 @@ pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
 pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
     TcpStream::connect(addr.into())
         .await
-        .map(|s| Socket::new(s.compat()))
+        .map(|s| Socket::new(BufWriter::new(s).compat()))
 }
 
 impl Listener {
@@ -39,12 +40,12 @@ impl Listener {
         self.inner
             .accept()
             .await
-            .map(|(s, _)| Socket::new(s.compat()))
+            .map(|(s, _)| Socket::new(BufWriter::new(s).compat()))
     }
 }
 
 impl Socket {
-    fn new(inner: Compat<TcpStream>) -> Self {
+    fn new(inner: Compat<BufWriter<TcpStream>>) -> Self {
         Socket { inner }
     }
 }
