@@ -14,10 +14,10 @@ readme = "README.md"
 # Consult the crate documentation for more details on the features.
 default = [
     "async_runtime_tokio",
-    "threadpool_crossbeam",
+    "threadpool_rayon",
     "socket_tokio_tcp",
     "serialize_serde",
-    "channel_async_channel_mpmc",
+    "channel_flume_mpmc",
     "crypto_signature_ring_ed25519",
     "crypto_hash_blake3_blake3",
     "collections_randomstate_twox_hash"
@@ -38,6 +38,7 @@ crypto_hash_blake3_blake3 = ["blake3"]
 
 threadpool_crossbeam = ["threadpool-crossbeam-channel"]
 threadpool_cthpool = ["cthpool"]
+threadpool_rayon = ["rayon"]
 
 channel_futures_mpsc = []
 channel_flume_mpmc = ["flume"]
@@ -81,6 +82,7 @@ threadpool-crossbeam-channel = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde-big-array = { version = "0.3", optional = true }
 cthpool = { git = "https://github.com/sug0/cthpool", optional = true }
+rayon = { version = "1", optional = true }
 rio = { version = "0.9", optional = true }
 socket2 = { version = "0.4", optional = true }
 blake3 = { version = "0.3", optional = true }

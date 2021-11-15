@@ -6,6 +6,9 @@ mod crossbeam;
 #[cfg(feature = "threadpool_cthpool")]
 mod cthpool;
 
+#[cfg(feature = "threadpool_rayon")]
+mod rayon;
+
 use crate::bft::globals::Global;
 use crate::bft::error::*;
 
@@ -15,13 +18,16 @@ use crate::bft::error::*;
 /// count increase operation. This means that if we drop its
 /// handle, the thread pool can continue to be used, as long
 /// as at least another instance of the original pool remains.
-#[derive(Clone)]
+//#[derive(Clone)]
 pub struct ThreadPool {
     #[cfg(feature = "threadpool_crossbeam")]
     inner: crossbeam::ThreadPool,
 
     #[cfg(feature = "threadpool_cthpool")]
     inner: cthpool::ThreadPool,
+
+    #[cfg(feature = "threadpool_rayon")]
+    inner: rayon::ThreadPool,
 }
 
 /// Helper type used to construct a new thread pool.
@@ -31,6 +37,9 @@ pub struct Builder {
 
     #[cfg(feature = "threadpool_cthpool")]
     inner: cthpool::Builder,
+
+    #[cfg(feature = "threadpool_rayon")]
+    inner: rayon::Builder,
 }
 
 impl Builder {
@@ -42,6 +51,9 @@ impl Builder {
 
             #[cfg(feature = "threadpool_cthpool")]
             { cthpool::Builder::new() }
+
+            #[cfg(feature = "threadpool_rayon")]
+            { rayon::Builder::new() }
         };
         Builder { inner }
     }
