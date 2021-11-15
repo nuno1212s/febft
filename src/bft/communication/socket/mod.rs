@@ -14,7 +14,12 @@ use std::pin::Pin;
 use std::net::SocketAddr;
 use std::task::{Poll, Context};
 
-use futures::io::{AsyncRead, AsyncWrite};
+use futures::io::{
+    AsyncRead,
+    AsyncWrite,
+    BufWriter,
+    BufReader,
+};
 use async_tls::{
     server::TlsStream as TlsStreamSrv,
     client::TlsStream as TlsStreamCli,
@@ -139,13 +144,13 @@ impl AsyncWrite for Socket {
 }
 
 pub enum SecureSocketRecv {
-    Plain(Socket),
-    Tls(TlsStreamSrv<Socket>),
+    Plain(BufReader<Socket>),
+    Tls(TlsStreamSrv<BufReader<Socket>>),
 }
 
 pub enum SecureSocketSend {
-    Plain(Socket),
-    Tls(TlsStreamCli<Socket>),
+    Plain(BufWriter<Socket>),
+    Tls(TlsStreamCli<BufWriter<Socket>>),
 }
 
 impl AsyncRead for SecureSocketRecv {

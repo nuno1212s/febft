@@ -26,6 +26,8 @@ use async_tls::{
     TlsAcceptor,
 };
 use futures::io::{
+    BufWriter,
+    BufReader,
     AsyncReadExt,
     AsyncWriteExt,
 };
@@ -944,9 +946,9 @@ where
 
                 // TLS handshake; drop connection if it fails
                 let sock = if peer_id >= first_cli || my_id >= first_cli {
-                    SecureSocketSend::Plain(sock)
+                    SecureSocketSend::Plain(BufWriter::new(sock))
                 } else {
-                    match connector.connect(hostname, sock).await {
+                    match connector.connect(hostname, BufWriter::new(sock)).await {
                         Ok(s) => SecureSocketSend::Tls(s),
                         Err(_) => break,
                     }
@@ -1019,9 +1021,9 @@ where
 
             // TLS handshake; drop connection if it fails
             let sock = if peer_id >= first_cli || my_id >= first_cli {
-                SecureSocketRecv::Plain(sock)
+                SecureSocketRecv::Plain(BufReader::new(sock))
             } else {
-                match acceptor.accept(sock).await {
+                match acceptor.accept(BufReader::new(sock)).await {
                     Ok(s) => SecureSocketRecv::Tls(s),
                     Err(_) => break,
                 }
