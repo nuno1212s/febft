@@ -5,14 +5,13 @@ use std::task::{Poll, Context};
 
 use futures::io::{AsyncRead, AsyncWrite};
 use ::async_std::net::{TcpListener, TcpStream};
-use ::async_std::io::BufWriter;
 
 pub struct Listener {
     inner: TcpListener,
 }
 
 pub struct Socket {
-    inner: BufWriter<TcpStream>,
+    inner: TcpStream,
 }
 
 pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
@@ -23,7 +22,6 @@ pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
 pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
     TcpStream::connect(addr.into())
         .await
-        .map(BufWriter::new)
         .map(|inner| Socket { inner })
 }
 
@@ -70,7 +68,6 @@ impl Listener {
         self.inner
             .accept()
             .await
-            .map(BufWriter::new)
             .map(|(inner, _)| Socket { inner })
     }
 }
