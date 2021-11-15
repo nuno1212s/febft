@@ -3,7 +3,6 @@ mod common;
 use common::*;
 
 use febft::bft::prng;
-use febft::bft::threadpool;
 use febft::bft::collections::HashMap;
 use febft::bft::communication::NodeId;
 use febft::bft::async_runtime as rt;
@@ -38,10 +37,6 @@ async fn async_main() {
         .map(|(id, sk)| (*id, sk.public_key().into()))
         .collect();
 
-    let pool = threadpool::Builder::new()
-        .num_threads(4)
-        .build();
-
     let sk = secret_keys.remove(&id).unwrap();
     drop(secret_keys);
 
@@ -56,7 +51,6 @@ async fn async_main() {
         NodeId::from(1000u32) => addr!("cli1000" => "127.0.0.1:11000")
     };
     let client = setup_client(
-        pool,
         id,
         sk,
         addrs,

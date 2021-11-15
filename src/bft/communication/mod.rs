@@ -948,7 +948,7 @@ where
                 let sock = if peer_id >= first_cli || my_id >= first_cli {
                     SecureSocketSend::Plain(BufWriter::new(sock))
                 } else {
-                    match connector.connect(hostname, BufWriter::new(sock)).await {
+                    match connector.connect(hostname, sock).await {
                         Ok(s) => SecureSocketSend::Tls(s),
                         Err(_) => break,
                     }
@@ -1023,7 +1023,7 @@ where
             let sock = if peer_id >= first_cli || my_id >= first_cli {
                 SecureSocketRecv::Plain(BufReader::new(sock))
             } else {
-                match acceptor.accept(BufReader::new(sock)).await {
+                match acceptor.accept(sock).await {
                     Ok(s) => SecureSocketRecv::Tls(s),
                     Err(_) => break,
                 }

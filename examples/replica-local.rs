@@ -2,7 +2,6 @@ mod common;
 
 use common::*;
 
-use febft::bft::threadpool;
 use febft::bft::collections::HashMap;
 use febft::bft::communication::NodeId;
 use febft::bft::async_runtime as rt;
@@ -35,10 +34,6 @@ async fn async_main() {
         .map(|(id, sk)| (*id, sk.public_key().into()))
         .collect();
 
-    let pool = threadpool::Builder::new()
-        .num_threads(4)
-        .build();
-
     for id in NodeId::targets(0..4) {
         let addrs= map! {
             // replicas
@@ -52,7 +47,6 @@ async fn async_main() {
         };
         let sk = secret_keys.remove(&id).unwrap();
         let fut = setup_replica(
-            pool.clone(),
             id,
             sk,
             addrs,
@@ -65,7 +59,7 @@ async fn async_main() {
             replica.run().await.unwrap();
         });
     }
-    drop((pool, secret_keys, public_keys));
+    drop((secret_keys, public_keys));
 
     // run forever
     std::future::pending().await

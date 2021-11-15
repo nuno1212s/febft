@@ -145,12 +145,12 @@ impl AsyncWrite for Socket {
 
 pub enum SecureSocketRecv {
     Plain(BufReader<Socket>),
-    Tls(TlsStreamSrv<BufReader<Socket>>),
+    Tls(TlsStreamSrv<Socket>),
 }
 
 pub enum SecureSocketSend {
     Plain(BufWriter<Socket>),
-    Tls(TlsStreamCli<BufWriter<Socket>>),
+    Tls(TlsStreamCli<Socket>),
 }
 
 impl AsyncRead for SecureSocketRecv {
