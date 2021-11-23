@@ -1,6 +1,8 @@
-# FeBFT
+<p align="center">
+    <img width="500" height="500" src="resources/logo.png">
 
-(Iron? Rusty? Fearless?) BFT middleware!
+    (Iron? Rusty? Fearless?) BFT middleware!
+</p>
 
 ---
 
