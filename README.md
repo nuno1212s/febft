@@ -1,7 +1,8 @@
 <p align="center">
 <img width="500" height="500" src="resources/logo.png">
-
-(Iron? Rusty? Fearless?) BFT middleware!
+</p>
+<p align="center">
+Iron? Rusty? Fearless? BFT middleware!
 </p>
 
 ---
