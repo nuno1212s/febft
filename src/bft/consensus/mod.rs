@@ -501,6 +501,13 @@ where
                 match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) if message.view() != synchronizer.view().sequence_number() => {
                         // drop proposed value in a different view (from different leader)
+                        eprintln!("DROPPED | PRE-PREPARE (n={:?}, v={:?}, d={:02x}{:02x}{:02x}...) | CTX (phase={:?}, n={:?}, v={:?}, d=nil)",
+                            message.sequence_number(),
+                            message.view(),
+                            header.digest().as_ref()[0], header.digest().as_ref()[1], header.digest().as_ref()[2],
+                            self.phase,
+                            self.sequence_number(),
+                            synchronizer.view().sequence_number());
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::PrePrepare(_) if message.sequence_number() != self.sequence_number() => {
@@ -626,12 +633,28 @@ where
                         self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     },
-                    ConsensusMessageKind::Prepare(_) if message.view() != synchronizer.view().sequence_number() => {
+                    ConsensusMessageKind::Prepare(d) if message.view() != synchronizer.view().sequence_number() => {
                         // drop msg in a different view
+                        eprintln!("DROPPED | PREPARE (n={:?}, v={:?}, d={:02x}{:02x}{:02x}...) | CTX (phase={:?}, n={:?}, v={:?}, d={:02x}{:02x}{:02x}...)",
+                            message.sequence_number(),
+                            message.view(),
+                            d.as_ref()[0], d.as_ref()[1], d.as_ref()[2],
+                            self.phase,
+                            self.sequence_number(),
+                            synchronizer.view().sequence_number(),
+                            self.current_digest.as_ref()[0], self.current_digest.as_ref()[1], self.current_digest.as_ref()[2]);
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Prepare(d) if d != &self.current_digest => {
                         // drop msg with different digest from proposed value
+                        eprintln!("DROPPED | PREPARE (n={:?}, v={:?}, d={:02x}{:02x}{:02x}...) | CTX (phase={:?}, n={:?}, v={:?}, d={:02x}{:02x}{:02x}...)",
+                            message.sequence_number(),
+                            message.view(),
+                            d.as_ref()[0], d.as_ref()[1], d.as_ref()[2],
+                            self.phase,
+                            self.sequence_number(),
+                            synchronizer.view().sequence_number(),
+                            self.current_digest.as_ref()[0], self.current_digest.as_ref()[1], self.current_digest.as_ref()[2]);
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Prepare(_) if message.sequence_number() != self.sequence_number() => {
@@ -685,12 +708,28 @@ where
                         self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     },
-                    ConsensusMessageKind::Commit(_) if message.view() != synchronizer.view().sequence_number() => {
+                    ConsensusMessageKind::Commit(d) if message.view() != synchronizer.view().sequence_number() => {
                         // drop msg in a different view
+                        eprintln!("DROPPED | COMMIT (n={:?}, v={:?}, d={:02x}{:02x}{:02x}...) | CTX (phase={:?}, n={:?}, v={:?}, d={:02x}{:02x}{:02x}...)",
+                            message.sequence_number(),
+                            message.view(),
+                            d.as_ref()[0], d.as_ref()[1], d.as_ref()[2],
+                            self.phase,
+                            self.sequence_number(),
+                            synchronizer.view().sequence_number(),
+                            self.current_digest.as_ref()[0], self.current_digest.as_ref()[1], self.current_digest.as_ref()[2]);
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Commit(d) if d != &self.current_digest => {
                         // drop msg with different digest from proposed value
+                        eprintln!("DROPPED | COMMIT (n={:?}, v={:?}, d={:02x}{:02x}{:02x}...) | CTX (phase={:?}, n={:?}, v={:?}, d={:02x}{:02x}{:02x}...)",
+                            message.sequence_number(),
+                            message.view(),
+                            d.as_ref()[0], d.as_ref()[1], d.as_ref()[2],
+                            self.phase,
+                            self.sequence_number(),
+                            synchronizer.view().sequence_number(),
+                            self.current_digest.as_ref()[0], self.current_digest.as_ref()[1], self.current_digest.as_ref()[2]);
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::Commit(_) if message.sequence_number() != self.sequence_number() => {
