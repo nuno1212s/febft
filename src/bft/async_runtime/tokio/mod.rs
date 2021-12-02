@@ -2,6 +2,9 @@ use crate::bft::error::*;
 
 pub type JoinHandle<T> = ::tokio::task::JoinHandle<T>;
 
+// FIXME: if users call `tokio::spawn`, nothing will happen!
+// we need to include an `EnterGuard<'static>` in the returned
+// runtime type
 pub type Runtime = ::tokio::runtime::Runtime;
 
 pub fn init(num_threads: usize) -> Result<Runtime> {
