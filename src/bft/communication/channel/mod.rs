@@ -96,7 +96,7 @@ pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
 
 impl<T> ChannelTx<T> {
     #[inline]
-    pub async fn send(&mut self, message: T) -> Result<()> {
+    #[tracing::instrument(skip_all)] pub async fn send(&mut self, message: T) -> Result<()> {
         self.inner.send(message).await
     }
 }
@@ -274,7 +274,7 @@ impl<S, O, P> Clone for MessageChannelTx<S, O, P> {
 }
 
 impl<S, O, P> MessageChannelTx<S, O, P> {
-    pub async fn send(&mut self, message: Message<S, O, P>) -> Result<()> {
+    #[tracing::instrument(skip_all)] pub async fn send(&mut self, message: Message<S, O, P>) -> Result<()> {
         match message {
             Message::System(header, message) => {
                 match message {
@@ -309,7 +309,7 @@ impl<S, O, P> MessageChannelTx<S, O, P> {
 }
 
 impl<S, O, P> MessageChannelRx<S, O, P> {
-    pub async fn recv(&mut self) -> Result<Message<S, O, P>> {
+    #[tracing::instrument(skip_all)] pub async fn recv(&mut self) -> Result<Message<S, O, P>> {
         let message = select! {
             result = self.consensus.recv() => {
                 let (h, c) = result?.into_inner();

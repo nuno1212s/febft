@@ -14,12 +14,12 @@ pub struct Socket {
     inner: TcpStream,
 }
 
-pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
+#[tracing::instrument(skip_all)] pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
     let inner = TcpListener::bind(addr.into()).await?;
     Ok(Listener { inner })
 }
 
-pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
+#[tracing::instrument(skip_all)] pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
     TcpStream::connect(addr.into())
         .await
         .map(|inner| Socket { inner })
@@ -64,7 +64,7 @@ impl AsyncWrite for Socket {
 }
 
 impl Listener {
-    pub async fn accept(&self) -> io::Result<Socket> {
+    #[tracing::instrument(skip_all)] pub async fn accept(&self) -> io::Result<Socket> {
         self.inner
             .accept()
             .await

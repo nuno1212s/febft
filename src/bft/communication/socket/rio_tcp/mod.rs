@@ -69,12 +69,12 @@ pub struct Listener {
 
 // bind won't actually be asynchronous, but we'll only call it once
 // throughout the library, anyway
-pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
+#[tracing::instrument(skip_all)] pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
     TcpListener::bind(addr.into())
         .map(|inner| Listener { inner })
 }
 
-pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
+#[tracing::instrument(skip_all)] pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
     let addr = addr.into();
     let domain = match addr {
         SocketAddr::V4(_) => Domain::IPV4,
@@ -89,7 +89,7 @@ pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
 }
 
 impl Listener {
-    pub async fn accept(&self) -> io::Result<Socket> {
+    #[tracing::instrument(skip_all)] pub async fn accept(&self) -> io::Result<Socket> {
         ring()
             .accept(&self.inner)
             .await

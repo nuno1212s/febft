@@ -161,7 +161,7 @@ where
     Reply<S>: Send + 'static,
 {
     /// Bootstrap a replica in `febft`.
-    pub async fn bootstrap(cfg: ReplicaConfig<S>) -> Result<Self> {
+    #[tracing::instrument(skip_all)] pub async fn bootstrap(cfg: ReplicaConfig<S>) -> Result<Self> {
         let ReplicaConfig {
             next_consensus_seq,
             node: node_config,
@@ -252,7 +252,7 @@ where
     }
 
     /// The main loop of a replica.
-    pub async fn run(&mut self) -> Result<()> {
+    #[tracing::instrument(skip_all)] pub async fn run(&mut self) -> Result<()> {
         // TODO: exit condition?
         loop {
             match self.phase {
@@ -263,7 +263,7 @@ where
         }
     }
 
-    async fn update_retrieving_state(&mut self) -> Result<()> {
+    #[tracing::instrument(skip_all)] async fn update_retrieving_state(&mut self) -> Result<()> {
         let message = self.node.receive().await?;
 
         match message {
@@ -373,7 +373,7 @@ where
         Ok(())
     }
 
-    async fn update_sync_phase(&mut self) -> Result<bool> {
+    #[tracing::instrument(skip_all)] async fn update_sync_phase(&mut self) -> Result<bool> {
         // retrieve a view change message to be processed
         let message = match self.synchronizer.poll() {
             SynchronizerPollStatus::Recv => {
@@ -476,7 +476,7 @@ where
         Ok(true)
     }
 
-    async fn update_normal_phase(&mut self) -> Result<()> {
+    #[tracing::instrument(skip_all)] async fn update_normal_phase(&mut self) -> Result<()> {
         // check if we have STOP messages to be processed,
         // and update our phase when we start installing
         // the new view

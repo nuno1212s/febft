@@ -42,7 +42,7 @@ pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
 
 impl<T> ChannelTx<T> {
     #[inline]
-    pub async fn send(&mut self, message: T) -> Result<()> {
+    #[tracing::instrument(skip_all)] pub async fn send(&mut self, message: T) -> Result<()> {
         self.ready().await?;
         self.inner
             .try_send(message)
@@ -50,7 +50,7 @@ impl<T> ChannelTx<T> {
     }
 
     #[inline]
-    async fn ready(&mut self) -> Result<()> {
+    #[tracing::instrument(skip_all)] async fn ready(&mut self) -> Result<()> {
         poll_fn(|cx| match self.inner.poll_ready(cx) {
             Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
             Poll::Ready(Err(e)) if e.is_full() => Poll::Pending,

@@ -42,7 +42,7 @@ pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
 
 impl<T> ChannelTx<T> {
     #[inline]
-    pub async fn send(&mut self, message: T) -> Result<()> {
+    #[tracing::instrument(skip_all)] pub async fn send(&mut self, message: T) -> Result<()> {
         self.inner
             .send(message)
             .await

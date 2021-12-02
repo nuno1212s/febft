@@ -70,7 +70,7 @@ pub unsafe fn drop() -> error::Result<()> {
 }
 
 /// Creates a new `Listener` socket, bound to the address `addr`.
-pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
+#[tracing::instrument(skip_all)] pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
     {
         #[cfg(feature = "socket_tokio_tcp")]
         { tokio_tcp::bind(addr).await }
@@ -84,7 +84,7 @@ pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
 }
 
 /// Connects to the remote node pointed to by the address `addr`.
-pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
+#[tracing::instrument(skip_all)] pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
     {
         #[cfg(feature = "socket_tokio_tcp")]
         { tokio_tcp::connect(addr).await }
@@ -98,7 +98,7 @@ pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
 }
 
 impl Listener {
-    pub async fn accept(&self) -> io::Result<Socket> {
+    #[tracing::instrument(skip_all)] pub async fn accept(&self) -> io::Result<Socket> {
         self.inner.accept()
             .await
             .map(|inner| Socket { inner })

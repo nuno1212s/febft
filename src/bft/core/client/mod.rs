@@ -121,7 +121,7 @@ where
     const GC_DUR: Duration = Duration::from_secs(30);
 
     /// Bootstrap a client in `febft`.
-    pub async fn bootstrap(cfg: ClientConfig) -> Result<Self> {
+    #[tracing::instrument(skip_all)] pub async fn bootstrap(cfg: ClientConfig) -> Result<Self> {
         let ClientConfig { node: node_config } = cfg;
 
         // system params
@@ -177,7 +177,7 @@ where
     /// on top of `febft`.
     //
     // TODO: request timeout
-    pub async fn update(&mut self, operation: D::Request) -> D::Reply {
+    #[tracing::instrument(skip_all)] pub async fn update(&mut self, operation: D::Request) -> D::Reply {
         let message = SystemMessage::Request(RequestMessage::new(
             self.session_id,
             self.next_operation_id(),
@@ -199,7 +199,7 @@ where
         id
     }
 
-    async fn message_recv_task(
+    #[tracing::instrument(skip_all)] async fn message_recv_task(
         params: SystemParams,
         data: Arc<ClientData<D::Reply>>,
         mut node: Node<D>,

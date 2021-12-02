@@ -90,7 +90,7 @@ impl<T> Future for JoinHandle<T> {
 }
 
 /// Yields execution back to the async runtime.
-pub async fn yield_now() {
+#[tracing::instrument(skip_all)] pub async fn yield_now() {
     struct YieldNow {
         yielded: bool,
     }

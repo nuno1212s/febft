@@ -59,6 +59,7 @@ num_cpus = "1"
 
 [dependencies]
 #scopeguard = "1"
+tracing = "0.1"
 chrono = "0.4"
 intmap = "0.7"
 either = "1"

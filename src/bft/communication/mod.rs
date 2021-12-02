@@ -240,7 +240,7 @@ where
     ///
     /// Rogue messages (i.e. not pertaining to the bootstrapping protocol)
     /// are returned in a `Vec`.
-    pub async fn bootstrap(
+    #[tracing::instrument(skip_all)] pub async fn bootstrap(
         cfg: NodeConfig,
     ) -> Result<(Self, RequestBatcher<D::Request>, Vec<Message<D::State, D::Request, D::Reply>>)> {
         let id = cfg.id;
@@ -771,7 +771,7 @@ where
     }
 
     /// Receive one message from peer nodes or ourselves.
-    pub async fn receive(&mut self) -> Result<Message<D::State, D::Request, D::Reply>> {
+    #[tracing::instrument(skip_all)] pub async fn receive(&mut self) -> Result<Message<D::State, D::Request, D::Reply>> {
         self.my_rx.recv().await
     }
 
@@ -896,7 +896,7 @@ where
         }
     }
 
-    async fn tx_side_connect_task(
+    #[tracing::instrument(skip_all)] async fn tx_side_connect_task(
         my_id: NodeId,
         first_cli: NodeId,
         peer_id: NodeId,
@@ -966,7 +966,7 @@ where
     }
 
     // TODO: check if we have terminated the node, and exit
-    async fn rx_side_accept(
+    #[tracing::instrument(skip_all)] async fn rx_side_accept(
         first_cli: NodeId,
         my_id: NodeId,
         listener: Listener,
@@ -985,7 +985,7 @@ where
     // performs a cryptographic handshake with a peer node;
     // header doesn't need to be signed, since we won't be
     // storing this message in the log
-    async fn rx_side_accept_task(
+    #[tracing::instrument(skip_all)] async fn rx_side_accept_task(
         first_cli: NodeId,
         my_id: NodeId,
         acceptor: TlsAcceptor,
@@ -1205,7 +1205,7 @@ where
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
-    async fn value(
+    #[tracing::instrument(skip_all)] async fn value(
         &mut self,
         m: Either<(u64, Digest, Buf), (SystemMessage<D::State, D::Request, D::Reply>, u64, Digest, Buf)>,
     ) {
@@ -1231,7 +1231,7 @@ where
         }
     }
 
-    async fn me(
+    #[tracing::instrument(skip_all)] async fn me(
         my_id: NodeId,
         m: SystemMessage<D::State, D::Request, D::Reply>,
         n: u64,
@@ -1254,7 +1254,7 @@ where
         tx.send(Message::System(h, m)).await.unwrap_or(())
     }
 
-    async fn peers(
+    #[tracing::instrument(skip_all)] async fn peers(
         flush: bool,
         my_id: NodeId,
         peer_id: NodeId,
@@ -1294,7 +1294,7 @@ where
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
-    async fn value(
+    #[tracing::instrument(skip_all)] async fn value(
         &mut self,
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
@@ -1309,7 +1309,7 @@ where
         }
     }
 
-    async fn me(
+    #[tracing::instrument(skip_all)] async fn me(
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
         tx: &mut MessageChannelTx<D::State, D::Request, D::Reply>,
@@ -1320,7 +1320,7 @@ where
         tx.send(Message::System(h, original)).await.unwrap_or(())
     }
 
-    async fn peers(
+    #[tracing::instrument(skip_all)] async fn peers(
         peer_id: NodeId,
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
