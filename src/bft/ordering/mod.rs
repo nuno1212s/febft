@@ -129,11 +129,22 @@ pub fn tbo_pop_message<M>(
 
 /// Takes an internal queue of a `TboQueue` (e.g. the one used in the consensus
 /// module), and queues a message.
+#[inline]
 pub fn tbo_queue_message<M: Orderable>(
     curr_seq: SeqNo,
     tbo: &mut VecDeque<VecDeque<StoredMessage<M>>>,
     m: StoredMessage<M>,
 ) {
+    tbo_queue_message_ctx(curr_seq, tbo, m);
+}
+
+/// Takes an internal queue of a `TboQueue` (e.g. the one used in the consensus
+/// module), and queues a message.
+pub fn tbo_queue_message_ctx<M: Orderable>(
+    curr_seq: SeqNo,
+    tbo: &mut VecDeque<VecDeque<StoredMessage<M>>>,
+    m: StoredMessage<M>,
+) -> Option<StoredMessage<M>> {
     let index = match m.message().sequence_number().index(curr_seq) {
         Right(i) => i,
         Left(_) => {
@@ -143,7 +154,7 @@ pub fn tbo_queue_message<M: Orderable>(
             //
             // NOTE: alternatively, if this seq no pertains to consensus,
             // we can try running the state transfer protocol
-            return;
+            return Some(m);
         },
     };
     if index >= tbo.len() {
@@ -151,6 +162,7 @@ pub fn tbo_queue_message<M: Orderable>(
         tbo.extend(std::iter::repeat_with(VecDeque::new).take(len));
     }
     tbo[index].push_back(m);
+    None
 }
 
 /// Takes an internal queue of a `TboQueue` (e.g. the one used in the consensus

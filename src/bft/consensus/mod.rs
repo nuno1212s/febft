@@ -46,7 +46,7 @@ use crate::bft::executable::{
 };
 use crate::bft::ordering::{
     tbo_advance_message_queue,
-    tbo_queue_message,
+    tbo_queue_message_ctx,
     tbo_pop_message,
     Orderable,
     SeqNo,
@@ -115,34 +115,6 @@ impl<O> TboQueue<O> {
         tbo_advance_message_queue(&mut self.pre_prepares);
         tbo_advance_message_queue(&mut self.prepares);
         tbo_advance_message_queue(&mut self.commits);
-    }
-
-    /// Queues a consensus message for later processing, or drops it
-    /// immediately if it pertains to an older consensus instance.
-    pub fn queue(&mut self, h: Header, m: ConsensusMessage<O>) {
-        match m.kind() {
-            ConsensusMessageKind::PrePrepare(_) => self.queue_pre_prepare(h, m),
-            ConsensusMessageKind::Prepare(_) => self.queue_prepare(h, m),
-            ConsensusMessageKind::Commit(_) => self.queue_commit(h, m),
-        }
-    }
-
-    /// Queues a `PRE-PREPARE` message for later processing, or drops it
-    /// immediately if it pertains to an older consensus instance.
-    fn queue_pre_prepare(&mut self, h: Header, m: ConsensusMessage<O>) {
-        tbo_queue_message(self.curr_seq, &mut self.pre_prepares, StoredMessage::new(h, m))
-    }
-
-    /// Queues a `PREPARE` message for later processing, or drops it
-    /// immediately if it pertains to an older consensus instance.
-    fn queue_prepare(&mut self, h: Header, m: ConsensusMessage<O>) {
-        tbo_queue_message(self.curr_seq, &mut self.prepares, StoredMessage::new(h, m))
-    }
-
-    /// Queues a `COMMIT` message for later processing, or drops it
-    /// immediately if it pertains to an older consensus instance.
-    fn queue_commit(&mut self, h: Header, m: ConsensusMessage<O>) {
-        tbo_queue_message(self.curr_seq, &mut self.commits, StoredMessage::new(h, m))
     }
 }
 
@@ -217,6 +189,49 @@ where
     Request<S>: Send + Clone + 'static,
     Reply<S>: Send + 'static,
 {
+    /// Queues a consensus message for later processing, or drops it
+    /// immediately if it pertains to an older consensus instance.
+    pub fn queue(&mut self, h: Header, m: ConsensusMessage<Request<S>>) {
+        match m.kind() {
+            ConsensusMessageKind::PrePrepare(_) => self.queue_pre_prepare(h, m),
+            ConsensusMessageKind::Prepare(_) => self.queue_prepare(h, m),
+            ConsensusMessageKind::Commit(_) => self.queue_commit(h, m),
+        }
+    }
+
+    /// Queues a `PRE-PREPARE` message for later processing, or drops it
+    /// immediately if it pertains to an older consensus instance.
+    fn queue_pre_prepare(&mut self, h: Header, m: ConsensusMessage<Request<S>>) {
+        if let Some(s) = tbo_queue_message_ctx(self.curr_seq, &mut self.pre_prepares, StoredMessage::new(h, m)) {
+            eprintln!("DROPPED | PRE-PREPARE (n={:?}) | CTX (phase={:?}, n={:?})",
+                s.message().sequence_number(),
+                self.phase,
+                self.sequence_number());
+        }
+    }
+
+    /// Queues a `PREPARE` message for later processing, or drops it
+    /// immediately if it pertains to an older consensus instance.
+    fn queue_prepare(&mut self, h: Header, m: ConsensusMessage<Request<S>>) {
+        if let Some(s) = tbo_queue_message_ctx(self.curr_seq, &mut self.prepares, StoredMessage::new(h, m)) {
+            eprintln!("DROPPED | PREPARE (n={:?}) | CTX (phase={:?}, n={:?})",
+                s.message().sequence_number(),
+                self.phase,
+                self.sequence_number());
+        }
+    }
+
+    /// Queues a `COMMIT` message for later processing, or drops it
+    /// immediately if it pertains to an older consensus instance.
+    fn queue_commit(&mut self, h: Header, m: ConsensusMessage<Request<S>>) {
+        if let Some(s) = tbo_queue_message_ctx(self.curr_seq, &mut self.commits, StoredMessage::new(h, m)) {
+            eprintln!("DROPPED | COMMIT (n={:?}) | CTX (phase={:?}, n={:?})",
+                s.message().sequence_number(),
+                self.phase,
+                self.sequence_number());
+        }
+    }
+
     /// Starts a new consensus protocol tracker.
     pub fn new(initial_seq_no: SeqNo, batch_size: usize) -> Self {
         Self {
