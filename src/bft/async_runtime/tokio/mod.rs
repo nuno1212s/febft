@@ -1,8 +1,13 @@
+use std::ops::Deref;
+
 use crate::bft::error::*;
 
 pub type JoinHandle<T> = ::tokio::task::JoinHandle<T>;
 
-pub type Runtime = ::tokio::runtime::Runtime;
+pub struct Runtime {
+    inner: ::tokio::runtime::Runtime,
+    _enter: ::tokio::runtime::EnterGuard<'static>,
+}
 
 pub fn init(num_threads: usize) -> Result<Runtime> {
     ::tokio::runtime::Builder::new_multi_thread()
@@ -11,5 +16,19 @@ pub fn init(num_threads: usize) -> Result<Runtime> {
         .thread_stack_size(2 * 1024 * 1024)
         .enable_all()
         .build()
+        .map(|inner| {
+            let _enter: ::tokio::runtime::EnterGuard<'static> = unsafe {
+                std::mem::transmute(inner.enter())
+            };
+            Runtime { inner, _enter }
+        })
         .wrapped_msg(ErrorKind::AsyncRuntimeTokio, "Failed to build tokio runtime")
+}
+
+impl Deref for Runtime {
+    type Target = ::tokio::runtime::Runtime;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
 }
