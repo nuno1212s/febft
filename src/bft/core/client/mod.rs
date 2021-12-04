@@ -3,7 +3,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::future::Future;
-use std::time::{Instant, Duration};
 use std::task::{Poll, Waker, Context};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -110,16 +109,6 @@ where
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
-    // elapsed time since last garbage collection
-    // of the replica vote counts hashmap;
-    //
-    // NOTE: garbage collection is needed because we only
-    // need a quorum of votes, but the remaining nodes
-    // may also vote, populating the hashmap
-    //
-    // TODO: tune this value, e.g. maybe change to 3mins?
-    const GC_DUR: Duration = Duration::from_secs(30);
-
     /// Bootstrap a client in `febft`.
     pub async fn bootstrap(cfg: ClientConfig) -> Result<Self> {
         let ClientConfig { node: node_config } = cfg;
@@ -204,7 +193,6 @@ where
         data: Arc<ClientData<D::Reply>>,
         mut node: Node<D>,
     ) {
-        let mut earlier = Instant::now();
         let mut votes: HashMap<Digest, ReplicaVotes> = collections::hash_map();
 
         loop {
@@ -213,27 +201,6 @@ where
                 Message::System(header, message) => {
                     match message {
                         SystemMessage::Reply(message) => {
-                            let now = Instant::now();
-
-                            // garbage collect old votes
-                            //
-                            // TODO: switch to `HashMap::drain_filter` when
-                            // this API reaches stable Rust
-                            if now.duration_since(earlier) > Self::GC_DUR {
-                                let mut to_remove = Vec::new();
-
-                                for (dig, v) in votes.iter() {
-                                    if v.count > params.f() {
-                                        to_remove.push(dig.clone());
-                                    }
-                                }
-
-                                for dig in to_remove {
-                                    votes.remove(&dig);
-                                }
-                            }
-                            earlier = now;
-
                             let (digest, payload) = message.into_inner();
                             let votes = votes
                                 .entry(digest)
