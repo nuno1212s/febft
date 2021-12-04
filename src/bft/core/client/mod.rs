@@ -62,6 +62,7 @@ impl<D: SharedData> Clone for Client<D> {
 }
 
 struct ClientRequestFut<'a, P> {
+    id: NodeId,
     digest: Digest,
     data: &'a ClientData<P>,
 }
@@ -73,20 +74,23 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
     // if we have a lot of requests being done in parallel,
     // the mutexes are going to have a fair bit of contention
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<P> {
-        // check if response is ready
-        {
-            let mut ready = self.data.ready.lock();
-            if let Some(payload) = ready.remove(&self.digest) {
-                // FIXME: should you remove wakers here?
-                return Poll::Ready(payload);
-            }
-        }
+        eprintln!("{:?} polled ClientRequestFut", self.id);
         // clone waker to wake up this task when
         // the response is ready
         {
             let mut wakers = self.data.wakers.lock();
             wakers.insert(self.digest, cx.waker().clone());
         }
+        // check if response is ready
+        {
+            let mut ready = self.data.ready.lock();
+            if let Some(payload) = ready.remove(&self.digest) {
+                // FIXME: should you remove wakers here?
+                eprintln!("{:?} ready ClientRequestFut", self.id);
+                return Poll::Ready(payload);
+            }
+        }
+        eprintln!("{:?} pending ClientRequestFut", self.id);
         Poll::Pending
     }
 }
@@ -179,7 +183,8 @@ where
 
         // await response
         let data = &*self.data;
-        ClientRequestFut { digest, data }.await
+        let id = self.node.id();
+        ClientRequestFut { id, digest, data }.await
     }
 
     fn next_operation_id(&mut self) -> SeqNo {
