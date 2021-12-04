@@ -3,10 +3,11 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::future::Future;
-use std::task::{Poll, Waker, Context};
+use std::task::{Poll, Context};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use parking_lot::Mutex;
+use futures::task::AtomicWaker;
 
 use super::SystemParams;
 
@@ -28,10 +29,23 @@ use crate::bft::communication::{
     NodeConfig,
 };
 
+struct ReadyData<P> {
+    payload: Option<P>,
+    waker: AtomicWaker,
+}
+
+impl<P> ReadyData<P> {
+    fn new() -> Self {
+        Self {
+            payload: None,
+            waker: AtomicWaker::new(),
+        }
+    }
+}
+
 struct ClientData<P> {
     session_counter: AtomicU32,
-    wakers: Mutex<HashMap<Digest, Waker>>,
-    ready: Mutex<HashMap<Digest, P>>,
+    ready: Mutex<HashMap<Digest, ReadyData<P>>>,
 }
 
 /// Represents a client node in `febft`.
@@ -73,20 +87,22 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
     // if we have a lot of requests being done in parallel,
     // the mutexes are going to have a fair bit of contention
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<P> {
+        let mut all_readies = self.data.ready.lock();
+
+        let ready = all_readies
+            .entry(self.digest)
+            .or_insert_with(ReadyData::new);
+
+        ready.waker.register(cx.waker());
+
         // check if response is ready
-        {
-            let mut ready = self.data.ready.lock();
-            if let Some(payload) = ready.remove(&self.digest) {
-                // FIXME: should you remove wakers here?
-                return Poll::Ready(payload);
-            }
+        if let Some(payload) = ready.payload.take() {
+            drop(ready);
+            all_readies.remove(&self.digest);
+
+            return Poll::Ready(payload);
         }
-        // clone waker to wake up this task when
-        // the response is ready
-        {
-            let mut wakers = self.data.wakers.lock();
-            wakers.insert(self.digest, cx.waker().clone());
-        }
+
         Poll::Pending
     }
 }
@@ -128,7 +144,6 @@ where
         // create shared data
         let data = Arc::new(ClientData {
             session_counter: AtomicU32::new(0),
-            wakers: Mutex::new(collections::hash_map()),
             ready: Mutex::new(collections::hash_map()),
         });
         let task_data = Arc::clone(&data);
@@ -228,19 +243,14 @@ where
 
                             // wait for at least f+1 identical replies
                             if votes.count > params.f() {
-                                // register response
-                                {
-                                    let mut ready = data.ready.lock();
-                                    ready.insert(digest, payload);
-                                }
+                                let mut all_readies = data.ready.lock();
 
-                                // try to wake up a waiting task
-                                {
-                                    let mut wakers = data.wakers.lock();
-                                    if let Some(waker) = wakers.remove(&digest) {
-                                        waker.wake();
-                                    }
-                                }
+                                let ready = all_readies
+                                    .entry(digest)
+                                    .or_insert_with(ReadyData::new);
+
+                                ready.payload = Some(payload);
+                                ready.waker.wake();
                             }
                         },
                         // FIXME: handle rogue messages on clients
