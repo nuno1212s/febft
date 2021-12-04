@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::future::Future;
 use std::time::{Instant, Duration};
-use std::task::{Poll, Context};
+use std::task::{Poll, Waker, Context};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use parking_lot::Mutex;
@@ -31,6 +31,7 @@ use crate::bft::communication::{
 
 struct ClientData<P> {
     session_counter: AtomicU32,
+    wakers: Mutex<HashMap<Digest, Waker>>,
     ready: Mutex<HashMap<Digest, P>>,
 }
 
@@ -77,10 +78,16 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
         {
             let mut ready = self.data.ready.lock();
             if let Some(payload) = ready.remove(&self.digest) {
+                // FIXME: should you remove wakers here?
                 return Poll::Ready(payload);
             }
         }
-        cx.waker().wake_by_ref();
+        // clone waker to wake up this task when
+        // the response is ready
+        {
+            let mut wakers = self.data.wakers.lock();
+            wakers.insert(self.digest, cx.waker().clone());
+        }
         Poll::Pending
     }
 }
@@ -132,6 +139,7 @@ where
         // create shared data
         let data = Arc::new(ClientData {
             session_counter: AtomicU32::new(0),
+            wakers: Mutex::new(collections::hash_map()),
             ready: Mutex::new(collections::hash_map()),
         });
         let task_data = Arc::clone(&data);
@@ -256,6 +264,14 @@ where
                                 {
                                     let mut ready = data.ready.lock();
                                     ready.insert(digest, payload);
+                                }
+
+                                // try to wake up a waiting task
+                                {
+                                    let mut wakers = data.wakers.lock();
+                                    if let Some(waker) = wakers.remove(&digest) {
+                                        waker.wake();
+                                    }
                                 }
                             }
                         },
