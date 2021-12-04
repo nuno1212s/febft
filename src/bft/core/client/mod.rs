@@ -207,7 +207,8 @@ where
         let mut earlier = Instant::now();
         let mut votes: HashMap<Digest, ReplicaVotes> = collections::hash_map();
 
-        while let Ok(message) = node.receive().await {
+        loop {
+            let message = node.receive().await.unwrap();
             match message {
                 Message::System(header, message) => {
                     match message {

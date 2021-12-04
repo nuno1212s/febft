@@ -866,11 +866,11 @@ where
                     },
                 };
 
-                tx.send(Message::System(header, message)).await.unwrap_or(());
+                tx.send(Message::System(header, message)).await.unwrap();
             }
 
             // announce we have disconnected
-            tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
+            tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap();
         });
     }
 
@@ -955,14 +955,14 @@ where
                 };
 
                 // success
-                tx.send(Message::ConnectedTx(peer_id, sock)).await.unwrap_or(());
+                tx.send(Message::ConnectedTx(peer_id, sock)).await.unwrap();
                 return;
             }
             // sleep for `SECS` seconds and retry
             Delay::new(Duration::from_secs(SECS)).await;
         }
         // announce we have failed to connect to the peer node
-        tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
+        tx.send(Message::DisconnectedTx(peer_id)).await.unwrap();
     }
 
     // TODO: check if we have terminated the node, and exit
@@ -1029,12 +1029,12 @@ where
                 }
             };
 
-            tx.send(Message::ConnectedRx(peer_id, sock)).await.unwrap_or(());
+            tx.send(Message::ConnectedRx(peer_id, sock)).await.unwrap();
             return;
         }
 
         // announce we have failed to connect to the peer node
-        tx.send(Message::DisconnectedRx(None)).await.unwrap_or(());
+        tx.send(Message::DisconnectedRx(None)).await.unwrap();
     }
 }
 
@@ -1251,7 +1251,7 @@ where
         ).into_inner();
 
         // send
-        tx.send(Message::System(h, m)).await.unwrap_or(())
+        tx.send(Message::System(h, m)).await.unwrap()
     }
 
     async fn peers(
@@ -1282,7 +1282,7 @@ where
         let mut sock = lock.lock().await;
         if let Err(_) = wm.write_to(&mut *sock, flush).await {
             // error sending, drop connection
-            tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
+            tx.send(Message::DisconnectedTx(peer_id)).await.unwrap();
         }
     }
 }
@@ -1317,7 +1317,7 @@ where
         let (original, _) = m.into_inner();
 
         // send
-        tx.send(Message::System(h, original)).await.unwrap_or(())
+        tx.send(Message::System(h, original)).await.unwrap()
     }
 
     async fn peers(
@@ -1338,7 +1338,7 @@ where
         let mut sock = lock.lock().await;
         if let Err(_) = wm.write_to(&mut *sock, true).await {
             // error sending, drop connection
-            tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
+            tx.send(Message::DisconnectedTx(peer_id)).await.unwrap();
         }
     }
 }

@@ -226,7 +226,8 @@ where
         // FIXME: maybe use threadpool to execute instead
         // FIXME: serialize data on exit
         thread::spawn(move || {
-            while let Ok(exec_req) = exec.e_rx.recv() {
+            loop {
+                let exec_req = exec.e_rx.recv().unwrap();
                 match exec_req {
                     ExecutionRequest::InstallState(checkpoint, after) => {
                         exec.state = checkpoint;

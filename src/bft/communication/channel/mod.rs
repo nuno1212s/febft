@@ -217,7 +217,7 @@ impl<O: Send + 'static> RequestBatcher<O> {
                 };
 
                 match batch {
-                    Batch::Now(batch) => self.batcher.send(batch).await.unwrap_or(()),
+                    Batch::Now(batch) => self.batcher.send(batch).await.unwrap(),
                     Batch::Notify => self.shared.event.notify(1),
                 }
             }
