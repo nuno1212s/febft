@@ -1,4 +1,5 @@
 use std::ops::Deref;
+use std::future::Future;
 
 use crate::bft::error::*;
 
@@ -23,6 +24,18 @@ pub fn init(num_threads: usize) -> Result<Runtime> {
             Runtime { inner, _enter }
         })
         .wrapped_msg(ErrorKind::AsyncRuntimeTokio, "Failed to build tokio runtime")
+}
+
+impl Runtime {
+    pub fn spawn_named<F>(&self, name: &str, future: F) -> JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        ::tokio::task::Builder::new()
+            .name(name)
+            .spawn(future)
+    }
 }
 
 impl Deref for Runtime {

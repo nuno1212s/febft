@@ -75,7 +75,7 @@ linked-hash-map = "0.5"
 rand_core = { version = "0.6", features = ["getrandom"] }
 smallvec = { version = "1", features = ["union", "write"] }
 async-std = { version = "1", optional = true }
-tokio = { version = "1", features = ["full"], optional = true }
+tokio = { version = "1", features = ["full", "tracing"], optional = true }
 tokio-util = { version = "0.6", features = ["compat"], optional = true }
 ring = { version = "0.16", optional = true }
 threadpool-crossbeam-channel = { version = "1", optional = true }

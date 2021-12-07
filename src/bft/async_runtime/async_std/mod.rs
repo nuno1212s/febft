@@ -25,6 +25,14 @@ impl Runtime {
         JoinHandle { inner }
     }
 
+    pub fn spawn_named<F>(&self, _name: &str, _future: F) -> JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        unimplemented!()
+    }
+
     pub fn block_on<F: Future>(&self, future: F) -> F::Output {
         ::async_std::task::block_on(future)
     }

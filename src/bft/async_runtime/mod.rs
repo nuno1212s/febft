@@ -74,6 +74,15 @@ where
     JoinHandle { inner }
 }
 
+pub fn spawn_named<F>(name: &str, future: F) -> JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let inner = runtime!().spawn_named(name, future);
+    JoinHandle { inner }
+}
+
 /// Blocks on a future `F` until it completes.
 pub fn block_on<F: Future>(future: F) -> F::Output {
     runtime!().block_on(future)

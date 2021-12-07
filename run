@@ -1,7 +1,7 @@
 #!/bin/sh
 
 cargo_do() {
-    export RUSTFLAGS="-C target-cpu=native"
+    export RUSTFLAGS="-C target-cpu=native --cfg tokio_unstable"
     subcmd=$1
     shift
     exec cargo +nightly $subcmd --features expose_impl $@
