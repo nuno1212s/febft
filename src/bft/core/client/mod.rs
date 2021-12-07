@@ -28,10 +28,14 @@ use crate::bft::communication::{
     NodeConfig,
 };
 
+struct ClientReady<P> {
+    reply: Option<P>,
+    waker: Option<Waker>
+}
+
 struct ClientData<P> {
     session_counter: AtomicU32,
-    wakers: Mutex<HashMap<Digest, Waker>>,
-    ready: Mutex<HashMap<Digest, P>>,
+    ready: Mutex<HashMap<Digest, ClientReady<P>>>,
 }
 
 /// Represents a client node in `febft`.
@@ -75,23 +79,22 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
     // the mutexes are going to have a fair bit of contention
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<P> {
         eprintln!("{:?} polled ClientRequestFut", self.id);
-        // clone waker to wake up this task when
-        // the response is ready
-        {
-            let mut wakers = self.data.wakers.lock();
-            wakers.insert(self.digest, cx.waker().clone());
+
+        let mut ready = self.data.ready.lock();
+        let request = ready
+            .entry(self.digest)
+            .or_insert_with(|| ClientReady { waker: None, reply: None });
+
+        if let Some(payload) = request.reply.take() {
+            eprintln!("{:?} ready ClientRequestFut", self.id);
+            Poll::Ready(payload)
+        } else {
+            eprintln!("{:?} pending ClientRequestFut", self.id);
+            // clone waker to wake up this task when
+            // the response is ready
+            request.waker = Some(cx.waker().clone());
+            Poll::Pending
         }
-        // check if response is ready
-        {
-            let mut ready = self.data.ready.lock();
-            if let Some(payload) = ready.remove(&self.digest) {
-                // FIXME: should you remove wakers here?
-                eprintln!("{:?} ready ClientRequestFut", self.id);
-                return Poll::Ready(payload);
-            }
-        }
-        eprintln!("{:?} pending ClientRequestFut", self.id);
-        Poll::Pending
     }
 }
 
@@ -132,7 +135,6 @@ where
         // create shared data
         let data = Arc::new(ClientData {
             session_counter: AtomicU32::new(0),
-            wakers: Mutex::new(collections::hash_map()),
             ready: Mutex::new(collections::hash_map()),
         });
         let task_data = Arc::clone(&data);
@@ -233,18 +235,13 @@ where
 
                             // wait for at least f+1 identical replies
                             if votes.count > params.f() {
-                                // register response
-                                {
-                                    let mut ready = data.ready.lock();
-                                    ready.insert(digest, payload);
-                                }
+                                let mut ready = data.ready.lock();
+                                let request = ready
+                                    .entry(digest)
+                                    .or_insert_with(move || ClientReady { waker: None, reply: Some(payload) });
 
-                                // try to wake up a waiting task
-                                {
-                                    let mut wakers = data.wakers.lock();
-                                    if let Some(waker) = wakers.remove(&digest) {
-                                        waker.wake();
-                                    }
+                                if let Some(waker) = request.waker.take() {
+                                    waker.wake();
                                 }
                             }
                         },
