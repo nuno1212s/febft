@@ -238,8 +238,12 @@ where
                                 let mut ready = data.ready.lock();
                                 let request = ready
                                     .entry(digest)
-                                    .or_insert_with(move || ClientReady { waker: None, reply: Some(payload) });
+                                    .or_insert_with(|| ClientReady { waker: None, reply: None });
 
+                                // register reply
+                                request.reply = Some(payload);
+
+                                // wake up pending task
                                 if let Some(waker) = request.waker.take() {
                                     waker.wake();
                                 }
