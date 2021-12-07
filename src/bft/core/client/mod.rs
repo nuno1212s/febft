@@ -138,6 +138,7 @@ where
             ready: Mutex::new(collections::hash_map()),
         });
         let task_data = Arc::clone(&data);
+        let waker_data = Arc::clone(&data);
 
         // get `SendNode` before giving up ownership on the `Node`
         let send_node = node.send_node();
@@ -148,6 +149,23 @@ where
             task_data,
             node,
         ));
+
+        // spawn thread to wake up tasks periodically...
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(3));
+
+                let mut ready = waker_data.ready.lock();
+
+                for request in ready.values_mut() {
+                    if request.reply.is_some() {
+                        if let Some(waker) = request.waker.take() {
+                            waker.wake();
+                        }
+                    }
+                }
+            }
+        });
 
         let session_id = data
             .session_counter
