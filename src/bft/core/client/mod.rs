@@ -221,9 +221,9 @@ where
                                 .or_insert_with(|| ReplicaVotes { count: 0, digest: header.digest().clone() });
 
                             // reply already delivered to application
-                            if votes.count > params.f() {
-                                continue;
-                            }
+                            //if votes.count > params.f() {
+                            //    continue;
+                            //}
 
                             // register new reply received
                             if &votes.digest == header.digest() {
