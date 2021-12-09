@@ -263,6 +263,7 @@ where
 
                                 // wake up pending task
                                 if let Some(waker) = request.waker.take() {
+                                    drop(request);
                                     waker.wake();
                                 }
                             }
