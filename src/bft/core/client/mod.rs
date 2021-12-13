@@ -85,14 +85,15 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
             .entry(self.digest)
             .or_insert_with(|| ClientReady { waker: None, reply: None });
 
+        // clone waker to wake up this task when
+        // the response is ready
+        request.waker = Some(cx.waker().clone());
+
         if let Some(payload) = request.reply.take() {
             eprintln!("{:?} ready ClientRequestFut", self.id);
             Poll::Ready(payload)
         } else {
             eprintln!("{:?} pending ClientRequestFut", self.id);
-            // clone waker to wake up this task when
-            // the response is ready
-            request.waker = Some(cx.waker().clone());
             Poll::Pending
         }
     }
@@ -238,11 +239,6 @@ where
                                 // the payload
                                 .or_insert_with(|| ReplicaVotes { count: 0, digest: header.digest().clone() });
 
-                            // reply already delivered to application
-                            if votes.count > params.f() {
-                                continue;
-                            }
-
                             // register new reply received
                             if &votes.digest == header.digest() {
                                 votes.count += 1;
@@ -263,7 +259,7 @@ where
 
                                 // wake up pending task
                                 if let Some(waker) = request.waker.take() {
-                                    drop(request);
+                                    drop(ready);
                                     waker.wake();
                                 }
                             }
