@@ -29,8 +29,7 @@ use crate::bft::communication::{
 };
 
 struct ClientReady<P> {
-    reply: Option<P>,
-    waker: Option<Waker>
+    reply: Option<oneshot::Sender<P>>,
 }
 
 struct ClientData<P> {
@@ -61,40 +60,6 @@ impl<D: SharedData> Clone for Client<D> {
             node: self.node.clone(),
             data: Arc::clone(&self.data),
             operation_counter: SeqNo::ZERO,
-        }
-    }
-}
-
-struct ClientRequestFut<'a, P> {
-    id: NodeId,
-    digest: Digest,
-    data: &'a ClientData<P>,
-}
-
-impl<'a, P> Future for ClientRequestFut<'a, P> {
-    type Output = P;
-
-    // TODO: maybe make this impl more efficient;
-    // if we have a lot of requests being done in parallel,
-    // the mutexes are going to have a fair bit of contention
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<P> {
-        eprintln!("{:?} polled ClientRequestFut", self.id);
-
-        let mut ready = self.data.ready.lock();
-        let request = ready
-            .entry(self.digest)
-            .or_insert_with(|| ClientReady { waker: None, reply: None });
-
-        // clone waker to wake up this task when
-        // the response is ready
-        request.waker = Some(cx.waker().clone());
-
-        if let Some(payload) = request.reply.take() {
-            eprintln!("{:?} ready ClientRequestFut", self.id);
-            Poll::Ready(payload)
-        } else {
-            eprintln!("{:?} pending ClientRequestFut", self.id);
-            Poll::Pending
         }
     }
 }
@@ -139,7 +104,6 @@ where
             ready: Mutex::new(collections::hash_map()),
         });
         let task_data = Arc::clone(&data);
-        let waker_data = Arc::clone(&data);
 
         // get `SendNode` before giving up ownership on the `Node`
         let send_node = node.send_node();
@@ -150,23 +114,6 @@ where
             task_data,
             node,
         ));
-
-        // spawn thread to wake up tasks periodically...
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(3));
-
-                let mut ready = waker_data.ready.lock();
-
-                for request in ready.values_mut() {
-                    if request.reply.is_some() {
-                        if let Some(waker) = request.waker.take() {
-                            waker.wake();
-                        }
-                    }
-                }
-            }
-        });
 
         let session_id = data
             .session_counter
@@ -202,10 +149,18 @@ where
         let targets = NodeId::targets(0..self.params.n());
         let digest = self.node.broadcast(message, targets);
 
+        // register channel to receive response in
+        let reply = {
+            let (tx, rx) = oneshot::channel();
+
+            let mut ready = self.data.ready.lock();
+            ready.insert(digest, ClientReady { reply: Some(tx) });
+
+            rx
+        };
+
         // await response
-        let data = &*self.data;
-        let id = self.node.id();
-        ClientRequestFut { id, digest, data }.await
+        reply.await.unwrap()
     }
 
     fn next_operation_id(&mut self) -> SeqNo {
@@ -252,15 +207,11 @@ where
                                 let mut ready = data.ready.lock();
                                 let request = ready
                                     .entry(digest)
-                                    .or_insert_with(|| ClientReady { waker: None, reply: None });
-
-                                // register reply
-                                request.reply = Some(payload);
+                                    .or_insert_with(|| ClientReady { reply: None });
 
                                 // wake up pending task
-                                if let Some(waker) = request.waker.take() {
-                                    drop(ready);
-                                    waker.wake();
+                                if let Some(sender) = request.reply.take() {
+                                    sender.send(payload).unwrap();
                                 }
                             }
                         },
