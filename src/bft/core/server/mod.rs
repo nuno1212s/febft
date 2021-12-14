@@ -136,6 +136,12 @@ pub struct Replica<S: Service> {
     node: Node<S::Data>,
 }
 
+impl<S: Service> std::ops::Drop for Replica<S> {
+    fn drop(&mut self) {
+        println!("REPLICA {:?} DROPPED @ {}", self.id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos());
+    }
+}
+
 /// Represents a configuration used to bootstrap a `Replica`.
 // TODO: load files from persistent storage
 pub struct ReplicaConfig<S> {
@@ -151,6 +157,13 @@ pub struct ReplicaConfig<S> {
     pub batch_size: usize,
     /// Check out the docs on `NodeConfig`.
     pub node: NodeConfig,
+}
+
+impl<S: Service> Replica<S> {
+    #[inline]
+    pub fn id(&self) -> NodeId {
+        self.node.id()
+    }
 }
 
 impl<S> Replica<S>
@@ -179,7 +192,9 @@ where
         let (node, batcher, rogue) = Node::bootstrap(node_config).await?;
 
         // start batcher
-        batcher.spawn(batch_size);
+        if let Some(b) = batcher {
+            b.spawn(batch_size);
+        }
 
         // start executor
         let executor = Executor::new(
@@ -244,11 +259,6 @@ where
         }
 
         Ok(replica)
-    }
-
-    #[inline]
-    pub fn id(&self) -> NodeId {
-        self.node.id()
     }
 
     /// The main loop of a replica.

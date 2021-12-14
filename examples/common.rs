@@ -155,7 +155,10 @@ pub async fn setup_node(
     pk: HashMap<NodeId, PublicKey>,
 ) -> Result<(Node<CalcData>, Vec<Message<f32, Action, f32>>)> {
     let conf = node_config(id, sk, addrs, pk).await;
-    let (node, _, rogue) = Node::bootstrap(conf).await?;
+    let (node, batcher, rogue) = Node::bootstrap(conf).await?;
+    if let Some(b) = batcher {
+        b.spawn(1024);
+    }
     Ok((node, rogue))
 }
 

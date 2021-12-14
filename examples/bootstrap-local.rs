@@ -73,12 +73,7 @@ async fn async_main() {
                     .receive()
                     .await
                     .unwrap();
-                let peer: u32 = m
-                    .header()
-                    .expect(&format!("on node {}", u32::from(id)))
-                    .from()
-                    .into();
-                println!("Node #{} received message {} from #{}", u32::from(id), debug_msg(m), peer);
+                println!("Node #{} received message {}", u32::from(id), debug_msg(m));
             }
         });
     }

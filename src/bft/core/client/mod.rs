@@ -1,9 +1,6 @@
 //! Contains the client side core protocol logic of `febft`.
 
-use std::pin::Pin;
 use std::sync::Arc;
-use std::future::Future;
-use std::task::{Poll, Waker, Context};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use parking_lot::Mutex;
@@ -75,6 +72,19 @@ struct ReplicaVotes {
     digest: Digest,
 }
 
+impl<D: SharedData> std::ops::Drop for Client<D> {
+    fn drop(&mut self) {
+        println!("CLIENT {:?} DROPPED @ {}", self.id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos());
+    }
+}
+
+impl<D: SharedData> Client<D> {
+    #[inline]
+    pub fn id(&self) -> NodeId {
+        self.node.id()
+    }
+}
+
 impl<D> Client<D>
 where
     D: SharedData + 'static,
@@ -127,11 +137,6 @@ where
             node: send_node,
             operation_counter: SeqNo::ZERO,
         })
-    }
-
-    #[inline]
-    pub fn id(&self) -> NodeId {
-        self.node.id()
     }
 
     /// Updates the replicated state of the application running

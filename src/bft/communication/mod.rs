@@ -228,6 +228,20 @@ type SendTos<D> = SmallVec<[SendTo<D>; NODE_VIEWSIZ]>;
 
 type SerializedSendTos<D> = SmallVec<[SerializedSendTo<D>; NODE_VIEWSIZ]>;
 
+impl<D: SharedData> Node<D> {
+    /// Reports the id of this `Node`.
+    #[inline]
+    pub fn id(&self) -> NodeId {
+        self.id
+    }
+}
+
+impl<D: SharedData> std::ops::Drop for Node<D> {
+    fn drop(&mut self) {
+        println!("NODE {:?} DROPPED @ {}", self.id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos());
+    }
+}
+
 impl<D> Node<D>
 where
     D: SharedData + 'static,
@@ -242,7 +256,7 @@ where
     /// are returned in a `Vec`.
     pub async fn bootstrap(
         cfg: NodeConfig,
-    ) -> Result<(Self, RequestBatcher<D::Request>, Vec<Message<D::State, D::Request, D::Reply>>)> {
+    ) -> Result<(Self, Option<RequestBatcher<D::Request>>, Vec<Message<D::State, D::Request, D::Reply>>)> {
         let id = cfg.id;
 
         // initial checks of correctness
@@ -258,7 +272,7 @@ where
         let listener = socket::bind(cfg.addrs[&id].0).await
             .wrapped(ErrorKind::Communication)?;
 
-        let (tx, rx, batcher) = new_message_channel::<D::State, D::Request, D::Reply>(NODE_CHAN_BOUND);
+        let (tx, rx, batcher) = new_message_channel::<D::State, D::Request, D::Reply>(id >= cfg.first_cli, NODE_CHAN_BOUND);
         let acceptor: TlsAcceptor = cfg.server_config.into();
         let connector: TlsConnector = cfg.client_config.into();
 
@@ -354,11 +368,6 @@ where
     /// Returns the public key of the node with the given id `id`.
     pub fn get_public_key(&self, id: NodeId) -> Option<&PublicKey> {
         self.shared.peer_keys.get(&id)
-    }
-
-    /// Reports the id of this `Node`.
-    pub fn id(&self) -> NodeId {
-        self.id
     }
 
     /// Reports the id of the first client.
@@ -1059,6 +1068,19 @@ impl<D: SharedData> Clone for SendNode<D> {
     }
 }
 
+impl<D: SharedData> SendNode<D> {
+    #[inline]
+    pub fn id(&self) -> NodeId {
+        self.id
+    }
+}
+
+impl<D: SharedData> std::ops::Drop for SendNode<D> {
+    fn drop(&mut self) {
+        println!("SEND_NODE {:?} DROPPED @ {}", self.id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos());
+    }
+}
+
 impl<D> SendNode<D>
 where
     D: SharedData + 'static,
@@ -1066,10 +1088,6 @@ where
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
-    pub fn id(&self) -> NodeId {
-        self.id
-    }
-
     /// Check the `master_channel()` documentation for `Node`.
     pub fn master_channel(&self) -> &MessageChannelTx<D::State, D::Request, D::Reply> {
         &self.my_tx
