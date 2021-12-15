@@ -160,6 +160,8 @@ where
 
             let mut ready = self.data.ready.lock();
             ready.insert(digest, ClientReady { reply: Some(tx) });
+            drop(ready);
+            println!("{:?} INSERTED DIGEST @ {}", self.id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos());
 
             rx
         };
@@ -199,6 +201,9 @@ where
                                 // the payload
                                 .or_insert_with(|| ReplicaVotes { count: 0, digest: header.digest().clone() });
 
+                            println!("{:?} VOTES: {}", node.id(), votes.count);
+
+
                             // register new reply received
                             if &votes.digest == header.digest() {
                                 votes.count += 1;
@@ -209,14 +214,22 @@ where
 
                             // wait for at least f+1 identical replies
                             if votes.count > params.f() {
+                                println!("{:?} reached >F", node.id());
+
                                 let mut ready = data.ready.lock();
+                                println!("{:?} LOOKING UP DIGEST @ {}", node.id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos());
                                 let request = ready
                                     .entry(digest)
                                     .or_insert_with(|| ClientReady { reply: None });
 
                                 // wake up pending task
                                 if let Some(sender) = request.reply.take() {
+                                    drop(ready);
+                                    println!("{:?}: Waking up task", node.id());
                                     sender.send(payload).unwrap();
+                                    println!("{:?}: Woke up task", node.id());
+                                } else {
+                                    drop(ready);
                                 }
                             }
                         },
