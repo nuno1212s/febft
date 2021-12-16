@@ -280,22 +280,29 @@ where
 
         // keep track of the last node we sent a reply to,
         // so we can flush writes when this value changes
-        let mut last_node = batch[0].to();
-        let last_reply_index = batch.len() - 1;
+        let mut curr_send = None;
 
         // deliver replies to clients
-        for (i, update_reply) in batch.into_iter().enumerate() {
+        for update_reply in batch {
             let (peer_id, digest, payload) = update_reply.into_inner();
+
+            if let Some((message, last_peer_id)) = curr_send.take() {
+                let flush = peer_id != last_peer_id;
+                println!("SEND {:?} FLUSH({})", last_peer_id, flush);
+                self.send_node.send(message, last_peer_id, flush);
+            }
+
             let message = SystemMessage::Reply(ReplyMessage::new(
                 digest,
                 payload,
             ));
+            curr_send = Some((message, peer_id));
+        }
 
-            let flush = peer_id != last_node || i == last_reply_index;
-            last_node = peer_id;
-
-            println!("SEND {:?} FLUSH({})", peer_id, flush);
-            self.send_node.send(message, peer_id, flush);
+        if let Some((message, last_peer_id)) = curr_send.take() {
+            let flush = true;
+            println!("SEND {:?} FLUSH({})", last_peer_id, flush);
+            self.send_node.send(message, last_peer_id, flush);
         }
     }
 }
