@@ -186,6 +186,9 @@ impl<O: Send + 'static> RequestBatcher<O> {
                     {
                         let mut current = shared.current.lock();
                         if current.batch.len() > 0 {
+                            for r in current.batch.iter() {
+                                println!("FROM(halfway) {:?}", r.header().from());
+                            }
                             break std::mem::take(&mut current.batch);
                         }
                     }
@@ -208,6 +211,7 @@ impl<O: Send + 'static> RequestBatcher<O> {
                     Ok(r) => r,
                     Err(_) => return,
                 };
+                println!("REQUEST from {:?}", request.header().from());
 
                 let batch = {
                     let mut current = self.shared
@@ -218,6 +222,9 @@ impl<O: Send + 'static> RequestBatcher<O> {
                     batch_size = current.batch.len();
 
                     let batch = if batch_size == max_batch_size {
+                        for r in current.batch.iter() {
+                            println!("FROM(full) {:?}", r.header().from());
+                        }
                         Batch::Now(std::mem::take(&mut current.batch))
                     } else {
                         Batch::Notify
@@ -228,7 +235,7 @@ impl<O: Send + 'static> RequestBatcher<O> {
 
                 match batch {
                     Batch::Now(batch) => self.batcher.send(batch).await.unwrap(),
-                    Batch::Notify => self.shared.event.notify(1),
+                    Batch::Notify => self.shared.event.notify_additional(1),
                 }
             }
         });

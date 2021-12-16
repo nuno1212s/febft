@@ -68,6 +68,7 @@ pub struct ClientConfig {
 }
 
 struct ReplicaVotes {
+    done: bool,
     count: usize,
     digest: Digest,
 }
@@ -167,7 +168,9 @@ where
         };
 
         // await response
-        reply.await.unwrap()
+        let rsp = reply.await.unwrap();
+        println!("{:?} GOT REPLY @ {}", self.id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos());
+        rsp
     }
 
     fn next_operation_id(&mut self) -> SeqNo {
@@ -189,6 +192,7 @@ where
                 Message::System(header, message) => {
                     match message {
                         SystemMessage::Reply(message) => {
+                            assert_eq!(header.to(), node.id());
                             let (digest, payload) = message.into_inner();
                             let votes = votes
                                 .entry(digest)
@@ -199,10 +203,14 @@ where
                                 //
                                 // NOTE: the `digest()` call in the header returns the digest of
                                 // the payload
-                                .or_insert_with(|| ReplicaVotes { count: 0, digest: header.digest().clone() });
+                                .or_insert_with(|| ReplicaVotes { done: false, count: 0, digest: header.digest().clone() });
+
+                            if votes.done {
+                                println!("{:?} SKIPPING", node.id());
+                                continue;
+                            }
 
                             println!("{:?} VOTES: {}", node.id(), votes.count);
-
 
                             // register new reply received
                             if &votes.digest == header.digest() {
@@ -225,10 +233,12 @@ where
                                 // wake up pending task
                                 if let Some(sender) = request.reply.take() {
                                     drop(ready);
-                                    println!("{:?}: Waking up task", node.id());
+                                    println!("{:?}: Waking up task @ {}", node.id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos());
                                     sender.send(payload).unwrap();
-                                    println!("{:?}: Woke up task", node.id());
+                                    votes.done = true;
+                                    println!("{:?}: Woke up task @ {}", node.id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos());
                                 } else {
+                                    println!("{:?} LOST WAKE UP @ {}", node.id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos());
                                     drop(ready);
                                 }
                             }

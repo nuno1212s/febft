@@ -236,6 +236,9 @@ where
                         }
                     },
                     ExecutionRequest::Update(meta, batch) => {
+                        for update in batch.inner.iter() {
+                            println!("EXEC from {:?}", update.from);
+                        }
                         let reply_batch = exec.service.update_batch(&mut exec.state, batch, meta);
 
                         // deliver replies
@@ -291,6 +294,7 @@ where
             let flush = peer_id != last_node || i == last_reply_index;
             last_node = peer_id;
 
+            println!("SEND {:?} FLUSH({})", peer_id, flush);
             self.send_node.send(message, peer_id, flush);
         }
     }
