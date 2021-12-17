@@ -17,7 +17,7 @@ default = [
     "threadpool_rayon",
     "socket_tokio_tcp",
     "serialize_serde",
-    "channel_flume_mpmc",
+    "channel_futures_mpsc",
     "crypto_signature_ring_ed25519",
     "crypto_hash_blake3_blake3",
     "collections_randomstate_twox_hash"
