@@ -394,7 +394,7 @@ where
         message: SystemMessage<D::State, D::Request, D::Reply>,
         target: NodeId,
         flush: bool,
-    ) -> Digest {
+    ) {
         let send_to = Self::send_to(
             flush,
             self.id,
@@ -418,7 +418,7 @@ where
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         target: NodeId,
-    ) -> Digest {
+    ) {
         let send_to = Self::send_to(
             true,
             self.id,
@@ -439,15 +439,15 @@ where
         my_id: NodeId,
         target: NodeId,
         nonce: u64,
-    ) -> Digest {
-        // serialize
-        let mut buf: Buf = Buf::new();
-        let digest = <D as DigestData>::serialize_digest(
-            &message,
-            &mut buf,
-        ).unwrap();
-
+    ) {
         rt::spawn(async move {
+            // serialize
+            let mut buf: Buf = Buf::new();
+            let digest = <D as DigestData>::serialize_digest(
+                &message,
+                &mut buf,
+            ).unwrap();
+
             // send
             if my_id == target {
                 // Right -> our turn
@@ -457,8 +457,6 @@ where
                 send_to.value(Left((nonce, digest, buf))).await;
             }
         });
-
-        digest.entropy(nonce.to_le_bytes())
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -466,7 +464,7 @@ where
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item = NodeId>,
-    ) -> Digest {
+    ) {
         let (mine, others) = Self::send_tos(
             self.id,
             &self.peer_tx,
@@ -485,7 +483,7 @@ where
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item = NodeId>,
-    ) -> Digest {
+    ) {
         let (mine, others) = Self::send_tos(
             self.id,
             &self.peer_tx,
@@ -558,15 +556,15 @@ where
         my_send_to: Option<SendTo<D>>,
         other_send_tos: SendTos<D>,
         nonce: u64,
-    ) -> Digest {
-        // serialize
-        let mut buf: Buf = Buf::new();
-        let digest = <D as DigestData>::serialize_digest(
-            &message,
-            &mut buf,
-        ).unwrap();
-
+    ) {
         rt::spawn(async move {
+            // serialize
+            let mut buf: Buf = Buf::new();
+            let digest = <D as DigestData>::serialize_digest(
+                &message,
+                &mut buf,
+            ).unwrap();
+
             // send to ourselves
             if let Some(mut send_to) = my_send_to {
                 let buf = buf.clone();
@@ -589,8 +587,6 @@ where
             // rustc to prove only one task gets ownership
             // of the `message`, i.e. `Right` = ourselves
         });
-
-        digest.entropy(nonce.to_le_bytes())
     }
 
     #[inline]
@@ -1084,7 +1080,7 @@ where
         message: SystemMessage<D::State, D::Request, D::Reply>,
         target: NodeId,
         flush: bool,
-    ) -> Digest {
+    ) {
         let send_to = <Node<D>>::send_to(
             flush,
             self.id,
@@ -1103,7 +1099,7 @@ where
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         target: NodeId,
-    ) -> Digest {
+    ) {
         let send_to = <Node<D>>::send_to(
             true,
             self.id,
@@ -1122,7 +1118,7 @@ where
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item = NodeId>,
-    ) -> Digest {
+    ) {
         let (mine, others) = <Node<D>>::send_tos(
             self.id,
             &self.peer_tx,
@@ -1139,7 +1135,7 @@ where
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item = NodeId>,
-    ) -> Digest {
+    ) {
         let (mine, others) = <Node<D>>::send_tos(
             self.id,
             &self.peer_tx,
