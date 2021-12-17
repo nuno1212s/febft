@@ -242,7 +242,7 @@ where
     /// are returned in a `Vec`.
     pub async fn bootstrap(
         cfg: NodeConfig,
-    ) -> Result<(Self, RequestBatcher<D::Request>, Vec<Message<D::State, D::Request, D::Reply>>)> {
+    ) -> Result<(Self, Option<RequestBatcher<D::Request>>, Vec<Message<D::State, D::Request, D::Reply>>)> {
         let id = cfg.id;
 
         // initial checks of correctness
@@ -258,7 +258,10 @@ where
         let listener = socket::bind(cfg.addrs[&id].0).await
             .wrapped(ErrorKind::Communication)?;
 
-        let (tx, rx, batcher) = new_message_channel::<D::State, D::Request, D::Reply>(NODE_CHAN_BOUND);
+        let (tx, rx, batcher) = new_message_channel::<D::State, D::Request, D::Reply>(
+            id >= cfg.first_cli,
+            NODE_CHAN_BOUND,
+        );
         let acceptor: TlsAcceptor = cfg.server_config.into();
         let connector: TlsConnector = cfg.client_config.into();
 

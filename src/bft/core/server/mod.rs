@@ -179,7 +179,9 @@ where
         let (node, batcher, rogue) = Node::bootstrap(node_config).await?;
 
         // start batcher
-        batcher.spawn(batch_size);
+        if let Some(b) = batcher {
+            b.spawn(batch_size);
+        }
 
         // start executor
         let executor = Executor::new(
