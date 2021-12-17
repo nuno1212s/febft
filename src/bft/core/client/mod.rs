@@ -3,19 +3,17 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::future::Future;
-use std::time::{Instant, Duration};
 use std::task::{Poll, Waker, Context};
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use intmap::IntMap;
 use parking_lot::Mutex;
 
 use super::SystemParams;
 
 use crate::bft::error::*;
-use crate::bft::ordering::SeqNo;
 use crate::bft::async_runtime as rt;
 use crate::bft::crypto::hash::Digest;
-use crate::bft::collections::{self, HashMap};
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::message::{
     Message,
@@ -28,11 +26,15 @@ use crate::bft::communication::{
     SendNode,
     NodeConfig,
 };
+use crate::bft::ordering::{
+    SeqNo,
+    Orderable,
+};
 
 struct ClientData<P> {
     session_counter: AtomicU32,
-    wakers: Mutex<HashMap<Digest, Waker>>,
-    ready: Mutex<HashMap<Digest, P>>,
+    wakers: Mutex<IntMap<Waker>>,
+    ready: Mutex<IntMap<P>>,
 }
 
 /// Represents a client node in `febft`.
@@ -63,7 +65,7 @@ impl<D: SharedData> Clone for Client<D> {
 }
 
 struct ClientRequestFut<'a, P> {
-    digest: Digest,
+    request_key: u64,
     data: &'a ClientData<P>,
 }
 
@@ -77,7 +79,7 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
         // check if response is ready
         {
             let mut ready = self.data.ready.lock();
-            if let Some(payload) = ready.remove(&self.digest) {
+            if let Some(payload) = ready.remove(self.request_key) {
                 // FIXME: should you remove wakers here?
                 return Poll::Ready(payload);
             }
@@ -86,7 +88,7 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
         // the response is ready
         {
             let mut wakers = self.data.wakers.lock();
-            wakers.insert(self.digest, cx.waker().clone());
+            wakers.insert(self.request_key, cx.waker().clone());
         }
         Poll::Pending
     }
@@ -110,16 +112,6 @@ where
     D::Request: Send + 'static,
     D::Reply: Send + 'static,
 {
-    // elapsed time since last garbage collection
-    // of the replica vote counts hashmap;
-    //
-    // NOTE: garbage collection is needed because we only
-    // need a quorum of votes, but the remaining nodes
-    // may also vote, populating the hashmap
-    //
-    // TODO: tune this value, e.g. maybe change to 3mins?
-    const GC_DUR: Duration = Duration::from_secs(30);
-
     /// Bootstrap a client in `febft`.
     pub async fn bootstrap(cfg: ClientConfig) -> Result<Self> {
         let ClientConfig { node: node_config } = cfg;
@@ -139,8 +131,8 @@ where
         // create shared data
         let data = Arc::new(ClientData {
             session_counter: AtomicU32::new(0),
-            wakers: Mutex::new(collections::hash_map()),
-            ready: Mutex::new(collections::hash_map()),
+            wakers: Mutex::new(IntMap::new()),
+            ready: Mutex::new(IntMap::new()),
         });
         let task_data = Arc::clone(&data);
 
@@ -178,19 +170,23 @@ where
     //
     // TODO: request timeout
     pub async fn update(&mut self, operation: D::Request) -> D::Reply {
+        let session_id = self.session_id;
+        let operation_id = self.next_operation_id();
         let message = SystemMessage::Request(RequestMessage::new(
-            self.session_id,
-            self.next_operation_id(),
+            session_id,
+            operation_id,
             operation,
         ));
 
         // broadcast our request to the node group
         let targets = NodeId::targets(0..self.params.n());
-        let digest = self.node.broadcast(message, targets);
+        self.node.broadcast(message, targets);
 
         // await response
         let data = &*self.data;
-        ClientRequestFut { digest, data }.await
+        let request_key = get_request_key(session_id, operation_id);
+
+        ClientRequestFut { request_key, data }.await
     }
 
     fn next_operation_id(&mut self) -> SeqNo {
@@ -204,38 +200,28 @@ where
         data: Arc<ClientData<D::Reply>>,
         mut node: Node<D>,
     ) {
-        let mut earlier = Instant::now();
-        let mut votes: HashMap<Digest, ReplicaVotes> = collections::hash_map();
+        // use session id as key
+        let mut last_operation_ids: IntMap<SeqNo> = IntMap::new();
+        let mut replica_votes: IntMap<ReplicaVotes> = IntMap::new();
 
         while let Ok(message) = node.receive().await {
             match message {
                 Message::System(header, message) => {
                     match message {
                         SystemMessage::Reply(message) => {
-                            let now = Instant::now();
+                            let (session_id, operation_id, payload) = message.into_inner();
+                            let last_operation_id = last_operation_ids
+                                .get(session_id.into())
+                                .copied()
+                                .unwrap_or(SeqNo::ZERO);
 
-                            // garbage collect old votes
-                            //
-                            // TODO: switch to `HashMap::drain_filter` when
-                            // this API reaches stable Rust
-                            if now.duration_since(earlier) > Self::GC_DUR {
-                                let mut to_remove = Vec::new();
-
-                                for (dig, v) in votes.iter() {
-                                    if v.count > params.f() {
-                                        to_remove.push(dig.clone());
-                                    }
-                                }
-
-                                for dig in to_remove {
-                                    votes.remove(&dig);
-                                }
+                            // reply already delivered to application
+                            if last_operation_id > operation_id {
+                                continue;
                             }
-                            earlier = now;
 
-                            let (digest, payload) = message.into_inner();
-                            let votes = votes
-                                .entry(digest)
+                            let request_key = get_request_key(session_id, operation_id);
+                            let votes = IntMapEntry::get(request_key, &mut replica_votes)
                                 // FIXME: cache every reply's digest, instead of just the first one
                                 // we receive, because the first reply may be faulty, while the
                                 // remaining ones may be correct, therefore we would not be able to
@@ -243,12 +229,12 @@ where
                                 //
                                 // NOTE: the `digest()` call in the header returns the digest of
                                 // the payload
-                                .or_insert_with(|| ReplicaVotes { count: 0, digest: header.digest().clone() });
-
-                            // reply already delivered to application
-                            if votes.count > params.f() {
-                                continue;
-                            }
+                                .or_insert_with(|| {
+                                    ReplicaVotes {
+                                        count: 0,
+                                        digest: header.digest().clone(),
+                                    }
+                                });
 
                             // register new reply received
                             if &votes.digest == header.digest() {
@@ -260,16 +246,20 @@ where
 
                             // wait for at least f+1 identical replies
                             if votes.count > params.f() {
+                                // update intmap states
+                                replica_votes.remove(request_key);
+                                last_operation_ids.insert(session_id.into(), operation_id);
+
                                 // register response
                                 {
                                     let mut ready = data.ready.lock();
-                                    ready.insert(digest, payload);
+                                    ready.insert(request_key, payload);
                                 }
 
                                 // try to wake up a waiting task
                                 {
                                     let mut wakers = data.wakers.lock();
-                                    if let Some(waker) = wakers.remove(&digest) {
+                                    if let Some(waker) = wakers.remove(request_key) {
                                         waker.wake();
                                     }
                                 }
@@ -289,5 +279,43 @@ where
                 _ => (),
             }
         }
+    }
+}
+
+#[inline]
+fn get_request_key(session_id: SeqNo, operation_id: SeqNo) -> u64 {
+    let sess: u64 = session_id.into();
+    let opid: u64 = operation_id.into();
+    sess | (opid << 32)
+}
+
+struct IntMapEntry<'a, T> {
+    key: u64,
+    map: &'a mut IntMap<T>,
+}
+
+macro_rules! certain {
+    ($some:expr) => {
+        match $some {
+            Some(x) => x,
+            None => unreachable!(),
+        }
+    }
+}
+
+impl<'a, T> IntMapEntry<'a, T> {
+    fn get(key: u64, map: &'a mut IntMap<T>) -> Self {
+        Self { key, map }
+    }
+
+    fn or_insert_with<F: FnOnce() -> T>(self, default: F) -> &'a mut T {
+        let (key, map) = (self.key, self.map);
+
+        if !map.contains_key(key) {
+            let value = (default)();
+            map.insert(key, value);
+        }
+
+        certain!(map.get_mut(key))
     }
 }

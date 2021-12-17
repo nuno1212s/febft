@@ -380,7 +380,8 @@ pub struct RequestMessage<O> {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct ReplyMessage<P> {
-    digest: Digest,
+    session_id: SeqNo,
+    operation_id: SeqNo,
     payload: P,
 }
 
@@ -445,10 +446,16 @@ impl<O> RequestMessage<O> {
     }
 }
 
+impl<P> Orderable for ReplyMessage<P> {
+    fn sequence_number(&self) -> SeqNo {
+        self.operation_id
+    }
+}
+
 impl<P> ReplyMessage<P> {
     /// Creates a new `ReplyMessage`.
-    pub fn new(digest: Digest, payload: P) -> Self {
-        Self { digest, payload }
+    pub fn new(sess: SeqNo, id: SeqNo, payload: P) -> Self {
+        Self { payload, operation_id: id, session_id: sess }
     }
 
     /// Returns a reference to the payload of type `P`.
@@ -456,15 +463,13 @@ impl<P> ReplyMessage<P> {
         &self.payload
     }
 
-    /// The hash digest of the request associated with
-    /// this reply.
-    pub fn digest(&self) -> &Digest {
-        &self.digest
+    pub fn session_id(&self) -> SeqNo {
+        self.session_id
     }
 
     /// Unwraps this `ReplyMessage`.
-    pub fn into_inner(self) -> (Digest, P) {
-        (self.digest, self.payload)
+    pub fn into_inner(self) -> (SeqNo, SeqNo, P) {
+        (self.session_id, self.operation_id, self.payload)
     }
 }
 

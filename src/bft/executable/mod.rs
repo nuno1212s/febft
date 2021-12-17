@@ -6,8 +6,8 @@ use std::thread;
 use std::sync::mpsc;
 
 use crate::bft::error::*;
+use crate::bft::ordering::SeqNo;
 use crate::bft::async_runtime as rt;
-use crate::bft::crypto::hash::Digest;
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::serialize::{
     //ReplicaDurability,
@@ -27,7 +27,8 @@ use crate::bft::communication::{
 #[derive(Clone)]
 pub struct Update<O> {
     from: NodeId,
-    digest: Digest,
+    session_id: SeqNo,
+    operation_id: SeqNo,
     operation: O,
 }
 
@@ -35,7 +36,8 @@ pub struct Update<O> {
 #[derive(Clone)]
 pub struct UpdateReply<P> {
     to: NodeId,
-    digest: Digest,
+    session_id: SeqNo,
+    operation_id: SeqNo,
     payload: P,
 }
 
@@ -136,9 +138,9 @@ pub trait Service {
         let mut reply_batch = UpdateBatchReplies::with_capacity(batch.len());
 
         for update in batch.into_inner() {
-            let (peer_id, dig, req) = update.into_inner();
+            let (peer_id, sess, opid, req) = update.into_inner();
             let reply = self.update(state, req);
-            reply_batch.add(peer_id, dig, reply);
+            reply_batch.add(peer_id, sess, opid, reply);
         }
 
         reply_batch
@@ -281,7 +283,7 @@ where
         let mut curr_send = None;
 
         for update_reply in batch {
-            let (peer_id, digest, payload) = update_reply.into_inner();
+            let (peer_id, session_id, operation_id, payload) = update_reply.into_inner();
 
             // NOTE: the technique used here to peek the next reply is a
             // hack... when we port this fix over to the production
@@ -295,7 +297,8 @@ where
             // store previous reply message and peer id,
             // for the next iteration
             let message = SystemMessage::Reply(ReplyMessage::new(
-                digest,
+                session_id,
+                operation_id,
                 payload,
             ));
             curr_send = Some((message, peer_id));
@@ -320,8 +323,8 @@ impl<O> UpdateBatch<O> {
     }
 
     /// Adds a new update request to the batch.
-    pub fn add(&mut self, from: NodeId, digest: Digest, operation: O) {
-        self.inner.push(Update { from, digest, operation });
+    pub fn add(&mut self, from: NodeId, session_id: SeqNo, operation_id: SeqNo, operation: O) {
+        self.inner.push(Update { from, session_id, operation_id, operation });
     }
 
     /// Returns the inner storage.
@@ -343,8 +346,8 @@ impl<O> AsRef<[Update<O>]> for UpdateBatch<O> {
 
 impl<O> Update<O> {
     /// Returns the inner types stored in this `Update`.
-    pub fn into_inner(self) -> (NodeId, Digest, O) {
-        (self.from, self.digest, self.operation)
+    pub fn into_inner(self) -> (NodeId, SeqNo, SeqNo, O) {
+        (self.from, self.session_id, self.operation_id, self.operation)
     }
 
     /// Returns a reference to this operation in this `Update`.
@@ -367,8 +370,8 @@ impl<P> UpdateBatchReplies<P> {
     }
 
     /// Adds a new update reply to the batch.
-    pub fn add(&mut self, to: NodeId, digest: Digest, payload: P) {
-        self.inner.push(UpdateReply { to, digest, payload });
+    pub fn add(&mut self, to: NodeId, session_id: SeqNo, operation_id: SeqNo, payload: P) {
+        self.inner.push(UpdateReply { to, session_id, operation_id, payload });
     }
 
     /// Returns the inner storage.
@@ -388,7 +391,7 @@ impl<P> UpdateReply<P> {
     }
 
     /// Returns the inner types stored in this `UpdateReply`.
-    pub fn into_inner(self) -> (NodeId, Digest, P) {
-        (self.to, self.digest, self.payload)
+    pub fn into_inner(self) -> (NodeId, SeqNo, SeqNo, P) {
+        (self.to, self.session_id, self.operation_id, self.payload)
     }
 }
