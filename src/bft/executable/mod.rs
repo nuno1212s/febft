@@ -270,27 +270,45 @@ where
     }
 
     fn execution_finished(&mut self, batch: UpdateBatchReplies<Reply<S>>) {
-        // sort batch by node ids
+        // sort batch by node ids,
+        // such that we can send as many replies as possible
+        // to a single node before flushing everything
         let mut batch = batch.into_inner();
         batch.sort_unstable_by_key(|update_reply| update_reply.to());
 
-        // keep track of the last node we sent a reply to,
-        // so we can flush writes when this value changes
-        let mut last_node = batch[0].to();
-        let last_reply_index = batch.len() - 1;
+        // keep track of the last message and node id
+        // we iterated over
+        let mut curr_send = None;
 
-        // deliver replies to clients
-        for (i, update_reply) in batch.into_iter().enumerate() {
+        for update_reply in batch {
             let (peer_id, digest, payload) = update_reply.into_inner();
+
+            // NOTE: the technique used here to peek the next reply is a
+            // hack... when we port this fix over to the production
+            // branch, perhaps we can come up with a better approach,
+            // but for now this will do
+            if let Some((message, last_peer_id)) = curr_send.take() {
+                let flush = peer_id != last_peer_id;
+                self.send_node.send(message, last_peer_id, flush);
+            }
+
+            // store previous reply message and peer id,
+            // for the next iteration
             let message = SystemMessage::Reply(ReplyMessage::new(
                 digest,
                 payload,
             ));
+            curr_send = Some((message, peer_id));
+        }
 
-            let flush = peer_id != last_node || i == last_reply_index;
-            last_node = peer_id;
-
-            self.send_node.send(message, peer_id, flush);
+        // deliver last reply
+        if let Some((message, last_peer_id)) = curr_send {
+            self.send_node.send(message, last_peer_id, true);
+        } else {
+            // slightly optimize code path;
+            // the previous if branch will always execute
+            // (there is always at least one request in the batch)
+            unreachable!();
         }
     }
 }
