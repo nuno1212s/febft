@@ -12,6 +12,7 @@ use parking_lot::Mutex;
 use super::SystemParams;
 
 use crate::bft::error::*;
+use crate::bft::ordering::SeqNo;
 use crate::bft::async_runtime as rt;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::communication::serialize::SharedData;
@@ -25,10 +26,6 @@ use crate::bft::communication::{
     NodeId,
     SendNode,
     NodeConfig,
-};
-use crate::bft::ordering::{
-    SeqNo,
-    Orderable,
 };
 
 struct ClientData<P> {
