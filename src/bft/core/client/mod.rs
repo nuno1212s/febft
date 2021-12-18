@@ -28,10 +28,14 @@ use crate::bft::communication::{
     NodeConfig,
 };
 
+struct Ready<P> {
+    waker: Option<Waker>,
+    payload: Option<P>,
+}
+
 struct ClientData<P> {
     session_counter: AtomicU32,
-    wakers: Mutex<IntMap<Waker>>,
-    ready: Mutex<IntMap<P>>,
+    ready: Vec<Mutex<IntMap<Ready<P>>>>,
 }
 
 /// Represents a client node in `febft`.
@@ -63,7 +67,7 @@ impl<D: SharedData> Clone for Client<D> {
 
 struct ClientRequestFut<'a, P> {
     request_key: u64,
-    data: &'a ClientData<P>,
+    ready: &'a Mutex<IntMap<Ready<P>>>,
 }
 
 impl<'a, P> Future for ClientRequestFut<'a, P> {
@@ -73,20 +77,19 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
     // if we have a lot of requests being done in parallel,
     // the mutexes are going to have a fair bit of contention
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<P> {
-        // check if response is ready
-        {
-            let mut ready = self.data.ready.lock();
-            if let Some(payload) = ready.remove(self.request_key) {
-                // FIXME: should you remove wakers here?
-                return Poll::Ready(payload);
-            }
+        let mut ready = self.ready.lock();
+        let request = IntMapEntry::get(self.request_key, &mut *ready)
+            .or_insert_with(|| Ready { payload: None, waker: None });
+
+        if let Some(payload) = request.payload.take() {
+            ready.remove(self.request_key);
+            return Poll::Ready(payload);
         }
+
         // clone waker to wake up this task when
         // the response is ready
-        {
-            let mut wakers = self.data.wakers.lock();
-            wakers.insert(self.request_key, cx.waker().clone());
-        }
+        request.waker = Some(cx.waker().clone());
+
         Poll::Pending
     }
 }
@@ -128,8 +131,9 @@ where
         // create shared data
         let data = Arc::new(ClientData {
             session_counter: AtomicU32::new(0),
-            wakers: Mutex::new(IntMap::new()),
-            ready: Mutex::new(IntMap::new()),
+            ready: std::iter::repeat_with(|| Mutex::new(IntMap::new()))
+                .take(num_cpus::get())
+                .collect(),
         });
         let task_data = Arc::clone(&data);
 
@@ -180,10 +184,10 @@ where
         self.node.broadcast(message, targets);
 
         // await response
-        let data = &*self.data;
         let request_key = get_request_key(session_id, operation_id);
+        let ready = get_ready::<D>(session_id, &*self.data);
 
-        ClientRequestFut { request_key, data }.await
+        ClientRequestFut { request_key, ready }.await
     }
 
     fn next_operation_id(&mut self) -> SeqNo {
@@ -247,18 +251,16 @@ where
                                 replica_votes.remove(request_key);
                                 last_operation_ids.insert(session_id.into(), operation_id);
 
+                                let mut ready = get_ready::<D>(session_id, &*data).lock();
+                                let request = IntMapEntry::get(request_key, &mut *ready)
+                                    .or_insert_with(|| Ready { payload: None, waker: None });
+
                                 // register response
-                                {
-                                    let mut ready = data.ready.lock();
-                                    ready.insert(request_key, payload);
-                                }
+                                request.payload = Some(payload);
 
                                 // try to wake up a waiting task
-                                {
-                                    let mut wakers = data.wakers.lock();
-                                    if let Some(waker) = wakers.remove(request_key) {
-                                        waker.wake();
-                                    }
+                                if let Some(waker) = request.waker.take() {
+                                    waker.wake();
                                 }
                             }
                         },
@@ -284,6 +286,13 @@ fn get_request_key(session_id: SeqNo, operation_id: SeqNo) -> u64 {
     let sess: u64 = session_id.into();
     let opid: u64 = operation_id.into();
     sess | (opid << 32)
+}
+
+#[inline]
+fn get_ready<D: SharedData>(session_id: SeqNo, data: &ClientData<D::Reply>) -> &Mutex<IntMap<Ready<D::Reply>>> {
+    let session_id: usize = session_id.into();
+    let index = session_id % data.ready.len();
+    &data.ready[index]
 }
 
 struct IntMapEntry<'a, T> {
