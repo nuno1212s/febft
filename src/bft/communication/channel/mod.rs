@@ -21,6 +21,7 @@ use futures::future::FusedFuture;
 use parking_lot::Mutex;
 
 use crate::bft::error::*;
+use crate::bft::ordering::Orderable;
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::message::{
     Message,
@@ -174,7 +175,7 @@ enum Batch<O> {
 }
 
 impl<O: Send + 'static> RequestBatcher<O> {
-    pub fn spawn(mut self, max_batch_size: usize) {
+    pub fn spawn(mut self, id: u32, max_batch_size: usize) {
         let mut batcher = self.batcher.clone();
         let shared = Arc::clone(&self.shared);
 
@@ -184,17 +185,23 @@ impl<O: Send + 'static> RequestBatcher<O> {
                 let batch = loop {
                     // check if batch is ready...
                     {
+                        println!("BATCHER: {}: locking current requests from batcher", id);
                         let mut current = shared.current.lock();
+                        println!("BATCHER: {}: acquired current requests from batcher", id);
                         if current.batch.len() > 0 {
                             break std::mem::take(&mut current.batch);
                         }
                     }
 
                     // listen for batch changes
+                    println!("BATCHER: {}: listening for events on batcher", id);
                     shared.event.listen().await;
+                    println!("BATCHER: {}: got event on batcher", id);
                 };
 
+                println!("BATCHER: {}: dispatching current batch", id);
                 let _ = batcher.send(batch).await;
+                println!("BATCHER: {}: dispatched current batch", id);
             }
         });
 
@@ -204,15 +211,22 @@ impl<O: Send + 'static> RequestBatcher<O> {
             let mut batch_size = 0;
 
             loop {
+                println!("BATCHER: {}: awaiting request", id);
                 let request = match self.receiver.recv().await {
                     Ok(r) => r,
-                    Err(_) => return,
+                    Err(_) => {
+                        println!("BATCHER: {}: failed to receive request", id);
+                        return;
+                    },
                 };
+                println!("BATCHER: {}: request received (from={:?}, opid={:?})", id, request.header().from(), request.message().sequence_number());
 
                 let batch = {
+                    println!("BATCHER: {}: locking current requests from receiver", id);
                     let mut current = self.shared
                         .current
                         .lock();
+                    println!("BATCHER: {}: acquired current requests from receiver", id);
 
                     current.batch.push(request);
                     batch_size = current.batch.len();
@@ -227,8 +241,15 @@ impl<O: Send + 'static> RequestBatcher<O> {
                 };
 
                 match batch {
-                    Batch::Now(batch) => self.batcher.send(batch).await.unwrap(),
-                    Batch::Notify => self.shared.event.notify_additional(1),
+                    Batch::Now(batch) => {
+                        println!("BATCHER: {}: dispatching current (full) batch", id);
+                        self.batcher.send(batch).await.unwrap();
+                        println!("BATCHER: {}: dispatched current (full) batch", id);
+                    },
+                    Batch::Notify => {
+                        self.shared.event.notify(1);
+                        println!("BATCHER: {}: notified current batch", id);
+                    },
                 }
             }
         });

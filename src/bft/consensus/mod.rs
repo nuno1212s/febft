@@ -165,6 +165,12 @@ enum ProtoPhase {
     Committing(usize),
 }
 
+#[derive(Copy, Clone, Debug)]
+struct ClientRequest {
+    from: NodeId,
+    opid: SeqNo,
+}
+
 /// Contains the state of an active consensus instance, as well
 /// as future instances.
 pub struct Consensus<S: Service> {
@@ -174,6 +180,7 @@ pub struct Consensus<S: Service> {
     phase: ProtoPhase,
     tbo: TboQueue<Request<S>>,
     current: Vec<Digest>,
+    current_reqs: Vec<ClientRequest>,
     current_digest: Digest,
     //voted: HashSet<NodeId>,
     missing_requests: VecDeque<Digest>,
@@ -195,17 +202,17 @@ pub enum ConsensusStatus<'a> {
 
 macro_rules! extract_msg {
     ($g:expr, $q:expr) => {
-        extract_msg!({}, $g, $q)
+        extract_msg!({}, ConsensusPollStatus::Recv, $g, $q)
     };
 
-    ($opt:block, $g:expr, $q:expr) => {
+    ($opt:block, $rsp:expr, $g:expr, $q:expr) => {
         if let Some(stored) = tbo_pop_message::<ConsensusMessage<_>>($q) {
             $opt
             let (header, message) = stored.into_inner();
             ConsensusPollStatus::NextMessage(header, message)
         } else {
             *$g = false;
-            ConsensusPollStatus::Recv
+            $rsp
         }
     };
 }
@@ -228,6 +235,7 @@ where
             tbo: TboQueue::new(initial_seq_no),
             speculative_commits: Arc::new(Mutex::new(collections::hash_map())),
             current_digest: Digest::from_bytes(&[0; Digest::LENGTH][..]).unwrap(),
+            current_reqs: Vec::new(),
             current: std::iter::repeat_with(|| Digest::from_bytes(&[0; Digest::LENGTH][..]))
                 .flat_map(|d| d) // unwrap
                 .take(batch_size)
@@ -357,18 +365,21 @@ where
     }
 
     /// Check if we can process new consensus messages.
-    pub fn poll(&mut self, log: &mut Log<State<S>, Request<S>, Reply<S>>) -> ConsensusPollStatus<Request<S>> {
+    pub fn poll(&mut self, id: u32, log: &mut Log<State<S>, Request<S>, Reply<S>>) -> ConsensusPollStatus<Request<S>> {
         match self.phase {
             ProtoPhase::Init if self.tbo.get_queue => {
                 log.batch_meta().consensus_start_time = Utc::now();
+                println!("CONSENSUS: {} on {:?} seq={:?}: poll tried extracting PRE-PREPARE", id, self.phase, self.sequence_number());
                 extract_msg!(
                     { self.phase = ProtoPhase::PrePreparing; },
+                    ConsensusPollStatus::TryProposeAndRecv,
                     &mut self.tbo.get_queue,
                     &mut self.tbo.pre_prepares
                 )
             },
             ProtoPhase::Init => {
                 log.batch_meta().consensus_start_time = Utc::now();
+                println!("CONSENSUS: {} on {:?} seq={:?}: poll recommends proposing", id, self.phase, self.sequence_number());
                 ConsensusPollStatus::TryProposeAndRecv
             },
             ProtoPhase::PrePreparing if self.tbo.get_queue => {
@@ -388,6 +399,7 @@ where
                 if self.missing_requests.is_empty() {
                     extract_msg!(
                         { self.phase = ProtoPhase::Preparing(1); },
+                        ConsensusPollStatus::Recv,
                         &mut self.tbo.get_queue,
                         &mut self.tbo.prepares
                     )
@@ -472,6 +484,7 @@ where
         log: &mut Log<State<S>, Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) -> ConsensusStatus<'a> {
+        println!("CONSENSUS: {} on {:?} seq={:?} deciding {:?}: processing message {}[{:?}] from {:?}", u32::from(node.id()), self.phase, self.sequence_number(), self.current_reqs, message.kind().describe(), message.sequence_number(), header.from());
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just
         // the amount of votes received
@@ -508,6 +521,10 @@ where
                         return ConsensusStatus::Deciding;
                     },
                     ConsensusMessageKind::PrePrepare(request_batch) => {
+                        self.current_reqs = request_batch
+                            .iter()
+                            .map(|request| ClientRequest { from: request.header().from(), opid: request.message().sequence_number() })
+                            .collect();
                         let digests = request_batch_received(
                             request_batch.clone(),
                             timeouts,
@@ -651,7 +668,7 @@ where
                 self.phase = if i == synchronizer.view().params().quorum() {
                     let speculative_commits = self.take_speculative_commits();
 
-                    if speculative_commits.len() == synchronizer.view().params().n() {
+                    if valid_spec_commits(&speculative_commits, self, synchronizer) {
                         // TODO: make sure the COMMIT messages have the same digest
                         // as the current one
                         node.broadcast_serialized(speculative_commits);
@@ -707,6 +724,7 @@ where
                     // we have reached a decision,
                     // notify core protocol
                     self.phase = ProtoPhase::Init;
+                    self.current_reqs.clear();
                     log.batch_meta().consensus_decision_time = Utc::now();
                     ConsensusStatus::Decided(&self.current[..self.batch_size])
                 } else {
@@ -746,6 +764,7 @@ where
     }
 }
 
+#[inline]
 fn request_batch_received<S>(
     requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
     timeouts: &TimeoutsHandle<S>,
@@ -763,4 +782,31 @@ where
         timeouts,
         log,
     )
+}
+
+#[inline]
+fn valid_spec_commits<S>(
+    speculative_commits: &HashMap<NodeId, StoredSerializedSystemMessage<S::Data>>,
+    consensus: &Consensus<S>,
+    synchronizer: &mut Synchronizer<S>,
+) -> bool
+where
+    S: Service + Send + 'static,
+    State<S>: Send + Clone + 'static,
+    Request<S>: Send + Clone + 'static,
+    Reply<S>: Send + 'static,
+{
+    if speculative_commits.len() != synchronizer.view().params().n() {
+        return false;
+    }
+    let seq_no = consensus.sequence_number();
+    speculative_commits
+        .values()
+        .map(|stored| {
+            match stored.message().original() {
+                SystemMessage::Consensus(c) => c,
+                _ => unreachable!(),
+            }
+        })
+        .all(|commit| commit.sequence_number() == seq_no)
 }

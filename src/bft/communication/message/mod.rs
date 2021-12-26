@@ -419,6 +419,16 @@ pub enum ConsensusMessageKind<O> {
     Commit(Digest),
 }
 
+impl<O> ConsensusMessageKind<O> {
+    pub fn describe(&self) -> &'static str {
+        match self {
+            ConsensusMessageKind::PrePrepare(_) => "PRE-PREPARE",
+            ConsensusMessageKind::Prepare(_) => "PREPARE",
+            ConsensusMessageKind::Commit(_) => "COMMIT",
+        }
+    }
+}
+
 impl<O> Orderable for RequestMessage<O> {
     fn sequence_number(&self) -> SeqNo {
         self.operation_id

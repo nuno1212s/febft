@@ -182,12 +182,15 @@ where
         // broadcast our request to the node group
         let targets = NodeId::targets(0..self.params.n());
         self.node.broadcast(message, targets);
+        println!("CLIENT: {}: sent request {:?}", u32::from(self.node.id()), operation_id);
 
         // await response
         let request_key = get_request_key(session_id, operation_id);
         let ready = get_ready::<D>(session_id, &*self.data);
 
-        ClientRequestFut { request_key, ready }.await
+        let reply = ClientRequestFut { request_key, ready }.await;
+        println!("CLIENT: {}: received reply for request {:?}", u32::from(self.node.id()), operation_id);
+        reply
     }
 
     fn next_operation_id(&mut self) -> SeqNo {

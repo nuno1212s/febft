@@ -581,12 +581,14 @@ impl<S, O: Clone, P> Log<S, O, P> {
 
                 // avoid executing earlier requests twice
                 if message.sequence_number() < seq_no {
+                    println!("LOG: dropped request {:?} from {:?}", message.sequence_number(), header.from());
                     return;
                 }
 
                 let digest = header.unique_digest();
                 let stored = StoredMessage::new(header, message);
 
+                println!("LOG: inserted request {:?} from {:?}", stored.message().sequence_number(), stored.header().from());
                 self.requests.insert(digest, stored);
                 self.deciding.remove(&digest);
             },

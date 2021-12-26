@@ -180,7 +180,7 @@ where
 
         // start batcher
         if let Some(b) = batcher {
-            b.spawn(batch_size);
+            b.spawn(node.id().into(), batch_size);
         }
 
         // start executor
@@ -494,7 +494,7 @@ where
         //
         // the order of the next consensus message is guaranteed by
         // `TboQueue`, in the consensus module.
-        let message = match self.consensus.poll(&mut self.log) {
+        let message = match self.consensus.poll(self.node.id().into(), &mut self.log) {
             ConsensusPollStatus::Recv => {
                 self.node.receive().await?
             },

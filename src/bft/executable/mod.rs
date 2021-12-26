@@ -289,8 +289,9 @@ where
             // hack... when we port this fix over to the production
             // branch, perhaps we can come up with a better approach,
             // but for now this will do
-            if let Some((message, last_peer_id)) = curr_send.take() {
+            if let Some((message, last_peer_id, opid)) = curr_send.take() {
                 let flush = peer_id != last_peer_id;
+                println!("EXECUTOR: sending reply to {:?} for request {:?} (FLUSH={})", last_peer_id, opid, flush);
                 self.send_node.send(message, last_peer_id, flush);
             }
 
@@ -301,11 +302,12 @@ where
                 operation_id,
                 payload,
             ));
-            curr_send = Some((message, peer_id));
+            curr_send = Some((message, peer_id, operation_id));
         }
 
         // deliver last reply
-        if let Some((message, last_peer_id)) = curr_send {
+        if let Some((message, last_peer_id, opid)) = curr_send {
+            println!("EXECUTOR: sending reply to {:?} for request {:?} (FLUSH=true)", last_peer_id, opid);
             self.send_node.send(message, last_peer_id, true);
         } else {
             // slightly optimize code path;
