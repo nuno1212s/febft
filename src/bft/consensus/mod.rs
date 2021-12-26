@@ -195,17 +195,17 @@ pub enum ConsensusStatus<'a> {
 
 macro_rules! extract_msg {
     ($g:expr, $q:expr) => {
-        extract_msg!({}, $g, $q)
+        extract_msg!({}, ConsensusPollStatus::Recv, $g, $q)
     };
 
-    ($opt:block, $g:expr, $q:expr) => {
+    ($opt:block, $rsp:expr, $g:expr, $q:expr) => {
         if let Some(stored) = tbo_pop_message::<ConsensusMessage<_>>($q) {
             $opt
             let (header, message) = stored.into_inner();
             ConsensusPollStatus::NextMessage(header, message)
         } else {
             *$g = false;
-            ConsensusPollStatus::Recv
+            $rsp
         }
     };
 }
@@ -363,6 +363,7 @@ where
                 log.batch_meta().consensus_start_time = Utc::now();
                 extract_msg!(
                     { self.phase = ProtoPhase::PrePreparing; },
+                    ConsensusPollStatus::TryProposeAndRecv,
                     &mut self.tbo.get_queue,
                     &mut self.tbo.pre_prepares
                 )
@@ -388,6 +389,7 @@ where
                 if self.missing_requests.is_empty() {
                     extract_msg!(
                         { self.phase = ProtoPhase::Preparing(1); },
+                        ConsensusPollStatus::Recv,
                         &mut self.tbo.get_queue,
                         &mut self.tbo.prepares
                     )
@@ -651,9 +653,7 @@ where
                 self.phase = if i == synchronizer.view().params().quorum() {
                     let speculative_commits = self.take_speculative_commits();
 
-                    if speculative_commits.len() == synchronizer.view().params().n() {
-                        // TODO: make sure the COMMIT messages have the same digest
-                        // as the current one
+                    if valid_spec_commits(&speculative_commits, self, synchronizer) {
                         node.broadcast_serialized(speculative_commits);
                     } else {
                         let message = SystemMessage::Consensus(ConsensusMessage::new(
@@ -746,6 +746,7 @@ where
     }
 }
 
+#[inline]
 fn request_batch_received<S>(
     requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
     timeouts: &TimeoutsHandle<S>,
@@ -763,4 +764,31 @@ where
         timeouts,
         log,
     )
+}
+
+#[inline]
+fn valid_spec_commits<S>(
+    speculative_commits: &HashMap<NodeId, StoredSerializedSystemMessage<S::Data>>,
+    consensus: &Consensus<S>,
+    synchronizer: &mut Synchronizer<S>,
+) -> bool
+where
+    S: Service + Send + 'static,
+    State<S>: Send + Clone + 'static,
+    Request<S>: Send + Clone + 'static,
+    Reply<S>: Send + 'static,
+{
+    if speculative_commits.len() != synchronizer.view().params().n() {
+        return false;
+    }
+    let seq_no = consensus.sequence_number();
+    speculative_commits
+        .values()
+        .map(|stored| {
+            match stored.message().original() {
+                SystemMessage::Consensus(c) => c,
+                _ => unreachable!(),
+            }
+        })
+        .all(|commit| commit.sequence_number() == seq_no)
 }
