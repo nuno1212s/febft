@@ -28,8 +28,7 @@ fn main() {
 async fn async_main() {
     let id = NodeId::from(1000u32);
 
-    let mut secret_keys: IntMap<KeyPair> = [0u64, 1, 2, 3, 1000]
-        .into_iter()
+    let mut secret_keys: IntMap<KeyPair> = std::iter::IntoIterator::into_iter([0u64, 1, 2, 3, 1000])
         .zip(sk_stream())
         .collect();
     let public_keys: IntMap<PublicKey> = secret_keys
