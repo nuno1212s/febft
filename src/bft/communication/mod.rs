@@ -35,12 +35,12 @@ use parking_lot::RwLock;
 use futures_timer::Delay;
 use futures::lock::Mutex;
 use smallvec::SmallVec;
+use intmap::IntMap;
 
 use crate::bft::prng;
 use crate::bft::error::*;
 use crate::bft::async_runtime as rt;
 use crate::bft::crypto::hash::Digest;
-use crate::bft::collections::{self, HashMap};
 use crate::bft::communication::serialize::{
     Buf,
     SharedData,
@@ -108,6 +108,13 @@ impl From<u32> for NodeId {
     }
 }
 
+impl From<u64> for NodeId {
+    #[inline]
+    fn from(id: u64) -> NodeId {
+        NodeId(id as u32)
+    }
+}
+
 impl From<usize> for NodeId {
     #[inline]
     fn from(id: usize) -> NodeId {
@@ -148,15 +155,15 @@ enum PeerTx {
     // lock allows us to take ownership of a copy of the socket, so we
     // don't block the thread with the guard of the first lock waiting
     // on the second one
-    Client(Arc<RwLock<HashMap<NodeId, Arc<Mutex<SecureSocketSend>>>>>),
+    Client(Arc<RwLock<IntMap<Arc<Mutex<SecureSocketSend>>>>>),
     // replicas don't need shared access to the hashmap, so
     // we only need one lock (to restrict I/O to one producer at a time)
-    Server(Arc<RwLock<HashMap<NodeId, Arc<Mutex<SecureSocketSend>>>>>),
+    Server(Arc<RwLock<IntMap<Arc<Mutex<SecureSocketSend>>>>>),
 }
 
 struct NodeShared {
     my_key: KeyPair,
-    peer_keys: HashMap<NodeId, PublicKey>,
+    peer_keys: IntMap<PublicKey>,
 }
 
 pub struct SignDetached {
@@ -182,7 +189,7 @@ pub struct Node<D: SharedData> {
     shared: Arc<NodeShared>,
     peer_tx: PeerTx,
     connector: TlsConnector,
-    peer_addrs: HashMap<NodeId, (SocketAddr, String)>,
+    peer_addrs: IntMap<(SocketAddr, String)>,
 }
 
 /// Represents a configuration used to bootstrap a `Node`.
@@ -207,9 +214,9 @@ pub struct NodeConfig {
     ///
     /// For any `NodeConfig` assigned to `c`, the IP address of
     /// `c.addrs[&c.id]` should be equivalent to `localhost`.
-    pub addrs: HashMap<NodeId, (SocketAddr, String)>,
+    pub addrs: IntMap<(SocketAddr, String)>,
     /// The list of public keys of all nodes in the system.
-    pub pk: HashMap<NodeId, PublicKey>,
+    pub pk: IntMap<PublicKey>,
     /// The secret key of this particular `Node`.
     pub sk: KeyPair,
     /// The TLS configuration used to connect to peer nodes.
@@ -255,7 +262,7 @@ where
                 .wrapped(ErrorKind::Communication);
         }
 
-        let listener = socket::bind(cfg.addrs[&id].0).await
+        let listener = socket::bind(cfg.addrs.get(id.into()).unwrap().0).await
             .wrapped(ErrorKind::Communication)?;
 
         let (tx, rx, batcher) = new_message_channel::<D::State, D::Request, D::Reply>(
@@ -282,9 +289,9 @@ where
 
         // node def
         let peer_tx = if id >= cfg.first_cli {
-            PeerTx::Client(Arc::new(RwLock::new(collections::hash_map())))
+            PeerTx::Client(Arc::new(RwLock::new(IntMap::new())))
         } else {
-            PeerTx::Server(Arc::new(RwLock::new(collections::hash_map())))
+            PeerTx::Server(Arc::new(RwLock::new(IntMap::new())))
         };
         let shared = Arc::new(NodeShared{
             my_key: cfg.sk,
@@ -356,7 +363,7 @@ where
 
     /// Returns the public key of the node with the given id `id`.
     pub fn get_public_key(&self, id: NodeId) -> Option<&PublicKey> {
-        self.shared.peer_keys.get(&id)
+        self.shared.peer_keys.get(id.into())
     }
 
     /// Reports the id of this `Node`.
@@ -497,7 +504,7 @@ where
 
     pub fn broadcast_serialized(
         &mut self,
-        messages: HashMap<NodeId, StoredSerializedSystemMessage<D>>,
+        messages: IntMap<StoredSerializedSystemMessage<D>>,
     ) {
         let headers = messages
             .values()
@@ -513,7 +520,7 @@ where
 
     #[inline]
     fn broadcast_serialized_impl(
-        mut messages: HashMap<NodeId, StoredSerializedSystemMessage<D>>,
+        mut messages: IntMap<StoredSerializedSystemMessage<D>>,
         my_send_to: Option<SerializedSendTo<D>>,
         other_send_tos: SerializedSendTos<D>,
     ) {
@@ -521,11 +528,11 @@ where
             // send to ourselves
             if let Some(mut send_to) = my_send_to {
                 let id = match &send_to {
-                    SerializedSendTo::Me { id, .. } => id,
+                    SerializedSendTo::Me { id, .. } => *id,
                     _ => unreachable!(),
                 };
                 let (header, message) = messages
-                    .remove(id)
+                    .remove(id.into())
                     .map(|stored| stored.into_inner())
                     .unwrap();
                 rt::spawn(async move {
@@ -536,11 +543,11 @@ where
             // send to others
             for mut send_to in other_send_tos {
                 let id = match &send_to {
-                    SerializedSendTo::Peers { id, .. } => id,
+                    SerializedSendTo::Peers { id, .. } => *id,
                     _ => unreachable!(),
                 };
                 let (header, message) = messages
-                    .remove(id)
+                    .remove(id.into())
                     .map(|stored| stored.into_inner())
                     .unwrap();
                 rt::spawn(async move {
@@ -672,7 +679,7 @@ where
     fn create_serialized_send_tos<'a>(
         my_id: NodeId,
         tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
-        map: &HashMap<NodeId, Arc<Mutex<SecureSocketSend>>>,
+        map: &IntMap<Arc<Mutex<SecureSocketSend>>>,
         headers: impl Iterator<Item = &'a Header>,
         mine: &mut Option<SerializedSendTo<D>>,
         others: &mut SerializedSendTos<D>,
@@ -686,7 +693,7 @@ where
                 };
                 *mine = Some(s);
             } else {
-                let sock = Arc::clone(&map[&id]);
+                let sock = Arc::clone(map.get(id.into()).unwrap());
                 let s = SerializedSendTo::Peers {
                     id,
                     sock,
@@ -702,7 +709,7 @@ where
         my_id: NodeId,
         tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
         shared: Option<&Arc<NodeShared>>,
-        map: &HashMap<NodeId, Arc<Mutex<SecureSocketSend>>>,
+        map: &IntMap<Arc<Mutex<SecureSocketSend>>>,
         targets: impl Iterator<Item = NodeId>,
         mine: &mut Option<SendTo<D>>,
         others: &mut SendTos<D>,
@@ -716,7 +723,7 @@ where
                 };
                 *mine = Some(s);
             } else {
-                let sock = Arc::clone(&map[&id]);
+                let sock = Arc::clone(map.get(id.into()).unwrap());
                 let s = SendTo::Peers {
                     sock,
                     my_id,
@@ -751,11 +758,11 @@ where
             let sock = match peer_tx {
                 PeerTx::Client(ref lock) => {
                     let map = lock.read();
-                    Arc::clone(&map[&peer_id])
+                    Arc::clone(map.get(peer_id.into()).unwrap())
                 },
                 PeerTx::Server(ref lock) => {
                     let map = lock.read();
-                    Arc::clone(&map[&peer_id])
+                    Arc::clone(map.get(peer_id.into()).unwrap())
                 },
             };
             SendTo::Peers {
@@ -779,11 +786,11 @@ where
         match &mut self.peer_tx {
             PeerTx::Server(ref lock) => {
                 let mut peer_tx = lock.write();
-                peer_tx.insert(peer_id, Arc::new(Mutex::new(sock)));
+                peer_tx.insert(peer_id.into(), Arc::new(Mutex::new(sock)));
             },
             PeerTx::Client(ref lock) => {
                 let mut peer_tx = lock.write();
-                peer_tx.insert(peer_id, Arc::new(Mutex::new(sock)));
+                peer_tx.insert(peer_id.into(), Arc::new(Mutex::new(sock)));
             },
         }
     }
@@ -799,7 +806,7 @@ where
                 //
                 // FIXME: this line can crash the program if the user
                 // provides an invalid HashMap
-                let addr = self.peer_addrs[&peer_id].clone();
+                let addr = self.peer_addrs.get(peer_id.into()).unwrap().clone();
 
                 // connect
                 let nonce = self.rng.next_state();
@@ -880,7 +887,7 @@ where
         my_id: NodeId,
         connector: TlsConnector,
         tx: MessageChannelTx<D::State, D::Request, D::Reply>,
-        addrs: &HashMap<NodeId, (SocketAddr, String)>,
+        addrs: &IntMap<(SocketAddr, String)>,
         rng: &mut prng::State,
     ) {
         for peer_id in NodeId::targets_u32(0..n).filter(|&id| id != my_id) {
@@ -888,7 +895,7 @@ where
             // FIXME: this line can crash the program if the user
             // provides an invalid HashMap, maybe return a Result<()>
             // from this function
-            let addr = addrs[&peer_id].clone();
+            let addr = addrs.get(peer_id.into()).unwrap().clone();
             let connector = connector.clone();
             let nonce = rng.next_state();
             rt::spawn(Self::tx_side_connect_task(my_id, first_cli, peer_id, nonce, connector, tx, addr));

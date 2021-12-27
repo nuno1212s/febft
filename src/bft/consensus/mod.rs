@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 
+use intmap::IntMap;
 use chrono::offset::Utc;
 use parking_lot::Mutex;
 use either::{
@@ -29,10 +30,6 @@ use crate::bft::communication::message::{
     SerializedMessage,
     ConsensusMessageKind,
     StoredSerializedSystemMessage,
-};
-use crate::bft::collections::{
-    self,
-    HashMap,
 };
 use crate::bft::communication::{
     Node,
@@ -178,7 +175,7 @@ pub struct Consensus<S: Service> {
     //voted: HashSet<NodeId>,
     missing_requests: VecDeque<Digest>,
     missing_swapbuf: Vec<usize>,
-    speculative_commits: Arc<Mutex<HashMap<NodeId, StoredSerializedSystemMessage<S::Data>>>>,
+    speculative_commits: Arc<Mutex<IntMap<StoredSerializedSystemMessage<S::Data>>>>,
 }
 
 /// Status returned from processing a consensus message.
@@ -226,7 +223,7 @@ where
             missing_requests: VecDeque::new(),
             //voted: collections::hash_set(),
             tbo: TboQueue::new(initial_seq_no),
-            speculative_commits: Arc::new(Mutex::new(collections::hash_map())),
+            speculative_commits: Arc::new(Mutex::new(IntMap::new())),
             current_digest: Digest::from_bytes(&[0; Digest::LENGTH][..]).unwrap(),
             current: std::iter::repeat_with(|| Digest::from_bytes(&[0; Digest::LENGTH][..]))
                 .flat_map(|d| d) // unwrap
@@ -459,9 +456,9 @@ where
         // FIXME: do we need to clear the missing requests buffers?
     }
 
-    fn take_speculative_commits(&self) -> HashMap<NodeId, StoredSerializedSystemMessage<S::Data>> {
+    fn take_speculative_commits(&self) -> IntMap<StoredSerializedSystemMessage<S::Data>> {
         let mut map = self.speculative_commits.lock();
-        std::mem::replace(&mut *map, collections::hash_map())
+        std::mem::replace(&mut *map, IntMap::new())
     }
 
     /// Process a message for a particular consensus instance.
@@ -574,7 +571,7 @@ where
                         let stored = StoredMessage::new(header, serialized);
 
                         let mut map = speculative_commits.lock();
-                        map.insert(peer_id, stored);
+                        map.insert(peer_id.into(), stored);
                     });
                 }
                 // leader can't vote for a PREPARE
@@ -768,7 +765,7 @@ where
 
 #[inline]
 fn valid_spec_commits<S>(
-    speculative_commits: &HashMap<NodeId, StoredSerializedSystemMessage<S::Data>>,
+    speculative_commits: &IntMap<StoredSerializedSystemMessage<S::Data>>,
     consensus: &Consensus<S>,
     synchronizer: &mut Synchronizer<S>,
 ) -> bool

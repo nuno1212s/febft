@@ -15,12 +15,12 @@ use serde::{
     Serialize,
     Deserialize,
 };
+use intmap::IntMap;
 
 use febft::bft::error::*;
 use febft::bft::threadpool;
 use febft::bft::ordering::SeqNo;
 use febft::bft::executable::Service;
-use febft::bft::collections::HashMap;
 use febft::bft::communication::serialize::SharedData;
 use febft::bft::communication::message::{
     Message,
@@ -55,7 +55,7 @@ macro_rules! addr {
 #[macro_export]
 macro_rules! map {
     ( $($key:expr => $value:expr),+ ) => {{
-        let mut m = ::febft::bft::collections::hash_map();
+        let mut m = ::intmap::IntMap::new();
         $(
             m.insert($key, $value);
         )+
@@ -94,8 +94,8 @@ pub fn debug_msg(m: Message<f32, Action, f32>) -> &'static str {
 async fn node_config(
     id: NodeId,
     sk: KeyPair,
-    addrs: HashMap<NodeId, (SocketAddr, String)>,
-    pk: HashMap<NodeId, PublicKey>,
+    addrs: IntMap<(SocketAddr, String)>,
+    pk: IntMap<PublicKey>,
 ) -> NodeConfig {
     // read TLS configs concurrently
     let (client_config, server_config) = {
@@ -121,8 +121,8 @@ async fn node_config(
 pub async fn setup_client(
     id: NodeId,
     sk: KeyPair,
-    addrs: HashMap<NodeId, (SocketAddr, String)>,
-    pk: HashMap<NodeId, PublicKey>,
+    addrs: IntMap<(SocketAddr, String)>,
+    pk: IntMap<PublicKey>,
 ) -> Result<Client<CalcData>> {
     let node = node_config(id, sk, addrs, pk).await;
     let conf = client::ClientConfig {
@@ -134,8 +134,8 @@ pub async fn setup_client(
 pub async fn setup_replica(
     id: NodeId,
     sk: KeyPair,
-    addrs: HashMap<NodeId, (SocketAddr, String)>,
-    pk: HashMap<NodeId, PublicKey>,
+    addrs: IntMap<(SocketAddr, String)>,
+    pk: IntMap<PublicKey>,
 ) -> Result<Replica<CalcService>> {
     let node = node_config(id, sk, addrs, pk).await;
     let conf = ReplicaConfig {
@@ -151,8 +151,8 @@ pub async fn setup_replica(
 pub async fn setup_node(
     id: NodeId,
     sk: KeyPair,
-    addrs: HashMap<NodeId, (SocketAddr, String)>,
-    pk: HashMap<NodeId, PublicKey>,
+    addrs: IntMap<(SocketAddr, String)>,
+    pk: IntMap<PublicKey>,
 ) -> Result<(Node<CalcData>, Vec<Message<f32, Action, f32>>)> {
     let conf = node_config(id, sk, addrs, pk).await;
     let (node, batcher, rogue) = Node::bootstrap(conf).await?;

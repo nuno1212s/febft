@@ -16,6 +16,8 @@ use serde::{Serialize, Deserialize};
 //    Right,
 //};
 
+use intmap::IntMap;
+
 use crate::bft::prng;
 use crate::bft::consensus::Consensus;
 use crate::bft::crypto::hash::Digest;
@@ -280,8 +282,8 @@ pub struct Synchronizer<S: Service> {
     phase: ProtoPhase,
     timeout_seq: SeqNo,
     timeout_dur: Duration,
-    stopped: HashMap<NodeId, Vec<StoredMessage<RequestMessage<Request<S>>>>>,
-    collects: HashMap<NodeId, StoredMessage<ViewChangeMessage<Request<S>>>>,
+    stopped: IntMap<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
+    collects: IntMap<StoredMessage<ViewChangeMessage<Request<S>>>>,
     watching: HashMap<Digest, TimeoutPhase>,
     tbo: TboQueue<Request<S>>,
     finalize_state: Option<FinalizeState<Request<S>>>,
@@ -358,8 +360,8 @@ where
             watching_timeouts: false,
             timeout_seq: SeqNo::ZERO,
             watching: collections::hash_map(),
-            stopped: collections::hash_map(),
-            collects: collections::hash_map(),
+            stopped: IntMap::new(),
+            collects: IntMap::new(),
             tbo: TboQueue::new(view),
             finalize_state: None,
         }
@@ -556,7 +558,7 @@ where
                         self.queue_stop(header, message);
                         return stop_status!(self, i);
                     },
-                    ViewChangeMessageKind::Stop(_) if self.stopped.contains_key(&header.from()) => {
+                    ViewChangeMessageKind::Stop(_) if self.stopped.contains_key(header.from().into()) => {
                         // drop attempts to vote twice
                         return stop_status!(self, i);
                     },
@@ -576,7 +578,7 @@ where
                     ViewChangeMessageKind::Stop(stopped) => stopped,
                     _ => unreachable!(),
                 };
-                self.stopped.insert(header.from(), stopped);
+                self.stopped.insert(header.from().into(), stopped);
 
                 // NOTE: we only take this branch of the code before
                 // we have sent our own STOP message
@@ -639,7 +641,7 @@ where
                     ViewChangeMessageKind::StopData(_) if self.view().leader() != node.id() => {
                         return SynchronizerStatus::Running;
                     },
-                    ViewChangeMessageKind::StopData(_) if self.collects.contains_key(&header.from()) => {
+                    ViewChangeMessageKind::StopData(_) if self.collects.contains_key(header.from().into()) => {
                         // drop attempts to vote twice
                         return SynchronizerStatus::Running;
                     },
@@ -657,7 +659,7 @@ where
                 // the new leader isn't forging messages.
 
                 // store collects from this STOP-DATA
-                self.collects.insert(header.from(), StoredMessage::new(header, message));
+                self.collects.insert(header.from().into(), StoredMessage::new(header, message));
 
                 if i != self.view().params().quorum() {
                     self.phase = ProtoPhase::StoppingData(i);

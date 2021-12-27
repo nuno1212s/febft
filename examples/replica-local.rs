@@ -2,7 +2,8 @@ mod common;
 
 use common::*;
 
-use febft::bft::collections::HashMap;
+use intmap::IntMap;
+
 use febft::bft::communication::NodeId;
 use febft::bft::async_runtime as rt;
 use febft::bft::{
@@ -24,28 +25,28 @@ fn main() {
 }
 
 async fn async_main() {
-    let mut secret_keys: HashMap<NodeId, KeyPair> = sk_stream()
+    let mut secret_keys: IntMap<KeyPair> = sk_stream()
         .take(4)
         .enumerate()
-        .map(|(id, sk)| (NodeId::from(id), sk))
+        .map(|(id, sk)| (id as u64, sk))
         .collect();
-    let public_keys: HashMap<NodeId, PublicKey> = secret_keys
+    let public_keys: IntMap<PublicKey> = secret_keys
         .iter()
         .map(|(id, sk)| (*id, sk.public_key().into()))
         .collect();
 
     for id in NodeId::targets(0..4) {
-        let addrs= map! {
+        let addrs = map! {
             // replicas
-            NodeId::from(0u32) => addr!("cop01" => "127.0.0.1:10001"),
-            NodeId::from(1u32) => addr!("cop02" => "127.0.0.1:10002"),
-            NodeId::from(2u32) => addr!("cop03" => "127.0.0.1:10003"),
-            NodeId::from(3u32) => addr!("cop04" => "127.0.0.1:10004"),
+            0 => addr!("cop01" => "127.0.0.1:10001"),
+            1 => addr!("cop02" => "127.0.0.1:10002"),
+            2 => addr!("cop03" => "127.0.0.1:10003"),
+            3 => addr!("cop04" => "127.0.0.1:10004"),
 
             // clients
-            NodeId::from(1000u32) => addr!("cli1000" => "127.0.0.1:11000")
+            1000 => addr!("cli1000" => "127.0.0.1:11000")
         };
-        let sk = secret_keys.remove(&id).unwrap();
+        let sk = secret_keys.remove(id.into()).unwrap();
         let fut = setup_replica(
             id,
             sk,
