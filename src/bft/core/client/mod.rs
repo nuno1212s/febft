@@ -77,20 +77,26 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
     // if we have a lot of requests being done in parallel,
     // the mutexes are going to have a fair bit of contention
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<P> {
-        let mut ready = self.ready.lock();
-        let request = IntMapEntry::get(self.request_key, &mut *ready)
-            .or_insert_with(|| Ready { payload: None, waker: None });
+        self.ready.try_lock()
+            .map(|mut ready| {
+                let request = IntMapEntry::get(self.request_key, &mut *ready)
+                    .or_insert_with(|| Ready { payload: None, waker: None });
 
-        if let Some(payload) = request.payload.take() {
-            ready.remove(self.request_key);
-            return Poll::Ready(payload);
-        }
+                if let Some(payload) = request.payload.take() {
+                    ready.remove(self.request_key);
+                    return Poll::Ready(payload);
+                }
 
-        // clone waker to wake up this task when
-        // the response is ready
-        request.waker = Some(cx.waker().clone());
+                // clone waker to wake up this task when
+                // the response is ready
+                request.waker = Some(cx.waker().clone());
 
-        Poll::Pending
+                Poll::Pending
+            })
+            .unwrap_or_else(|| {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            })
     }
 }
 
