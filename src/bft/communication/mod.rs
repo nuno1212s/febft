@@ -39,6 +39,7 @@ use intmap::IntMap;
 
 use crate::bft::prng;
 use crate::bft::error::*;
+use crate::bft::threadpool;
 use crate::bft::async_runtime as rt;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::communication::serialize::{
@@ -447,7 +448,7 @@ where
         target: NodeId,
         nonce: u64,
     ) {
-        rt::spawn(async move {
+        threadpool::execute(move || {
             // serialize
             let mut buf: Buf = Buf::new();
             let digest = <D as DigestData>::serialize_digest(
@@ -458,10 +459,14 @@ where
             // send
             if my_id == target {
                 // Right -> our turn
-                send_to.value(Right((message, nonce, digest ,buf))).await;
+                rt::spawn(async move {
+                    send_to.value(Right((message, nonce, digest ,buf))).await;
+                });
             } else {
                 // Left -> peer turn
-                send_to.value(Left((nonce, digest, buf))).await;
+                rt::spawn(async move {
+                    send_to.value(Left((nonce, digest, buf))).await;
+                });
             }
         });
     }
@@ -524,7 +529,7 @@ where
         my_send_to: Option<SerializedSendTo<D>>,
         other_send_tos: SerializedSendTos<D>,
     ) {
-        rt::spawn(async move {
+        threadpool::execute(move || {
             // send to ourselves
             if let Some(mut send_to) = my_send_to {
                 let id = match &send_to {
@@ -564,7 +569,7 @@ where
         other_send_tos: SendTos<D>,
         nonce: u64,
     ) {
-        rt::spawn(async move {
+        threadpool::execute(move || {
             // serialize
             let mut buf: Buf = Buf::new();
             let digest = <D as DigestData>::serialize_digest(
