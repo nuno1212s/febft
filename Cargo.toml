@@ -74,7 +74,7 @@ num_cpus = "1"
 event-listener = "2"
 linked-hash-map = "0.5"
 rand_core = { version = "0.6", features = ["getrandom"] }
-smallvec = { version = "1", features = ["union", "write"] }
+smallvec = { version = "1", features = ["union", "write", "const_generics"] }
 async-std = { version = "1", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 tokio-util = { version = "0.6", features = ["compat"], optional = true }
