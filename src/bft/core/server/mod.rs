@@ -566,7 +566,7 @@ where
                             // if deciding, nothing to do
                             ConsensusStatus::Deciding => rt::yield_now().await,
                             // FIXME: implement this
-                            ConsensusStatus::VotedTwice(_) => unimplemented!(),
+                            ConsensusStatus::VotedTwice(_) => todo!(),
                             // reached agreement, execute requests
                             //
                             // FIXME: execution layer needs to receive the id
