@@ -830,7 +830,7 @@ where
         let mut tx = self.my_tx.clone();
 
         rt::spawn(async move {
-            let mut buf: Buf = Buf::new();
+            let mut buf = SmallVec::<[u8; 16384]>::new();
 
             // TODO
             //  - verify signatures???
