@@ -8,8 +8,6 @@
 
 use std::io::{Read, Write};
 
-use smallvec::SmallVec;
-
 use crate::bft::error::*;
 use crate::bft::crypto::hash::{Context, Digest};
 use crate::bft::communication::message::SystemMessage;
@@ -54,10 +52,10 @@ pub trait SharedData {
 }
 
 // max no. of bytes to inline before doing a heap alloc
-const NODE_BUFSIZ: usize = 16384;
+//const NODE_BUFSIZ: usize = 16384;
 
 /// The buffer type used to serialize messages into.
-pub type Buf = SmallVec<[u8; NODE_BUFSIZ]>;
+pub type Buf = Vec<u8>;
 
 /// Extension of `SharedData` to obtain hash digests.
 pub trait DigestData: SharedData {
