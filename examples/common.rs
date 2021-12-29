@@ -44,6 +44,9 @@ use febft::bft::core::server::{
     ReplicaConfig,
 };
 
+#[global_allocator]
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[macro_export]
 macro_rules! addr {
     ($h:expr => $a:expr) => {{

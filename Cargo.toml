@@ -56,6 +56,7 @@ itertools = "0.9"
 [dev-dependencies]
 bincode = "1"
 num_cpus = "1"
+mimalloc = { version = "*", default-features = false }
 
 [dependencies]
 #scopeguard = "1"
@@ -93,22 +94,22 @@ twox-hash = { version = "1", optional = true }
 serde_bytes = { version = "0.11", optional = true }
 
 # https://doc.rust-lang.org/cargo/reference/profiles.html
-#[profile.release]
-#opt-level = 3
-#panic = "abort" # disable stack unwinding on panic
-#overflow-checks = false # disable integer overflow checks.
-#codegen-units = 1
-#lto = true # LLVM link time optimizations
-#debug = false
-#debug-assertions = false
-#incremental = false
-#
-#[profile.dev]
-#opt-level = 0
-#panic = "unwind"
-#overflow-checks = true
-#codegen-units = 32
-#lto = false
-#debug = true
-#debug-assertions = true
-#incremental = true
+[profile.release]
+opt-level = 3
+panic = "abort" # disable stack unwinding on panic
+overflow-checks = false # disable integer overflow checks.
+codegen-units = 1
+lto = true # LLVM link time optimizations
+debug = false
+debug-assertions = false
+incremental = false
+
+[profile.dev]
+opt-level = 0
+panic = "unwind"
+overflow-checks = true
+codegen-units = 32
+lto = false
+debug = true
+debug-assertions = true
+incremental = true
