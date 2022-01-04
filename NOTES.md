@@ -1,77 +1,48 @@
-# dynamic batch size
+# improvements to current febft implementation
 
-implement dynamic instrospection of the batch size being used,
-and introspect the time between each constructed batch,
-to minimize request latency and maximize the system throughput
+* `[x]` improve map hashing algorithm
+    + solved: use **fxhash**
+    + <https://hg.openjdk.java.net/jdk8/jdk8/jdk/file/687fd7c7986d/src/share/classes/java/lang/String.java>
+* `[x]` run profiling in `febft`
+    + solved: a lot of time spent on hashmaps
+* `[ ]` improve testing approach
+    - run without any other processes in the cluster potentially altering results
+    - run tests for longer (e.g. each client sends 20,000 requests)
+* `[ ]` improve communication code in `src/bft/communication/mod.rs`?
+    + maybe reduce number of `.clone()` calls on buffers
+        - using `Arc<Buffer>` and cloning the buf is actually slower...
+        - use faster allocator? right now we are trying out `mimalloc` over the `std`
+          allocator
+* `[ ]` implement `io_uring` async executor
+    - try out [**nuklei**](https://github.com/vertexclique/nuclei)
+* `[ ]` improve map accesses
+    + try out [**intmap**](https://github.com/JesperAxelsson/rust-intmap)
+    + parallelize map accesses
+        - do we need to synchronize each op with `.await`?
+    + try using [**dashmap**](https://github.com/xacrimon/dashmap)
+    + benchmarks for [**dashmap**](https://github.com/xacrimon/conc-map-bench)
+* `[ ]` improve tcp settings
+    + [**tokio**](https://docs.rs/tokio/latest/tokio/net/struct.TcpStream.html#method.from_std)
+    + [**async-std**](https://docs.rs/async-std/latest/async_std/net/struct.TcpStream.html#impl-From%3CTcpStream%3E)
+    + with [**socket2**](https://docs.rs/socket2/0.4.2/socket2/struct.Socket.html#method.set_recv_buffer_size)
+* `[ ]` improve batching
+    + use interpolation?
+        - probably not the right approach... either way
+        - calculate local maxima of first order derivate of interpolated function
+          $T(t) = \frac{\texttt{measurement interval}}{\Delta t}$ where
+          $\Delta t = \texttt{time now} - \texttt{time last measurement}$,
+          which yields the throughput of the system at any given instant $t$
+        - <https://docs.rs/interpolation/latest/interpolation/>
+        - <https://www.dcode.fr/function-equation-finder>
+* `[ ]` improve consensus performance
+    + `microbenchmarks` reveal our `PREPARE` phase has a fair bit of latency for whatever reason
 
-# check what is saved to disk on bft smart
-
-    $ cd ~/Documents/tese/bft-smart/src/bftsmart
-    $ rg -n --heading --color=always File | less
-
-# check use of parallel execs
-
-    $ rg 'submit\(\(\)' ~/Documents/tese/bft-smart/src/bftsmart
-
-# changes done to the research branch
-
-## to be resolved
-
-the system appears to hang after an undeterminate amount of time,
-causing the request processing to halt completely, and the
-throughput to become 0
-
-## implemented
-
-* view change `hasProof` checks for signature of
-  `ACCEPT` aka `COMMIT` messages only
-    + sign only `COMMIT` messages
-* speculatively create (i.e. sign) `COMMIT` msg
-  before the prepared state
-* group flush() calls together, by sorting replies
-  per node id
-* remove TLS from clients
-    + do we need to check hmacs?
-* send_node on execution layer, so we don't need to go
-  through the master channel to send replies to clients
-* `PRE-PREPARE` messages include the request bodies, rather than
-  just their hash digests
-    + clients should maintain a separate sequence number used
-      to discard requests that have already been processed,
-      the operation id as used in BFT-SMaRt
-    + blindly add these requests to the log..? this may affect
-      the correctness of the sound predicate from Cachin, if
-      the leader is forging requests; read BFT-SMaRt code again,
-      check if they consult the log for the existence of these reqs
-* propose requests as soon as possible
-    + pull up to `BATCH_SIZE` requests from the queue, with
-      a minimum of 1, then start proposing immediately; this
-      improves the request processing latency
-
-## given up
-
-* requests are concurrently added to the request queue, and
-  don't go through the master channel (use Mutex)
-* maybe replicas use non-async communication
-    + BFT-SMaRt has a send thread, so we will probably
-      disregard this change
-
-## algorithm to perform research branch changes
-
-1. order changes by level of complexity, from least
-  difficult to most difficult
-2. implement changes in this order, by creating a new
-   branch `research-<feature>` starting from the previous
-   change's branch
-3. the first feature's branch starts from `view-change`
-4. lastly, try to merge all the changes of `research` into
-   the branch `ycsb`; fix conflicts with an interactive `git`
-   command line tool
-
+<!--
 # systems in rust
 
-* https://www.ibr.cs.tu-bs.de/users/ruesch/papers/ruesch-serial19.pdf
-* https://crates.io/crates/overlord
-* https://crates.io/crates/brb
-* https://crates.io/crates/aleph-bft
-    + https://github.com/Cardinal-Cryptography/AlephBFT
+* <https://www.ibr.cs.tu-bs.de/users/ruesch/papers/ruesch-serial19.pdf>
+* <https://crates.io/crates/overlord>
+* <https://crates.io/crates/brb>
+* <https://crates.io/crates/aleph-bft>
+    + <https://github.com/Cardinal-Cryptography/AlephBFT>
+-->
