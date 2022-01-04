@@ -20,7 +20,7 @@ default = [
     "channel_futures_mpsc",
     "crypto_signature_ring_ed25519",
     "crypto_hash_blake3_blake3",
-    "collections_randomstate_twox_hash"
+    "collections_randomstate_fxhash"
 ]
 
 socket_tokio_tcp = ["tokio", "tokio-util"]
@@ -45,6 +45,7 @@ channel_flume_mpmc = ["flume"]
 channel_async_channel_mpmc = ["async-channel"]
 
 collections_randomstate_std = []
+collections_randomstate_fxhash = ["fxhash"]
 collections_randomstate_twox_hash = ["twox-hash"]
 
 #bench = ["expose_impl", "oneshot", "futures-timer", "async-semaphore"]
@@ -92,6 +93,7 @@ flume = { version = "0.10", optional = true }
 async-channel = { version = "1", optional = true }
 twox-hash = { version = "1", optional = true }
 serde_bytes = { version = "0.11", optional = true }
+fxhash = { version = "0.2", optional = true }
 
 # https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.release]

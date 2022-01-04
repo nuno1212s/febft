@@ -2,6 +2,9 @@
 
 use std::default::Default;
 
+#[cfg(feature = "collections_randomstate_fxhash")]
+pub type RandomState = ::std::hash::BuildHasherDefault<::fxhash::FxHasher>;
+
 #[cfg(feature = "collections_randomstate_twox_hash")]
 pub type RandomState = ::twox_hash::RandomXxh3HashBuilder64;
 
