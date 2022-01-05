@@ -5,6 +5,10 @@
     + <https://hg.openjdk.java.net/jdk8/jdk8/jdk/file/687fd7c7986d/src/share/classes/java/lang/String.java>
 * `[x]` run profiling in `febft`
     + solved: a lot of time spent on hashmaps
+* `[x]` improve tcp settings
+    + [**tokio**](https://docs.rs/tokio/latest/tokio/net/struct.TcpStream.html#method.from_std)
+    + [**async-std**](https://docs.rs/async-std/latest/async_std/net/struct.TcpStream.html#impl-From%3CTcpStream%3E)
+    + with [**socket2**](https://docs.rs/socket2/0.4.2/socket2/struct.Socket.html#method.set_recv_buffer_size)
 * `[ ]` improve testing approach
     - run without any other processes in the cluster potentially altering results
     - run tests for longer (e.g. each client sends 20,000 requests)
@@ -21,10 +25,6 @@
         - do we need to synchronize each op with `.await`?
     + try using [**dashmap**](https://github.com/xacrimon/dashmap)
     + benchmarks for [**dashmap**](https://github.com/xacrimon/conc-map-bench)
-* `[ ]` improve tcp settings
-    + [**tokio**](https://docs.rs/tokio/latest/tokio/net/struct.TcpStream.html#method.from_std)
-    + [**async-std**](https://docs.rs/async-std/latest/async_std/net/struct.TcpStream.html#impl-From%3CTcpStream%3E)
-    + with [**socket2**](https://docs.rs/socket2/0.4.2/socket2/struct.Socket.html#method.set_recv_buffer_size)
 * `[ ]` improve batching
     + use interpolation?
         - probably not the right approach... either way
