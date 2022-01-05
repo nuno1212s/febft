@@ -86,3 +86,25 @@ impl AsyncWrite for Socket {
         Pin::new(&mut self.inner).poll_close(cx)
     }
 }
+
+#[cfg(windows)]
+mod sys {
+    compile_error!("Sorry Windows users! Switch to the `async-std` socket backend.");
+}
+
+#[cfg(unix)]
+mod sys {
+    use std::os::unix::io::{RawFd, AsRawFd};
+
+    impl AsRawFd for super::Socket {
+        fn as_raw_fd(&self) -> RawFd {
+            self.inner.as_raw_fd()
+        }
+    }
+
+    impl AsRawFd for super::Listener {
+        fn as_raw_fd(&self) -> RawFd {
+            self.inner.as_raw_fd()
+        }
+    }
+}

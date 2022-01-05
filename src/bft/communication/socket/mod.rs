@@ -80,7 +80,7 @@ pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
 
         #[cfg(feature = "socket_rio_tcp")]
         { rio_tcp::bind(addr).await }
-    }.map(|inner| Listener { inner })
+    }.and_then(|inner| set_listener_options(Listener { inner }))
 }
 
 /// Connects to the remote node pointed to by the address `addr`.
@@ -94,14 +94,14 @@ pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
 
         #[cfg(feature = "socket_rio_tcp")]
         { rio_tcp::connect(addr).await }
-    }.map(|inner| Socket { inner })
+    }.and_then(|inner| set_sockstream_options(Socket { inner }))
 }
 
 impl Listener {
     pub async fn accept(&self) -> io::Result<Socket> {
         self.inner.accept()
             .await
-            .map(|inner| Socket { inner })
+            .and_then(|inner| set_sockstream_options(Socket { inner }))
     }
 }
 
@@ -217,4 +217,30 @@ impl AsyncWrite for SecureSocketSend {
             },
         }
     }
+}
+
+// set listener socket options; translated from BFT-SMaRt
+#[inline]
+fn set_listener_options(listener: Listener) -> io::Result<Listener> {
+    let sock = socket2::SockRef::from(&listener.inner);
+    sock.set_send_buffer_size(8 * 10240 * 1024)?;
+    sock.set_recv_buffer_size(8 * 10240 * 1024)?;
+    sock.set_reuse_address(true)?;
+    sock.set_keepalive(true)?;
+    sock.set_nodelay(true)?;
+    // ChannelOption.CONNECT_TIMEOUT_MILLIS ??
+    // ChannelOption.SO_BACKLOG ??
+    Ok(listener)
+}
+
+// set connection socket options; translated from BFT-SMaRt
+#[inline]
+fn set_sockstream_options(connection: Socket) -> io::Result<Socket> {
+    let sock = socket2::SockRef::from(&connection.inner);
+    sock.set_send_buffer_size(8 * 10240 * 1024)?;
+    sock.set_recv_buffer_size(8 * 10240 * 1024)?;
+    sock.set_keepalive(true)?;
+    sock.set_nodelay(true)?;
+    // ChannelOption.CONNECT_TIMEOUT_MILLIS ??
+    Ok(connection)
 }
