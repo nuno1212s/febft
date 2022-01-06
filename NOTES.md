@@ -10,15 +10,13 @@
     + [**async-std**](https://docs.rs/async-std/latest/async_std/net/struct.TcpStream.html#impl-From%3CTcpStream%3E)
     + with [**socket2**](https://docs.rs/socket2/0.4.2/socket2/struct.Socket.html#method.set_recv_buffer_size)
 * `[ ]` improve testing approach
-    - run without any other processes in the cluster potentially altering results
-    - run tests for longer (e.g. each client sends 20,000 requests)
+    + run without any other processes in the cluster potentially altering results
+    + run tests for longer (e.g. each client sends 20,000 requests)
 * `[ ]` improve communication code in `src/bft/communication/mod.rs`?
     + maybe reduce number of `.clone()` calls on buffers
         - using `Arc<Buffer>` and cloning the buf is actually slower...
         - use faster allocator? right now we are trying out `mimalloc` over the `std`
           allocator
-* `[ ]` implement `io_uring` async executor
-    - try out [**nuklei**](https://github.com/vertexclique/nuclei)
 * `[ ]` improve map accesses
     + try out [**intmap**](https://github.com/JesperAxelsson/rust-intmap)
     + parallelize map accesses
@@ -36,6 +34,13 @@
         - <https://www.dcode.fr/function-equation-finder>
 * `[ ]` improve consensus performance
     + `microbenchmarks` reveal our `PREPARE` phase has a fair bit of latency for whatever reason
+
+# archived changes
+
+* `[x]` implement `io_uring` async executor
+    + solved: implemented in branch `microbenchmarks-improvements-nuclei`
+        - buggy... and it only works in linux $\ge$ 5.10
+    + try out [**nuclei**](https://github.com/vertexclique/nuclei)
 
 <!--
 # systems in rust
