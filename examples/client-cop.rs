@@ -21,7 +21,7 @@ fn main() {
         async_threads: 4,
     };
     let _guard = unsafe { init(conf).unwrap() };
-    rt::block_on(async_main());
+    rt::drive(async_main());
 }
 
 macro_rules! ip {

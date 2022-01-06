@@ -18,7 +18,7 @@
         - use faster allocator? right now we are trying out `mimalloc` over the `std`
           allocator
 * `[ ]` implement `io_uring` async executor
-    - try out [**nuklei**](https://github.com/vertexclique/nuclei)
+    - try out [**nuclei**](https://github.com/vertexclique/nuclei)
 * `[ ]` improve map accesses
     + try out [**intmap**](https://github.com/JesperAxelsson/rust-intmap)
     + parallelize map accesses

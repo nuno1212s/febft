@@ -6,6 +6,9 @@ mod tokio;
 #[cfg(feature = "async_runtime_async_std")]
 mod async_std;
 
+#[cfg(feature = "async_runtime_nuclei")]
+mod nuclei;
+
 use std::pin::Pin;
 use std::future::Future;
 use std::task::{Context, Poll};
@@ -14,10 +17,16 @@ use crate::bft::globals::Global;
 use crate::bft::error::*;
 
 #[cfg(feature = "async_runtime_tokio")]
+use self::tokio::TokioDrive;
+
+#[cfg(feature = "async_runtime_tokio")]
 static mut RUNTIME: Global<tokio::Runtime> = Global::new();
 
 #[cfg(feature = "async_runtime_async_std")]
 static mut RUNTIME: Global<async_std::Runtime> = Global::new();
+
+#[cfg(feature = "async_runtime_nuclei")]
+static mut RUNTIME: Global<nuclei::Runtime> = Global::new();
 
 macro_rules! runtime {
     () => {
@@ -39,6 +48,9 @@ pub struct JoinHandle<T> {
 
     #[cfg(feature = "async_runtime_async_std")]
     inner: async_std::JoinHandle<T>,
+
+    #[cfg(feature = "async_runtime_nuclei")]
+    inner: nuclei::JoinHandle<T>,
 }
 
 /// This function initializes the async runtime.
@@ -50,6 +62,9 @@ pub unsafe fn init(num_threads: usize) -> Result<()> {
 
     #[cfg(feature = "async_runtime_async_std")]
     { async_std::init(num_threads).map(|rt| RUNTIME.set(rt)) }
+
+    #[cfg(feature = "async_runtime_nuclei")]
+    { nuclei::init(num_threads).map(|rt| RUNTIME.set(rt)) }
 }
 
 /// This function drops the async runtime.
@@ -75,11 +90,20 @@ where
 }
 
 /// Blocks on a future `F` until it completes.
-pub fn block_on<F: Future>(future: F) -> F::Output {
+pub fn block_on<F>(future: F) -> F::Output
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
     runtime!().block_on(future)
 }
 
-impl<T> Future for JoinHandle<T> {
+/// Drives I/O events on a future `F` until it completes.
+pub fn drive<F: Future>(future: F) -> F::Output {
+    runtime!().drive(future)
+}
+
+impl<T: Send + 'static> Future for JoinHandle<T> {
     type Output = Result<T>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

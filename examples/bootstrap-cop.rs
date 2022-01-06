@@ -37,7 +37,7 @@ fn main() {
         async_threads: num_cpus::get(),
     };
     let _guard = unsafe { init(conf).unwrap() };
-    rt::block_on(async_main(NodeId::from(id)));
+    rt::drive(async_main(NodeId::from(id)));
 }
 
 macro_rules! ip {

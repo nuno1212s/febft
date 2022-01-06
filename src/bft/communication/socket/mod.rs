@@ -6,6 +6,9 @@ mod tokio_tcp;
 #[cfg(feature = "socket_async_std_tcp")]
 mod async_std_tcp;
 
+#[cfg(feature = "socket_nuclei_tcp")]
+mod nuclei_tcp;
+
 #[cfg(feature = "socket_rio_tcp")]
 mod rio_tcp;
 
@@ -36,6 +39,9 @@ pub struct Listener {
     #[cfg(feature = "socket_async_std_tcp")]
     inner: async_std_tcp::Listener,
 
+    #[cfg(feature = "socket_nuclei_tcp")]
+    inner: nuclei_tcp::Listener,
+
     #[cfg(feature = "socket_rio_tcp")]
     inner: rio_tcp::Listener,
 }
@@ -48,6 +54,9 @@ pub struct Socket {
 
     #[cfg(feature = "socket_async_std_tcp")]
     inner: async_std_tcp::Socket,
+
+    #[cfg(feature = "socket_nuclei_tcp")]
+    inner: nuclei_tcp::Socket,
 
     #[cfg(feature = "socket_rio_tcp")]
     inner: rio_tcp::Socket,
@@ -78,6 +87,9 @@ pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
         #[cfg(feature = "socket_async_std_tcp")]
         { async_std_tcp::bind(addr).await }
 
+        #[cfg(feature = "socket_nuclei_tcp")]
+        { nuclei_tcp::bind(addr).await }
+
         #[cfg(feature = "socket_rio_tcp")]
         { rio_tcp::bind(addr).await }
     }.and_then(|inner| set_listener_options(Listener { inner }))
@@ -91,6 +103,9 @@ pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
 
         #[cfg(feature = "socket_async_std_tcp")]
         { async_std_tcp::connect(addr).await }
+
+        #[cfg(feature = "socket_nuclei_tcp")]
+        { nuclei_tcp::connect(addr).await }
 
         #[cfg(feature = "socket_rio_tcp")]
         { rio_tcp::connect(addr).await }

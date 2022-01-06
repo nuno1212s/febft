@@ -33,7 +33,7 @@ fn main() {
         async_threads: num_cpus::get(),
     };
     let _guard = unsafe { init(conf).unwrap() };
-    rt::block_on(async_main());
+    rt::drive(async_main());
 }
 
 async fn async_main() {

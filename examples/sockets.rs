@@ -23,7 +23,7 @@ fn main() {
         async_threads: 4,
     };
     let _guard = unsafe { init(conf).unwrap() };
-    rt::block_on(client_main()).unwrap();
+    rt::drive(client_main()).unwrap();
 }
 
 async fn client_main() -> io::Result<()> {

@@ -13,9 +13,9 @@ readme = "README.md"
 [features]
 # Consult the crate documentation for more details on the features.
 default = [
-    "async_runtime_tokio",
+    "async_runtime_nuclei",
     "threadpool_rayon",
-    "socket_tokio_tcp",
+    "socket_nuclei_tcp",
     "serialize_serde",
     "channel_futures_mpsc",
     "crypto_signature_ring_ed25519",
@@ -25,11 +25,13 @@ default = [
 
 socket_tokio_tcp = ["tokio", "tokio-util"]
 socket_async_std_tcp = ["async-std"]
+socket_nuclei_tcp = ["nuclei"]
 socket_rio_tcp = ["rio"]
 
 serialize_serde = ["serde", "serde-big-array", "serde_bytes"]
 
 async_runtime_tokio = ["tokio"]
+async_runtime_nuclei = ["nuclei"]
 async_runtime_async_std = ["async-std"]
 
 crypto_signature_ring_ed25519 = ["ring"]
@@ -94,6 +96,7 @@ async-channel = { version = "1", optional = true }
 twox-hash = { version = "1", optional = true }
 serde_bytes = { version = "0.11", optional = true }
 fxhash = { version = "0.2", optional = true }
+nuclei = { version = "0.1", default-features = false, features = ["bastion", "iouring"], optional = true }
 
 # https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.release]
