@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;
+use std::collections::BTreeMap;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
@@ -21,11 +22,6 @@ use crate::bft::communication::message::{
     RequestMessage,
     ConsensusMessage,
     ConsensusMessageKind,
-};
-use crate::bft::collections::{
-    self,
-    HashMap,
-    OrderedMap,
 };
 use crate::bft::ordering::{
     SeqNo,
@@ -477,8 +473,7 @@ pub struct Log<S, O, P> {
     batch_size: usize,
     declog: DecisionLog<O>,
     latest_op: IntMap<SeqNo>,
-    requests: OrderedMap<Digest, StoredMessage<RequestMessage<O>>>,
-    deciding: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
+    requests: BTreeMap<Digest, StoredMessage<RequestMessage<O>>>,
     decided: Vec<O>,
     checkpoint: CheckpointState<S>,
     meta: BatchMeta,
@@ -499,10 +494,9 @@ impl<S, O: Clone, P> Log<S, O, P> {
             curr_seq: SeqNo::ZERO,
             latest_op: IntMap::new(),
             declog: DecisionLog::new(),
-            deciding: collections::hash_map_capacity(batch_size),
             // TODO: use config value instead of const
             decided: Vec::with_capacity(PERIOD as usize),
-            requests: collections::ordered_map(),
+            requests: BTreeMap::new(),
             checkpoint: CheckpointState::None,
             meta: BatchMeta::new(),
             _marker: PhantomData,
@@ -588,7 +582,6 @@ impl<S, O: Clone, P> Log<S, O, P> {
                 let stored = StoredMessage::new(header, message);
 
                 self.requests.insert(digest, stored);
-                self.deciding.remove(&digest);
             },
             SystemMessage::Consensus(message) => {
                 let stored = StoredMessage::new(header, message);
@@ -605,19 +598,13 @@ impl<S, O: Clone, P> Log<S, O, P> {
 
     /// Retrieves the next batch of requests available for proposing, if any.
     pub fn next_batch(&mut self) -> Option<Vec<StoredMessage<RequestMessage<O>>>> {
-        while let Some((digest, stored)) = self.requests.pop_front() {
-            self.deciding.insert(digest, stored);
-            if self.deciding.len() >= self.batch_size {
-                break;
-            }
-        }
         // TODO:
         // - we may include another condition here to decide on a
         // smaller batch size, so that client request latency is lower
         // - prevent non leader replicas from collecting a batch of digests,
         // as only the leader will actually propose!
-        if self.deciding.len() > 0 {
-            Some(self.deciding
+        if self.requests.len() > 0 {
+            Some(self.requests
                 .values()
                 .cloned()
                 .take(self.batch_size)
@@ -631,7 +618,6 @@ impl<S, O: Clone, P> Log<S, O, P> {
     pub fn view_change_propose(&self) -> Vec<StoredMessage<RequestMessage<O>>> {
         self.requests
             .values()
-            .chain(self.deciding.values())
             .take(self.batch_size)
             .cloned()
             .collect()
@@ -639,7 +625,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
 
     /// Checks if this `Log` has a particular request with the given `digest`.
     pub fn has_request(&self, digest: &Digest) -> bool {
-        self.deciding.contains_key(digest) || self.requests.contains_key(digest)
+        self.requests.contains_key(digest)
     }
 
     /// Clone the requests corresponding to the provided list of hash digests.
@@ -649,7 +635,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
     {
         digests
             .iter()
-            .flat_map(|d| self.deciding.get(d).or_else(|| self.requests.get(d)))
+            .flat_map(|d| self.requests.get(d))
             .cloned()
             .collect()
     }
@@ -666,9 +652,8 @@ impl<S, O: Clone, P> Log<S, O, P> {
     {
         let mut batch = UpdateBatch::new();
         for digest in digests {
-            let (header, message) = self.deciding
+            let (header, message) = self.requests
                 .remove(digest)
-                .or_else(|| self.requests.remove(digest))
                 .map(StoredMessage::into_inner)
                 .ok_or(Error::simple(ErrorKind::ConsensusLog))?;
 
