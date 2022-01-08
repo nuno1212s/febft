@@ -34,6 +34,8 @@
         - <https://www.dcode.fr/function-equation-finder>
 * `[ ]` improve consensus performance
     + `microbenchmarks` reveal our `PREPARE` phase has a fair bit of latency for whatever reason
+* `[ ]` remove nonce from message headers
+    + should not be necessary anymore
 
 # archived changes
 
