@@ -13,6 +13,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::future::Future;
 use std::task::{Poll, Context};
+use std::thread::sleep;
+use std::time::Duration;
 
 use chrono::offset::Utc;
 use futures::select;
@@ -81,13 +83,13 @@ impl<T> Clone for ChannelTx<T> {
 pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
     let (tx, rx) = {
         #[cfg(feature = "channel_futures_mpsc")]
-        { futures_mpsc::new_bounded(bound) }
+            { futures_mpsc::new_bounded(bound) }
 
         #[cfg(feature = "channel_flume_mpmc")]
-        { flume_mpmc::new_bounded(bound) }
+            { flume_mpmc::new_bounded(bound) }
 
         #[cfg(feature = "channel_async_channel_mpmc")]
-        { async_channel_mpmc::new_bounded(bound) }
+            { async_channel_mpmc::new_bounded(bound) }
     };
     let tx = ChannelTx { inner: tx };
     let rx = ChannelRx { inner: rx };
@@ -173,6 +175,33 @@ enum Batch<O> {
     Notify,
 }
 
+struct ExponentialBackoff {
+    current_backoff: u64,
+    multiplier: u64
+}
+
+impl ExponentialBackoff {
+    pub fn new() -> Self {
+        Self {
+            current_backoff: 1,
+            multiplier: 2
+        }
+    }
+
+    pub fn new_with_exponent(multiplier: u64) -> Self {
+        Self {
+            current_backoff: 1,
+            multiplier
+        }
+    }
+
+    pub fn sleep(&mut self) {
+        sleep(Duration::from_millis(self.current_backoff));
+
+        self.current_backoff *= self.multiplier;
+    }
+}
+
 impl<O: Send + 'static> RequestBatcher<O> {
     pub fn spawn(mut self, max_batch_size: usize) {
         let mut batcher = self.batcher.clone();
@@ -181,14 +210,27 @@ impl<O: Send + 'static> RequestBatcher<O> {
         // handle events to prepare new batch
         rt::spawn(async move {
             loop {
+                let mut backoff = ExponentialBackoff::new();
+
                 let batch = loop {
                     // check if batch is ready...
                     {
-                        let mut current = shared.current.lock();
-                        if current.batch.len() > 0 {
-                            break std::mem::take(&mut current.batch);
+                        let opt_current = shared.current.try_lock();
+
+                        match opt_current {
+                            Some(mut current) => {
+                                //PRINT HERE TO SEE THE BATCH SIZE
+                                if current.batch.len() > 0 {
+                                    //println!("Current batch length {}", current.batch.len() as u32);
+
+                                    break std::mem::take(&mut current.batch);
+                                }
+                            }
+                            None => {}
                         }
                     }
+
+                    backoff.sleep();
 
                     // listen for batch changes
                     shared.event.listen().await;
@@ -201,7 +243,7 @@ impl<O: Send + 'static> RequestBatcher<O> {
         // handle reception of requests
         rt::spawn(async move {
             #[allow(unused_assignments)]
-            let mut batch_size = 0;
+                let mut batch_size = 0;
 
             loop {
                 let request = match self.receiver.recv().await {
@@ -289,13 +331,13 @@ impl<S, O, P> Clone for MessageChannelTx<S, O, P> {
                     requests: requests.clone(),
                     other: other.clone(),
                 }
-            },
+            }
             MessageChannelTx::Client { replies, other } => {
                 MessageChannelTx::Client {
                     other: other.clone(),
                     replies: replies.clone(),
                 }
-            },
+            }
         }
     }
 }
@@ -310,27 +352,27 @@ impl<S, O, P> MessageChannelTx<S, O, P> {
                             SystemMessage::Request(message) => {
                                 let m = StoredMessage::new(header, message);
                                 requests.send(m).await
-                            },
+                            }
                             SystemMessage::Consensus(message) => {
                                 let m = StoredMessage::new(header, message);
                                 consensus.send(m).await
-                            },
+                            }
                             message @ SystemMessage::Cst(_) => {
                                 other.send(Message::System(header, message)).await
-                            },
+                            }
                             message @ SystemMessage::ViewChange(_) => {
                                 other.send(Message::System(header, message)).await
-                            },
+                            }
                             message @ SystemMessage::ForwardedRequests(_) => {
                                 other.send(Message::System(header, message)).await
-                            },
+                            }
                             // drop other msgs
                             _ => Ok(()),
                         }
-                    },
+                    }
                     _ => other.send(message).await,
                 }
-            },
+            }
             MessageChannelTx::Client { replies, other } => {
                 match message {
                     Message::System(header, message) => {
@@ -338,14 +380,14 @@ impl<S, O, P> MessageChannelTx<S, O, P> {
                             SystemMessage::Reply(message) => {
                                 let m = StoredMessage::new(header, message);
                                 replies.send(m).await
-                            },
+                            }
                             // drop other msgs
                             _ => Ok(()),
                         }
-                    },
+                    }
                     _ => other.send(message).await,
                 }
-            },
+            }
         }
     }
 }
@@ -369,7 +411,7 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
                     },
                 };
                 Ok(message)
-            },
+            }
             MessageChannelRx::Client { replies, other } => {
                 let message = select! {
                     result = replies.recv() => {
@@ -382,7 +424,7 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
                     },
                 };
                 Ok(message)
-            },
+            }
         }
     }
 }
