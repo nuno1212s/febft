@@ -13,6 +13,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::future::Future;
 use std::task::{Poll, Context};
+use std::collections::LinkedList;
 
 use chrono::offset::Utc;
 use futures::select;
@@ -135,7 +136,7 @@ pub enum MessageChannelTx<S, O, P> {
     },
     Server {
         other: ChannelTx<Message<S, O, P>>,
-        requests: ChannelTx<StoredMessage<RequestMessage<O>>>,
+        requests: Arc<RequestBatcherShared<O>>,
         consensus: ChannelTx<StoredMessage<ConsensusMessage<O>>>,
     },
 }
@@ -153,83 +154,56 @@ pub enum MessageChannelRx<S, O, P> {
     },
 }
 
-struct BatcherData<O> {
-    batch: Vec<StoredMessage<RequestMessage<O>>>,
-}
-
-struct RequestBatcherShared<O> {
+pub struct RequestBatcherShared<O> {
     event: Event,
-    current: Mutex<BatcherData<O>>,
+    batch: Mutex<LinkedList<StoredMessage<RequestMessage<O>>>>,
 }
 
 pub struct RequestBatcher<O> {
-    shared: Arc<RequestBatcherShared<O>>,
-    receiver: ChannelRx<StoredMessage<RequestMessage<O>>>,
-    batcher: ChannelTx<Vec<StoredMessage<RequestMessage<O>>>>,
-}
-
-enum Batch<O> {
-    Now(Vec<StoredMessage<RequestMessage<O>>>),
-    Notify,
+    requests: Arc<RequestBatcherShared<O>>,
+    to_core_server_task: ChannelTx<Vec<StoredMessage<RequestMessage<O>>>>,
 }
 
 impl<O: Send + 'static> RequestBatcher<O> {
     pub fn spawn(mut self, max_batch_size: usize) {
-        let mut batcher = self.batcher.clone();
-        let shared = Arc::clone(&self.shared);
-
         // handle events to prepare new batch
         rt::spawn(async move {
             loop {
-                let batch = loop {
+                let batch = 'new_batch: loop {
                     // check if batch is ready...
                     {
-                        let mut current = shared.current.lock();
-                        if current.batch.len() > 0 {
-                            break std::mem::take(&mut current.batch);
+                        let mut current_batch = 'spin_lock: loop {
+                            match self.requests.batch.try_lock() {
+                                Some(batch) => break 'spin_lock batch,
+                                None => (),
+                            }
+                            rt::yield_now().await;
+                        };
+
+                        if current_batch.len() > 0 {
+                            let cap = std::cmp::min(current_batch.len(), max_batch_size);
+                            let mut batch = Vec::with_capacity(cap);
+
+                            for _i in 0..cap {
+                                let request = match current_batch.pop_front() {
+                                    Some(r) => r,
+                                    _ => unreachable!(),
+                                };
+                                batch.push(request);
+                            }
+
+                            break 'new_batch batch;
                         }
                     }
 
-                    // listen for batch changes
-                    shared.event.listen().await;
+                    // listen for new requests
+                    self.requests.event.listen().await;
                 };
 
-                let _ = batcher.send(batch).await;
-            }
-        });
-
-        // handle reception of requests
-        rt::spawn(async move {
-            #[allow(unused_assignments)]
-            let mut batch_size = 0;
-
-            loop {
-                let request = match self.receiver.recv().await {
-                    Ok(r) => r,
-                    Err(_) => return,
-                };
-
-                let batch = {
-                    let mut current = self.shared
-                        .current
-                        .lock();
-
-                    current.batch.push(request);
-                    batch_size = current.batch.len();
-
-                    let batch = if batch_size == max_batch_size {
-                        Batch::Now(std::mem::take(&mut current.batch))
-                    } else {
-                        Batch::Notify
-                    };
-
-                    batch
-                };
-
-                match batch {
-                    Batch::Now(batch) => self.batcher.send(batch).await.unwrap(),
-                    Batch::Notify => self.shared.event.notify_additional(1),
-                }
+                let _ = self
+                    .to_core_server_task
+                    .send(batch)
+                    .await;
             }
         });
     }
@@ -253,22 +227,19 @@ pub fn new_message_channel<S, O, P>(
         let (c_tx, c_rx) = new_bounded(bound);
         let (o_tx, o_rx) = new_bounded(bound);
 
-        let (req_tx, req_rx) = new_bounded(bound);
         let (reqbatch_tx, reqbatch_rx) = new_bounded(bound);
+        let shared = Arc::new(RequestBatcherShared {
+            event: Event::new(),
+            batch: Mutex::new(LinkedList::new()),
+        });
 
         let batcher = Some(RequestBatcher {
-            receiver: req_rx,
-            batcher: reqbatch_tx,
-            shared: Arc::new(RequestBatcherShared {
-                event: Event::new(),
-                current: Mutex::new(BatcherData {
-                    batch: Vec::new(),
-                }),
-            }),
+            requests: Arc::clone(&shared),
+            to_core_server_task: reqbatch_tx,
         });
         let tx = MessageChannelTx::Server {
             consensus: c_tx,
-            requests: req_tx,
+            requests: shared,
             other: o_tx,
         };
         let rx = MessageChannelRx::Server {
@@ -285,8 +256,8 @@ impl<S, O, P> Clone for MessageChannelTx<S, O, P> {
         match self {
             MessageChannelTx::Server { consensus, requests, other } => {
                 MessageChannelTx::Server {
+                    requests: Arc::clone(requests),
                     consensus: consensus.clone(),
-                    requests: requests.clone(),
                     other: other.clone(),
                 }
             },
@@ -309,7 +280,17 @@ impl<S, O, P> MessageChannelTx<S, O, P> {
                         match message {
                             SystemMessage::Request(message) => {
                                 let m = StoredMessage::new(header, message);
-                                requests.send(m).await
+
+                                'spin_lock: loop {
+                                    if let Some(mut current_batch) = requests.batch.try_lock() {
+                                        current_batch.push_back(m);
+                                        break 'spin_lock;
+                                    }
+                                    rt::yield_now().await;
+                                }
+
+                                requests.event.notify(1);
+                                Ok(())
                             },
                             SystemMessage::Consensus(message) => {
                                 let m = StoredMessage::new(header, message);
