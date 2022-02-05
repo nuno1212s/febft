@@ -75,3 +75,21 @@ $ cargo run --release --example replica-local
 # In another terminal window, start the client(s)
 $ cargo run --release --example client-local
 ```
+
+# For contributors
+
+The code is organized as follows:
+
+* `src/bft/core/client` is the main entry point for a client.
+* `src/bft/core/server` is the main entry point for a replica.
+* `src/bft/consensus` implements the normal phase consensus code.
+* `src/bft/consensus/log` implements the message log.
+* `src/bft/sync` implements the view change code.
+* `src/bft/cst` implements the state transfer code.
+* `src/bft/communication` and its sub-modules implement the network code.
+* `src/bft/executable` implements the thread responsible for running the
+  user's application code.
+* `src/bft/ordering` defines code for sequence numbers resistant to overflows.
+
+Other modules should be somewhat self explanatory, especially if you read
+the documentation generated with `cargo doc --features expose_impl` for FeBFT.
