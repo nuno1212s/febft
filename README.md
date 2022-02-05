@@ -63,3 +63,7 @@ pub trait Service {
     ) -> Reply<Self>;
 }
 ```
+
+You may want to check out [client-local.rs](examples/replica-local.rs) and
+[replica-local.rs](examples/replica-local.rs) for examples of how to write
+services utilizing FeBFT.
