@@ -66,4 +66,12 @@ pub trait Service {
 
 You may want to check out [client-local.rs](examples/client-local.rs) and
 [replica-local.rs](examples/replica-local.rs) for examples of how to write
-services utilizing FeBFT.
+services utilizing FeBFT. Run them with:
+
+```
+# Start the service replicas in a terminal window
+$ cargo run --release --example replica-local
+
+# In another terminal window, start the client(s)
+$ cargo run --release --example client-local
+```
