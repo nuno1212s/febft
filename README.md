@@ -13,9 +13,9 @@ A rusty, efficient Byzantine fault tolerant middleware library/framework.
 FeBFT is an efficient BFT SMR middleware library implementation, directly descendant
 of protocols such as PBFT and BFT-SMaRt, where a static group of `n = 3f + 1` nodes
 are responsible for replicating a service, that is usually exposed via a RPC interface.
-The properties of these systems are such that despite the failure of `f` nodes (due to
-software bugs, power outages, etc) the service abstraction will continue operating
-as usual.
+The properties of these systems are such that despite the failure of (up to) `f` nodes
+(due to software bugs, power outages, malicious attackers, etc) the service abstraction
+will continue operating as usual.
 
 Different from prior art in this field, usually implemented in Java, Rust was
 the language of choice to implement all the typical SMR sub-protocols present
