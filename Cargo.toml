@@ -43,6 +43,7 @@ threadpool_rayon = ["rayon"]
 channel_futures_mpsc = []
 channel_flume_mpmc = ["flume"]
 channel_async_channel_mpmc = ["async-channel"]
+channel_custom_dump = ["DSRust"]
 
 collections_randomstate_std = []
 collections_randomstate_fxhash = ["fxhash"]
@@ -94,6 +95,8 @@ async-channel = { version = "1", optional = true }
 twox-hash = { version = "1", optional = true }
 serde_bytes = { version = "0.11", optional = true }
 fxhash = { version = "0.2", optional = true }
+#DSRust = { git = "https://github.com/nuno1212s/DSRust" }
+DSRust = { path = "/home/nunogneto/Documents/Development/Rust/DSRust", optional = true}
 
 # https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.release]
