@@ -196,17 +196,17 @@ pub fn new_message_channel<S, O, P>(
 
         let batcher;
 
-        let mut shared: Option<Arc<RequestBatcherShared<O>>> = None;
+        let shared: Arc<RequestBatcherShared<O>>;
 
         #[cfg(not(feature = "channel_custom_dump"))]
             {
-                shared = Some(Arc::new(RequestBatcherShared {
+                shared = Arc::new(RequestBatcherShared {
                     event: Event::new(),
                     batch: Mutex::new(LinkedList::new()),
-                }));
+                });
 
                 batcher = Some(RequestBatcher {
-                    requests: Arc::clone(shared.as_ref().unwrap()),
+                    requests: Arc::clone(&shared),
                     to_core_server_task: reqbatch_tx,
                 });
             }
@@ -217,7 +217,7 @@ pub fn new_message_channel<S, O, P>(
         let tx = MessageChannelTx::Server {
             consensus: c_tx,
             #[cfg(not(feature = "channel_custom_dump"))]
-            requests: shared.unwrap(),
+            requests: shared,
             #[cfg(feature = "channel_custom_dump")]
             requests: reqbatch_tx,
             other: o_tx,
