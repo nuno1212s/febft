@@ -7,6 +7,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use chrono::offset::Utc;
+#[cfg(feature = "channel_custom_dump")]
+use dsrust::channels::queue_channel::ChannelRxMult;
+
+#[cfg(feature = "channel_custom_dump")]
+use dsrust::queues::rooms_array_queue::LFBRArrayQueue;
 use event_listener::Event;
 use futures::future::FusedFuture;
 use futures::select;
@@ -32,6 +37,10 @@ mod flume_mpmc;
 #[cfg(feature = "channel_async_channel_mpmc")]
 mod async_channel_mpmc;
 
+#[cfg(feature = "channel_custom_dump")]
+mod flume_mpmc;
+
+
 /// General purpose channel's sending half.
 pub struct ChannelTx<T> {
     #[cfg(feature = "channel_futures_mpsc")]
@@ -44,7 +53,7 @@ pub struct ChannelTx<T> {
     inner: async_channel_mpmc::ChannelTx<T>,
 
     #[cfg(feature = "channel_custom_dump")]
-    inner: DSRust::channels::queue_channel::ChannelTx<T, LFBRArrayQueue<T>>,
+    inner: flume_mpmc::ChannelTx<T>,
 }
 
 /// General purpose channel's receiving half.
@@ -59,7 +68,7 @@ pub struct ChannelRx<T> {
     inner: async_channel_mpmc::ChannelRx<T>,
 
     #[cfg(feature = "channel_custom_dump")]
-    inner: DSRust::channels::queue_channel::ChannelRx<T, LFBRArrayQueue<T>>,
+    inner: flume_mpmc::ChannelRx<T>,
 }
 
 /// Future for a general purpose channel's receiving operation.
@@ -74,7 +83,7 @@ pub struct ChannelRxFut<'a, T> {
     inner: async_channel_mpmc::ChannelRxFut<'a, T>,
 
     #[cfg(feature = "channel_custom_dump")]
-    inner: DSRust::channels::queue_channel::ChannelRxFut<'a, T, LFBRArrayQueue<T>>,
+    inner: flume_mpmc::ChannelRxFut<'a, T>,
 }
 
 impl<T> Clone for ChannelTx<T> {
@@ -100,19 +109,35 @@ pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
             { async_channel_mpmc::new_bounded(bound) }
 
         #[cfg(feature = "channel_custom_dump")]
-            { DSRust::channels::queue_channel::bounded_lf_room_queue(bound) }
+            { flume_mpmc::new_bounded(bound) }
     };
 
     let ttx = ChannelTx { inner: tx };
+
     let rrx = ChannelRx { inner: rx };
 
     (ttx, rrx)
 }
 
+#[cfg(feature = "channel_custom_dump")]
+#[inline]
+pub fn new_bounded_mult<T>(bound: usize) -> (dsrust::channels::queue_channel::ChannelTx<T, LFBRArrayQueue<T>>, ChannelRxMult<T, LFBRArrayQueue<T>>) {
+    let (tx, rx) = dsrust::channels::queue_channel::bounded_lf_room_queue(bound);
+
+    (tx, dsrust::channels::queue_channel::make_mult_recv_from(rx))
+}
+
 impl<T> ChannelTx<T> {
     #[inline]
     pub async fn send(&mut self, message: T) -> Result<()> {
-        self.inner.send(message).await
+        match self.inner.send(message).await {
+            Ok(_) => {
+                Ok(())
+            }
+            Err(_) => {
+                Err(Error::simple(ErrorKind::CommunicationChannelAsyncChannelMpmc))
+            }
+        }
     }
 }
 
@@ -153,7 +178,7 @@ pub enum MessageChannelTx<S, O, P> {
         #[cfg(not(feature = "channel_custom_dump"))]
         requests: Arc<RequestBatcherShared<O>>,
         #[cfg(feature = "channel_custom_dump")]
-        requests: ChannelTx<StoredMessage<RequestMessage<O>>>,
+        requests: dsrust::channels::queue_channel::ChannelTx<StoredMessage<RequestMessage<O>>, LFBRArrayQueue<StoredMessage<RequestMessage<O>>>>,
         consensus: ChannelTx<StoredMessage<ConsensusMessage<O>>>,
     },
 }
@@ -169,7 +194,7 @@ pub enum MessageChannelRx<S, O, P> {
         #[cfg(not(feature = "channel_custom_dump"))]
         requests: ChannelRx<Vec<StoredMessage<RequestMessage<O>>>>,
         #[cfg(feature = "channel_custom_dump")]
-        requests: ChannelRx<StoredMessage<RequestMessage<O>>>,
+        requests: ChannelRxMult<StoredMessage<RequestMessage<O>>, LFBRArrayQueue<StoredMessage<RequestMessage<O>>>>,
         consensus: ChannelRx<StoredMessage<ConsensusMessage<O>>>,
     },
 }
@@ -192,7 +217,11 @@ pub fn new_message_channel<S, O, P>(
         let (c_tx, c_rx) = new_bounded(bound);
         let (o_tx, o_rx) = new_bounded(bound);
 
-        let (reqbatch_tx, reqbatch_rx) = new_bounded(bound);
+        #[cfg(not(feature = "channel_custom_dump"))]
+            let (reqbatch_tx, reqbatch_rx) = new_bounded(bound);
+
+        #[cfg(feature = "channel_custom_dump")]
+            let (reqbatch_tx, reqbatch_rx) = new_bounded_mult(bound);
 
         let batcher;
 
@@ -360,9 +389,17 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
                                 Message::System(h, SystemMessage::Consensus(c))
                             },
                         //Handle reception of requests through the batcher
-                            result = requests.recv_mult_async() => {
-                                let batch = result?;
-                                Message::RequestBatch(Utc::now(), batch)
+                            result = requests.recv() => {
+                                let batch = result;
+
+                                return match batch {
+                                    Ok(vec) => {
+                                        Ok(Message::RequestBatch(Utc::now(), vec))
+                                    },
+                                    Err(_e) => {
+                                        Err(Error::simple(ErrorKind::CommunicationChannelAsyncChannelMpmc))
+                                    }
+                                }
                             },
                             result = other.recv() => {
                                 let message = result?;
