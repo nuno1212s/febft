@@ -9,9 +9,10 @@ use std::task::{Context, Poll};
 use chrono::offset::Utc;
 #[cfg(feature = "channel_custom_dump")]
 use dsrust::channels::queue_channel::ChannelRxMult;
+use dsrust::queues::lf_array_queue::LFBQueue;
 
 #[cfg(feature = "channel_custom_dump")]
-use dsrust::queues::rooms_array_queue::LFBRArrayQueue;
+use dsrust::queues::rooms_array_queue::LFBQueue;
 use event_listener::Event;
 use futures::future::FusedFuture;
 use futures::select;
@@ -121,8 +122,8 @@ pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
 
 #[cfg(feature = "channel_custom_dump")]
 #[inline]
-pub fn new_bounded_mult<T>(bound: usize) -> (dsrust::channels::queue_channel::ChannelTx<T, LFBRArrayQueue<T>>, ChannelRxMult<T, LFBRArrayQueue<T>>) {
-    let (tx, rx) = dsrust::channels::queue_channel::bounded_lf_room_queue(bound);
+pub fn new_bounded_mult<T>(bound: usize) -> (dsrust::channels::queue_channel::ChannelTx<T, LFBQueue<T>>, ChannelRxMult<T, LFBQueue<T>>) {
+    let (tx, rx) = dsrust::channels::queue_channel::bounded_lf_queue(bound);
 
     (tx, dsrust::channels::queue_channel::make_mult_recv_from(rx))
 }
@@ -178,7 +179,7 @@ pub enum MessageChannelTx<S, O, P> {
         #[cfg(not(feature = "channel_custom_dump"))]
         requests: Arc<RequestBatcherShared<O>>,
         #[cfg(feature = "channel_custom_dump")]
-        requests: dsrust::channels::queue_channel::ChannelTx<StoredMessage<RequestMessage<O>>, LFBRArrayQueue<StoredMessage<RequestMessage<O>>>>,
+        requests: dsrust::channels::queue_channel::ChannelTx<StoredMessage<RequestMessage<O>>, LFBQueue<StoredMessage<RequestMessage<O>>>>,
         consensus: ChannelTx<StoredMessage<ConsensusMessage<O>>>,
     },
 }
@@ -194,7 +195,7 @@ pub enum MessageChannelRx<S, O, P> {
         #[cfg(not(feature = "channel_custom_dump"))]
         requests: ChannelRx<Vec<StoredMessage<RequestMessage<O>>>>,
         #[cfg(feature = "channel_custom_dump")]
-        requests: ChannelRxMult<StoredMessage<RequestMessage<O>>, LFBRArrayQueue<StoredMessage<RequestMessage<O>>>>,
+        requests: ChannelRxMult<StoredMessage<RequestMessage<O>>, LFBQueue<StoredMessage<RequestMessage<O>>>>,
         consensus: ChannelRx<StoredMessage<ConsensusMessage<O>>>,
     },
 }
