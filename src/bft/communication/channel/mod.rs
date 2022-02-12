@@ -9,10 +9,9 @@ use std::task::{Context, Poll};
 use chrono::offset::Utc;
 #[cfg(feature = "channel_custom_dump")]
 use dsrust::channels::queue_channel::ChannelRxMult;
+#[cfg(feature = "channel_custom_dump")]
 use dsrust::queues::lf_array_queue::LFBQueue;
 
-#[cfg(feature = "channel_custom_dump")]
-use dsrust::queues::rooms_array_queue::LFBQueue;
 use event_listener::Event;
 use futures::future::FusedFuture;
 use futures::select;
