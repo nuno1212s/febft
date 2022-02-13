@@ -1,32 +1,32 @@
 //! Contains the client side core protocol logic of `febft`.
 
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::future::Future;
-use std::task::{Poll, Waker, Context};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::task::{Context, Poll, Waker};
 
 use intmap::IntMap;
 use parking_lot::Mutex;
 
-use super::SystemParams;
-
-use crate::bft::error::*;
-use crate::bft::ordering::SeqNo;
 use crate::bft::async_runtime as rt;
-use crate::bft::crypto::hash::Digest;
-use crate::bft::communication::serialize::SharedData;
-use crate::bft::communication::message::{
-    Message,
-    SystemMessage,
-    RequestMessage,
-};
 use crate::bft::communication::{
     Node,
+    NodeConfig,
     NodeId,
     SendNode,
-    NodeConfig,
 };
+use crate::bft::communication::message::{
+    Message,
+    RequestMessage,
+    SystemMessage,
+};
+use crate::bft::communication::serialize::SharedData;
+use crate::bft::crypto::hash::Digest;
+use crate::bft::error::*;
+use crate::bft::ordering::SeqNo;
+
+use super::SystemParams;
 
 struct Ready<P> {
     waker: Option<Waker>,
@@ -112,11 +112,11 @@ struct ReplicaVotes {
 }
 
 impl<D> Client<D>
-where
-    D: SharedData + 'static,
-    D::State: Send + Clone + 'static,
-    D::Request: Send + 'static,
-    D::Reply: Send + 'static,
+    where
+        D: SharedData + 'static,
+        D::State: Send + Clone + 'static,
+        D::Request: Send + 'static,
+        D::Reply: Send + 'static,
 {
     /// Bootstrap a client in `febft`.
     pub async fn bootstrap(cfg: ClientConfig) -> Result<Self> {
@@ -269,11 +269,11 @@ where
                                     waker.wake();
                                 }
                             }
-                        },
+                        }
                         // FIXME: handle rogue messages on clients
                         _ => panic!("rogue message detected"),
                     }
-                },
+                }
                 Message::ConnectedTx(id, sock) => node.handle_connected_tx(id, sock),
                 Message::ConnectedRx(id, sock) => node.handle_connected_rx(id, sock),
                 // TODO: node disconnected on send side

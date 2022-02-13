@@ -7,10 +7,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use chrono::offset::Utc;
-#[cfg(feature = "channel_custom_dump")]
-use dsrust::channels::queue_channel::ChannelRxMult;
-#[cfg(feature = "channel_custom_dump")]
-use dsrust::queues::lf_array_queue::LFBQueue;
 
 use event_listener::Event;
 use futures::future::FusedFuture;
@@ -39,6 +35,9 @@ mod async_channel_mpmc;
 
 #[cfg(feature = "channel_custom_dump")]
 mod flume_mpmc;
+
+#[cfg(feature = "channel_custom_dump")]
+mod custom_dump;
 
 
 /// General purpose channel's sending half.
@@ -121,10 +120,8 @@ pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
 
 #[cfg(feature = "channel_custom_dump")]
 #[inline]
-pub fn new_bounded_mult<T>(bound: usize) -> (dsrust::channels::queue_channel::ChannelTx<T, LFBQueue<T>>, ChannelRxMult<T, LFBQueue<T>>) {
-    let (tx, rx) = dsrust::channels::queue_channel::bounded_lf_queue(bound);
-
-    (tx, dsrust::channels::queue_channel::make_mult_recv_from(rx))
+pub fn new_bounded_mult<T>(bound: usize) -> (custom_dump::ChannelTx<T>, custom_dump::ChannelRxMult<T>) {
+    custom_dump::bounded_mult_channel(bound)
 }
 
 impl<T> ChannelTx<T> {
@@ -178,7 +175,7 @@ pub enum MessageChannelTx<S, O, P> {
         #[cfg(not(feature = "channel_custom_dump"))]
         requests: Arc<RequestBatcherShared<O>>,
         #[cfg(feature = "channel_custom_dump")]
-        requests: dsrust::channels::queue_channel::ChannelTx<StoredMessage<RequestMessage<O>>, LFBQueue<StoredMessage<RequestMessage<O>>>>,
+        requests: custom_dump::ChannelTx<StoredMessage<RequestMessage<O>>>,
         consensus: ChannelTx<StoredMessage<ConsensusMessage<O>>>,
     },
 }
@@ -194,7 +191,7 @@ pub enum MessageChannelRx<S, O, P> {
         #[cfg(not(feature = "channel_custom_dump"))]
         requests: ChannelRx<Vec<StoredMessage<RequestMessage<O>>>>,
         #[cfg(feature = "channel_custom_dump")]
-        requests: ChannelRxMult<StoredMessage<RequestMessage<O>>, LFBQueue<StoredMessage<RequestMessage<O>>>>,
+        requests: custom_dump::ChannelRxMult<StoredMessage<RequestMessage<O>>>,
         consensus: ChannelRx<StoredMessage<ConsensusMessage<O>>>,
     },
 }
