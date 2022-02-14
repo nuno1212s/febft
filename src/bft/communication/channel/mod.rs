@@ -381,6 +381,7 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
                     }
                 #[cfg(feature = "channel_custom_dump")]
                     {
+                        println!("Selecting...");
                         let message = select! {
                             result = consensus.recv() => {
                                 let (h, c) = result?.into_inner();
