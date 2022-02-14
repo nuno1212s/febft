@@ -4,6 +4,7 @@ use std::task::{Context, Poll};
 
 use dsrust::channels::async_ch::{ReceiverFut, ReceiverMultFut};
 use dsrust::channels::queue_channel::{Receiver, ReceiverMult, Sender};
+use dsrust::queues::lf_array_queue::LFBQueue;
 use dsrust::queues::rooms_array_queue::LFBRArrayQueue;
 use futures::future::FusedFuture;
 
@@ -101,7 +102,7 @@ impl<'a, T> Future for ChannelRxFut<'a, T> {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.inner)
             .poll(cx)
-            .map(|opt| opt.ok().ok_or(Error::simple(ErrorKind::CommunicationChannelFlumeMpmc)))
+            .map(|opt| opt.simple(ErrorKind::CommunicationChannelFlumeMpmc))
     }
 }
 
@@ -119,7 +120,7 @@ impl<'a, T> Future for ChannelRxMultFut<'a, T> {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.inner)
             .poll(cx)
-            .map(|opt| opt.ok().ok_or(Error::simple(ErrorKind::CommunicationChannelFlumeMpmc)))
+            .map(|opt| opt.simple(ErrorKind::CommunicationChannelFlumeMpmc))
     }
 }
 

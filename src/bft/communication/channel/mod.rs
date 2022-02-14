@@ -310,7 +310,6 @@ impl<S, O, P> MessageChannelTx<S, O, P> {
 
                                 #[cfg(feature = "channel_custom_dump")]
                                     {
-                                        println!("Sending...");
                                         requests.send(m).await;
                                     }
 
@@ -381,7 +380,6 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
                     }
                 #[cfg(feature = "channel_custom_dump")]
                     {
-                        println!("Selecting...");
                         let message = select! {
                             result = consensus.recv() => {
                                 let (h, c) = result?.into_inner();
@@ -389,7 +387,6 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
                             },
                         //Handle reception of requests through the batcher
                             result = requests.recv() => {
-                                println!("Receiving...");
                                 let batch = result;
 
                                 return match batch {
@@ -406,6 +403,7 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
                                 message
                             },
                 };
+
 
                         Ok(message)
                     }
