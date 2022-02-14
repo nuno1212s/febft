@@ -310,7 +310,7 @@ impl<S, O, P> MessageChannelTx<S, O, P> {
 
                                 #[cfg(feature = "channel_custom_dump")]
                                     {
-                                        requests.send(m);
+                                        requests.send(m).await;
                                     }
 
                                 Ok(())
