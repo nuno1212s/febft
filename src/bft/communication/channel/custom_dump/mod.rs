@@ -11,26 +11,26 @@ use futures::future::FusedFuture;
 use crate::bft::error::*;
 
 pub struct ChannelTx<T> where {
-    inner: Sender<T, LFBQueue<T>>,
+    inner: Sender<T, LFBRArrayQueue<T>>,
 }
 
 pub struct ChannelRx<T> where
 {
-    inner: Receiver<T, LFBQueue<T>>,
+    inner: Receiver<T, LFBRArrayQueue<T>>,
 }
 
 pub struct ChannelRxFut<'a, T> where {
-    inner: ReceiverFut<'a, T, LFBQueue<T>>,
+    inner: ReceiverFut<'a, T, LFBRArrayQueue<T>>,
 }
 
 pub struct ChannelRxMult<T> where
 {
-    inner: ReceiverMult<T, LFBQueue<T>>,
+    inner: ReceiverMult<T, LFBRArrayQueue<T>>,
 }
 
 pub struct ChannelRxMultFut<'a, T> where
 {
-    inner: ReceiverMultFut<'a, T, LFBQueue<T>>,
+    inner: ReceiverMultFut<'a, T, LFBRArrayQueue<T>>,
 }
 
 impl<T> ChannelTx<T> where {
@@ -131,7 +131,7 @@ impl<'a, T> FusedFuture for ChannelRxMultFut<'a, T> {
 }
 
 pub fn bounded_mult_channel<T>(bound: usize) -> (ChannelTx<T>, ChannelRxMult<T>) {
-    let (tx, rx) = dsrust::channels::queue_channel::bounded_lf_queue(bound);
+    let (tx, rx) = dsrust::channels::queue_channel::bounded_lf_room_queue(bound);
 
     let receiver = dsrust::channels::queue_channel::make_mult_recv_from(rx);
 
