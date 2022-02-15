@@ -13,6 +13,7 @@ use crate::bft::error::*;
 use crate::bft::cst::RecoveryState;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::benchmarks::BatchMeta;
+use crate::bft::collections::HashMap;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::executable::UpdateBatch;
 use crate::bft::communication::message::{
@@ -473,7 +474,7 @@ pub struct Log<S, O, P> {
     batch_size: usize,
     declog: DecisionLog<O>,
     latest_op: IntMap<SeqNo>,
-    requests: BTreeMap<Digest, StoredMessage<RequestMessage<O>>>,
+    requests: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
     decided: Vec<O>,
     checkpoint: CheckpointState<S>,
     meta: BatchMeta,
@@ -496,7 +497,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
             declog: DecisionLog::new(),
             // TODO: use config value instead of const
             decided: Vec::with_capacity(PERIOD as usize),
-            requests: BTreeMap::new(),
+            requests: HashMap::default(),
             checkpoint: CheckpointState::None,
             meta: BatchMeta::new(),
             _marker: PhantomData,
