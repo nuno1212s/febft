@@ -11,26 +11,41 @@ use futures::future::FusedFuture;
 use crate::bft::error::*;
 
 pub struct ChannelTx<T> where {
+    #[cfg(feature = "channel_custom_dump_lfb")]
     inner: Sender<T, LFBQueue<T>>,
+    #[cfg(not(feature = "channel_custom_dump_lfb"))]
+    inner: Sender<T, LFBRArrayQueue<T>>,
 }
 
 pub struct ChannelRx<T> where
 {
+    #[cfg(feature = "channel_custom_dump_lfb")]
     inner: Receiver<T, LFBQueue<T>>,
+    #[cfg(not(feature = "channel_custom_dump_lfb"))]
+    inner: Sender<T, LFBRArrayQueue<T>>,
 }
 
 pub struct ChannelRxFut<'a, T> where {
+    #[cfg(feature = "channel_custom_dump_lfb")]
     inner: ReceiverFut<'a, T, LFBQueue<T>>,
+    #[cfg(not(feature = "channel_custom_dump_lfb"))]
+    inner: Sender<T, LFBRArrayQueue<T>>,
 }
 
 pub struct ChannelRxMult<T> where
 {
+    #[cfg(feature = "channel_custom_dump_lfb")]
     inner: ReceiverMult<T, LFBQueue<T>>,
+    #[cfg(not(feature = "channel_custom_dump_lfb"))]
+    inner: Sender<T, LFBRArrayQueue<T>>,
 }
 
 pub struct ChannelRxMultFut<'a, T> where
 {
+    #[cfg(feature = "channel_custom_dump_lfb")]
     inner: ReceiverMultFut<'a, T, LFBQueue<T>>,
+    #[cfg(not(feature = "channel_custom_dump_lfb"))]
+    inner: Sender<T, LFBRArrayQueue<T>>,
 }
 
 impl<T> ChannelTx<T> where {
@@ -131,7 +146,11 @@ impl<'a, T> FusedFuture for ChannelRxMultFut<'a, T> {
 }
 
 pub fn bounded_mult_channel<T>(bound: usize) -> (ChannelTx<T>, ChannelRxMult<T>) {
-    let (tx, rx) = dsrust::channels::queue_channel::bounded_lf_queue(bound);
+    #[cfg(feature = "channel_custom_dump_lfb")]
+        let (tx, rx) = dsrust::channels::queue_channel::bounded_lf_queue(bound);
+
+    #[cfg(not(feature = "channel_custom_dump_lfb"))]
+        let (tx, rx) = dsrust::channels::queue_channel::bounded_lf_room_queue(bound);
 
     let receiver = dsrust::channels::queue_channel::make_mult_recv_from(rx);
 
