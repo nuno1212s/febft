@@ -385,7 +385,7 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
                                 let (h, c) = result?.into_inner();
                                 Message::System(h, SystemMessage::Consensus(c))
                             },
-                        //Handle reception of requests through the batcher
+                        //Handle reception of requests directly from the queue
                             result = requests.recv() => {
                                 let batch = result;
 

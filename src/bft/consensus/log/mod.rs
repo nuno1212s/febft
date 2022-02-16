@@ -474,7 +474,7 @@ pub struct Log<S, O, P> {
     batch_size: usize,
     declog: DecisionLog<O>,
     latest_op: IntMap<SeqNo>,
-    requests: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
+    requests: BTreeMap<Digest, StoredMessage<RequestMessage<O>>>,
     decided: Vec<O>,
     checkpoint: CheckpointState<S>,
     meta: BatchMeta,
@@ -497,7 +497,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
             declog: DecisionLog::new(),
             // TODO: use config value instead of const
             decided: Vec::with_capacity(PERIOD as usize),
-            requests: HashMap::default(),
+            requests: BTreeMap::new(),
             checkpoint: CheckpointState::None,
             meta: BatchMeta::new(),
             _marker: PhantomData,
