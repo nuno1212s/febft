@@ -22,14 +22,14 @@ pub struct ChannelRx<T> where
     #[cfg(feature = "channel_custom_dump_lfb")]
     inner: Receiver<T, LFBQueue<T>>,
     #[cfg(not(feature = "channel_custom_dump_lfb"))]
-    inner: Sender<T, LFBRArrayQueue<T>>,
+    inner: Receiver<T, LFBRArrayQueue<T>>,
 }
 
 pub struct ChannelRxFut<'a, T> where {
     #[cfg(feature = "channel_custom_dump_lfb")]
     inner: ReceiverFut<'a, T, LFBQueue<T>>,
     #[cfg(not(feature = "channel_custom_dump_lfb"))]
-    inner: Sender<T, LFBRArrayQueue<T>>,
+    inner: ReceiverFut<'a, T, LFBRArrayQueue<T>>,
 }
 
 pub struct ChannelRxMult<T> where
@@ -37,7 +37,7 @@ pub struct ChannelRxMult<T> where
     #[cfg(feature = "channel_custom_dump_lfb")]
     inner: ReceiverMult<T, LFBQueue<T>>,
     #[cfg(not(feature = "channel_custom_dump_lfb"))]
-    inner: Sender<T, LFBRArrayQueue<T>>,
+    inner: ReceiverMult<T, LFBRArrayQueue<T>>,
 }
 
 pub struct ChannelRxMultFut<'a, T> where
@@ -45,7 +45,7 @@ pub struct ChannelRxMultFut<'a, T> where
     #[cfg(feature = "channel_custom_dump_lfb")]
     inner: ReceiverMultFut<'a, T, LFBQueue<T>>,
     #[cfg(not(feature = "channel_custom_dump_lfb"))]
-    inner: Sender<T, LFBRArrayQueue<T>>,
+    inner: ReceiverMultFut<'a, T, LFBRArrayQueue<T>>,
 }
 
 impl<T> ChannelTx<T> where {
