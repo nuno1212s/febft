@@ -1,76 +1,73 @@
 //! Communication primitives for `febft`, such as wire message formats.
 
-pub mod socket;
-pub mod serialize;
-pub mod message;
-pub mod channel;
-
-#[cfg(feature = "serialize_serde")]
-use serde::{Serialize, Deserialize};
-
-use std::sync::Arc;
+use std::convert::identity;
+use std::env::var;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use async_tls::{
+    TlsAcceptor,
+    TlsConnector,
+};
+use dsrust::queues::mqueue::MQueue;
+use dsrust::queues::queues::{BQueue, PartiallyDumpable};
 use either::{
+    Either,
     Left,
     Right,
-    Either,
 };
+use futures::io::{
+    AsyncReadExt,
+    AsyncWriteExt,
+    BufReader,
+    BufWriter,
+};
+use futures::lock::Mutex;
+use futures_timer::Delay;
+use intmap::IntMap;
+use parking_lot::RwLock;
 use rustls::{
     ClientConfig,
     ServerConfig,
 };
-use async_tls::{
-    TlsConnector,
-    TlsAcceptor,
-};
-use futures::io::{
-    BufWriter,
-    BufReader,
-    AsyncReadExt,
-    AsyncWriteExt,
-};
-use parking_lot::RwLock;
-use futures_timer::Delay;
-use futures::lock::Mutex;
+#[cfg(feature = "serialize_serde")]
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use intmap::IntMap;
 
-use crate::bft::prng;
-use crate::bft::error::*;
-use crate::bft::threadpool;
 use crate::bft::async_runtime as rt;
-use crate::bft::crypto::hash::Digest;
+use crate::bft::communication::channel::{
+    MessageChannelRx,
+    MessageChannelTx,
+    new_message_channel,
+    RequestBatcher,
+};
+use crate::bft::communication::message::{Header, Message, RequestMessage, SerializedMessage, StoredMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
 use crate::bft::communication::serialize::{
     Buf,
-    SharedData,
     DigestData,
+    SharedData,
 };
 use crate::bft::communication::socket::{
-    Socket,
     Listener,
-    SecureSocketSend,
     SecureSocketRecv,
+    SecureSocketSend,
+    Socket,
 };
-use crate::bft::communication::message::{
-    Header,
-    Message,
-    WireMessage,
-    SystemMessage,
-    SerializedMessage,
-    StoredSerializedSystemMessage,
-};
-use crate::bft::communication::channel::{
-    RequestBatcher,
-    MessageChannelTx,
-    MessageChannelRx,
-    new_message_channel,
-};
+use crate::bft::crypto::hash::Digest;
 use crate::bft::crypto::signature::{
-    PublicKey,
     KeyPair,
+    PublicKey,
 };
+use crate::bft::error::*;
+use crate::bft::prng;
+use crate::bft::threadpool;
+
+pub mod socket;
+pub mod serialize;
+pub mod message;
+pub mod channel;
 
 //pub trait HijackMessage {
 //    fn hijack_message(&self, stored: ) -> Either<M
@@ -83,18 +80,18 @@ use crate::bft::crypto::signature::{
 pub struct NodeId(u32);
 
 impl NodeId {
-    pub fn targets_u32<I>(into_iterator: I) -> impl Iterator<Item = Self>
-    where
-        I: IntoIterator<Item = u32>,
+    pub fn targets_u32<I>(into_iterator: I) -> impl Iterator<Item=Self>
+        where
+            I: IntoIterator<Item=u32>,
     {
         into_iterator
             .into_iter()
             .map(Self)
     }
 
-    pub fn targets<I>(into_iterator: I) -> impl Iterator<Item = Self>
-    where
-        I: IntoIterator<Item = usize>,
+    pub fn targets<I>(into_iterator: I) -> impl Iterator<Item=Self>
+        where
+            I: IntoIterator<Item=usize>,
     {
         into_iterator
             .into_iter()
@@ -171,6 +168,123 @@ pub struct SignDetached {
     shared: Arc<NodeShared>,
 }
 
+pub struct ConnectedClients<T> {
+    connected_clients: parking_lot::Mutex<Vec<Arc<ConnectedClient<T>>>>,
+    request_bound: usize,
+}
+
+pub struct ConnectedClient<T> {
+    client_id: NodeId,
+    request_queue: ClientQueue<T>,
+}
+
+impl<T> ConnectedClient<T> {
+    pub fn new(client_id: NodeId, per_client_bound: usize) -> Self {
+        Self {
+            client_id,
+            request_queue: ClientQueue::new(per_client_bound),
+        }
+    }
+
+    pub fn client_id(&self) -> &NodeId {
+        &self.client_id
+    }
+
+    pub fn request_queue(&self) -> &ClientQueue<T> {
+        &self.request_queue
+    }
+}
+
+impl<T> ConnectedClients<T> {
+    pub fn new(per_client_bound: usize) -> Self {
+        Self {
+            connected_clients: parking_lot::Mutex::new(Vec::new()),
+            request_bound: per_client_bound,
+        }
+    }
+
+    pub fn init_client(&self, peer_id: NodeId) -> Arc<ConnectedClient<T>> {
+        let client_queue = Arc::new(ConnectedClient::new(peer_id, self.request_bound));
+
+        let clone_queue = client_queue.clone();
+
+        let mut guard = self.connected_clients.lock();
+
+        guard.push(clone_queue);
+
+        client_queue
+    }
+
+    pub fn collect_requests(&self, batch_size: usize) -> Vec<T> {
+        let mut batch = Vec::with_capacity(batch_size);
+
+        let guard = self.connected_clients.lock();
+
+        ///TODO: If the client count is larger than the batch size, then we have
+        /// to do this another way
+        let requests_per_client = batch_size / guard.len();
+        let requests_remainder = batch_size % guard.len();
+
+        let start_point = fastrand::usize(0..guard.len());
+
+        //We don't want to leave any slot in the batch unfilled...
+        let mut next_client_requests = requests_per_client + requests_remainder;
+
+        for index in 0..guard.len() {
+            let rqs_dumped = guard[(start_point + index) % guard.len()]
+                .request_queue().dump_n_requests(next_client_requests, &mut batch);
+
+            //Leave the requests that were not used open for the following clients, in a greedy fashion
+            next_client_requests -= rqs_dumped;
+            //Add the requests for the upcoming requests
+            next_client_requests += requests_per_client;
+        }
+
+        batch
+    }
+
+    pub fn del_client(&self, client_id: &NodeId) -> bool {
+        let mut guard = self.connected_clients.lock();
+
+        let pos = guard.iter().position(|x| x.client_id().eq(client_id));
+
+        match pos {
+            None => {
+                return false;
+            }
+            Some(pos) => {
+                //Since we do not need to maintain ordering in the list, use this remove
+                //Which is O(1) instead of the normal remove which is O(n)
+                guard.swap_remove(pos);
+            }
+        }
+
+        true
+    }
+}
+
+pub struct ClientQueue<T> {
+    pending_requests_queue: MQueue<T>,
+}
+
+impl<T> ClientQueue<T> {
+    pub fn new(client_bound: usize) -> Self {
+        Self {
+            pending_requests_queue: MQueue::new(client_bound, true)
+        }
+    }
+
+    ///Dump n requests into the provided vector
+    ///Returns the amount of requests that were dumped into the array
+    pub fn dump_n_requests(&self, rq_bound: usize, dump_vec: &mut Vec<StoredMessage<RequestMessage<O>>>) -> usize {
+        self.pending_requests_queue.dump_partial(dump_vec, rq_bound).unwrap()
+    }
+
+    pub fn push_request(&self, msg: T) {
+        self.pending_requests_queue.enqueue_blk(msg)
+    }
+}
+
 impl SignDetached {
     pub fn key_pair(&self) -> &KeyPair {
         &self.shared.my_key
@@ -184,6 +298,7 @@ impl SignDetached {
 pub struct Node<D: SharedData> {
     id: NodeId,
     first_cli: NodeId,
+    connected_clients: ConnectedClients<Message<D::State, D::Request, D::Reply>>,
     my_tx: MessageChannelTx<D::State, D::Request, D::Reply>,
     my_rx: MessageChannelRx<D::State, D::Request, D::Reply>,
     rng: prng::State,
@@ -237,11 +352,11 @@ type SendTos<D> = SmallVec<[SendTo<D>; NODE_VIEWSIZ]>;
 type SerializedSendTos<D> = SmallVec<[SerializedSendTo<D>; NODE_VIEWSIZ]>;
 
 impl<D> Node<D>
-where
-    D: SharedData + 'static,
-    D::State: Send + Clone + 'static,
-    D::Request: Send + 'static,
-    D::Reply: Send + 'static,
+    where
+        D: SharedData + 'static,
+        D::State: Send + Clone + 'static,
+        D::Request: Send + 'static,
+        D::Reply: Send + 'static,
 {
     /// Bootstrap a `Node`, i.e. create connections between itself and its
     /// peer nodes.
@@ -254,7 +369,7 @@ where
         let id = cfg.id;
 
         // initial checks of correctness
-        if cfg.n < (3*cfg.f + 1) {
+        if cfg.n < (3 * cfg.f + 1) {
             return Err("Invalid number of replicas")
                 .wrapped(ErrorKind::Communication);
         }
@@ -294,7 +409,7 @@ where
         } else {
             PeerTx::Server(Arc::new(RwLock::new(IntMap::new())))
         };
-        let shared = Arc::new(NodeShared{
+        let shared = Arc::new(NodeShared {
             my_key: cfg.sk,
             peer_keys: cfg.pk,
         });
@@ -328,26 +443,26 @@ where
                         // not a client connection, increase count
                         c[usize::from(id)] += 1;
                     }
-                },
+                }
                 Message::ConnectedRx(id, sock) => {
                     node.handle_connected_rx(id, sock);
                     if id < cfg.first_cli {
                         // not a client connection, increase count
                         c[usize::from(id)] += 1;
                     }
-                },
+                }
                 Message::DisconnectedTx(NodeId(i)) => {
                     let s = format!("Node {} disconnected from send side", i);
                     return Err(s).wrapped(ErrorKind::Communication);
-                },
+                }
                 Message::DisconnectedRx(Some(NodeId(i))) => {
                     let s = format!("Node {} disconnected from receive side", i);
                     return Err(s).wrapped(ErrorKind::Communication);
-                },
+                }
                 Message::DisconnectedRx(None) => {
                     let s = "Disconnected from receive side";
                     return Err(s).wrapped(ErrorKind::Communication);
-                },
+                }
                 m => rogue.push(m),
             }
         }
@@ -460,7 +575,7 @@ where
             if my_id == target {
                 // Right -> our turn
                 rt::spawn(async move {
-                    send_to.value(Right((message, nonce, digest ,buf))).await;
+                    send_to.value(Right((message, nonce, digest, buf))).await;
                 });
             } else {
                 // Left -> peer turn
@@ -475,7 +590,7 @@ where
     pub fn broadcast(
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
-        targets: impl Iterator<Item = NodeId>,
+        targets: impl Iterator<Item=NodeId>,
     ) {
         let (mine, others) = Self::send_tos(
             self.id,
@@ -494,7 +609,7 @@ where
     pub fn broadcast_signed(
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
-        targets: impl Iterator<Item = NodeId>,
+        targets: impl Iterator<Item=NodeId>,
     ) {
         let (mine, others) = Self::send_tos(
             self.id,
@@ -607,7 +722,7 @@ where
         peer_tx: &PeerTx,
         tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
         shared: Option<&Arc<NodeShared>>,
-        targets: impl Iterator<Item = NodeId>,
+        targets: impl Iterator<Item=NodeId>,
     ) -> (Option<SendTo<D>>, SendTos<D>) {
         let mut my_send_to = None;
         let mut other_send_tos = SendTos::new();
@@ -624,7 +739,7 @@ where
                     &mut my_send_to,
                     &mut other_send_tos,
                 );
-            },
+            }
             PeerTx::Server(ref lock) => {
                 let map = lock.read();
                 Self::create_send_tos(
@@ -636,7 +751,7 @@ where
                     &mut my_send_to,
                     &mut other_send_tos,
                 );
-            },
+            }
         };
 
         (my_send_to, other_send_tos)
@@ -647,7 +762,7 @@ where
         my_id: NodeId,
         peer_tx: &PeerTx,
         tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
-        headers: impl Iterator<Item = &'a Header>,
+        headers: impl Iterator<Item=&'a Header>,
     ) -> (Option<SerializedSendTo<D>>, SerializedSendTos<D>) {
         let mut my_send_to = None;
         let mut other_send_tos = SerializedSendTos::new();
@@ -663,7 +778,7 @@ where
                     &mut my_send_to,
                     &mut other_send_tos,
                 );
-            },
+            }
             PeerTx::Server(ref lock) => {
                 let map = lock.read();
                 Self::create_serialized_send_tos(
@@ -674,7 +789,7 @@ where
                     &mut my_send_to,
                     &mut other_send_tos,
                 );
-            },
+            }
         };
 
         (my_send_to, other_send_tos)
@@ -685,7 +800,7 @@ where
         my_id: NodeId,
         tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
         map: &IntMap<Arc<Mutex<SecureSocketSend>>>,
-        headers: impl Iterator<Item = &'a Header>,
+        headers: impl Iterator<Item=&'a Header>,
         mine: &mut Option<SerializedSendTo<D>>,
         others: &mut SerializedSendTos<D>,
     ) {
@@ -715,7 +830,7 @@ where
         tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
         shared: Option<&Arc<NodeShared>>,
         map: &IntMap<Arc<Mutex<SecureSocketSend>>>,
-        targets: impl Iterator<Item = NodeId>,
+        targets: impl Iterator<Item=NodeId>,
         mine: &mut Option<SendTo<D>>,
         others: &mut SendTos<D>,
     ) {
@@ -764,11 +879,11 @@ where
                 PeerTx::Client(ref lock) => {
                     let map = lock.read();
                     Arc::clone(map.get(peer_id.into()).unwrap())
-                },
+                }
                 PeerTx::Server(ref lock) => {
                     let map = lock.read();
                     Arc::clone(map.get(peer_id.into()).unwrap())
-                },
+                }
             };
             SendTo::Peers {
                 flush,
@@ -792,11 +907,11 @@ where
             PeerTx::Server(ref lock) => {
                 let mut peer_tx = lock.write();
                 peer_tx.insert(peer_id.into(), Arc::new(Mutex::new(sock)));
-            },
+            }
             PeerTx::Client(ref lock) => {
                 let mut peer_tx = lock.write();
                 peer_tx.insert(peer_id.into(), Arc::new(Mutex::new(sock)));
-            },
+            }
         }
     }
 
@@ -828,6 +943,7 @@ where
         }
 
         let mut tx = self.my_tx.clone();
+        let client = self.connected_clients.init_client(peer_id.clone());
 
         rt::spawn(async move {
             let mut buf = SmallVec::<[u8; 16384]>::new();
@@ -874,14 +990,18 @@ where
                         // errors deserializing -> faulty connection;
                         // drop this socket
                         break;
-                    },
+                    }
                 };
 
-                tx.send(Message::System(header, message)).await.unwrap_or(());
+                client.request_queue().push_request(Message::System(header, message));
+
+                //tx.send(Message::System(header, message)).await.unwrap_or(());
             }
 
             // announce we have disconnected
-            tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
+            client.request_queue().push_request(Message::DisconnectedRx(Some(peer_id)));
+
+            //tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
         });
     }
 
@@ -1071,11 +1191,11 @@ impl<D: SharedData> Clone for SendNode<D> {
 }
 
 impl<D> SendNode<D>
-where
-    D: SharedData + 'static,
-    D::State: Send + Clone + 'static,
-    D::Request: Send + 'static,
-    D::Reply: Send + 'static,
+    where
+        D: SharedData + 'static,
+        D::State: Send + Clone + 'static,
+        D::Request: Send + 'static,
+        D::Reply: Send + 'static,
 {
     pub fn id(&self) -> NodeId {
         self.id
@@ -1129,7 +1249,7 @@ where
     pub fn broadcast(
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
-        targets: impl Iterator<Item = NodeId>,
+        targets: impl Iterator<Item=NodeId>,
     ) {
         let (mine, others) = <Node<D>>::send_tos(
             self.id,
@@ -1146,7 +1266,7 @@ where
     pub fn broadcast_signed(
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
-        targets: impl Iterator<Item = NodeId>,
+        targets: impl Iterator<Item=NodeId>,
     ) {
         let (mine, others) = <Node<D>>::send_tos(
             self.id,
@@ -1210,11 +1330,11 @@ enum SerializedSendTo<D: SharedData> {
 }
 
 impl<D> SendTo<D>
-where
-    D: SharedData + 'static,
-    D::State: Send + Clone + 'static,
-    D::Request: Send + 'static,
-    D::Reply: Send + 'static,
+    where
+        D: SharedData + 'static,
+        D::State: Send + Clone + 'static,
+        D::Request: Send + 'static,
+        D::Reply: Send + 'static,
 {
     async fn value(
         &mut self,
@@ -1229,7 +1349,7 @@ where
                     // optimize code path
                     unreachable!()
                 }
-            },
+            }
             SendTo::Peers { flush, my_id, peer_id, shared: ref sh, ref sock, ref mut tx } => {
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Left((n, d, b)) = m {
@@ -1238,7 +1358,7 @@ where
                     // optimize code path
                     unreachable!()
                 }
-            },
+            }
         }
     }
 
@@ -1299,11 +1419,11 @@ where
 }
 
 impl<D> SerializedSendTo<D>
-where
-    D: SharedData + 'static,
-    D::State: Send + Clone + 'static,
-    D::Request: Send + 'static,
-    D::Reply: Send + 'static,
+    where
+        D: SharedData + 'static,
+        D::State: Send + Clone + 'static,
+        D::Request: Send + 'static,
+        D::Reply: Send + 'static,
 {
     async fn value(
         &mut self,
@@ -1313,10 +1433,10 @@ where
         match self {
             SerializedSendTo::Me { ref mut tx, .. } => {
                 Self::me(h, m, tx).await
-            },
+            }
             SerializedSendTo::Peers { id, ref sock, ref mut tx } => {
                 Self::peers(*id, h, m, &*sock, tx).await
-            },
+            }
         }
     }
 

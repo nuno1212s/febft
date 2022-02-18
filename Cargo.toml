@@ -63,6 +63,7 @@ mimalloc = { version = "*", default-features = false }
 
 [dependencies]
 #scopeguard = "1"
+fastrand = "1.7.0"
 chrono = "0.4"
 intmap = "0.7"
 either = "1"
@@ -96,8 +97,8 @@ async-channel = { version = "1", optional = true }
 twox-hash = { version = "1", optional = true }
 serde_bytes = { version = "0.11", optional = true }
 fxhash = { version = "0.2", optional = true }
-dsrust = { version = "0.1.7", git = "https://github.com/nuno1212s/DSRust", optional = true }
-#dsrust = { path = "/home/nunogneto/Documents/Development/Rust/dsrust", optional = true}
+#dsrust = { version = "0.1.7", git = "https://github.com/nuno1212s/DSRust", optional = true }
+dsrust = { path = "/home/nunogneto/Documents/Development/Rust/dsrust", optional = true}
 
 # https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.release]
