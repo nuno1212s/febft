@@ -200,6 +200,8 @@ pub struct OwnedWireMessage<T> {
 pub enum Message<S, O, P> {
     /// Client requests and process sub-protocol messages.
     System(Header, SystemMessage<S, O, P>),
+
+    ///TODO: These messages are no longer needed since connections are now handled differently
     /// A client with id `NodeId` has finished connecting to the socket `Socket`.
     /// This socket should only perform write operations.
     ConnectedTx(NodeId, SecureSocketSend),

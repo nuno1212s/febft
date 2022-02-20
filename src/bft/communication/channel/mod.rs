@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use chrono::offset::Utc;
-
 use event_listener::Event;
 use futures::future::FusedFuture;
 use futures::select;
@@ -171,12 +170,7 @@ pub enum MessageChannelTx<S, O, P> {
         replies: ChannelTx<StoredMessage<ReplyMessage<P>>>,
     },
     Server {
-        other: ChannelTx<Message<S, O, P>>,
-        #[cfg(not(feature = "channel_custom_dump"))]
-        requests: Arc<RequestBatcherShared<O>>,
-        #[cfg(feature = "channel_custom_dump")]
-        requests: custom_dump::ChannelTx<StoredMessage<RequestMessage<O>>>,
-        consensus: ChannelTx<StoredMessage<ConsensusMessage<O>>>,
+        messages: ChannelTx<Message<S, O, P>>,
     },
 }
 
@@ -187,12 +181,7 @@ pub enum MessageChannelRx<S, O, P> {
         replies: ChannelRx<StoredMessage<ReplyMessage<P>>>,
     },
     Server {
-        other: ChannelRx<Message<S, O, P>>,
-        #[cfg(not(feature = "channel_custom_dump"))]
-        requests: ChannelRx<Vec<StoredMessage<RequestMessage<O>>>>,
-        #[cfg(feature = "channel_custom_dump")]
-        requests: custom_dump::ChannelRxMult<StoredMessage<RequestMessage<O>>>,
-        consensus: ChannelRx<StoredMessage<ConsensusMessage<O>>>,
+        messages: ChannelRx<Message<S, O, P>>,
     },
 }
 
@@ -262,14 +251,9 @@ pub fn new_message_channel<S, O, P>(
 impl<S, O, P> Clone for MessageChannelTx<S, O, P> {
     fn clone(&self) -> Self {
         match self {
-            MessageChannelTx::Server { consensus, requests, other } => {
+            MessageChannelTx::Server { messages } => {
                 MessageChannelTx::Server {
-                    other: other.clone(),
-                    #[cfg(not(feature = "channel_custom_dump"))]
-                    requests: Arc::clone(requests),
-                    #[cfg(feature = "channel_custom_dump")]
-                    requests: requests.clone(),
-                    consensus: consensus.clone(),
+                    messages: messages.clone()
                 }
             }
             MessageChannelTx::Client { replies, other } => {
@@ -286,54 +270,9 @@ impl<S, O, P> MessageChannelTx<S, O, P> {
     pub async fn send(&mut self, message: Message<S, O, P>) -> Result<()> {
         match self {
             MessageChannelTx::Server {
-                consensus,
-                requests, other
+                messages
             } => {
-                match message {
-                    Message::System(header, message) => {
-                        match message {
-                            SystemMessage::Request(message) => {
-                                let m = StoredMessage::new(header, message);
-
-                                #[cfg(not(feature = "channel_custom_dump"))]
-                                    {
-                                        'spin_lock: loop {
-                                            if let Some(mut current_batch) = requests.batch.try_lock() {
-                                                current_batch.push_back(m);
-                                                break 'spin_lock;
-                                            }
-                                            rt::yield_now().await;
-                                        }
-
-                                        requests.event.notify(1);
-                                    }
-
-                                #[cfg(feature = "channel_custom_dump")]
-                                    {
-                                        requests.send(m).await;
-                                    }
-
-                                Ok(())
-                            }
-                            SystemMessage::Consensus(message) => {
-                                let m = StoredMessage::new(header, message);
-                                consensus.send(m).await
-                            }
-                            message @ SystemMessage::Cst(_) => {
-                                other.send(Message::System(header, message)).await
-                            }
-                            message @ SystemMessage::ViewChange(_) => {
-                                other.send(Message::System(header, message)).await
-                            }
-                            message @ SystemMessage::ForwardedRequests(_) => {
-                                other.send(Message::System(header, message)).await
-                            }
-                            // drop other msgs
-                            _ => Ok(()),
-                        }
-                    }
-                    _ => other.send(message).await,
-                }
+                messages.send(message).await
             }
             MessageChannelTx::Client { replies, other } => {
                 match message {
@@ -357,56 +296,8 @@ impl<S, O, P> MessageChannelTx<S, O, P> {
 impl<S, O, P> MessageChannelRx<S, O, P> {
     pub async fn recv(&mut self) -> Result<Message<S, O, P>> {
         match self {
-            MessageChannelRx::Server { consensus, requests, other } => {
-                #[cfg(not(feature = "channel_custom_dump"))]
-                    {
-                        let message = select! {
-                    result = consensus.recv() => {
-                        let (h, c) = result?.into_inner();
-                        Message::System(h, SystemMessage::Consensus(c))
-                    },
-                        //Handle reception of requests through the batcher
-                    result = requests.recv() => {
-                        let batch = result?;
-                        Message::RequestBatch(Utc::now(), batch)
-                    }
-                    ,
-                    result = other.recv() => {
-                        let message = result?;
-                        message
-                    },
-                };
-                        Ok(message)
-                    }
-                #[cfg(feature = "channel_custom_dump")]
-                    {
-                        let message = select! {
-                            result = consensus.recv() => {
-                                let (h, c) = result?.into_inner();
-                                Message::System(h, SystemMessage::Consensus(c))
-                            },
-                        //Handle reception of requests directly from the queue
-                            result = requests.recv() => {
-                                let batch = result;
-
-                                return match batch {
-                                    Ok(vec) => {
-                                        Ok(Message::RequestBatch(Utc::now(), vec))
-                                    },
-                                    Err(_e) => {
-                                        Err(Error::simple(ErrorKind::CommunicationChannelAsyncChannelMpmc))
-                                    }
-                                }
-                            },
-                            result = other.recv() => {
-                                let message = result?;
-                                message
-                            },
-                };
-
-
-                        Ok(message)
-                    }
+            MessageChannelRx::Server { messages } => {
+                messages.recv().await
             }
             MessageChannelRx::Client { replies, other } => {
                 let message = select! {
@@ -422,61 +313,5 @@ impl<S, O, P> MessageChannelRx<S, O, P> {
                 Ok(message)
             }
         }
-    }
-}
-
-pub struct RequestBatcherShared<O> {
-    event: Event,
-    batch: Mutex<LinkedList<StoredMessage<RequestMessage<O>>>>,
-}
-
-pub struct RequestBatcher<O> {
-    requests: Arc<RequestBatcherShared<O>>,
-    to_core_server_task: ChannelTx<Vec<StoredMessage<RequestMessage<O>>>>,
-}
-
-impl<O: Send + 'static> RequestBatcher<O> {
-    pub fn spawn(mut self, max_batch_size: usize) {
-        // handle events to prepare new batch
-
-        rt::spawn(async move {
-            loop {
-                let batch = 'new_batch: loop {
-                    // check if batch is ready...
-                    {
-                        let mut current_batch = 'spin_lock: loop {
-                            match self.requests.batch.try_lock() {
-                                Some(batch) => break 'spin_lock batch,
-                                None => (),
-                            }
-                            rt::yield_now().await;
-                        };
-
-                        if current_batch.len() > 0 {
-                            let cap = std::cmp::min(current_batch.len(), max_batch_size);
-                            let mut batch = Vec::with_capacity(cap);
-
-                            for _i in 0..cap {
-                                let request = match current_batch.pop_front() {
-                                    Some(r) => r,
-                                    _ => unreachable!(),
-                                };
-                                batch.push(request);
-                            }
-
-                            break 'new_batch batch;
-                        }
-                    }
-
-                    // listen for new requests
-                    self.requests.event.listen().await;
-                };
-
-                let _ = self
-                    .to_core_server_task
-                    .send(batch)
-                    .await;
-            }
-        });
     }
 }

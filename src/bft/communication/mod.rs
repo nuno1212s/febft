@@ -4,7 +4,7 @@ use std::convert::identity;
 use std::env::var;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_tls::{
@@ -37,13 +37,9 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use crate::bft::async_runtime as rt;
-use crate::bft::communication::channel::{
-    MessageChannelRx,
-    MessageChannelTx,
-    new_message_channel,
-    RequestBatcher,
-};
+use crate::bft::communication::channel::{ChannelTx, MessageChannelRx, MessageChannelTx, new_bounded, new_message_channel, RequestBatcher};
 use crate::bft::communication::message::{Header, Message, RequestMessage, SerializedMessage, StoredMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
+use crate::bft::communication::peer_handling::{ConnectedPeer, ConnectedPeersGroup, NodePeers};
 use crate::bft::communication::serialize::{
     Buf,
     DigestData,
@@ -68,6 +64,7 @@ pub mod socket;
 pub mod serialize;
 pub mod message;
 pub mod channel;
+pub mod peer_handling;
 
 //pub trait HijackMessage {
 //    fn hijack_message(&self, stored: ) -> Either<M
@@ -168,123 +165,6 @@ pub struct SignDetached {
     shared: Arc<NodeShared>,
 }
 
-pub struct ConnectedClients<T> {
-    connected_clients: parking_lot::Mutex<Vec<Arc<ConnectedClient<T>>>>,
-    request_bound: usize,
-}
-
-pub struct ConnectedClient<T> {
-    client_id: NodeId,
-    request_queue: ClientQueue<T>,
-}
-
-impl<T> ConnectedClient<T> {
-    pub fn new(client_id: NodeId, per_client_bound: usize) -> Self {
-        Self {
-            client_id,
-            request_queue: ClientQueue::new(per_client_bound),
-        }
-    }
-
-    pub fn client_id(&self) -> &NodeId {
-        &self.client_id
-    }
-
-    pub fn request_queue(&self) -> &ClientQueue<T> {
-        &self.request_queue
-    }
-}
-
-impl<T> ConnectedClients<T> {
-    pub fn new(per_client_bound: usize) -> Self {
-        Self {
-            connected_clients: parking_lot::Mutex::new(Vec::new()),
-            request_bound: per_client_bound,
-        }
-    }
-
-    pub fn init_client(&self, peer_id: NodeId) -> Arc<ConnectedClient<T>> {
-        let client_queue = Arc::new(ConnectedClient::new(peer_id, self.request_bound));
-
-        let clone_queue = client_queue.clone();
-
-        let mut guard = self.connected_clients.lock();
-
-        guard.push(clone_queue);
-
-        client_queue
-    }
-
-    pub fn collect_requests(&self, batch_size: usize) -> Vec<T> {
-        let mut batch = Vec::with_capacity(batch_size);
-
-        let guard = self.connected_clients.lock();
-
-        ///TODO: If the client count is larger than the batch size, then we have
-        /// to do this another way
-        let requests_per_client = batch_size / guard.len();
-        let requests_remainder = batch_size % guard.len();
-
-        let start_point = fastrand::usize(0..guard.len());
-
-        //We don't want to leave any slot in the batch unfilled...
-        let mut next_client_requests = requests_per_client + requests_remainder;
-
-        for index in 0..guard.len() {
-            let rqs_dumped = guard[(start_point + index) % guard.len()]
-                .request_queue().dump_n_requests(next_client_requests, &mut batch);
-
-            //Leave the requests that were not used open for the following clients, in a greedy fashion
-            next_client_requests -= rqs_dumped;
-            //Add the requests for the upcoming requests
-            next_client_requests += requests_per_client;
-        }
-
-        batch
-    }
-
-    pub fn del_client(&self, client_id: &NodeId) -> bool {
-        let mut guard = self.connected_clients.lock();
-
-        let pos = guard.iter().position(|x| x.client_id().eq(client_id));
-
-        match pos {
-            None => {
-                return false;
-            }
-            Some(pos) => {
-                //Since we do not need to maintain ordering in the list, use this remove
-                //Which is O(1) instead of the normal remove which is O(n)
-                guard.swap_remove(pos);
-            }
-        }
-
-        true
-    }
-}
-
-pub struct ClientQueue<T> {
-    pending_requests_queue: MQueue<T>,
-}
-
-impl<T> ClientQueue<T> {
-    pub fn new(client_bound: usize) -> Self {
-        Self {
-            pending_requests_queue: MQueue::new(client_bound, true)
-        }
-    }
-
-    ///Dump n requests into the provided vector
-    ///Returns the amount of requests that were dumped into the array
-    pub fn dump_n_requests(&self, rq_bound: usize, dump_vec: &mut Vec<StoredMessage<RequestMessage<O>>>) -> usize {
-        self.pending_requests_queue.dump_partial(dump_vec, rq_bound).unwrap()
-    }
-
-    pub fn push_request(&self, msg: T) {
-        self.pending_requests_queue.enqueue_blk(msg)
-    }
-}
-
 impl SignDetached {
     pub fn key_pair(&self) -> &KeyPair {
         &self.shared.my_key
@@ -298,9 +178,9 @@ impl SignDetached {
 pub struct Node<D: SharedData> {
     id: NodeId,
     first_cli: NodeId,
-    connected_clients: ConnectedClients<Message<D::State, D::Request, D::Reply>>,
-    my_tx: MessageChannelTx<D::State, D::Request, D::Reply>,
-    my_rx: MessageChannelRx<D::State, D::Request, D::Reply>,
+    //Client handling is only available in the replicas, since clients don't connect to other
+    //Clients.
+    node_handling: NodePeers<Message<D::State, D::Request, D::Reply>>,
     rng: prng::State,
     shared: Arc<NodeShared>,
     peer_tx: PeerTx,
@@ -365,7 +245,7 @@ impl<D> Node<D>
     /// are returned in a `Vec`.
     pub async fn bootstrap(
         cfg: NodeConfig,
-    ) -> Result<(Self, Option<RequestBatcher<D::Request>>, Vec<Message<D::State, D::Request, D::Reply>>)> {
+    ) -> Result<(Arc<Self>, Vec<Message<D::State, D::Request, D::Reply>>)> {
         let id = cfg.id;
 
         // initial checks of correctness
@@ -381,27 +261,8 @@ impl<D> Node<D>
         let listener = socket::bind(cfg.addrs.get(id.into()).unwrap().0).await
             .wrapped(ErrorKind::Communication)?;
 
-        let (tx, rx, batcher) = new_message_channel::<D::State, D::Request, D::Reply>(
-            id >= cfg.first_cli,
-            NODE_CHAN_BOUND,
-        );
         let acceptor: TlsAcceptor = cfg.server_config.into();
         let connector: TlsConnector = cfg.client_config.into();
-
-        // rx side (accept conns from replica)
-        rt::spawn(Self::rx_side_accept(cfg.first_cli, id, listener, acceptor, tx.clone()));
-
-        // tx side (connect to replica)
-        let mut rng = prng::State::new();
-        Self::tx_side_connect(
-            cfg.n as u32,
-            cfg.first_cli,
-            id,
-            connector.clone(),
-            tx.clone(),
-            &cfg.addrs,
-            &mut rng,
-        );
 
         // node def
         let peer_tx = if id >= cfg.first_cli {
@@ -409,26 +270,49 @@ impl<D> Node<D>
         } else {
             PeerTx::Server(Arc::new(RwLock::new(IntMap::new())))
         };
+
         let shared = Arc::new(NodeShared {
             my_key: cfg.sk,
             peer_keys: cfg.pk,
         });
-        let mut node = Node {
+
+        let peers = NodePeers::new(&cfg);
+
+        let mut node = Arc::new(Node {
             id,
             rng,
             shared,
             peer_tx,
-            my_tx: tx,
-            my_rx: rx,
+            node_handling: peers,
             connector,
             peer_addrs: cfg.addrs,
             first_cli: cfg.first_cli,
-        };
+        });
+
+        let rx_node_clone = node.clone();
+
+        // rx side (accept conns from replica)
+        rt::spawn(async move || {
+            rx_node_clone.rx_side_accept(cfg.first_cli, id, listener, acceptor)
+        });
+
+        // tx side (connect to replica)
+        let mut rng = prng::State::new();
+
+        node.clone().tx_side_connect(
+            cfg.n as u32,
+            cfg.first_cli,
+            id,
+            connector.clone(),
+            &cfg.addrs,
+            &mut rng,
+        );
 
         // receive peer connections from channel
         let mut rogue = Vec::new();
         let mut c = vec![0; cfg.n];
 
+        //TODO: Wait for all the replicas to have connected
         while c
             .iter()
             .enumerate()
@@ -468,7 +352,12 @@ impl<D> Node<D>
         }
 
         // success
-        Ok((node, batcher, rogue))
+        Ok((node, rogue))
+    }
+
+    fn resolve_client_connection(&self, node_id: NodeId) -> Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
+        self.node_handling.resolve_peer_conn(node_id)
+            .expect(&*format!("Failed to resolve peer connection for {:?}", node_id))
     }
 
     // clone the shared data and pass it to a new object
@@ -493,13 +382,13 @@ impl<D> Node<D>
     }
 
     /// Returns a `SendNode` sharing the same handles as this `Node`.
-    pub fn send_node(&self) -> SendNode<D> {
+    pub fn send_node(self: &Arc<Self>) -> SendNode<D> {
         SendNode {
             id: self.id,
             rng: prng::State::new(),
             shared: Arc::clone(&self.shared),
             peer_tx: self.peer_tx.clone(),
-            my_tx: self.my_tx.clone(),
+            parent_node: Arc::clone(self),
         }
     }
 
@@ -523,9 +412,10 @@ impl<D> Node<D>
             self.id,
             target,
             None,
-            &self.my_tx,
+            self.resolve_client_connection(target),
             &self.peer_tx,
         );
+
         let my_id = self.id;
         let nonce = self.rng.next_state();
         Self::send_impl(message, send_to, my_id, target, nonce)
@@ -547,9 +437,10 @@ impl<D> Node<D>
             self.id,
             target,
             Some(&self.shared),
-            &self.my_tx,
+            self.resolve_client_connection(target),
             &self.peer_tx,
         );
+
         let my_id = self.id;
         let nonce = self.rng.next_state();
         Self::send_impl(message, send_to, my_id, target, nonce)
@@ -592,10 +483,9 @@ impl<D> Node<D>
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item=NodeId>,
     ) {
-        let (mine, others) = Self::send_tos(
+        let (mine, others) = self.send_tos(
             self.id,
             &self.peer_tx,
-            &self.my_tx,
             None,
             targets,
         );
@@ -611,10 +501,9 @@ impl<D> Node<D>
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item=NodeId>,
     ) {
-        let (mine, others) = Self::send_tos(
+        let (mine, others) = self.send_tos(
             self.id,
             &self.peer_tx,
-            &self.my_tx,
             Some(&self.shared),
             targets,
         );
@@ -629,12 +518,13 @@ impl<D> Node<D>
         let headers = messages
             .values()
             .map(|stored| stored.header());
-        let (mine, others) = Self::serialized_send_tos(
+
+        let (mine, others) = self.serialized_send_tos(
             self.id,
             &self.peer_tx,
-            &self.my_tx,
             headers,
         );
+
         Self::broadcast_serialized_impl(messages, mine, others);
     }
 
@@ -718,9 +608,9 @@ impl<D> Node<D>
 
     #[inline]
     fn send_tos(
+        &self,
         my_id: NodeId,
         peer_tx: &PeerTx,
-        tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
         shared: Option<&Arc<NodeShared>>,
         targets: impl Iterator<Item=NodeId>,
     ) -> (Option<SendTo<D>>, SendTos<D>) {
@@ -730,9 +620,9 @@ impl<D> Node<D>
         match peer_tx {
             PeerTx::Client(ref lock) => {
                 let map = lock.read();
-                Self::create_send_tos(
+
+                self.create_send_tos(
                     my_id,
-                    tx,
                     shared,
                     &*map,
                     targets,
@@ -742,9 +632,9 @@ impl<D> Node<D>
             }
             PeerTx::Server(ref lock) => {
                 let map = lock.read();
-                Self::create_send_tos(
+
+                self.create_send_tos(
                     my_id,
-                    tx,
                     shared,
                     &*map,
                     targets,
@@ -759,9 +649,9 @@ impl<D> Node<D>
 
     #[inline]
     fn serialized_send_tos<'a>(
+        &self,
         my_id: NodeId,
         peer_tx: &PeerTx,
-        tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
         headers: impl Iterator<Item=&'a Header>,
     ) -> (Option<SerializedSendTo<D>>, SerializedSendTos<D>) {
         let mut my_send_to = None;
@@ -770,9 +660,8 @@ impl<D> Node<D>
         match peer_tx {
             PeerTx::Client(ref lock) => {
                 let map = lock.read();
-                Self::create_serialized_send_tos(
+                self.create_serialized_send_tos(
                     my_id,
-                    tx,
                     &*map,
                     headers,
                     &mut my_send_to,
@@ -781,9 +670,8 @@ impl<D> Node<D>
             }
             PeerTx::Server(ref lock) => {
                 let map = lock.read();
-                Self::create_serialized_send_tos(
+                self.create_serialized_send_tos(
                     my_id,
-                    tx,
                     &*map,
                     headers,
                     &mut my_send_to,
@@ -797,8 +685,8 @@ impl<D> Node<D>
 
     #[inline]
     fn create_serialized_send_tos<'a>(
+        &self,
         my_id: NodeId,
-        tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
         map: &IntMap<Arc<Mutex<SecureSocketSend>>>,
         headers: impl Iterator<Item=&'a Header>,
         mine: &mut Option<SerializedSendTo<D>>,
@@ -809,7 +697,7 @@ impl<D> Node<D>
             if id == my_id {
                 let s = SerializedSendTo::Me {
                     id,
-                    tx: tx.clone(),
+                    tx: self.resolve_client_connection(id),
                 };
                 *mine = Some(s);
             } else {
@@ -817,7 +705,7 @@ impl<D> Node<D>
                 let s = SerializedSendTo::Peers {
                     id,
                     sock,
-                    tx: tx.clone(),
+                    tx: self.resolve_client_connection(id),
                 };
                 others.push(s);
             }
@@ -826,8 +714,8 @@ impl<D> Node<D>
 
     #[inline]
     fn create_send_tos(
+        &self,
         my_id: NodeId,
-        tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
         shared: Option<&Arc<NodeShared>>,
         map: &IntMap<Arc<Mutex<SecureSocketSend>>>,
         targets: impl Iterator<Item=NodeId>,
@@ -838,7 +726,7 @@ impl<D> Node<D>
             if id == my_id {
                 let s = SendTo::Me {
                     my_id,
-                    tx: tx.clone(),
+                    tx: self.resolve_client_connection(id),
                     shared: shared.map(|sh| Arc::clone(sh)),
                 };
                 *mine = Some(s);
@@ -849,7 +737,7 @@ impl<D> Node<D>
                     my_id,
                     peer_id: id,
                     flush: true,
-                    tx: tx.clone(),
+                    tx: self.resolve_client_connection(id),
                     shared: shared.map(|sh| Arc::clone(sh)),
                 };
                 others.push(s);
@@ -863,16 +751,15 @@ impl<D> Node<D>
         my_id: NodeId,
         peer_id: NodeId,
         shared: Option<&Arc<NodeShared>>,
-        tx: &MessageChannelTx<D::State, D::Request, D::Reply>,
+        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
         peer_tx: &PeerTx,
     ) -> SendTo<D> {
-        let tx = tx.clone();
         let shared = shared.map(|sh| Arc::clone(sh));
         if my_id == peer_id {
             SendTo::Me {
                 shared,
                 my_id,
-                tx,
+                tx: cli,
             }
         } else {
             let sock = match peer_tx {
@@ -902,12 +789,15 @@ impl<D> Node<D>
     }
 
     /// Method called upon a `Message::ConnectedTx`.
-    pub fn handle_connected_tx(&mut self, peer_id: NodeId, sock: SecureSocketSend) {
-        match &mut self.peer_tx {
+    /// Registers the newly created transmission socket to the peer
+    pub fn handle_connected_tx(&self, peer_id: NodeId, sock: SecureSocketSend) {
+        match &self.peer_tx {
+            ///If we are a replica?
             PeerTx::Server(ref lock) => {
                 let mut peer_tx = lock.write();
                 peer_tx.insert(peer_id.into(), Arc::new(Mutex::new(sock)));
             }
+            ///If we are a client?
             PeerTx::Client(ref lock) => {
                 let mut peer_tx = lock.write();
                 peer_tx.insert(peer_id.into(), Arc::new(Mutex::new(sock)));
@@ -916,7 +806,8 @@ impl<D> Node<D>
     }
 
     /// Method called upon a `Message::ConnectedRx`.
-    pub fn handle_connected_rx(&mut self, peer_id: NodeId, mut sock: SecureSocketRecv) {
+    /// Handles client connections
+    pub fn handle_connected_rx(self: Arc<Self>, peer_id: NodeId, mut sock: SecureSocketRecv) {
         // we are a server node
         if let PeerTx::Server(_) = &self.peer_tx {
             // the node whose conn we accepted is a client
@@ -929,21 +820,28 @@ impl<D> Node<D>
                 let addr = self.peer_addrs.get(peer_id.into()).unwrap().clone();
 
                 // connect
-                let nonce = self.rng.next_state();
+                //let nonce = self.rng.next_state();
+                let nonce = fastrand::u64(..);
+
                 rt::spawn(Self::tx_side_connect_task(
+                    self.clone(),
                     self.id,
                     self.first_cli,
                     peer_id,
                     nonce,
                     self.connector.clone(),
-                    self.my_tx.clone(),
                     addr,
                 ));
             }
         }
 
-        let mut tx = self.my_tx.clone();
-        let client = self.connected_clients.init_client(peer_id.clone());
+        let client = if peer_id < self.first_cli {
+            //if this is a replica we are connecting to
+            self.replica_handling.unwrap().init_client(peer_id.clone())
+        } else {
+            //This is a client we are connecting to
+            self.client_handling.unwrap().init_client(peer_id.clone());
+        };
 
         rt::spawn(async move {
             let mut buf = SmallVec::<[u8; 16384]>::new();
@@ -999,7 +897,7 @@ impl<D> Node<D>
             }
 
             // announce we have disconnected
-            client.request_queue().push_request(Message::DisconnectedRx(Some(peer_id)));
+            client.disconnect();
 
             //tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
         });
@@ -1007,33 +905,34 @@ impl<D> Node<D>
 
     #[inline]
     fn tx_side_connect(
+        self: Arc<Self>,
         n: u32,
         first_cli: NodeId,
         my_id: NodeId,
         connector: TlsConnector,
-        tx: MessageChannelTx<D::State, D::Request, D::Reply>,
         addrs: &IntMap<(SocketAddr, String)>,
         rng: &mut prng::State,
     ) {
         for peer_id in NodeId::targets_u32(0..n).filter(|&id| id != my_id) {
-            let tx = tx.clone();
             // FIXME: this line can crash the program if the user
             // provides an invalid HashMap, maybe return a Result<()>
             // from this function
             let addr = addrs.get(peer_id.into()).unwrap().clone();
             let connector = connector.clone();
             let nonce = rng.next_state();
-            rt::spawn(Self::tx_side_connect_task(my_id, first_cli, peer_id, nonce, connector, tx, addr));
+
+            rt::spawn(self.clone().tx_side_connect_task(my_id, first_cli, peer_id,
+                                                        nonce, connector, addr));
         }
     }
 
     async fn tx_side_connect_task(
+        self: Arc<Self>,
         my_id: NodeId,
         first_cli: NodeId,
         peer_id: NodeId,
         nonce: u64,
         connector: TlsConnector,
-        mut tx: MessageChannelTx<D::State, D::Request, D::Reply>,
         (addr, hostname): (SocketAddr, String),
     ) {
         const SECS: u64 = 1;
@@ -1086,29 +985,30 @@ impl<D> Node<D>
                 };
 
                 // success
-                tx.send(Message::ConnectedTx(peer_id, sock)).await.unwrap_or(());
+                self.handle_connected_tx(peer_id, sock);
                 return;
             }
             // sleep for `SECS` seconds and retry
             Delay::new(Duration::from_secs(SECS)).await;
         }
+
         // announce we have failed to connect to the peer node
-        tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
+        //if we fail to connect, then just ignore
+        //tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
     }
 
     // TODO: check if we have terminated the node, and exit
     async fn rx_side_accept(
+        self: Arc<Self>,
         first_cli: NodeId,
         my_id: NodeId,
         listener: Listener,
         acceptor: TlsAcceptor,
-        tx: MessageChannelTx<D::State, D::Request, D::Reply>,
     ) {
         loop {
             if let Ok(sock) = listener.accept().await {
-                let tx = tx.clone();
                 let acceptor = acceptor.clone();
-                rt::spawn(Self::rx_side_accept_task(first_cli, my_id, acceptor, sock, tx));
+                rt::spawn(self.clone().rx_side_accept_task(first_cli, my_id, acceptor, sock));
             }
         }
     }
@@ -1117,11 +1017,11 @@ impl<D> Node<D>
     // header doesn't need to be signed, since we won't be
     // storing this message in the log
     async fn rx_side_accept_task(
+        self: Arc<Self>,
         first_cli: NodeId,
         my_id: NodeId,
         acceptor: TlsAcceptor,
         mut sock: Socket,
-        mut tx: MessageChannelTx<D::State, D::Request, D::Reply>,
     ) {
         let mut buf_header = [0; Header::LENGTH];
 
@@ -1160,12 +1060,14 @@ impl<D> Node<D>
                 }
             };
 
-            tx.send(Message::ConnectedRx(peer_id, sock)).await.unwrap_or(());
+            self.handle_connected_rx(peer_id, sock);
+            //tx.send(Message::ConnectedRx(peer_id, sock)).await.unwrap_or(());
+
             return;
         }
 
         // announce we have failed to connect to the peer node
-        tx.send(Message::DisconnectedRx(None)).await.unwrap_or(());
+        //tx.send(Message::DisconnectedRx(None)).await.unwrap_or(());
     }
 }
 
@@ -1175,7 +1077,7 @@ pub struct SendNode<D: SharedData> {
     shared: Arc<NodeShared>,
     rng: prng::State,
     peer_tx: PeerTx,
-    my_tx: MessageChannelTx<D::State, D::Request, D::Reply>,
+    parent_node: Arc<Node<D>>,
 }
 
 impl<D: SharedData> Clone for SendNode<D> {
@@ -1185,7 +1087,7 @@ impl<D: SharedData> Clone for SendNode<D> {
             rng: prng::State::new(),
             shared: Arc::clone(&self.shared),
             peer_tx: self.peer_tx.clone(),
-            my_tx: self.my_tx.clone(),
+            parent_node: self.parent_node.clone(),
         }
     }
 }
@@ -1218,11 +1120,13 @@ impl<D> SendNode<D>
             self.id,
             target,
             None,
-            &self.my_tx,
+            self.parent_node.resolve_client_connection(target),
             &self.peer_tx,
         );
+
         let my_id = self.id;
         let nonce = self.rng.next_state();
+
         <Node<D>>::send_impl(message, send_to, my_id, target, nonce)
     }
 
@@ -1237,7 +1141,7 @@ impl<D> SendNode<D>
             self.id,
             target,
             Some(&self.shared),
-            &self.my_tx,
+            self.parent_node.resolve_client_connection(target),
             &self.peer_tx,
         );
         let my_id = self.id;
@@ -1251,10 +1155,9 @@ impl<D> SendNode<D>
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item=NodeId>,
     ) {
-        let (mine, others) = <Node<D>>::send_tos(
+        let (mine, others) = self.parent_node.send_tos(
             self.id,
             &self.peer_tx,
-            &self.my_tx,
             None,
             targets,
         );
@@ -1268,13 +1171,13 @@ impl<D> SendNode<D>
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item=NodeId>,
     ) {
-        let (mine, others) = <Node<D>>::send_tos(
+        let (mine, others) = self.parent_node.send_tos(
             self.id,
             &self.peer_tx,
-            &self.my_tx,
             Some(&self.shared),
             targets,
         );
+
         let nonce = self.rng.next_state();
         <Node<D>>::broadcast_impl(message, mine, others, nonce)
     }
@@ -1293,8 +1196,8 @@ enum SendTo<D: SharedData> {
         my_id: NodeId,
         // shared data
         shared: Option<Arc<NodeShared>>,
-        // a handle to our message channel
-        tx: MessageChannelTx<D::State, D::Request, D::Reply>,
+        // a handle to our client handle
+        tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     },
     Peers {
         // should we flush write calls?
@@ -1307,8 +1210,8 @@ enum SendTo<D: SharedData> {
         shared: Option<Arc<NodeShared>>,
         // handle to socket
         sock: Arc<Mutex<SecureSocketSend>>,
-        // a handle to our message channel
-        tx: MessageChannelTx<D::State, D::Request, D::Reply>,
+        // a handle to the message channel of the corresponding client
+        tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     },
 }
 
@@ -1316,16 +1219,16 @@ enum SerializedSendTo<D: SharedData> {
     Me {
         // our id
         id: NodeId,
-        // a handle to our message channel
-        tx: MessageChannelTx<D::State, D::Request, D::Reply>,
+        // a handle to our client handle
+        tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     },
     Peers {
         // the id of the peer
         id: NodeId,
         // handle to socket
         sock: Arc<Mutex<SecureSocketSend>>,
-        // a handle to our message channel
-        tx: MessageChannelTx<D::State, D::Request, D::Reply>,
+        // a handle to the message channel of the corresponding client
+        tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     },
 }
 
@@ -1337,23 +1240,26 @@ impl<D> SendTo<D>
         D::Reply: Send + 'static,
 {
     async fn value(
-        &mut self,
+        self,
         m: Either<(u64, Digest, Buf), (SystemMessage<D::State, D::Request, D::Reply>, u64, Digest, Buf)>,
     ) {
         match self {
-            SendTo::Me { my_id, shared: ref sh, ref mut tx } => {
+            SendTo::Me { my_id, shared: ref sh, tx } => {
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Right((m, n, d, b)) = m {
-                    Self::me(*my_id, m, n, d, b, key, tx).await
+                    Self::me(my_id, m, n, d, b, key, tx).await
                 } else {
                     // optimize code path
                     unreachable!()
                 }
             }
-            SendTo::Peers { flush, my_id, peer_id, shared: ref sh, ref sock, ref mut tx } => {
+            SendTo::Peers {
+                flush, my_id, peer_id,
+                shared: ref sh, sock, tx
+            } => {
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Left((n, d, b)) = m {
-                    Self::peers(*flush, *my_id, *peer_id, n, d, b, key, &*sock, tx).await
+                    Self::peers(flush, my_id, peer_id, n, d, b, key, sock, tx).await
                 } else {
                     // optimize code path
                     unreachable!()
@@ -1369,7 +1275,7 @@ impl<D> SendTo<D>
         d: Digest,
         b: Buf,
         sk: Option<&KeyPair>,
-        tx: &mut MessageChannelTx<D::State, D::Request, D::Reply>,
+        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
         // create wire msg
         let (h, _) = WireMessage::new(
@@ -1382,7 +1288,7 @@ impl<D> SendTo<D>
         ).into_inner();
 
         // send
-        tx.send(Message::System(h, m)).await.unwrap_or(())
+        cli.push_request(Message::System(h, m));
     }
 
     async fn peers(
@@ -1393,8 +1299,8 @@ impl<D> SendTo<D>
         d: Digest,
         b: Buf,
         sk: Option<&KeyPair>,
-        lock: &Mutex<SecureSocketSend>,
-        tx: &mut MessageChannelTx<D::State, D::Request, D::Reply>,
+        lock: Arc<Mutex<SecureSocketSend>>,
+        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
         // create wire msg
         let wm = WireMessage::new(
@@ -1413,7 +1319,8 @@ impl<D> SendTo<D>
         let mut sock = lock.lock().await;
         if let Err(_) = wm.write_to(&mut *sock, flush).await {
             // error sending, drop connection
-            tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
+            cli.disconnect();
+            //tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
         }
     }
 }
@@ -1426,16 +1333,16 @@ impl<D> SerializedSendTo<D>
         D::Reply: Send + 'static,
 {
     async fn value(
-        &mut self,
+        self,
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
     ) {
         match self {
-            SerializedSendTo::Me { ref mut tx, .. } => {
+            SerializedSendTo::Me { tx, .. } => {
                 Self::me(h, m, tx).await
             }
-            SerializedSendTo::Peers { id, ref sock, ref mut tx } => {
-                Self::peers(*id, h, m, &*sock, tx).await
+            SerializedSendTo::Peers { id, sock, tx } => {
+                Self::peers(id, h, m, sock, tx).await
             }
         }
     }
@@ -1443,20 +1350,20 @@ impl<D> SerializedSendTo<D>
     async fn me(
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        tx: &mut MessageChannelTx<D::State, D::Request, D::Reply>,
+        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
         let (original, _) = m.into_inner();
 
         // send
-        tx.send(Message::System(h, original)).await.unwrap_or(())
+        cli.push_request(Message::System(h, original)).await;
     }
 
     async fn peers(
         peer_id: NodeId,
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        lock: &Mutex<SecureSocketSend>,
-        tx: &mut MessageChannelTx<D::State, D::Request, D::Reply>,
+        lock: Arc<Mutex<SecureSocketSend>>,
+        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
         // create wire msg
         let (_, raw) = m.into_inner();
@@ -1469,7 +1376,9 @@ impl<D> SerializedSendTo<D>
         let mut sock = lock.lock().await;
         if let Err(_) = wm.write_to(&mut *sock, true).await {
             // error sending, drop connection
-            tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
+
+            cli.disconnect();
+            //tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
         }
     }
 }

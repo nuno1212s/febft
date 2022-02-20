@@ -1,5 +1,6 @@
 //! Contains the server side core protocol logic of `febft`.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(feature = "serialize_serde")]
@@ -133,7 +134,7 @@ pub struct Replica<S: Service> {
     consensus: Consensus<S>,
     cst: CollabStateTransfer<S>,
     log: Log<State<S>, Request<S>, Reply<S>>,
-    node: Node<S::Data>,
+    node: Arc<Node<S::Data>>,
 }
 
 /// Represents a configuration used to bootstrap a `Replica`.
@@ -176,12 +177,7 @@ where
         let view = ViewInfo::new(view, n, f)?;
 
         // connect to peer nodes
-        let (node, batcher, rogue) = Node::bootstrap(node_config).await?;
-
-        // start batcher
-        if let Some(b) = batcher {
-            b.spawn(batch_size);
-        }
+        let (node, rogue) = Node::bootstrap(node_config).await?;
 
         // start executor
         let executor = Executor::new(
@@ -364,8 +360,11 @@ where
             },
             Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
             Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
+            //If a client has disconnected, print
             Message::DisconnectedTx(id) if id >= self.node.first_client_id() => println!("{:?} disconnected TX", id),
             Message::DisconnectedRx(Some(id)) if id >= self.node.first_client_id() => println!("{:?} disconnected RX", id),
+
+            //TODO: Panics on replica disconnection?
             // TODO: node disconnected on send side
             Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
             // TODO: node disconnected on receive side
