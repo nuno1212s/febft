@@ -1,56 +1,54 @@
 //! The consensus algorithm used for `febft` and other logic.
 
-pub mod log;
-
-use std::sync::Arc;
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
-use intmap::IntMap;
 use chrono::offset::Utc;
-use parking_lot::Mutex;
 use either::{
     Left,
     Right,
 };
+use intmap::IntMap;
+use parking_lot::Mutex;
 
-use crate::bft::threadpool;
-use crate::bft::cst::RecoveryState;
-use crate::bft::sync::Synchronizer;
-use crate::bft::crypto::hash::Digest;
-use crate::bft::timeouts::TimeoutsHandle;
-use crate::bft::communication::serialize::DigestData;
-use crate::bft::communication::message::{
-    Header,
-    WireMessage,
-    StoredMessage,
-    SystemMessage,
-    RequestMessage,
-    ConsensusMessage,
-    SerializedMessage,
-    ConsensusMessageKind,
-    StoredSerializedSystemMessage,
-};
 use crate::bft::communication::{
     Node,
     NodeId,
 };
+use crate::bft::communication::message::{
+    ConsensusMessage,
+    ConsensusMessageKind,
+    Header,
+    RequestMessage,
+    SerializedMessage,
+    StoredMessage,
+    StoredSerializedSystemMessage,
+    SystemMessage,
+    WireMessage,
+};
+use crate::bft::communication::serialize::DigestData;
+use crate::bft::consensus::log::Log;
+use crate::bft::crypto::hash::Digest;
+use crate::bft::cst::RecoveryState;
 use crate::bft::executable::{
-    Service,
-    Request,
     Reply,
+    Request,
+    Service,
     State,
 };
 use crate::bft::ordering::{
-    tbo_advance_message_queue,
-    tbo_queue_message,
-    tbo_pop_message,
     Orderable,
     SeqNo,
+    tbo_advance_message_queue,
+    tbo_pop_message,
+    tbo_queue_message,
 };
-use crate::bft::consensus::log::{
-    Log,
-};
+use crate::bft::sync::Synchronizer;
+use crate::bft::threadpool;
+use crate::bft::timeouts::TimeoutsHandle;
+
+pub mod log;
 
 /// Represents the status of calling `poll()` on a `Consensus`.
 pub enum ConsensusPollStatus<O> {
@@ -77,9 +75,9 @@ pub enum ConsensusPollStatus<O> {
 pub struct TboQueue<O> {
     curr_seq: SeqNo,
     get_queue: bool,
-        pre_prepares: VecDeque<VecDeque<StoredMessage<ConsensusMessage<O>>>>,
-        prepares: VecDeque<VecDeque<StoredMessage<ConsensusMessage<O>>>>,
-        commits: VecDeque<VecDeque<StoredMessage<ConsensusMessage<O>>>>,
+    pre_prepares: VecDeque<VecDeque<StoredMessage<ConsensusMessage<O>>>>,
+    prepares: VecDeque<VecDeque<StoredMessage<ConsensusMessage<O>>>>,
+    commits: VecDeque<VecDeque<StoredMessage<ConsensusMessage<O>>>>,
 }
 
 impl<O> Orderable for TboQueue<O> {
@@ -208,11 +206,11 @@ macro_rules! extract_msg {
 }
 
 impl<S> Consensus<S>
-where
-    S: Service + Send + 'static,
-    State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
-    Reply<S>: Send + 'static,
+    where
+        S: Service + Send + 'static,
+        State<S>: Send + Clone + 'static,
+        Request<S>: Send + Clone + 'static,
+        Reply<S>: Send + 'static,
 {
     /// Starts a new consensus protocol tracker.
     pub fn new(initial_seq_no: SeqNo, batch_size: usize) -> Self {
@@ -338,7 +336,7 @@ where
                 for (i, stored) in requests.iter().enumerate() {
                     self.current[i] = stored.header().unique_digest();
                 }
-            },
+            }
             _ => unreachable!(),
         }
 
@@ -354,24 +352,26 @@ where
     }
 
     /// Check if we can process new consensus messages.
-    pub fn poll(&mut self, log: &mut Log<State<S>, Request<S>, Reply<S>>) -> ConsensusPollStatus<Request<S>> {
+    pub fn poll(&mut self, log: &Log<State<S>, Request<S>, Reply<S>>) -> ConsensusPollStatus<Request<S>> {
         match self.phase {
             ProtoPhase::Init if self.tbo.get_queue => {
-                log.batch_meta().consensus_start_time = Utc::now();
+                log.batch_meta().lock().consensus_start_time = Utc::now();
+
                 extract_msg!(
                     { self.phase = ProtoPhase::PrePreparing; },
                     ConsensusPollStatus::TryProposeAndRecv,
                     &mut self.tbo.get_queue,
                     &mut self.tbo.pre_prepares
                 )
-            },
+            }
             ProtoPhase::Init => {
-                log.batch_meta().consensus_start_time = Utc::now();
+                log.batch_meta().lock().consensus_start_time = Utc::now();
+
                 ConsensusPollStatus::TryProposeAndRecv
-            },
+            }
             ProtoPhase::PrePreparing if self.tbo.get_queue => {
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.pre_prepares)
-            },
+            }
             ProtoPhase::PreparingRequests => {
                 let iterator = self.missing_requests
                     .iter()
@@ -393,13 +393,13 @@ where
                 } else {
                     ConsensusPollStatus::Recv
                 }
-            },
+            }
             ProtoPhase::Preparing(_) if self.tbo.get_queue => {
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.prepares)
-            },
+            }
             ProtoPhase::Committing(_) if self.tbo.get_queue => {
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.commits)
-            },
+            }
             _ => ConsensusPollStatus::Recv,
         }
     }
@@ -424,7 +424,7 @@ where
                 self.tbo.pre_prepares.clear();
                 self.tbo.prepares.clear();
                 self.tbo.commits.clear();
-            },
+            }
             Right(limit) => {
                 let iterator = self.tbo.pre_prepares
                     .drain(..limit)
@@ -435,14 +435,14 @@ where
                 for _ in iterator {
                     // consume elems
                 }
-            },
+            }
             // drop all messages
             Left(_) => {
                 // NOTE: same as NOTE on the match branch above
                 self.tbo.pre_prepares.clear();
                 self.tbo.prepares.clear();
                 self.tbo.commits.clear();
-            },
+            }
         }
 
         // install new phase
@@ -468,7 +468,7 @@ where
         message: ConsensusMessage<Request<S>>,
         timeouts: &TimeoutsHandle<S>,
         synchronizer: &mut Synchronizer<S>,
-        log: &mut Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
         node: &mut Node<S::Data>,
     ) -> ConsensusStatus<'a> {
         // FIXME: make sure a replica doesn't vote twice
@@ -476,24 +476,24 @@ where
         // the amount of votes received
         match self.phase {
             ProtoPhase::Init => {
-                log.batch_meta().consensus_start_time = Utc::now();
+                log.batch_meta().lock().consensus_start_time = Utc::now();
                 // in the init phase, we can't do anything,
                 // queue the message for later
                 match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
                         self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::Prepare(_) => {
                         self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::Commit(_) => {
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                 }
-            },
+            }
             ProtoPhase::PrePreparing => {
                 // queue message if we're not pre-preparing
                 // or in the same seq as the message
@@ -501,11 +501,11 @@ where
                     ConsensusMessageKind::PrePrepare(_) if message.view() != synchronizer.view().sequence_number() => {
                         // drop proposed value in a different view (from different leader)
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::PrePrepare(_) if message.sequence_number() != self.sequence_number() => {
                         self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::PrePrepare(request_batch) => {
                         let digests = request_batch_received(
                             request_batch.clone(),
@@ -516,15 +516,15 @@ where
                         self.batch_size = digests.len();
                         self.current_digest = header.digest().clone();
                         (&mut self.current[..digests.len()]).copy_from_slice(&digests[..]);
-                    },
+                    }
                     ConsensusMessageKind::Prepare(_) => {
                         self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::Commit(_) => {
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                 }
                 // start speculatively creating COMMIT messages,
                 // which involve potentially expensive signing ops
@@ -584,7 +584,7 @@ where
                     let targets = NodeId::targets(0..synchronizer.view().params().n());
                     node.broadcast(message, targets);
                 }
-                log.batch_meta().prepare_sent_time = Utc::now();
+                log.batch_meta().lock().prepare_sent_time = Utc::now();
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
                 // try entering preparing phase
@@ -598,7 +598,7 @@ where
                 //};
                 self.phase = ProtoPhase::Preparing(1);
                 ConsensusStatus::Deciding
-            },
+            }
             ProtoPhase::PreparingRequests => {
                 // can't do anything while waiting for client requests,
                 // queue the message for later
@@ -606,17 +606,17 @@ where
                     ConsensusMessageKind::PrePrepare(_) => {
                         self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::Prepare(_) => {
                         self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::Commit(_) => {
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                 }
-            },
+            }
             ProtoPhase::Preparing(i) => {
                 // queue message if we're not preparing
                 // or in the same seq as the message
@@ -624,24 +624,24 @@ where
                     ConsensusMessageKind::PrePrepare(_) => {
                         self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::Prepare(_) if message.view() != synchronizer.view().sequence_number() => {
                         // drop msg in a different view
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::Prepare(d) if d != &self.current_digest => {
                         // drop msg with different digest from proposed value
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::Prepare(_) if message.sequence_number() != self.sequence_number() => {
                         self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::Prepare(_) => i + 1,
                     ConsensusMessageKind::Commit(_) => {
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                 };
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
@@ -662,14 +662,14 @@ where
                         node.broadcast_signed(message, targets);
                     }
 
-                    log.batch_meta().commit_sent_time = Utc::now();
+                    log.batch_meta().lock().commit_sent_time = Utc::now();
 
                     ProtoPhase::Committing(0)
                 } else {
                     ProtoPhase::Preparing(i)
                 };
                 ConsensusStatus::Deciding
-            },
+            }
             ProtoPhase::Committing(i) => {
                 // queue message if we're not committing
                 // or in the same seq as the message
@@ -677,25 +677,26 @@ where
                     ConsensusMessageKind::PrePrepare(_) => {
                         self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::Prepare(_) => {
                         self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::Commit(_) if message.view() != synchronizer.view().sequence_number() => {
                         // drop msg in a different view
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::Commit(d) if d != &self.current_digest => {
                         // drop msg with different digest from proposed value
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::Commit(_) if message.sequence_number() != self.sequence_number() => {
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
-                    },
+                    }
                     ConsensusMessageKind::Commit(_) => i + 1,
                 };
+
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
                 // check if we have gathered enough votes,
@@ -704,23 +705,23 @@ where
                     // we have reached a decision,
                     // notify core protocol
                     self.phase = ProtoPhase::Init;
-                    log.batch_meta().consensus_decision_time = Utc::now();
+                    log.batch_meta().lock().consensus_decision_time = Utc::now();
                     ConsensusStatus::Decided(&self.current[..self.batch_size])
                 } else {
                     self.phase = ProtoPhase::Committing(i);
                     ConsensusStatus::Deciding
                 }
-            },
+            }
         }
     }
 }
 
 impl<S> Deref for Consensus<S>
-where
-    S: Service + Send + 'static,
-    State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
-    Reply<S>: Send + 'static,
+    where
+        S: Service + Send + 'static,
+        State<S>: Send + Clone + 'static,
+        Request<S>: Send + Clone + 'static,
+        Reply<S>: Send + 'static,
 {
     type Target = TboQueue<Request<S>>;
 
@@ -731,11 +732,11 @@ where
 }
 
 impl<S> DerefMut for Consensus<S>
-where
-    S: Service + Send + 'static,
-    State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
-    Reply<S>: Send + 'static,
+    where
+        S: Service + Send + 'static,
+        State<S>: Send + Clone + 'static,
+        Request<S>: Send + Clone + 'static,
+        Reply<S>: Send + 'static,
 {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
@@ -748,13 +749,13 @@ fn request_batch_received<S>(
     requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
     timeouts: &TimeoutsHandle<S>,
     synchronizer: &mut Synchronizer<S>,
-    log: &mut Log<State<S>, Request<S>, Reply<S>>,
+    log: &Log<State<S>, Request<S>, Reply<S>>,
 ) -> Vec<Digest>
-where
-    S: Service + Send + 'static,
-    State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
-    Reply<S>: Send + 'static,
+    where
+        S: Service + Send + 'static,
+        State<S>: Send + Clone + 'static,
+        Request<S>: Send + Clone + 'static,
+        Reply<S>: Send + 'static,
 {
     synchronizer.watch_request_batch(
         requests,
@@ -769,11 +770,11 @@ fn valid_spec_commits<S>(
     consensus: &Consensus<S>,
     synchronizer: &mut Synchronizer<S>,
 ) -> bool
-where
-    S: Service + Send + 'static,
-    State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
-    Reply<S>: Send + 'static,
+    where
+        S: Service + Send + 'static,
+        State<S>: Send + Clone + 'static,
+        Request<S>: Send + Clone + 'static,
+        Reply<S>: Send + 'static,
 {
     if speculative_commits.len() != synchronizer.view().params().n() {
         return false;

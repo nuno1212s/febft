@@ -76,7 +76,7 @@ pub struct RecoveryState<S, O> {
 pub fn install_recovery_state<S>(
     recovery_state: RecoveryState<State<S>, Request<S>>,
     synchronizer: &mut Synchronizer<S>,
-    log: &mut Log<State<S>, Request<S>, Reply<S>>,
+    log: &Log<State<S>, Request<S>, Reply<S>>,
     executor: &mut ExecutorHandle<S>,
     consensus: &mut Consensus<S>,
 ) -> Result<()>

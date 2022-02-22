@@ -1,6 +1,7 @@
 //! Wrappers around `std::collections`.
 
 use std::default::Default;
+use dashmap::DashMap;
 
 #[cfg(feature = "collections_randomstate_fxhash")]
 pub type RandomState = ::std::hash::BuildHasherDefault<::fxhash::FxHasher>;
@@ -19,6 +20,8 @@ pub type HashMap<K, V> = ::std::collections::HashMap<K, V, RandomState>;
 
 /// A `HashSet` with a faster hashing function.
 pub type HashSet<T> = ::std::collections::HashSet<T, RandomState>;
+
+pub type ConcurrentHashMap<K, V> = ::dashmap::DashMap<K, V, RandomState>;
 
 /// Creates a new `OrderedMap`.
 pub fn ordered_map<K: Eq + ::std::hash::Hash, V>() -> OrderedMap<K, V> {
@@ -43,4 +46,10 @@ pub fn hash_map_capacity<K, V>(cap: usize) -> HashMap<K, V> {
 /// Creates a new `HashSet`, with a custom capacity.
 pub fn hash_set_capacity<T>(cap: usize) -> HashSet<T> {
     HashSet::with_capacity_and_hasher(cap, Default::default())
+}
+
+pub fn concurrent_hash_map<K, V>() -> ConcurrentHashMap<K, V> { dashmap::DashMap::with_hasher(Default::default()) }
+
+pub fn concurrent_hash_map_with_capacity<K, V> (size: usize) -> ConcurrentHashMap<K, V> {
+    DashMap::with_capacity_and_hasher(size, Default::default())
 }

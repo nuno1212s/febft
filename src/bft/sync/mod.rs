@@ -383,7 +383,7 @@ where
         &mut self,
         requests: ForwardedRequestsMessage<Request<S>>,
         timeouts: &TimeoutsHandle<S>,
-        log: &mut Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) {
         let phase = TimeoutPhase::TimedOutOnce(Instant::now());
         let requests = requests
@@ -401,7 +401,7 @@ where
         &mut self,
         requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         timeouts: &TimeoutsHandle<S>,
-        log: &mut Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> Vec<Digest> {
         let mut digests = Vec::new();
         let phase = TimeoutPhase::Init(Instant::now());
@@ -421,7 +421,7 @@ where
 
     fn add_stopped_requests(
         &mut self,
-        log: &mut Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
@@ -528,7 +528,7 @@ where
         header: Header,
         message: ViewChangeMessage<Request<S>>,
         timeouts: &TimeoutsHandle<S>,
-        log: &mut Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
         consensus: &mut Consensus<S>,
         node: &mut Node<S::Data>,
     ) -> SynchronizerStatus {
@@ -794,7 +794,7 @@ where
     /// Resume the view change protocol after running the CST protocol.
     pub fn resume_view_change(
         &mut self,
-        log: &mut Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
         consensus: &mut Consensus<S>,
         node: &mut Node<S::Data>,
     ) -> Option<()> {
@@ -1021,14 +1021,14 @@ where
     fn finalize(
         &mut self,
         FinalizeState { curr_cid, proposed, sound }: FinalizeState<Request<S>>,
-        log: &mut Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
         consensus: &mut Consensus<S>,
         node: &mut Node<S::Data>,
     ) -> SynchronizerStatus {
         // we will get some value to be proposed because of the
         // check we did in `pre_finalize()`, guarding against no values
         let proposed = log
-            .decision_log_mut()
+            .decision_log().borrow_mut()
             .clear_last_occurrences(curr_cid, sound.value())
             .and_then(|stored| {
                 let (_, mut message) = stored.into_inner();

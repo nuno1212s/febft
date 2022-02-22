@@ -25,6 +25,7 @@ use futures::io::{
     BufWriter,
 };
 use futures::lock::Mutex;
+use futures::select;
 use futures_timer::Delay;
 use intmap::IntMap;
 use parking_lot::RwLock;
@@ -178,8 +179,6 @@ impl SignDetached {
 pub struct Node<D: SharedData> {
     id: NodeId,
     first_cli: NodeId,
-    //Client handling is only available in the replicas, since clients don't connect to other
-    //Clients.
     node_handling: NodePeers<Message<D::State, D::Request, D::Reply>>,
     rng: prng::State,
     shared: Arc<NodeShared>,
@@ -276,6 +275,7 @@ impl<D> Node<D>
             peer_keys: cfg.pk,
         });
 
+        //Setup all the peer message reception handling.
         let peers = NodePeers::new(&cfg);
 
         let mut node = Arc::new(Node {
@@ -355,7 +355,7 @@ impl<D> Node<D>
         Ok((node, rogue))
     }
 
-    fn resolve_client_connection(&self, node_id: NodeId) -> Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
+    fn resolve_client_rx_connection(&self, node_id: NodeId) -> Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
         self.node_handling.resolve_peer_conn(node_id)
             .expect(&*format!("Failed to resolve peer connection for {:?}", node_id))
     }
@@ -412,7 +412,7 @@ impl<D> Node<D>
             self.id,
             target,
             None,
-            self.resolve_client_connection(target),
+            self.resolve_client_rx_connection(target),
             &self.peer_tx,
         );
 
@@ -437,7 +437,7 @@ impl<D> Node<D>
             self.id,
             target,
             Some(&self.shared),
-            self.resolve_client_connection(target),
+            self.resolve_client_rx_connection(target),
             &self.peer_tx,
         );
 
@@ -697,7 +697,8 @@ impl<D> Node<D>
             if id == my_id {
                 let s = SerializedSendTo::Me {
                     id,
-                    tx: self.resolve_client_connection(id),
+                    //get our own channel to send to ourselves
+                    tx: self.resolve_client_rx_connection(id),
                 };
                 *mine = Some(s);
             } else {
@@ -705,7 +706,8 @@ impl<D> Node<D>
                 let s = SerializedSendTo::Peers {
                     id,
                     sock,
-                    tx: self.resolve_client_connection(id),
+                    //Get the RX channel for the peer to mark as DCed if it fails
+                    tx: self.resolve_client_rx_connection(id),
                 };
                 others.push(s);
             }
@@ -726,7 +728,8 @@ impl<D> Node<D>
             if id == my_id {
                 let s = SendTo::Me {
                     my_id,
-                    tx: self.resolve_client_connection(id),
+                    //get our own channel to send to ourselves
+                    tx: self.resolve_client_rx_connection(id),
                     shared: shared.map(|sh| Arc::clone(sh)),
                 };
                 *mine = Some(s);
@@ -737,7 +740,8 @@ impl<D> Node<D>
                     my_id,
                     peer_id: id,
                     flush: true,
-                    tx: self.resolve_client_connection(id),
+                    //Get the RX channel for the peer to mark as DCed if it fails
+                    tx: self.resolve_client_rx_connection(id),
                     shared: shared.map(|sh| Arc::clone(sh)),
                 };
                 others.push(s);
@@ -783,9 +787,27 @@ impl<D> Node<D>
         }
     }
 
+    pub async fn receive_from_clients(&self) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
+        todo!()
+    }
+
+    pub async fn receive_from_replicas(&self) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
+        todo!()
+    }
+
     /// Receive one message from peer nodes or ourselves.
-    pub async fn receive(&mut self) -> Result<Message<D::State, D::Request, D::Reply>> {
-        self.my_rx.recv().await
+    pub async fn receive(&mut self) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
+
+        //TODO: Receive messages from the peer handling
+
+
+        let msg = select! {
+
+
+
+        };
+
+        Ok(msg)
     }
 
     /// Method called upon a `Message::ConnectedTx`.
@@ -1120,7 +1142,7 @@ impl<D> SendNode<D>
             self.id,
             target,
             None,
-            self.parent_node.resolve_client_connection(target),
+            self.parent_node.resolve_client_rx_connection(target),
             &self.peer_tx,
         );
 
@@ -1141,7 +1163,7 @@ impl<D> SendNode<D>
             self.id,
             target,
             Some(&self.shared),
-            self.parent_node.resolve_client_connection(target),
+            self.parent_node.resolve_client_rx_connection(target),
             &self.peer_tx,
         );
         let my_id = self.id;
@@ -1319,6 +1341,9 @@ impl<D> SendTo<D>
         let mut sock = lock.lock().await;
         if let Err(_) = wm.write_to(&mut *sock, flush).await {
             // error sending, drop connection
+
+            //TODO: Since this only handles receiving stuff, do we have to disconnect?
+            //Idk...
             cli.disconnect();
             //tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
         }
@@ -1354,7 +1379,7 @@ impl<D> SerializedSendTo<D>
     ) {
         let (original, _) = m.into_inner();
 
-        // send
+        // send to ourselves
         cli.push_request(Message::System(h, original)).await;
     }
 
@@ -1377,6 +1402,8 @@ impl<D> SerializedSendTo<D>
         if let Err(_) = wm.write_to(&mut *sock, true).await {
             // error sending, drop connection
 
+            //TODO: Since this only handles receiving stuff, do we have to disconnect?
+            //Idk...
             cli.disconnect();
             //tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
         }

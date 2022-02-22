@@ -4,15 +4,13 @@ use std::thread::JoinHandle;
 
 use dsrust::queues::mqueue::MQueue;
 use dsrust::queues::queues::{BQueue, PartiallyDumpable, SizableQueue};
+use futures::select;
 use intmap::IntMap;
 use parking_lot::{Mutex, RwLock};
 
-use febft::bft::communication::channel::ChannelTx;
-use febft::bft::communication::message::{RequestMessage, StoredMessage};
-use febft::bft::communication::NodeId;
-
 use crate::bft::communication::{NODE_CHAN_BOUND, NodeConfig, NodeId};
 use crate::bft::communication::channel::{ChannelRx, ChannelTx, new_bounded};
+use crate::bft::error::*;
 use crate::bft::threadpool;
 
 ///Handles the communication between two peers (replica - replica, replica - client)
@@ -24,8 +22,8 @@ pub struct NodePeers<T> {
     peer_loopback: Arc<ConnectedPeer<T>>,
     replica_handling: ConnectedPeersGroup<T>,
     client_handling: Option<ConnectedPeersGroup<T>>,
-    replica_channel: (ChannelTx<T>, ChannelRx<T>),
-    client_channel: Option<(ChannelTx<T>, ChannelRx<T>)>,
+    replica_channel: (ChannelTx<Vec<T>>, ChannelRx<Vec<T>>),
+    client_channel: Option<(ChannelTx<Vec<T>>, ChannelRx<Vec<T>>)>,
 }
 
 impl<T> NodePeers<T> {
@@ -54,7 +52,8 @@ impl<T> NodePeers<T> {
 
         //TODO: Batch size is not correct, should be the value found in env
         //Both replicas and clients have to interact with replicas, so we always need this pool
-        let replica_handling = ConnectedPeersGroup::new(32, NODE_CHAN_BOUND,
+        //We have a much larger queue because we don't want small slowdowns slowing down the connections
+        let replica_handling = ConnectedPeersGroup::new(1024, NODE_CHAN_BOUND,
                                                         replica_tx.clone());
 
         let loopback_address = replica_handling.init_client(id);
@@ -80,6 +79,29 @@ impl<T> NodePeers<T> {
         } else {
             self.client_handling.expect("Tried to resolve client conn in the client")
                 .get_client_conn(peer);
+        };
+    }
+
+    pub async fn receive_client_messages(&mut self) -> Result<Vec<T>> {
+
+    }
+
+    pub async fn receive_messages(&mut self) -> Result<Vec<T>> {
+        return if self.client_handling.is_some() {
+            let msgs: Result<Vec<T>> = select! {
+
+                result = self.replica_channel.1.recv() => {
+                    result
+                },
+                result = self.client_channel.unwrap().1.recv() => {
+                    result
+                }
+
+            };
+
+            msgs
+        } else {
+            self.replica_channel.1.recv().await
         };
     }
 }
@@ -240,8 +262,8 @@ impl<T> ConnectedPeersPool<T> {
 
         let pool_clone = pool.clone();
 
-        ///Spawn the thread that will collect client requests
-        /// and then send the batches to the channel.
+        //Spawn the thread that will collect client requests
+        //and then send the batches to the channel.
         pool.thread_handle = Some(std::thread::spawn(move || {
             loop {
                 if pool_clone.finish_execution.load(Ordering::Relaxed) {
