@@ -75,7 +75,7 @@ pub struct RecoveryState<S, O> {
 /// Allow a replica to recover from the state received by peer nodes.
 pub fn install_recovery_state<S>(
     recovery_state: RecoveryState<State<S>, Request<S>>,
-    synchronizer: &mut Synchronizer<S>,
+    synchronizer: &Synchronizer<S>,
     log: &Log<State<S>, Request<S>, Reply<S>>,
     executor: &mut ExecutorHandle<S>,
     consensus: &mut Consensus<S>,
@@ -250,9 +250,9 @@ where
         message: CstMessage<State<S>, Request<S>>,
         synchronizer: &Synchronizer<S>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
-        node: &mut Node<S::Data>,
+        node: &Node<S::Data>,
     ) {
-        let snapshot = match log.snapshot(*synchronizer.view()) {
+        let snapshot = match log.snapshot(synchronizer.view()) {
             Ok(snapshot) => snapshot,
             Err(_) => {
                 self.phase = ProtoPhase::WaitingCheckpoint(header, message);
@@ -273,7 +273,7 @@ where
         synchronizer: &Synchronizer<S>,
         consensus: &Consensus<S>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
-        node: &mut Node<S::Data>,
+        node: &Node<S::Data>,
     ) -> CstStatus<State<S>, Request<S>> {
         match self.phase {
             ProtoPhase::WaitingCheckpoint(_, _) => {
@@ -471,7 +471,7 @@ where
         &mut self,
         synchronizer: &Synchronizer<S>,
         timeouts: &TimeoutsHandle<S>,
-        node: &mut Node<S::Data>,
+        node: &Node<S::Data>,
     ) {
         // reset state of latest seq no. request
         self.latest_cid = SeqNo::ZERO;
@@ -494,7 +494,7 @@ where
         &mut self,
         synchronizer: &Synchronizer<S>,
         timeouts: &TimeoutsHandle<S>,
-        node: &mut Node<S::Data>,
+        node: &Node<S::Data>,
     ) {
         // reset hashmap of received states
         self.received_states.clear();

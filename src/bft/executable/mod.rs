@@ -4,6 +4,7 @@
 
 use std::thread;
 use std::sync::mpsc;
+use parking_lot::Mutex;
 
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
@@ -174,8 +175,10 @@ where
     }
 
     /// Queues a batch of requests `batch` for execution.
-    pub fn queue_update(&mut self, meta: BatchMeta, batch: UpdateBatch<Request<S>>) -> Result<()> {
-        self.e_tx.send(ExecutionRequest::Update(meta, batch))
+    pub fn queue_update(&mut self, meta: &Mutex<BatchMeta>, batch: UpdateBatch<Request<S>>) -> Result<()> {
+        let guard = meta.lock();
+
+        self.e_tx.send(ExecutionRequest::Update(*guard, batch))
             .simple(ErrorKind::Executable)
     }
 
@@ -185,10 +188,12 @@ where
     /// This is useful during local checkpoints.
     pub fn queue_update_and_get_appstate(
         &mut self,
-        meta: BatchMeta,
+        meta: &Mutex<BatchMeta>,
         batch: UpdateBatch<Request<S>>,
     ) -> Result<()> {
-        self.e_tx.send(ExecutionRequest::UpdateAndGetAppstate(meta, batch))
+        let guard = meta.lock();
+
+        self.e_tx.send(ExecutionRequest::UpdateAndGetAppstate(*guard, batch))
             .simple(ErrorKind::Executable)
     }
 }
@@ -263,11 +268,12 @@ where
 
     fn deliver_checkpoint_state(&self) {
         let cloned_state = self.state.clone();
-        let mut system_tx = self.send_node.master_channel().clone();
+
+        let mut system_tx = self.send_node.loopback_channel().clone();
 
         rt::spawn(async move {
             let m = Message::ExecutionFinishedWithAppstate(cloned_state);
-            system_tx.send(m).await.unwrap();
+            system_tx.push_request(m);
         });
     }
 

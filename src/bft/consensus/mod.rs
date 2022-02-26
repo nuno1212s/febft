@@ -270,7 +270,7 @@ impl<S> Consensus<S>
         &mut self,
         requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         synchronizer: &Synchronizer<S>,
-        node: &mut Node<S::Data>,
+        node: &Node<S::Data>,
     ) {
         match self.phase {
             ProtoPhase::Init => self.phase = ProtoPhase::PrePreparing,
@@ -318,7 +318,7 @@ impl<S> Consensus<S>
         digest: Digest,
         synchronizer: &Synchronizer<S>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
-        node: &mut Node<S::Data>,
+        node: &Node<S::Data>,
     ) {
         // update phase
         self.phase = ProtoPhase::Preparing(1);
@@ -326,7 +326,7 @@ impl<S> Consensus<S>
         // copy digests from PRE-PREPARE
         self.current_digest = digest;
 
-        let pre_prepares = log.decision_log().pre_prepares();
+        let pre_prepares = log.decision_log().borrow().pre_prepares();
         let last = &pre_prepares[pre_prepares.len() - 1];
 
         match last.message().kind() {
@@ -467,9 +467,9 @@ impl<S> Consensus<S>
         header: Header,
         message: ConsensusMessage<Request<S>>,
         timeouts: &TimeoutsHandle<S>,
-        synchronizer: &mut Synchronizer<S>,
+        synchronizer: &Arc<Synchronizer<S>>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
-        node: &mut Node<S::Data>,
+        node: &Node<S::Data>,
     ) -> ConsensusStatus<'a> {
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just
@@ -748,7 +748,7 @@ impl<S> DerefMut for Consensus<S>
 fn request_batch_received<S>(
     requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
     timeouts: &TimeoutsHandle<S>,
-    synchronizer: &mut Synchronizer<S>,
+    synchronizer: &Arc<Synchronizer<S>>,
     log: &Log<State<S>, Request<S>, Reply<S>>,
 ) -> Vec<Digest>
     where
@@ -768,7 +768,7 @@ fn request_batch_received<S>(
 fn valid_spec_commits<S>(
     speculative_commits: &IntMap<StoredSerializedSystemMessage<S::Data>>,
     consensus: &Consensus<S>,
-    synchronizer: &mut Synchronizer<S>,
+    synchronizer: &Synchronizer<S>,
 ) -> bool
     where
         S: Service + Send + 'static,

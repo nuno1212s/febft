@@ -1,5 +1,6 @@
 //! Communication primitives for `febft`, such as wire message formats.
 
+use std::cell::RefCell;
 use std::convert::identity;
 use std::env::var;
 use std::net::SocketAddr;
@@ -38,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use crate::bft::async_runtime as rt;
-use crate::bft::communication::channel::{ChannelTx, MessageChannelRx, MessageChannelTx, new_bounded, new_message_channel, RequestBatcher};
+use crate::bft::communication::channel::{ChannelRx, ChannelTx, new_bounded};
 use crate::bft::communication::message::{Header, Message, RequestMessage, SerializedMessage, StoredMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
 use crate::bft::communication::peer_handling::{ConnectedPeer, ConnectedPeersGroup, NodePeers};
 use crate::bft::communication::serialize::{
@@ -59,6 +60,7 @@ use crate::bft::crypto::signature::{
 };
 use crate::bft::error::*;
 use crate::bft::prng;
+use crate::bft::prng::ThreadSafePrng;
 use crate::bft::threadpool;
 
 pub mod socket;
@@ -180,7 +182,7 @@ pub struct Node<D: SharedData> {
     id: NodeId,
     first_cli: NodeId,
     node_handling: NodePeers<Message<D::State, D::Request, D::Reply>>,
-    rng: prng::State,
+    rng: prng::ThreadSafePrng,
     shared: Arc<NodeShared>,
     peer_tx: PeerTx,
     connector: TlsConnector,
@@ -276,7 +278,9 @@ impl<D> Node<D>
         });
 
         //Setup all the peer message reception handling.
-        let peers = NodePeers::new(&cfg);
+        let peers = NodePeers::new(cfg.id, cfg.first_cli);
+
+        let rng = ThreadSafePrng::new();
 
         let mut node = Arc::new(Node {
             id,
@@ -284,7 +288,7 @@ impl<D> Node<D>
             shared,
             peer_tx,
             node_handling: peers,
-            connector,
+            connector: connector.clone(),
             peer_addrs: cfg.addrs,
             first_cli: cfg.first_cli,
         });
@@ -292,9 +296,7 @@ impl<D> Node<D>
         let rx_node_clone = node.clone();
 
         // rx side (accept conns from replica)
-        rt::spawn(async move || {
-            rx_node_clone.rx_side_accept(cfg.first_cli, id, listener, acceptor)
-        });
+        rt::spawn(rx_node_clone.rx_side_accept(cfg.first_cli, id, listener, acceptor));
 
         // tx side (connect to replica)
         let mut rng = prng::State::new();
@@ -303,8 +305,8 @@ impl<D> Node<D>
             cfg.n as u32,
             cfg.first_cli,
             id,
-            connector.clone(),
-            &cfg.addrs,
+            connector,
+            &node.peer_addrs,
             &mut rng,
         );
 
@@ -313,43 +315,44 @@ impl<D> Node<D>
         let mut c = vec![0; cfg.n];
 
         //TODO: Wait for all the replicas to have connected
-        while c
-            .iter()
-            .enumerate()
-            .any(|(id, &n)| id != usize::from(node.id) && n != 2_i32)
-        {
-            let message = node.my_rx.recv().await.unwrap();
 
-            match message {
-                Message::ConnectedTx(id, sock) => {
-                    node.handle_connected_tx(id, sock);
-                    if id < cfg.first_cli {
-                        // not a client connection, increase count
-                        c[usize::from(id)] += 1;
-                    }
-                }
-                Message::ConnectedRx(id, sock) => {
-                    node.handle_connected_rx(id, sock);
-                    if id < cfg.first_cli {
-                        // not a client connection, increase count
-                        c[usize::from(id)] += 1;
-                    }
-                }
-                Message::DisconnectedTx(NodeId(i)) => {
-                    let s = format!("Node {} disconnected from send side", i);
-                    return Err(s).wrapped(ErrorKind::Communication);
-                }
-                Message::DisconnectedRx(Some(NodeId(i))) => {
-                    let s = format!("Node {} disconnected from receive side", i);
-                    return Err(s).wrapped(ErrorKind::Communication);
-                }
-                Message::DisconnectedRx(None) => {
-                    let s = "Disconnected from receive side";
-                    return Err(s).wrapped(ErrorKind::Communication);
-                }
-                m => rogue.push(m),
-            }
-        }
+        // while c
+        //     .iter()
+        //     .enumerate()
+        //     .any(|(id, &n)| id != usize::from(node.id) && n != 2_i32)
+        // {
+        //     // let message = node..recv().await.unwrap();
+        //
+        //     match message {
+        //         Message::ConnectedTx(id, sock) => {
+        //             node.handle_connected_tx(id, sock);
+        //             if id < cfg.first_cli {
+        //                 // not a client connection, increase count
+        //                 c[usize::from(id)] += 1;
+        //             }
+        //         }
+        //         Message::ConnectedRx(id, sock) => {
+        //             node.handle_connected_rx(id, sock);
+        //             if id < cfg.first_cli {
+        //                 // not a client connection, increase count
+        //                 c[usize::from(id)] += 1;
+        //             }
+        //         }
+        //         Message::DisconnectedTx(NodeId(i)) => {
+        //             let s = format!("Node {} disconnected from send side", i);
+        //             return Err(s).wrapped(ErrorKind::Communication);
+        //         }
+        //         Message::DisconnectedRx(Some(NodeId(i))) => {
+        //             let s = format!("Node {} disconnected from receive side", i);
+        //             return Err(s).wrapped(ErrorKind::Communication);
+        //         }
+        //         Message::DisconnectedRx(None) => {
+        //             let s = "Disconnected from receive side";
+        //             return Err(s).wrapped(ErrorKind::Communication);
+        //         }
+        //         m => rogue.push(m),
+        //     }
+        // }
 
         // success
         Ok((node, rogue))
@@ -389,12 +392,13 @@ impl<D> Node<D>
             shared: Arc::clone(&self.shared),
             peer_tx: self.peer_tx.clone(),
             parent_node: Arc::clone(self),
+            channel: Arc::clone(self.loopback_channel()),
         }
     }
 
-    /// Returns a handle to the master channel of this `Node`.
-    pub fn master_channel(&self) -> &MessageChannelTx<D::State, D::Request, D::Reply> {
-        &self.my_tx
+    /// Returns a handle to the loopback channel of this `Node`.
+    pub fn loopback_channel(&self) -> &Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
+        self.node_handling.peer_loopback()
     }
 
     /// Send a `SystemMessage` to a single destination.
@@ -402,7 +406,7 @@ impl<D> Node<D>
     /// This method is somewhat more efficient than calling `broadcast()`
     /// on a single target id.
     pub fn send(
-        &mut self,
+        &self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         target: NodeId,
         flush: bool,
@@ -428,7 +432,7 @@ impl<D> Node<D>
     ///
     /// This variant of `send()` signs the sent message.
     pub fn send_signed(
-        &mut self,
+        &self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         target: NodeId,
     ) {
@@ -442,6 +446,7 @@ impl<D> Node<D>
         );
 
         let my_id = self.id;
+
         let nonce = self.rng.next_state();
         Self::send_impl(message, send_to, my_id, target, nonce)
     }
@@ -479,7 +484,7 @@ impl<D> Node<D>
 
     /// Broadcast a `SystemMessage` to a group of nodes.
     pub fn broadcast(
-        &mut self,
+        &self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item=NodeId>,
     ) {
@@ -512,7 +517,7 @@ impl<D> Node<D>
     }
 
     pub fn broadcast_serialized(
-        &mut self,
+        &self,
         messages: IntMap<StoredSerializedSystemMessage<D>>,
     ) {
         let headers = messages
@@ -782,32 +787,29 @@ impl<D> Node<D>
                 shared,
                 peer_id,
                 my_id,
-                tx,
+                tx: cli,
             }
         }
     }
 
-    pub async fn receive_from_clients(&self) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
-        todo!()
+    //Receive messages from the clients we are connected to
+    pub fn receive_from_clients(&self) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
+        self.node_handling.receive_from_clients()
     }
 
-    pub async fn receive_from_replicas(&self) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
-        todo!()
+    //Receive messages from the replicas we are connected to
+    pub fn receive_from_replicas(&self) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
+        self.node_handling.receive_from_replicas()
     }
 
-    /// Receive one message from peer nodes or ourselves.
-    pub async fn receive(&mut self) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
+    //Receive messages from the clients we are connected to
+    pub async fn receive_from_clients_async(&self) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
+        self.node_handling.receive_from_client_async().await
+    }
 
-        //TODO: Receive messages from the peer handling
-
-
-        let msg = select! {
-
-
-
-        };
-
-        Ok(msg)
+    //Receive messages from the replicas we are connected to
+    pub async fn receive_from_replicas_async(&self) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
+        self.node_handling.receive_from_replicas_async().await
     }
 
     /// Method called upon a `Message::ConnectedTx`.
@@ -842,8 +844,7 @@ impl<D> Node<D>
                 let addr = self.peer_addrs.get(peer_id.into()).unwrap().clone();
 
                 // connect
-                //let nonce = self.rng.next_state();
-                let nonce = fastrand::u64(..);
+                let nonce = self.rng.next_state();
 
                 rt::spawn(Self::tx_side_connect_task(
                     self.clone(),
@@ -857,13 +858,8 @@ impl<D> Node<D>
             }
         }
 
-        let client = if peer_id < self.first_cli {
-            //if this is a replica we are connecting to
-            self.replica_handling.unwrap().init_client(peer_id.clone())
-        } else {
-            //This is a client we are connecting to
-            self.client_handling.unwrap().init_client(peer_id.clone());
-        };
+        //Init the per client queue and start putting the received messages into it
+        let client = self.node_handling.init_peer_conn(peer_id.clone());
 
         rt::spawn(async move {
             let mut buf = SmallVec::<[u8; 16384]>::new();
@@ -913,7 +909,7 @@ impl<D> Node<D>
                     }
                 };
 
-                client.request_queue().push_request(Message::System(header, message));
+                client.push_request(Message::System(header, message));
 
                 //tx.send(Message::System(header, message)).await.unwrap_or(());
             }
@@ -1100,6 +1096,7 @@ pub struct SendNode<D: SharedData> {
     rng: prng::State,
     peer_tx: PeerTx,
     parent_node: Arc<Node<D>>,
+    channel: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
 }
 
 impl<D: SharedData> Clone for SendNode<D> {
@@ -1110,6 +1107,7 @@ impl<D: SharedData> Clone for SendNode<D> {
             shared: Arc::clone(&self.shared),
             peer_tx: self.peer_tx.clone(),
             parent_node: self.parent_node.clone(),
+            channel: self.channel.clone(),
         }
     }
 }
@@ -1125,10 +1123,11 @@ impl<D> SendNode<D>
         self.id
     }
 
-    /// Check the `master_channel()` documentation for `Node`.
-    pub fn master_channel(&self) -> &MessageChannelTx<D::State, D::Request, D::Reply> {
-        &self.my_tx
+    pub fn loopback_channel(&self) -> &Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
+        &self.channel
     }
+
+    /// Check the `master_channel()` documentation for `Node`.
 
     /// Check the `send()` documentation for `Node`.
     pub fn send(

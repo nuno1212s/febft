@@ -1,42 +1,60 @@
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::RecvError;
 use std::thread::JoinHandle;
+use dsrust::channels::queue_channel::{Receiver, Sender};
+use dsrust::queues::lf_array_queue::LFBQueue;
 
 use dsrust::queues::mqueue::MQueue;
-use dsrust::queues::queues::{BQueue, PartiallyDumpable, SizableQueue};
+use dsrust::queues::queues::{BQueue, PartiallyDumpable, Queue, SizableQueue};
 use futures::select;
 use intmap::IntMap;
 use parking_lot::{Mutex, RwLock};
 
 use crate::bft::communication::{NODE_CHAN_BOUND, NodeConfig, NodeId};
 use crate::bft::communication::channel::{ChannelRx, ChannelTx, new_bounded};
+use crate::bft::communication::message::Message;
 use crate::bft::error::*;
 use crate::bft::threadpool;
 
 ///Handles the communication between two peers (replica - replica, replica - client)
 /// Only handles reception of requests, not transmission
 
+type QueueType<T> = LFBQueue<Vec<T>>;
+
+fn channel_init<T>(capacity: usize) -> (Sender<Vec<T>, QueueType<T>>, Receiver<Vec<T>, QueueType<T>>) {
+    dsrust::channels::queue_channel::bounded_lf_queue(capacity)
+}
+
 pub struct NodePeers<T> {
     first_cli: NodeId,
     own_id: NodeId,
     peer_loopback: Arc<ConnectedPeer<T>>,
-    replica_handling: ConnectedPeersGroup<T>,
-    client_handling: Option<ConnectedPeersGroup<T>>,
-    replica_channel: (ChannelTx<Vec<T>>, ChannelRx<Vec<T>>),
-    client_channel: Option<(ChannelTx<Vec<T>>, ChannelRx<Vec<T>>)>,
+    replica_handling: Arc<ConnectedPeersGroup<T>>,
+    client_handling: Option<Arc<ConnectedPeersGroup<T>>>,
+    replica_tx: Sender<Vec<T>, QueueType<T>>,
+    client_tx: Option<Sender<Vec<T>, QueueType<T>>>,
+    client_rx: Option<Receiver<Vec<T>, QueueType<T>>>,
+    replica_rx: Receiver<Vec<T>, QueueType<T>>,
 }
 
-impl<T> NodePeers<T> {
-    pub fn new(cfg: &NodeConfig) -> NodePeers<T> {
-        let id = cfg.id;
+///We make this class Sync and send since the clients are going to be handled by a single class
+///And the replicas are going to be handled by another class.
+/// There is no possibility of 2 threads accessing the client_rx or replica_rx concurrently
+unsafe impl<T> Sync for NodePeers<T> {}
+unsafe impl<T> Send for NodePeers<T> {}
 
+impl<T> NodePeers<T> {
+    pub fn new(id: NodeId, first_cli: NodeId) -> NodePeers<T> {
         //We only want to setup client handling if we are a replica
         let client_handling;
 
         let client_channel;
 
-        if id >= cfg.first_cli {
-            let (client_tx, client_rx) = new_bounded(NODE_CHAN_BOUND);
+        if id >= first_cli {
+
+            let (client_tx, client_rx) = channel_init(NODE_CHAN_BOUND);
 
             client_handling = Some(ConnectedPeersGroup::new(32,
                                                             NODE_CHAN_BOUND,
@@ -48,7 +66,7 @@ impl<T> NodePeers<T> {
         };
 
         //TODO: maybe change the channel bound?
-        let (replica_tx, replica_rx) = new_bounded(NODE_CHAN_BOUND);
+        let (replica_tx, replica_rx) = channel_init(NODE_CHAN_BOUND);
 
         //TODO: Batch size is not correct, should be the value found in env
         //Both replicas and clients have to interact with replicas, so we always need this pool
@@ -58,15 +76,34 @@ impl<T> NodePeers<T> {
 
         let loopback_address = replica_handling.init_client(id);
 
-        NodePeers {
-            first_cli: cfg.first_cli,
-            own_id: cfg.id,
+        let (cl_tx, cl_rx) = if let Some((cl_tx, cl_rx)) = client_channel {
+            (Some(cl_tx), Some(cl_rx))
+        } else {
+            (None, None)
+        };
+
+        let peers = NodePeers {
+            first_cli,
+            own_id: id,
             peer_loopback: loopback_address,
             replica_handling,
             client_handling,
-            replica_channel: (replica_tx, replica_rx),
-            client_channel,
-        }
+            replica_tx,
+            client_tx: cl_tx,
+            client_rx: cl_rx,
+            replica_rx,
+        };
+
+        (peers)
+    }
+
+    pub fn init_peer_conn(&self, peer: NodeId) -> Arc<ConnectedPeer<T>> {
+        return if peer >= self.first_cli {
+            self.client_handling.expect("Tried to init client request from client itself?")
+                .init_client(peer)
+        } else {
+            self.replica_handling.init_client(peer)
+        };
     }
 
     pub fn resolve_peer_conn(&self, peer: NodeId) -> Option<Arc<ConnectedPeer<T>>> {
@@ -78,31 +115,67 @@ impl<T> NodePeers<T> {
             self.replica_handling.get_client_conn(peer)
         } else {
             self.client_handling.expect("Tried to resolve client conn in the client")
-                .get_client_conn(peer);
+                .get_client_conn(peer)
         };
     }
 
-    pub async fn receive_client_messages(&mut self) -> Result<Vec<T>> {
-
+    pub fn peer_loopback(&self) -> &Arc<ConnectedPeer<T>> {
+        &self.peer_loopback.clone()
     }
 
-    pub async fn receive_messages(&mut self) -> Result<Vec<T>> {
-        return if self.client_handling.is_some() {
-            let msgs: Result<Vec<T>> = select! {
-
-                result = self.replica_channel.1.recv() => {
-                    result
-                },
-                result = self.client_channel.unwrap().1.recv() => {
-                    result
+    pub fn receive_from_clients(&self) -> Result<Vec<T>> {
+        return match &self.client_rx {
+            None => {
+                Err(Error::simple(ErrorKind::Communication))
+            }
+            Some(rx) => {
+                match rx.recv_blk() {
+                    Ok(vec) => {
+                        Ok(vec)
+                    }
+                    Err(_) => {
+                        Err(Error::simple(ErrorKind::Communication))}
                 }
-
-            };
-
-            msgs
-        } else {
-            self.replica_channel.1.recv().await
+            }
         };
+    }
+
+    pub async fn receive_from_client_async(&self) -> Result<Vec<T>> {
+        return match &self.client_rx {
+            None => {
+                Err(Error::simple(ErrorKind::Communication))
+            }
+            Some(rx) => {
+                match rx.recv_fut().await {
+                    Ok(vec) => {
+                        Ok(vec)
+                    }
+                    Err(_) => {
+                        Err(Error::simple(ErrorKind::Communication))
+                    }
+                }
+            }
+        };
+    }
+
+    pub fn receive_from_replicas(&self) -> Result<Vec<T>> {
+        match self.replica_rx.recv_blk() {
+            Ok(vec) => {
+                Ok(vec)
+            }
+            Err(_) => {
+                Err(Error::simple(ErrorKind::Communication))}
+        }
+    }
+
+    pub async fn receive_from_replicas_async(&self) -> Result<Vec<T>> {
+        match self.replica_rx.recv_fut().await {
+            Ok(vec) => {
+                Ok(vec)
+            }
+            Err(_) => {
+                Err(Error::simple(ErrorKind::Communication))}
+        }
     }
 }
 
@@ -125,7 +198,7 @@ pub struct ConnectedPeersGroup<T> {
     client_connections_cache: RwLock<IntMap<Arc<ConnectedPeer<T>>>>,
     per_client_cache: usize,
     batch_size: usize,
-    batch_transmission: ChannelTx<Vec<T>>,
+    batch_transmission: Sender<Vec<T>, QueueType<T>>,
 }
 
 pub struct ConnectedPeersPool<T> {
@@ -134,10 +207,9 @@ pub struct ConnectedPeersPool<T> {
     //That's producing the batches and the threads of clients connecting and disconnecting
     connected_clients: Mutex<Vec<Arc<ConnectedPeer<T>>>>,
     batch_size: usize,
-    batch_transmission: ChannelTx<Vec<T>>,
+    batch_transmission: Sender<Vec<T>, QueueType<T>>,
     finish_execution: AtomicBool,
-    thread_handle: Option<JoinHandle<()>>,
-    owner: &'static ConnectedPeersGroup<T>,
+    owner: Arc<ConnectedPeersGroup<T>>,
 }
 
 pub struct ConnectedPeer<T> {
@@ -147,17 +219,17 @@ pub struct ConnectedPeer<T> {
 }
 
 impl<T> ConnectedPeersGroup<T> {
-    pub fn new(per_client_bound: usize, batch_size: usize, batch_transmission: ChannelTx<Vec<T>>) -> Self {
-        Self {
+    pub fn new(per_client_bound: usize, batch_size: usize, batch_transmission: Sender<Vec<T>, QueueType<T>>) -> Arc<Self> {
+        Arc::new(Self {
             client_pools: parking_lot::Mutex::new(Vec::new()),
             client_connections_cache: RwLock::new(IntMap::new()),
             per_client_cache: per_client_bound,
             batch_size,
             batch_transmission,
-        }
+        })
     }
 
-    pub fn init_client(&self, peer_id: NodeId) -> Arc<ConnectedPeer<T>> {
+    pub fn init_client(self: &Arc<Self>, peer_id: NodeId) -> Arc<ConnectedPeer<T>> {
         let connected_client = Arc::new(ConnectedPeer::new(peer_id, self.per_client_cache));
 
         let mut cached_clients = self.client_connections_cache.write();
@@ -184,11 +256,37 @@ impl<T> ConnectedPeersGroup<T> {
         //In the case all the pools are already full, allocate a new pool
         let pool = ConnectedPeersPool::new(self.batch_size,
                                            self.batch_transmission.clone(),
-                                           self);
+                                           Arc::clone(self));
 
-        pool.attempt_to_add(clone_queue).unwrap();
+        match pool.attempt_to_add(clone_queue) {
+            Ok(_) => {}
+            Err(e) => {
+                panic!("Failed to add pool to pool list.")
+            }
+        };
+
+        let pool_clone = pool.clone();
 
         guard.push(pool);
+
+        //Spawn the thread that will collect client requests
+        //and then send the batches to the channel.
+        std::thread::spawn(move || {
+
+            //Lock this before hand since there will be absolutely no contention
+            //So we can just keep this lock forever
+            loop {
+                if pool_clone.finish_execution.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let vec = pool_clone.collect_requests(pool_clone.batch_size, &pool_clone.owner);
+
+                if !vec.is_empty() {
+                    pool_clone.batch_transmission.send(vec);
+                }
+            }
+        });
 
         connected_client
     }
@@ -201,7 +299,7 @@ impl<T> ConnectedPeersGroup<T> {
                 None
             }
             Some(peer) => {
-                Ok(Arc::clone(peer))
+                Some(Arc::clone(peer))
             }
         };
     }
@@ -247,36 +345,17 @@ impl<T> ConnectedPeersGroup<T> {
 impl<T> ConnectedPeersPool<T> {
     //We mark the owner as static since if the pool is active then
     //The owner also has to be active
-    pub fn new(client_count: usize, batch_transmission: ChannelTx<Vec<T>>,
-               owner: &'static ConnectedPeersGroup<T>) -> Arc<Self> {
+    pub fn new(client_count: usize, batch_transmission: Sender<Vec<T>, QueueType<T>>,
+               owner: Arc<ConnectedPeersGroup<T>>) -> Arc<Self> {
         let result = Self {
             connected_clients: parking_lot::Mutex::new(Vec::new()),
             batch_size: client_count,
             batch_transmission,
             finish_execution: AtomicBool::new(false),
-            thread_handle: None,
             owner,
         };
 
-        let mut pool = Arc::new(result);
-
-        let pool_clone = pool.clone();
-
-        //Spawn the thread that will collect client requests
-        //and then send the batches to the channel.
-        pool.thread_handle = Some(std::thread::spawn(move || {
-            loop {
-                if pool_clone.finish_execution.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                let vec = pool_clone.collect_requests(pool_clone.batch_size, owner);
-
-                if !vec.is_empty() {
-                    pool_clone.batch_transmission.send(vec);
-                }
-            }
-        }));
+        let pool = Arc::new(result);
 
         pool
     }
@@ -308,7 +387,7 @@ impl<T> ConnectedPeersPool<T> {
         };
     }
 
-    pub fn collect_requests(&self, batch_size: usize, owner: &ConnectedPeersGroup<T>) -> Vec<T> {
+    pub fn collect_requests(&self, batch_size: usize, owner: &Arc<ConnectedPeersGroup<T>>) -> Vec<T> {
         let mut batch = Vec::with_capacity(batch_size);
 
         let mut guard = self.connected_clients.lock();
@@ -338,8 +417,7 @@ impl<T> ConnectedPeersPool<T> {
                 continue;
             }
 
-            let rqs_dumped = client
-                .request_queue().dump_n_requests(next_client_requests, &mut batch);
+            let rqs_dumped = client.dump_n_requests(next_client_requests, &mut batch);
 
             //Leave the requests that were not used open for the following clients, in a greedy fashion
             next_client_requests -= rqs_dumped;

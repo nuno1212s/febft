@@ -147,11 +147,13 @@ impl<D> Client<D>
         let send_node = node.send_node();
 
         // spawn receiving task
-        rt::spawn(Self::message_recv_task(
-            params,
-            task_data,
-            node,
-        ));
+        std::thread::spawn(move || {
+            Self::message_recv_task(
+                params,
+                task_data,
+                node,
+            )
+        });
 
         let session_id = data
             .session_counter
@@ -202,86 +204,88 @@ impl<D> Client<D>
         id
     }
 
-    async fn message_recv_task(
+    fn message_recv_task(
         params: SystemParams,
         data: Arc<ClientData<D::Reply>>,
-        mut node: Node<D>,
+        node: Arc<Node<D>>,
     ) {
         // use session id as key
         let mut last_operation_ids: IntMap<SeqNo> = IntMap::new();
         let mut replica_votes: IntMap<ReplicaVotes> = IntMap::new();
 
-        while let Ok(message) = node.receive().await {
-            match message {
-                Message::System(header, message) => {
-                    match message {
-                        SystemMessage::Reply(message) => {
-                            let (session_id, operation_id, payload) = message.into_inner();
-                            let last_operation_id = last_operation_ids
-                                .get(session_id.into())
-                                .copied()
-                                .unwrap_or(SeqNo::ZERO);
+        while let Ok(messages) = node.receive_from_replicas() {
+            for message in messages {
+                match message {
+                    Message::System(header, message) => {
+                        match message {
+                            SystemMessage::Reply(message) => {
+                                let (session_id, operation_id, payload) = message.into_inner();
+                                let last_operation_id = last_operation_ids
+                                    .get(session_id.into())
+                                    .copied()
+                                    .unwrap_or(SeqNo::ZERO);
 
-                            // reply already delivered to application
-                            if last_operation_id > operation_id {
-                                continue;
-                            }
+                                // reply already delivered to application
+                                if last_operation_id > operation_id {
+                                    continue;
+                                }
 
-                            let request_key = get_request_key(session_id, operation_id);
-                            let votes = IntMapEntry::get(request_key, &mut replica_votes)
-                                // FIXME: cache every reply's digest, instead of just the first one
-                                // we receive, because the first reply may be faulty, while the
-                                // remaining ones may be correct, therefore we would not be able to
-                                // count at least f+1 identical replies
-                                //
-                                // NOTE: the `digest()` call in the header returns the digest of
-                                // the payload
-                                .or_insert_with(|| {
-                                    ReplicaVotes {
-                                        count: 0,
-                                        digest: header.digest().clone(),
+                                let request_key = get_request_key(session_id, operation_id);
+                                let votes = IntMapEntry::get(request_key, &mut replica_votes)
+                                    // FIXME: cache every reply's digest, instead of just the first one
+                                    // we receive, because the first reply may be faulty, while the
+                                    // remaining ones may be correct, therefore we would not be able to
+                                    // count at least f+1 identical replies
+                                    //
+                                    // NOTE: the `digest()` call in the header returns the digest of
+                                    // the payload
+                                    .or_insert_with(|| {
+                                        ReplicaVotes {
+                                            count: 0,
+                                            digest: header.digest().clone(),
+                                        }
+                                    });
+
+                                // register new reply received
+                                if &votes.digest == header.digest() {
+                                    votes.count += 1;
+                                }
+
+                                // TODO: check if a replica hasn't voted
+                                // twice for the same digest
+
+                                // wait for at least f+1 identical replies
+                                if votes.count > params.f() {
+                                    // update intmap states
+                                    replica_votes.remove(request_key);
+                                    last_operation_ids.insert(session_id.into(), operation_id);
+
+                                    let mut ready = get_ready::<D>(session_id, &*data).lock();
+                                    let request = IntMapEntry::get(request_key, &mut *ready)
+                                        .or_insert_with(|| Ready { payload: None, waker: None });
+
+                                    // register response
+                                    request.payload = Some(payload);
+
+                                    // try to wake up a waiting task
+                                    if let Some(waker) = request.waker.take() {
+                                        waker.wake();
                                     }
-                                });
-
-                            // register new reply received
-                            if &votes.digest == header.digest() {
-                                votes.count += 1;
-                            }
-
-                            // TODO: check if a replica hasn't voted
-                            // twice for the same digest
-
-                            // wait for at least f+1 identical replies
-                            if votes.count > params.f() {
-                                // update intmap states
-                                replica_votes.remove(request_key);
-                                last_operation_ids.insert(session_id.into(), operation_id);
-
-                                let mut ready = get_ready::<D>(session_id, &*data).lock();
-                                let request = IntMapEntry::get(request_key, &mut *ready)
-                                    .or_insert_with(|| Ready { payload: None, waker: None });
-
-                                // register response
-                                request.payload = Some(payload);
-
-                                // try to wake up a waiting task
-                                if let Some(waker) = request.waker.take() {
-                                    waker.wake();
                                 }
                             }
+                            // FIXME: handle rogue messages on clients
+                            _ => panic!("rogue message detected"),
                         }
-                        // FIXME: handle rogue messages on clients
-                        _ => panic!("rogue message detected"),
                     }
+                    Message::ConnectedTx(id, sock) => todo!(),
+                    Message::ConnectedRx(id, sock) => todo!(),
+                    // TODO: node disconnected on send side
+                    Message::DisconnectedTx(_id) => todo!(),
+                    // TODO: node disconnected on receive side
+                    Message::DisconnectedRx(_some_id) => todo!(),
+                    // we don't receive any other type of messages as a client node
+                    _ => (),
                 }
-                Message::ConnectedTx(id, sock) => node.handle_connected_tx(id, sock),
-                Message::ConnectedRx(id, sock) => node.handle_connected_rx(id, sock),
-                // TODO: node disconnected on send side
-                Message::DisconnectedTx(_id) => todo!(),
-                // TODO: node disconnected on receive side
-                Message::DisconnectedRx(_some_id) => todo!(),
-                // we don't receive any other type of messages as a client node
-                _ => (),
             }
         }
     }

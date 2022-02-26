@@ -5,6 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use dashmap::DashMap;
 use intmap::IntMap;
@@ -477,7 +478,8 @@ pub struct Log<S, O, P> {
     //This item will only be accessed by the replica request thread
     curr_seq: Cell<SeqNo>,
     batch_size: usize,
-    //This will only be access by the
+    //This will only be accessed by the replica processing thread since requests will only be
+    //Decided by the consensus protocol, which operates completly in the replica thread
     declog: RefCell<DecisionLog<O>>,
     //This item will also be accessed from both the client request thread and the
     //replica request thread. However the client request thread will always only read
@@ -489,8 +491,8 @@ pub struct Log<S, O, P> {
     requests: ConcurrentHashMap<Digest, StoredMessage<RequestMessage<O>>>,
     //This will only be accessed from the replica request thread so we can wrap it
     //In a simple cell
-    decided: Cell<Vec<O>>,
-    checkpoint: Cell<CheckpointState<S>>,
+    decided: RefCell<Vec<O>>,
+    checkpoint: RefCell<CheckpointState<S>>,
     //Some stuff for statistics.
     meta: Mutex<BatchMeta>,
     _marker: PhantomData<P>,
@@ -506,19 +508,19 @@ impl<S, O: Clone, P> Log<S, O, P> {
     ///
     /// The value `batch_size` represents the maximum number of
     /// client requests to queue before executing a consensus instance.
-    pub fn new(batch_size: usize) -> Self {
-        Self {
+    pub fn new(batch_size: usize) -> Arc<Self> {
+        Arc::new(Self {
             batch_size,
             curr_seq: Cell::new(SeqNo::ZERO),
             latest_op: RwLock::new(IntMap::new()),
             declog: RefCell::new(DecisionLog::new()),
             // TODO: use config value instead of const
-            decided: Cell::new(Vec::with_capacity(PERIOD as usize)),
+            decided: RefCell::new(Vec::with_capacity(PERIOD as usize)),
             requests: collections::concurrent_hash_map_with_capacity(PERIOD as usize),
-            checkpoint: Cell::new(CheckpointState::None),
+            checkpoint: RefCell::new(CheckpointState::None),
             meta: Mutex::new(BatchMeta::new()),
             _marker: PhantomData,
-        }
+        })
     }
 
     pub fn batch_meta(&self) -> &Mutex<BatchMeta> {
@@ -556,13 +558,13 @@ impl<S, O: Clone, P> Log<S, O, P> {
             S: Clone,
             O: Clone,
     {
-        match self.checkpoint {
-            CheckpointState::Complete(ref checkpoint) => {
+        match *self.checkpoint.borrow() {
+            CheckpointState::Complete(checkpoint) => {
                 Ok(RecoveryState::new(
                     view,
-                    (*checkpoint).clone(),
-                    (*self.decided).clone(),
-                    (*self.declog).clone(),
+                    checkpoint.clone(),
+                    self.decided.borrow().clone(),
+                    self.declog.borrow().clone(),
                 ))
             }
             _ => Err("Checkpoint to be finalized").wrapped(ErrorKind::ConsensusLog),
@@ -628,11 +630,8 @@ impl<S, O: Clone, P> Log<S, O, P> {
         // - prevent non leader replicas from collecting a batch of digests,
         // as only the leader will actually propose!
         if self.requests.len() > 0 {
-            Some(self.requests
-                .values()
-                .cloned()
-                .take(self.batch_size)
-                .collect())
+            //TODO: Remove all requests from map and build a batch?
+            None
         } else {
             None
         }
@@ -640,11 +639,9 @@ impl<S, O: Clone, P> Log<S, O, P> {
 
     /// Retrieves a batch of requests to be proposed during a view change.
     pub fn view_change_propose(&self) -> Vec<StoredMessage<RequestMessage<O>>> {
-        self.requests
-            .values()
-            .take(self.batch_size)
-            .cloned()
-            .collect()
+        todo!()
+
+        //COLLECT ALL REQUESTS FROM THE MAP
     }
 
     /// Checks if this `Log` has a particular request with the given `digest`.
@@ -660,7 +657,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
         digests
             .iter()
             .flat_map(|d| self.requests.get(d))
-            .cloned()
+            .map(|rq_ref| rq_ref.value().clone())
             .collect()
     }
 
@@ -679,6 +676,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
         for digest in digests {
             let (header, message) = self.requests
                 .remove(digest)
+                .map(|f| f.1)
                 .map(StoredMessage::into_inner)
                 .ok_or(Error::simple(ErrorKind::ConsensusLog))?;
 
@@ -708,13 +706,16 @@ impl<S, O: Clone, P> Log<S, O, P> {
         // TODO: optimize batch cloning, as this can take
         // several ms if the batch size is large, and each
         // request also large
+
+        let mut guard = self.decided.borrow_mut();
+
         for update in batch.as_ref() {
-            self.decided.push(update.operation().clone());
+            guard.push(update.operation().clone());
         }
 
         // retrive the sequence number stored within the PRE-PREPARE message
         // pertaining to the current request being executed
-        let mut dec_log_guard = self.declog.lock();
+        let mut dec_log_guard = self.declog.borrow_mut();
 
         let last_seq_no = if dec_log_guard.pre_prepares.len() > 0 {
             let stored_pre_prepare =
@@ -723,7 +724,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
         } else {
             // the log was cleared concurrently, retrieve
             // the seq number stored before the log was cleared
-            (*self.curr_seq).clone()
+            self.curr_seq.get()
         };
 
         let last_seq_no_u32 = u32::from(last_seq_no);
@@ -760,7 +761,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
     /// `Info::BeginCheckpoint`, and the requested application state is received
     /// on the core server task's master channel.
     pub fn finalize_checkpoint(&self, appstate: S) -> Result<()> {
-        match *self.checkpoint {
+        match *self.checkpoint.borrow() {
             CheckpointState::None => Err("No checkpoint has been initiated yet").wrapped(ErrorKind::ConsensusLog),
             CheckpointState::Complete(_) => Err("Checkpoint already finalized").wrapped(ErrorKind::ConsensusLog),
             CheckpointState::Partial { ref seq } | CheckpointState::PartialWithEarlier { ref seq, .. } => {
@@ -771,18 +772,18 @@ impl<S, O: Clone, P> Log<S, O, P> {
                     appstate,
                 }));
 
-                self.decided.clear();
+                self.decided.borrow_mut().clear();
                 //
                 // NOTE: workaround bug where when we clear the log,
                 // we remove the PRE-PREPARE of an on-going request
                 //
                 // FIXME: the log should not be cleared until a request is over
                 //
-                let guard = self.declog.lock();
+                let mut guard = self.declog.borrow_mut();
 
-                match self.declog.pre_prepares.pop() {
+                match guard.pre_prepares.pop() {
                     Some(last_pre_prepare) => {
-                        self.declog.pre_prepares.clear();
+                        guard.pre_prepares.clear();
 
                         // store the id of the last received pre-prepare,
                         // which corresponds to the request currently being
@@ -793,8 +794,10 @@ impl<S, O: Clone, P> Log<S, O, P> {
                         // no stored PRE-PREPARE messages, NOOP
                     }
                 }
-                self.declog.prepares.clear();
-                self.declog.commits.clear();
+
+                guard.prepares.clear();
+                guard.commits.clear();
+
                 Ok(())
             }
         }

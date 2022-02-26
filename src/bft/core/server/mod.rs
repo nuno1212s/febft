@@ -132,13 +132,13 @@ pub struct Replica<S: Service> {
     // this value is primarily used to switch from
     // state transfer back to a view change
     phase_stack: Option<ReplicaPhase>,
-    timeouts: TimeoutsHandle<S>,
+    timeouts: Arc<TimeoutsHandle<S>>,
     executor: ExecutorHandle<S>,
-    synchronizer: Synchronizer<S>,
+    synchronizer: Arc<Synchronizer<S>>,
     consensus: Consensus<S>,
     cst: CollabStateTransfer<S>,
-    log: Log<State<S>, Request<S>, Reply<S>>,
-    client_rqs: Arc<RqProcessor<S, S::Data>>,
+    log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
+    client_rqs: Arc<RqProcessor<S>>,
     node: Arc<Node<S::Data>>,
 }
 
@@ -184,6 +184,8 @@ impl<S> Replica<S>
         // connect to peer nodes
         let (node, rogue) = Node::bootstrap(node_config).await?;
 
+        let node_clone = node.clone();
+
         // start executor
         let executor = Executor::new(
             node.send_node(),
@@ -192,7 +194,7 @@ impl<S> Replica<S>
 
         // start timeouts handler
         let timeouts = Timeouts::new(
-            node.master_channel().clone(),
+            Arc::clone(node.loopback_channel()),
         );
 
         // TODO: get log from persistent storage
@@ -205,16 +207,19 @@ impl<S> Replica<S>
         const CST_BASE_DUR: Duration = Duration::from_secs(30);
         const REQ_BASE_DUR: Duration = Duration::from_secs(2 * 60);
 
+        let synchronizer = Synchronizer::new(REQ_BASE_DUR, view);
+
         let mut replica = Replica {
             cst: CollabStateTransfer::new(CST_BASE_DUR),
-            synchronizer: Synchronizer::new(REQ_BASE_DUR, view),
+            synchronizer: synchronizer.clone(),
             consensus: Consensus::new(next_consensus_seq, batch_size),
             phase: ReplicaPhase::NormalPhase,
             phase_stack: None,
-            timeouts,
+            timeouts: timeouts.clone(),
             executor,
             node,
-            log,
+            log: log.clone(),
+            client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts),
         };
 
         // handle rogue messages
@@ -254,12 +259,6 @@ impl<S> Replica<S>
         self.node.id()
     }
 
-    pub fn run_client_req_collector(&self) -> JoinHandle<()> {
-        let node_ref = self.node.clone();
-
-        std::thread::spawn(|| {});
-    }
-
     /// The main loop of a replica.
     pub async fn run(&mut self) -> Result<()> {
         // TODO: exit condition?
@@ -273,7 +272,7 @@ impl<S> Replica<S>
     }
 
     async fn update_retrieving_state(&mut self) -> Result<()> {
-        let messages = self.node.receive_from_replicas().await?;
+        let messages = self.node.receive_from_replicas().unwrap();
 
         for message in messages {
             match message {
@@ -302,15 +301,15 @@ impl<S> Replica<S>
                                 &self.synchronizer,
                                 &self.consensus,
                                 &self.log,
-                                &mut self.node,
+                                &self.node,
                             );
                             match status {
                                 CstStatus::Running => (),
                                 CstStatus::State(state) => {
                                     install_recovery_state(
                                         state,
-                                        &mut self.synchronizer,
-                                        &mut self.log,
+                                        &self.synchronizer,
+                                        &self.log,
                                         &mut self.executor,
                                         &mut self.consensus,
                                     )?;
@@ -332,7 +331,7 @@ impl<S> Replica<S>
                                         self.cst.request_latest_state(
                                             &self.synchronizer,
                                             &self.timeouts,
-                                            &mut self.node,
+                                            &self.node,
                                         );
                                     } else {
                                         self.phase = ReplicaPhase::NormalPhase;
@@ -342,7 +341,7 @@ impl<S> Replica<S>
                                     self.cst.request_latest_consensus_seq_no(
                                         &self.synchronizer,
                                         &self.timeouts,
-                                        &mut self.node,
+                                        &self.node,
                                     );
                                 }
                                 CstStatus::RequestState => {
@@ -370,8 +369,12 @@ impl<S> Replica<S>
                     // TODO: verify if ignoring the checkpoint state while
                     // receiving state from peer nodes is correct
                 }
-                Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
-                Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
+                Message::ConnectedTx(id, sock) => {
+                    //self.node.handle_connected_tx(id, sock)
+                }
+                Message::ConnectedRx(id, sock) => {
+                    //self.node.handle_connected_rx(id, sock)
+                }
                 //If a client has disconnected, print
                 Message::DisconnectedTx(id) if id >= self.node.first_client_id() => println!("{:?} disconnected TX", id),
                 Message::DisconnectedRx(Some(id)) if id >= self.node.first_client_id() => println!("{:?} disconnected RX", id),
@@ -389,102 +392,109 @@ impl<S> Replica<S>
 
     async fn update_sync_phase(&mut self) -> Result<bool> {
         // retrieve a view change message to be processed
-        let message = match self.synchronizer.poll() {
+        let messages = match self.synchronizer.poll() {
             SynchronizerPollStatus::Recv => {
-                self.node.receive().await?
+                self.node.receive_from_replicas()?
             }
             SynchronizerPollStatus::NextMessage(h, m) => {
-                Message::System(h, SystemMessage::ViewChange(m))
+                vec![Message::System(h, SystemMessage::ViewChange(m))]
             }
             SynchronizerPollStatus::ResumeViewChange => {
                 self.synchronizer.resume_view_change(
-                    &mut self.log,
+                    &self.log,
                     &mut self.consensus,
-                    &mut self.node,
+                    &self.node,
                 );
+
                 self.phase = ReplicaPhase::NormalPhase;
                 return Ok(false);
             }
         };
 
-        match message {
-            Message::RequestBatch(time, batch) => {
-                self.requests_received(time, batch);
-            }
-            Message::System(header, message) => {
-                match message {
-                    SystemMessage::Consensus(message) => {
-                        self.consensus.queue(header, message);
-                    }
-                    SystemMessage::ForwardedRequests(requests) => {
-                        self.forwarded_requests_received(requests);
-                    }
-                    request @ SystemMessage::Request(_) => {
-                        self.request_received(header, request);
-                    }
-                    SystemMessage::Cst(message) => {
-                        let status = self.cst.process_message(
-                            CstProgress::Message(header, message),
-                            &self.synchronizer,
-                            &self.consensus,
-                            &self.log,
-                            &mut self.node,
-                        );
-                        match status {
-                            CstStatus::Nil => (),
-                            // should not happen...
-                            _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
-                        }
-                    }
-                    SystemMessage::ViewChange(message) => {
-                        let status = self.synchronizer.process_message(
-                            header,
-                            message,
-                            &self.timeouts,
-                            &mut self.log,
-                            &mut self.consensus,
-                            &mut self.node,
-                        );
-                        self.synchronizer.signal();
-                        match status {
-                            SynchronizerStatus::Nil => return Ok(false),
-                            SynchronizerStatus::Running => (),
-                            SynchronizerStatus::NewView => {
-                                self.phase = ReplicaPhase::NormalPhase;
-                                return Ok(false);
-                            }
-                            SynchronizerStatus::RunCst => {
-                                self.phase = ReplicaPhase::RetrievingState;
-                                self.phase_stack = Some(ReplicaPhase::SyncPhase);
-                            }
-                            // should not happen...
-                            _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
-                        }
-                    }
-                    // FIXME: handle rogue reply messages
-                    SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
+        for message in messages {
+            match message {
+                Message::RequestBatch(time, batch) => {
+                    self.requests_received(time, batch);
                 }
+                Message::System(header, message) => {
+                    match message {
+                        SystemMessage::Consensus(message) => {
+                            self.consensus.queue(header, message);
+                        }
+                        SystemMessage::ForwardedRequests(requests) => {
+                            self.forwarded_requests_received(requests);
+                        }
+                        request @ SystemMessage::Request(_) => {
+                            self.request_received(header, request);
+                        }
+                        SystemMessage::Cst(message) => {
+                            let status = self.cst.process_message(
+                                CstProgress::Message(header, message),
+                                &self.synchronizer,
+                                &self.consensus,
+                                &self.log,
+                                &mut self.node,
+                            );
+                            match status {
+                                CstStatus::Nil => (),
+                                // should not happen...
+                                _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+                            }
+                        }
+                        SystemMessage::ViewChange(message) => {
+                            let status = self.synchronizer.process_message(
+                                header,
+                                message,
+                                &self.timeouts,
+                                &mut self.log,
+                                &mut self.consensus,
+                                &mut self.node,
+                            );
+                            self.synchronizer.signal();
+                            match status {
+                                SynchronizerStatus::Nil => return Ok(false),
+                                SynchronizerStatus::Running => (),
+                                SynchronizerStatus::NewView => {
+                                    self.phase = ReplicaPhase::NormalPhase;
+                                    return Ok(false);
+                                }
+                                SynchronizerStatus::RunCst => {
+                                    self.phase = ReplicaPhase::RetrievingState;
+                                    self.phase_stack = Some(ReplicaPhase::SyncPhase);
+                                }
+                                // should not happen...
+                                _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+                            }
+                        }
+                        // FIXME: handle rogue reply messages
+                        SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
+                    }
+                }
+                //////// XXX XXX XXX XXX
+                //
+                // TODO: check if simply copying the behavior over from the
+                // normal phase is correct here
+                //
+                //
+                Message::Timeout(timeout_kind) => {
+                    self.timeout_received(timeout_kind);
+                }
+                Message::ExecutionFinishedWithAppstate(appstate) => {
+                    self.execution_finished_with_appstate(appstate)?;
+                }
+                Message::ConnectedTx(id, sock) => {
+                    //self.node.handle_connected_tx(id, sock)
+                }
+                Message::ConnectedRx(id, sock) => {
+                    //self.node.handle_connected_rx(id, sock)
+                }
+                Message::DisconnectedTx(id) if id >= self.node.first_client_id() => println!("{:?} disconnected TX", id),
+                Message::DisconnectedRx(Some(id)) if id >= self.node.first_client_id() => println!("{:?} disconnected RX", id),
+                // TODO: node disconnected on send side
+                Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
+                // TODO: node disconnected on receive side
+                Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
             }
-            //////// XXX XXX XXX XXX
-            //
-            // TODO: check if simply copying the behavior over from the
-            // normal phase is correct here
-            //
-            //
-            Message::Timeout(timeout_kind) => {
-                self.timeout_received(timeout_kind);
-            }
-            Message::ExecutionFinishedWithAppstate(appstate) => {
-                self.execution_finished_with_appstate(appstate)?;
-            }
-            Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
-            Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
-            Message::DisconnectedTx(id) if id >= self.node.first_client_id() => println!("{:?} disconnected TX", id),
-            Message::DisconnectedRx(Some(id)) if id >= self.node.first_client_id() => println!("{:?} disconnected RX", id),
-            // TODO: node disconnected on send side
-            Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
-            // TODO: node disconnected on receive side
-            Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
         }
 
         Ok(true)
@@ -506,134 +516,143 @@ impl<S> Replica<S>
         //
         // the order of the next consensus message is guaranteed by
         // `TboQueue`, in the consensus module.
-        let message = match self.consensus.poll(&mut self.log) {
+        let messages = match self.consensus.poll(&mut self.log) {
             ConsensusPollStatus::Recv => {
-                self.node.receive_from_replicas().await?
+                self.node.receive_from_replicas()?
             }
             ConsensusPollStatus::NextMessage(h, m) => {
-                Message::System(h, SystemMessage::Consensus(m))
+                vec![Message::System(h, SystemMessage::Consensus(m))]
             }
             ConsensusPollStatus::TryProposeAndRecv => {
                 if let Some(requests) = self.log.next_batch() {
-                    self.consensus.propose(requests, &self.synchronizer, &mut self.node);
+                    self.consensus.propose(requests, &self.synchronizer, &self.node);
                 }
 
-                self.node.receive_from_replicas().await?
+                self.node.receive_from_replicas()?
             }
         };
 
-        match message {
-            Message::RequestBatch(time, batch) => {
-                self.requests_received(time, batch);
-            }
-            Message::System(header, message) => {
-                match message {
-                    SystemMessage::ForwardedRequests(requests) => {
-                        self.forwarded_requests_received(requests);
-                    }
-                    request @ SystemMessage::Request(_) => {
-                        self.request_received(header, request);
-                    }
-                    SystemMessage::Cst(message) => {
-                        let status = self.cst.process_message(
-                            CstProgress::Message(header, message),
-                            &self.synchronizer,
-                            &self.consensus,
-                            &self.log,
-                            &mut self.node,
-                        );
-                        match status {
-                            CstStatus::Nil => (),
-                            // should not happen...
-                            _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+        for message in messages {
+            match message {
+                Message::RequestBatch(time, batch) => {
+                    self.requests_received(time, batch);
+                }
+                Message::System(header, message) => {
+                    match message {
+                        SystemMessage::ForwardedRequests(requests) => {
+                            self.forwarded_requests_received(requests);
                         }
-                    }
-                    SystemMessage::ViewChange(message) => {
-                        let status = self.synchronizer.process_message(
-                            header,
-                            message,
-                            &self.timeouts,
-                            &mut self.log,
-                            &mut self.consensus,
-                            &mut self.node,
-                        );
-                        self.synchronizer.signal();
-                        match status {
-                            SynchronizerStatus::Nil => (),
-                            SynchronizerStatus::Running => self.phase = ReplicaPhase::SyncPhase,
-                            // should not happen...
-                            _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+                        request @ SystemMessage::Request(_) => {
+                            self.request_received(header, request);
                         }
-                    }
-                    SystemMessage::Consensus(message) => {
-                        let seq = self.consensus.sequence_number();
-                        let status = self.consensus.process_message(
-                            header,
-                            message,
-                            &self.timeouts,
-                            &mut self.synchronizer,
-                            &mut self.log,
-                            &mut self.node,
-                        );
-                        match status {
-                            // if deciding, nothing to do
-                            ConsensusStatus::Deciding => rt::yield_now().await,
-                            // FIXME: implement this
-                            ConsensusStatus::VotedTwice(_) => todo!(),
-                            // reached agreement, execute requests
-                            //
-                            // FIXME: execution layer needs to receive the id
-                            // attributed by the consensus layer to each op,
-                            // to execute in order
-                            ConsensusStatus::Decided(digests) => {
-                                for digest in digests.iter() {
-                                    self.synchronizer.unwatch_request(digest);
-                                }
-                                let (info, batch) = self.log.finalize_batch(seq, digests)?;
-                                match info {
-                                    // normal execution
-                                    Info::Nil => self.executor.queue_update(
-                                        *self.log.batch_meta(),
-                                        batch,
-                                    )?,
-                                    // execute and begin local checkpoint
-                                    Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
-                                        *self.log.batch_meta(),
-                                        batch,
-                                    )?,
-                                }
-                                self.consensus.next_instance();
+                        SystemMessage::Cst(message) => {
+                            let status = self.cst.process_message(
+                                CstProgress::Message(header, message),
+                                &self.synchronizer,
+                                &self.consensus,
+                                &self.log,
+                                &mut self.node,
+                            );
+                            match status {
+                                CstStatus::Nil => (),
+                                // should not happen...
+                                _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
                             }
                         }
+                        SystemMessage::ViewChange(message) => {
+                            let status = self.synchronizer.process_message(
+                                header,
+                                message,
+                                &self.timeouts,
+                                &self.log,
+                                &mut self.consensus,
+                                &self.node,
+                            );
 
-                        // we processed a consensus message,
-                        // signal the consensus layer of this event
-                        self.consensus.signal();
+                            self.synchronizer.signal();
 
-                        // yield execution since `signal()`
-                        // will probably force a value from the
-                        // TBO queue in the consensus layer
-                        rt::yield_now().await;
+                            match status {
+                                SynchronizerStatus::Nil => (),
+                                SynchronizerStatus::Running => self.phase = ReplicaPhase::SyncPhase,
+                                // should not happen...
+                                _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+                            }
+                        }
+                        SystemMessage::Consensus(message) => {
+                            let seq = self.consensus.sequence_number();
+                            let status = self.consensus.process_message(
+                                header,
+                                message,
+                                &self.timeouts,
+                                &self.synchronizer,
+                                &self.log,
+                                &self.node,
+                            );
+                            match status {
+                                // if deciding, nothing to do
+                                ConsensusStatus::Deciding => rt::yield_now().await,
+                                // FIXME: implement this
+                                ConsensusStatus::VotedTwice(_) => todo!(),
+                                // reached agreement, execute requests
+                                //
+                                // FIXME: execution layer needs to receive the id
+                                // attributed by the consensus layer to each op,
+                                // to execute in order
+                                ConsensusStatus::Decided(digests) => {
+                                    for digest in digests.iter() {
+                                        self.synchronizer.unwatch_request(digest);
+                                    }
+                                    let (info, batch) = self.log.finalize_batch(seq, digests)?;
+                                    match info {
+                                        // normal execution
+                                        Info::Nil => self.executor.queue_update(
+                                            self.log.batch_meta(),
+                                            batch,
+                                        )?,
+                                        // execute and begin local checkpoint
+                                        Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
+                                            self.log.batch_meta(),
+                                            batch,
+                                        )?,
+                                    }
+                                    self.consensus.next_instance();
+                                }
+                            }
+
+                            // we processed a consensus message,
+                            // signal the consensus layer of this event
+                            self.consensus.signal();
+
+                            // yield execution since `signal()`
+                            // will probably force a value from the
+                            // TBO queue in the consensus layer
+                            rt::yield_now().await;
+                        }
+                        // FIXME: handle rogue reply messages
+                        SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
                     }
-                    // FIXME: handle rogue reply messages
-                    SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
                 }
+                Message::Timeout(timeout_kind) => {
+                    self.timeout_received(timeout_kind);
+                }
+                Message::ExecutionFinishedWithAppstate(appstate) => {
+                    self.execution_finished_with_appstate(appstate)?;
+                }
+                Message::ConnectedTx(id, sock) => {
+                    //self.node.handle_connected_tx(id, sock)
+                },
+                Message::ConnectedRx(id, sock) => {
+                    //self.node.handle_connected_rx(id, sock)
+                },
+                Message::DisconnectedTx(id) if id >= self.node.first_client_id() => println!("{:?} disconnected TX", id),
+                Message::DisconnectedRx(Some(id)) if id >= self.node.first_client_id() => println!("{:?} disconnected RX", id),
+                // TODO: node disconnected on send side
+                Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
+                // TODO: node disconnected on receive side
+                Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
             }
-            Message::Timeout(timeout_kind) => {
-                self.timeout_received(timeout_kind);
-            }
-            Message::ExecutionFinishedWithAppstate(appstate) => {
-                self.execution_finished_with_appstate(appstate)?;
-            }
-            Message::ConnectedTx(id, sock) => self.node.handle_connected_tx(id, sock),
-            Message::ConnectedRx(id, sock) => self.node.handle_connected_rx(id, sock),
-            Message::DisconnectedTx(id) if id >= self.node.first_client_id() => println!("{:?} disconnected TX", id),
-            Message::DisconnectedRx(Some(id)) if id >= self.node.first_client_id() => println!("{:?} disconnected RX", id),
-            // TODO: node disconnected on send side
-            Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
-            // TODO: node disconnected on receive side
-            Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
         }
+
         Ok(())
     }
 
@@ -677,7 +696,7 @@ impl<S> Replica<S>
                         self.cst.request_latest_consensus_seq_no(
                             &self.synchronizer,
                             &self.timeouts,
-                            &mut self.node,
+                            &self.node,
                         );
                         self.phase = ReplicaPhase::RetrievingState;
                     }
@@ -685,7 +704,7 @@ impl<S> Replica<S>
                         self.cst.request_latest_state(
                             &self.synchronizer,
                             &self.timeouts,
-                            &mut self.node,
+                            &self.node,
                         );
                         self.phase = ReplicaPhase::RetrievingState;
                     }
@@ -736,7 +755,6 @@ impl<S> Replica<S>
     }
 
     fn request_received(&self, h: Header, r: SystemMessage<State<S>, Request<S>, Reply<S>>) {
-        //TODO: Make this not require mut ref
         self.synchronizer.watch_request(
             h.unique_digest(),
             &self.timeouts,

@@ -15,7 +15,8 @@ use futures_timer::Delay;
 use crate::bft::ordering;
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::message::Message;
-use crate::bft::communication::channel::MessageChannelTx;
+use crate::bft::communication::peer_handling::ConnectedPeer;
+use crate::bft::communication::serialize::SharedData;
 use crate::bft::executable::{
     Service,
     Request,
@@ -43,7 +44,7 @@ struct TimeoutsHandleShared {
 
 pub struct TimeoutsHandle<S: Service> {
     shared: Arc<TimeoutsHandleShared>,
-    system_tx: MessageChannelTx<State<S>, Request<S>, Reply<S>>,
+    system_tx: Arc<ConnectedPeer<Message<State<S>, Request<S>, Reply<S>>>>,
 }
 
 pub struct TimeoutHandle {
@@ -105,7 +106,7 @@ where
         let mut system_tx = self.system_tx.clone();
         rt::spawn(async move {
             Delay::new(dur).await;
-            system_tx.send(Message::Timeout(kind)).await.unwrap_or(());
+            system_tx.push_request(Message::Timeout(kind));
         });
     }
 
@@ -118,10 +119,11 @@ where
         let seq = self.shared.gen_seq_no();
 
         let shared = Arc::clone(&self.shared);
+
         rt::spawn(async move {
             Delay::new(dur).await;
             if !shared.was_canceled(seq) {
-                system_tx.send(Message::Timeout(kind)).await.unwrap_or(());
+                system_tx.push_request(Message::Timeout(kind));
             }
         });
 
@@ -138,12 +140,12 @@ where
     Reply<S>: Send + 'static,
 {
     pub fn new(
-        system_tx: MessageChannelTx<State<S>, Request<S>, Reply<S>>,
-    ) -> TimeoutsHandle<S> {
+        system_tx: Arc<ConnectedPeer<Message<State<S>, Request<S>, Reply<S>>>>,
+    ) -> Arc<TimeoutsHandle<S>> {
         let shared = Arc::new(TimeoutsHandleShared {
             canceled: Mutex::new(IntMap::new()),
             current_seq_no: AtomicSeqNo::new(0),
         });
-        TimeoutsHandle { system_tx, shared }
+        Arc::new(TimeoutsHandle { system_tx, shared })
     }
 }
