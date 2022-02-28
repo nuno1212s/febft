@@ -178,7 +178,7 @@ impl SignDetached {
 ///
 /// A `Node` constitutes the core component used in the wire
 /// communication between processes.
-pub struct Node<D: SharedData> {
+pub struct Node<D: SharedData + 'static> {
     id: NodeId,
     first_cli: NodeId,
     node_handling: NodePeers<Message<D::State, D::Request, D::Reply>>,
@@ -1090,7 +1090,7 @@ impl<D> Node<D>
 }
 
 /// Represents a node with sending capabilities only.
-pub struct SendNode<D: SharedData> {
+pub struct SendNode<D: SharedData + 'static> {
     id: NodeId,
     shared: Arc<NodeShared>,
     rng: prng::State,

@@ -19,7 +19,7 @@ use crate::bft::timeouts::TimeoutsHandle;
 ///Handles taking requests from the client pools and storing the requests in the log,
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
-pub struct RqProcessor<S: Service> {
+pub struct RqProcessor<S: Service + 'static> {
     batch_channel: (ChannelTx<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
                     ChannelRx<Vec<StoredMessage<RequestMessage<Request<S>>>>>),
     node_ref: Arc<Node<S::Data>>,

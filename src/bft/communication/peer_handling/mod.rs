@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::RecvError;
 use std::thread::JoinHandle;
 use dsrust::channels::queue_channel::{Receiver, Sender};
@@ -27,7 +27,7 @@ fn channel_init<T>(capacity: usize) -> (Sender<Vec<T>, QueueType<T>>, Receiver<V
     dsrust::channels::queue_channel::bounded_lf_queue(capacity)
 }
 
-pub struct NodePeers<T> {
+pub struct NodePeers<T: 'static> {
     first_cli: NodeId,
     own_id: NodeId,
     peer_loopback: Arc<ConnectedPeer<T>>,
@@ -71,6 +71,7 @@ impl<T> NodePeers<T> {
         //TODO: Batch size is not correct, should be the value found in env
         //Both replicas and clients have to interact with replicas, so we always need this pool
         //We have a much larger queue because we don't want small slowdowns slowing down the connections
+        //And also because there are few replicas, while there can be a very large amount of clients
         let replica_handling = ConnectedPeersGroup::new(1024, NODE_CHAN_BOUND,
                                                         replica_tx.clone());
 
@@ -177,6 +178,19 @@ impl<T> NodePeers<T> {
                 Err(Error::simple(ErrorKind::Communication))}
         }
     }
+
+    pub fn client_count(&self) -> Option<usize> {
+        return match &self.client_handling {
+            None => {None}
+            Some(client) => {
+                Some(client.connected_clients.load(Ordering::Relaxed))
+            }
+        }
+    }
+
+    pub fn replica_count(&self) -> usize {
+        return self.replica_handling.connected_clients.load(Ordering::Relaxed)
+    }
 }
 
 ///
@@ -190,18 +204,19 @@ impl<T> NodePeers<T> {
 /// no socket handling is done here
 /// This is just built on top of the actual per client connection socket stuff and each socket
 /// should push items into its own ConnectedPeer instance
-pub struct ConnectedPeersGroup<T> {
+pub struct ConnectedPeersGroup<T:'static> {
     //We can use mutexes here since there will only be concurrency on client connections and dcs
     //And since each client has his own reference to push data to, this only needs to be accessed by the thread
     //That's producing the batches and the threads of clients connecting and disconnecting
     client_pools: Mutex<Vec<Arc<ConnectedPeersPool<T>>>>,
     client_connections_cache: RwLock<IntMap<Arc<ConnectedPeer<T>>>>,
+    connected_clients: AtomicUsize,
     per_client_cache: usize,
     batch_size: usize,
     batch_transmission: Sender<Vec<T>, QueueType<T>>,
 }
 
-pub struct ConnectedPeersPool<T> {
+pub struct ConnectedPeersPool<T: 'static> {
     //We can use mutexes here since there will only be concurrency on client connections and dcs
     //And since each client has his own reference to push data to, this only needs to be accessed by the thread
     //That's producing the batches and the threads of clients connecting and disconnecting
@@ -218,12 +233,13 @@ pub struct ConnectedPeer<T> {
     disconnected: AtomicBool,
 }
 
-impl<T> ConnectedPeersGroup<T> {
+impl<T:'static> ConnectedPeersGroup<T> {
     pub fn new(per_client_bound: usize, batch_size: usize, batch_transmission: Sender<Vec<T>, QueueType<T>>) -> Arc<Self> {
         Arc::new(Self {
             client_pools: parking_lot::Mutex::new(Vec::new()),
             client_connections_cache: RwLock::new(IntMap::new()),
             per_client_cache: per_client_bound,
+            connected_clients: AtomicUsize::new(0),
             batch_size,
             batch_transmission,
         })
@@ -269,12 +285,12 @@ impl<T> ConnectedPeersGroup<T> {
 
         guard.push(pool);
 
+        self.connected_clients.fetch_add(1, Ordering::SeqCst);
+
         //Spawn the thread that will collect client requests
         //and then send the batches to the channel.
         std::thread::spawn(move || {
 
-            //Lock this before hand since there will be absolutely no contention
-            //So we can just keep this lock forever
             loop {
                 if pool_clone.finish_execution.load(Ordering::Relaxed) {
                     break;
@@ -312,6 +328,8 @@ impl<T> ConnectedPeersGroup<T> {
         }
 
         drop(cache_guard);
+
+        self.connected_clients.fetch_sub(1, Ordering::SeqCst);
     }
 
     pub fn del_client(&self, client_id: &NodeId) -> bool {
@@ -337,6 +355,8 @@ impl<T> ConnectedPeersGroup<T> {
                 Err(_) => {}
             }
         }
+
+        self.connected_clients.fetch_sub(1, Ordering::SeqCst);
 
         false
     }

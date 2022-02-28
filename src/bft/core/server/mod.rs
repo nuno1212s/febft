@@ -127,7 +127,7 @@ impl ViewInfo {
 }
 
 /// Represents a replica in `febft`.
-pub struct Replica<S: Service> {
+pub struct Replica<S: Service + 'static> {
     phase: ReplicaPhase,
     // this value is primarily used to switch from
     // state transfer back to a view change

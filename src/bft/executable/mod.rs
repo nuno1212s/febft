@@ -150,7 +150,7 @@ pub trait Service {
 
 /// Stateful data of the task responsible for executing
 /// client requests.
-pub struct Executor<S: Service> {
+pub struct Executor<S: Service + 'static> {
     service: S,
     state: State<S>,
     e_rx: mpsc::Receiver<ExecutionRequest<State<S>, Request<S>>>,

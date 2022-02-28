@@ -40,7 +40,7 @@ struct ClientData<P> {
 
 /// Represents a client node in `febft`.
 // TODO: maybe make the clone impl more efficient
-pub struct Client<D: SharedData> {
+pub struct Client<D: SharedData + 'static> {
     session_id: SeqNo,
     operation_counter: SeqNo,
     data: Arc<ClientData<D::Reply>>,
