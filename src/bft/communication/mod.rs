@@ -1,19 +1,14 @@
 //! Communication primitives for `febft`, such as wire message formats.
 
 use std::cell::RefCell;
-use std::convert::identity;
-use std::env::var;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_tls::{
     TlsAcceptor,
     TlsConnector,
 };
-use dsrust::queues::mqueue::MQueue;
-use dsrust::queues::queues::{BQueue, PartiallyDumpable};
 use either::{
     Either,
     Left,
@@ -26,7 +21,6 @@ use futures::io::{
     BufWriter,
 };
 use futures::lock::Mutex;
-use futures::select;
 use futures_timer::Delay;
 use intmap::IntMap;
 use parking_lot::RwLock;
@@ -39,9 +33,8 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use crate::bft::async_runtime as rt;
-use crate::bft::communication::channel::{ChannelRx, ChannelTx, new_bounded};
-use crate::bft::communication::message::{Header, Message, RequestMessage, SerializedMessage, StoredMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
-use crate::bft::communication::peer_handling::{ConnectedPeer, ConnectedPeersGroup, NodePeers};
+use crate::bft::communication::message::{Header, Message, SerializedMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
+use crate::bft::communication::peer_handling::{ConnectedPeer, NodePeers};
 use crate::bft::communication::serialize::{
     Buf,
     DigestData,
@@ -316,6 +309,16 @@ impl<D> Node<D>
 
         //TODO: Wait for all the replicas to have connected
 
+        while node.node_handling.replica_count() < 4 {
+
+            //Any received messages will be handled by the connection pool buffers
+            println!("Connected to {} replicas on the node {:?}", node.node_handling.replica_count(), node.id);
+
+            Delay::new(Duration::from_secs(1)).await;
+        }
+
+        println!("Found all nodes required {}", node.node_handling.replica_count());
+
         // while c
         //     .iter()
         //     .enumerate()
@@ -502,7 +505,7 @@ impl<D> Node<D>
     ///
     /// This variant of `broadcast()` signs the sent message.
     pub fn broadcast_signed(
-        &mut self,
+        &self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item=NodeId>,
     ) {
@@ -512,7 +515,9 @@ impl<D> Node<D>
             Some(&self.shared),
             targets,
         );
+
         let nonce = self.rng.next_state();
+
         Self::broadcast_impl(message, mine, others, nonce)
     }
 
@@ -815,6 +820,8 @@ impl<D> Node<D>
     /// Method called upon a `Message::ConnectedTx`.
     /// Registers the newly created transmission socket to the peer
     pub fn handle_connected_tx(&self, peer_id: NodeId, sock: SecureSocketSend) {
+        println!("Connected TX to peer {:?} from peer {:?}", peer_id, self.id);
+
         match &self.peer_tx {
             ///If we are a replica?
             PeerTx::Server(ref lock) => {
@@ -859,6 +866,8 @@ impl<D> Node<D>
         }
 
         //Init the per client queue and start putting the received messages into it
+        println!("Handling connection of peer {:?} in peer {:?}", peer_id, self.id);
+
         let client = self.node_handling.init_peer_conn(peer_id.clone());
 
         rt::spawn(async move {
@@ -909,7 +918,7 @@ impl<D> Node<D>
                     }
                 };
 
-                client.push_request(Message::System(header, message));
+                client.push_request(Message::System(header, message)).await;
 
                 //tx.send(Message::System(header, message)).await.unwrap_or(());
             }
@@ -939,8 +948,12 @@ impl<D> Node<D>
             let connector = connector.clone();
             let nonce = rng.next_state();
 
-            rt::spawn(self.clone().tx_side_connect_task(my_id, first_cli, peer_id,
-                                                        nonce, connector, addr));
+            println!("Attempting to connect to peer {:?} with address {:?} from node {:?}", peer_id, addr, my_id);
+
+            let arc = self.clone();
+
+            rt::spawn(arc.tx_side_connect_task(my_id, first_cli, peer_id,
+                                                  nonce, connector, addr));
         }
     }
 
@@ -955,6 +968,8 @@ impl<D> Node<D>
     ) {
         const SECS: u64 = 1;
         const RETRY: usize = 3 * 60;
+
+        println!("TRYING TIMES {} for Node {:?} from peer {:?}", RETRY, peer_id, my_id);
         // NOTE:
         // ========
         //
@@ -964,7 +979,8 @@ impl<D> Node<D>
         //
         // 2) try to connect up to `RETRY` times, then announce
         // failure with a channel send op
-        for _ in 0..RETRY {
+        for _try in 0..RETRY {
+            println!("Trying attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
             if let Ok(mut sock) = socket::connect(addr).await {
                 // create header
                 let (header, _) = WireMessage::new(
@@ -1053,6 +1069,8 @@ impl<D> Node<D>
                 break;
             }
 
+            println!("Node {:?} received connection from node", my_id);
+
             // we are passing the correct length, safe to use unwrap()
             let header = Header::deserialize_from(&buf_header[..]).unwrap();
 
@@ -1067,6 +1085,8 @@ impl<D> Node<D>
                 // drop connections with invalid headers
                 Err(_) => break,
             };
+
+            println!("Node {:?} received connection from node {:?}", my_id, peer_id);
 
             // TLS handshake; drop connection if it fails
             let sock = if peer_id >= first_cli || my_id >= first_cli {
@@ -1309,7 +1329,7 @@ impl<D> SendTo<D>
         ).into_inner();
 
         // send
-        cli.push_request(Message::System(h, m));
+        cli.push_request(Message::System(h, m)).await;
     }
 
     async fn peers(

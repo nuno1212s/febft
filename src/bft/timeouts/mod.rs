@@ -106,7 +106,7 @@ where
         let mut system_tx = self.system_tx.clone();
         rt::spawn(async move {
             Delay::new(dur).await;
-            system_tx.push_request(Message::Timeout(kind));
+            system_tx.push_request(Message::Timeout(kind)).await;
         });
     }
 
@@ -123,7 +123,7 @@ where
         rt::spawn(async move {
             Delay::new(dur).await;
             if !shared.was_canceled(seq) {
-                system_tx.push_request(Message::Timeout(kind));
+                system_tx.push_request(Message::Timeout(kind)).await;
             }
         });
 

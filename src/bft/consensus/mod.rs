@@ -326,7 +326,9 @@ impl<S> Consensus<S>
         // copy digests from PRE-PREPARE
         self.current_digest = digest;
 
-        let pre_prepares = log.decision_log().borrow().pre_prepares();
+        let dec_log_borrow = log.decision_log().borrow();
+
+        let pre_prepares = dec_log_borrow.pre_prepares();
         let last = &pre_prepares[pre_prepares.len() - 1];
 
         match last.message().kind() {

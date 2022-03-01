@@ -3,7 +3,6 @@
 //! This code allows a replica to change its view, where a new
 //! leader is elected.
 
-use std::borrow::{Borrow, BorrowMut};
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::collections::VecDeque;
@@ -133,41 +132,45 @@ pub struct TboQueue<O> {
     view: ViewInfo,
     // probe messages from this queue instead of
     // fetching them from the network
-    get_queue: Cell<bool>,
+    get_queue: bool,
     // stores all STOP messages for the next view
-    stop: RefCell<VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>>,
+    stop: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
     // stores all STOP-DATA messages for the next view
-    stop_data: RefCell<VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>>,
+    stop_data: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
     // stores all SYNC messages for the next view
-    sync: RefCell<VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>>,
+    sync: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
 }
 
 impl<O> TboQueue<O> {
     fn new(view: ViewInfo) -> Self {
         Self {
             view,
-            get_queue: Cell::new(false),
-            stop: RefCell::new(VecDeque::new()),
-            stop_data: RefCell::new(VecDeque::new()),
-            sync: RefCell::new(VecDeque::new()),
+            get_queue: false,
+            stop: VecDeque::new(),
+            stop_data: VecDeque::new(),
+            sync: VecDeque::new(),
         }
+    }
+
+    pub fn install_view(&mut self, view: ViewInfo) {
+        self.view = view;
     }
 
     /// Signal this `TboQueue` that it may be able to extract new
     /// view change messages from its internal storage.
-    pub fn signal(&self) {
-        self.get_queue.replace(true);
+    pub fn signal(&mut self) {
+        self.get_queue = true;
     }
 
-    fn next_instance_queue(&self) {
-        tbo_advance_message_queue(&mut *self.stop.borrow_mut());
-        tbo_advance_message_queue(&mut *self.stop_data.borrow_mut());
-        tbo_advance_message_queue(&mut *self.sync.borrow_mut());
+    fn next_instance_queue(&mut self) {
+        tbo_advance_message_queue(&mut self.stop);
+        tbo_advance_message_queue(&mut self.stop_data);
+        tbo_advance_message_queue(&mut self.sync);
     }
 
     /// Queues a view change message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
-    pub fn queue(&self, h: Header, m: ViewChangeMessage<O>) {
+    pub fn queue(&mut self, h: Header, m: ViewChangeMessage<O>) {
         match m.kind() {
             ViewChangeMessageKind::Stop(_) => self.queue_stop(h, m),
             ViewChangeMessageKind::StopData(_) => self.queue_stop_data(h, m),
@@ -178,7 +181,7 @@ impl<O> TboQueue<O> {
     /// Verifies if we have new `STOP` messages to be processed for
     /// the next view.
     pub fn can_process_stops(&self) -> bool {
-        self.stop.borrow_mut()
+        self.stop
             .get(0)
             .map(|deque| deque.len() > 0)
             .unwrap_or(false)
@@ -186,25 +189,25 @@ impl<O> TboQueue<O> {
 
     /// Queues a `STOP` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
-    fn queue_stop(&self, h: Header, m: ViewChangeMessage<O>) {
+    fn queue_stop(&mut self, h: Header, m: ViewChangeMessage<O>) {
         // NOTE: we use next() because we want to retrieve messages
         // for v+1, as we haven't started installing the new view yet
         let seq = self.view.sequence_number().next();
-        tbo_queue_message(seq, &mut *self.stop.borrow_mut(), StoredMessage::new(h, m))
+        tbo_queue_message(seq, &mut self.stop, StoredMessage::new(h, m))
     }
 
     /// Queues a `STOP-DATA` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
-    fn queue_stop_data(&self, h: Header, m: ViewChangeMessage<O>) {
+    fn queue_stop_data(&mut self, h: Header, m: ViewChangeMessage<O>) {
         let seq = self.view.sequence_number();
-        tbo_queue_message(seq, &mut *self.stop_data.borrow_mut(), StoredMessage::new(h, m))
+        tbo_queue_message(seq, &mut self.stop_data, StoredMessage::new(h, m))
     }
 
     /// Queues a `SYNC` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
-    fn queue_sync(&self, h: Header, m: ViewChangeMessage<O>) {
+    fn queue_sync(&mut self, h: Header, m: ViewChangeMessage<O>) {
         let seq = self.view.sequence_number();
-        tbo_queue_message(seq, &mut *self.sync.borrow_mut(), StoredMessage::new(h, m))
+        tbo_queue_message(seq, &mut self.sync, StoredMessage::new(h, m))
     }
 }
 
@@ -292,6 +295,14 @@ pub struct Synchronizer<S: Service> {
     finalize_state: RefCell<Option<FinalizeState<Request<S>>>>,
 }
 
+///Justification/Sort of correction proof:
+///In general, all fields and methods will be accessed by the replica thread, never by the client rq thread.
+/// Therefore, we only have to protect the fields that will be accessed by both clients and replicas.
+/// So we protect collects, watching and tbo as those are the fields that are going to be
+/// accessed by both those threads.
+/// Since the other fields are going to be accessed by just 1 thread, we just need them to be Send, which they are
+unsafe impl<S: Service> Sync for Synchronizer<S> {}
+
 macro_rules! extract_msg {
     ($t:ty => $g:expr, $q:expr) => {
         extract_msg!($t => {}, $g, $q)
@@ -303,7 +314,7 @@ macro_rules! extract_msg {
             let (header, message) = stored.into_inner();
             SynchronizerPollStatus::NextMessage(header, message)
         } else {
-            $g.replace(false);
+            *$g = false;
             SynchronizerPollStatus::Recv
         }
     };
@@ -369,6 +380,18 @@ impl<S> Synchronizer<S>
             tbo: Mutex::new(TboQueue::new(view)),
             finalize_state: RefCell::new(None),
         })
+    }
+
+    pub fn signal(&self) {
+        self.tbo.lock().signal()
+    }
+
+    pub fn queue(&self, header: Header, message: ViewChangeMessage<Request<S>>) {
+        self.tbo.lock().queue(header, message)
+    }
+
+    pub fn can_process_stops(&self) -> bool {
+        self.tbo.lock().can_process_stops()
     }
 
     /// Watch a client request with the digest `digest`.
@@ -487,37 +510,38 @@ impl<S> Synchronizer<S>
         // FIXME: is the following line necessary?
         //self.phase = ProtoPhase::Init;
         let mut guard = self.tbo.lock();
-        guard.view = view;
+
+        guard.install_view(view);
     }
 
     /// Check if we can process new view change messages.
     pub fn poll(&self) -> SynchronizerPollStatus<Request<S>> {
-        let tbo_guard = self.tbo.lock();
+        let mut tbo_guard = self.tbo.lock();
         match *self.phase.borrow() {
-            _ if !tbo_guard.get_queue.get() => SynchronizerPollStatus::Recv,
+            _ if !tbo_guard.get_queue => SynchronizerPollStatus::Recv,
             ProtoPhase::Init => {
                 extract_msg!(Request<S> => 
                     { self.phase.replace(ProtoPhase::Stopping(0)); },
-                    &mut *tbo_guard.get_queue.borrow_mut(),
-                    &mut *tbo_guard.stop.borrow_mut()
+                    &mut tbo_guard.get_queue,
+                    &mut tbo_guard.stop
                 )
             }
             ProtoPhase::Stopping(_) | ProtoPhase::Stopping2(_) => {
                 extract_msg!(Request<S> =>
-                    &mut *tbo_guard.get_queue.borrow_mut(),
-                    &mut *tbo_guard.stop.borrow_mut()
+                    &mut tbo_guard.get_queue,
+                    &mut tbo_guard.stop
                 )
             }
             ProtoPhase::StoppingData(_) => {
                 extract_msg!(Request<S> =>
-                    &mut *tbo_guard.get_queue.borrow_mut(),
-                    &mut *tbo_guard.stop_data.borrow_mut()
+                    &mut tbo_guard.get_queue,
+                    &mut tbo_guard.stop_data
                 )
             }
             ProtoPhase::Syncing => {
                 extract_msg!(Request<S> =>
-                    &mut *tbo_guard.get_queue.borrow_mut(),
-                    &mut *tbo_guard.sync.borrow_mut()
+                    &mut tbo_guard.get_queue,
+                    &mut tbo_guard.sync
                 )
             }
             ProtoPhase::SyncingState => {
@@ -542,26 +566,39 @@ impl<S> Synchronizer<S>
             ProtoPhase::Init => {
                 match message.kind() {
                     ViewChangeMessageKind::Stop(_) => {
-                        self.queue_stop(header, message);
+                        let mut guard = self.tbo.lock();
+
+                        guard.queue_stop(header, message);
+
                         return SynchronizerStatus::Nil;
                     }
                     ViewChangeMessageKind::StopData(_) => {
-                        self.queue_stop_data(header, message);
+                        let mut guard = self.tbo.lock();
+
+                        guard.queue_stop_data(header, message);
+
                         return SynchronizerStatus::Nil;
                     }
                     ViewChangeMessageKind::Sync(_) => {
-                        self.queue_sync(header, message);
+                        let mut guard = self.tbo.lock();
+
+                        guard.queue_sync(header, message);
+
                         return SynchronizerStatus::Nil;
                     }
                 }
             }
             ProtoPhase::Stopping(i) | ProtoPhase::Stopping2(i) => {
                 let msg_seq = message.sequence_number();
-                let next_seq = self.view().sequence_number().next();
+                let current_view = self.view();
+                let next_seq = current_view.sequence_number().next();
 
                 let i = match message.kind() {
                     ViewChangeMessageKind::Stop(_) if msg_seq != next_seq => {
-                        self.queue_stop(header, message);
+                        let mut guard = self.tbo.lock();
+
+                        guard.queue_stop(header, message);
+
                         return stop_status!(self, i);
                     }
                     ViewChangeMessageKind::Stop(_) if self.stopped.borrow().contains_key(header.from().into()) => {
@@ -570,11 +607,17 @@ impl<S> Synchronizer<S>
                     }
                     ViewChangeMessageKind::Stop(_) => i + 1,
                     ViewChangeMessageKind::StopData(_) => {
-                        self.queue_stop_data(header, message);
+                        let mut guard = self.tbo.lock();
+
+                        guard.queue_stop_data(header, message);
+
                         return stop_status!(self, i);
                     }
                     ViewChangeMessageKind::Sync(_) => {
-                        self.queue_sync(header, message);
+                        let mut guard = self.tbo.lock();
+
+                        guard.queue_sync(header, message);
+
                         return stop_status!(self, i);
                     }
                 };
@@ -590,7 +633,7 @@ impl<S> Synchronizer<S>
                 // NOTE: we only take this branch of the code before
                 // we have sent our own STOP message
                 if let ProtoPhase::Stopping(_) = *self.phase.borrow() {
-                    return if i > self.view().params().f() {
+                    return if i > current_view.params().f() {
                         self.begin_view_change(None, node);
                         SynchronizerStatus::Running
                     } else {
@@ -599,7 +642,7 @@ impl<S> Synchronizer<S>
                     };
                 }
 
-                if i == self.view().params().quorum() {
+                if i == current_view.params().quorum() {
                     // NOTE:
                     // - add requests from STOP into client requests
                     //   in the log, to be ordered
@@ -610,22 +653,22 @@ impl<S> Synchronizer<S>
                     self.add_stopped_requests(log);
                     self.watch_all_requests(timeouts);
 
-                    self.install_view(self.view().next_view());
+                    self.install_view(current_view.next_view());
 
-                    self.phase.replace(if node.id() != self.view().leader() {
+                    self.phase.replace(if node.id() != current_view.leader() {
                         ProtoPhase::Syncing
                     } else {
                         ProtoPhase::StoppingData(0)
                     });
 
-                    let collect = log.decision_log().borrow().collect_data(self.view());
+                    let collect = log.decision_log().borrow().collect_data(current_view);
 
                     let message = SystemMessage::ViewChange(ViewChangeMessage::new(
-                        self.view().sequence_number(),
+                        current_view.sequence_number(),
                         ViewChangeMessageKind::StopData(collect),
                     ));
 
-                    node.send_signed(message, self.view().leader());
+                    node.send_signed(message, current_view.leader());
                 } else {
                     self.phase.replace(ProtoPhase::Stopping2(i));
                 }
@@ -634,23 +677,29 @@ impl<S> Synchronizer<S>
             }
             ProtoPhase::StoppingData(i) => {
                 let msg_seq = message.sequence_number();
-                let seq = self.view().sequence_number();
+                let current_view = self.view();
+                let seq = current_view.sequence_number();
 
                 // reject STOP-DATA messages if we are not the leader
                 let mut collects_guard = self.collects.lock();
 
                 let i = match message.kind() {
                     ViewChangeMessageKind::Stop(_) => {
-                        self.queue_stop(header, message);
+                        let mut guard = self.tbo.lock();
+
+                        guard.queue_stop(header, message);
+
                         return SynchronizerStatus::Running;
                     }
                     ViewChangeMessageKind::StopData(_) if msg_seq != seq => {
-                        if self.view().peek(msg_seq).leader() == node.id() {
-                            self.queue_stop_data(header, message);
+                        if current_view.peek(msg_seq).leader() == node.id() {
+                            let mut guard = self.tbo.lock();
+
+                            guard.queue_stop_data(header, message);
                         }
                         return SynchronizerStatus::Running;
                     }
-                    ViewChangeMessageKind::StopData(_) if self.view().leader() != node.id() => {
+                    ViewChangeMessageKind::StopData(_) if current_view.leader() != node.id() => {
                         return SynchronizerStatus::Running;
                     }
                     ViewChangeMessageKind::StopData(_) if collects_guard.contains_key(header.from().into()) => {
@@ -659,7 +708,9 @@ impl<S> Synchronizer<S>
                     }
                     ViewChangeMessageKind::StopData(_) => i + 1,
                     ViewChangeMessageKind::Sync(_) => {
-                        self.queue_sync(header, message);
+                        let mut guard = self.tbo.lock();
+                        guard.queue_sync(header, message);
+
                         return SynchronizerStatus::Running;
                     }
                 };
@@ -674,7 +725,7 @@ impl<S> Synchronizer<S>
                 collects_guard
                     .insert(header.from().into(), StoredMessage::new(header, message));
 
-                if i != self.view().params().quorum() {
+                if i != current_view.params().quorum() {
                     self.phase.replace(ProtoPhase::StoppingData(i));
                     return SynchronizerStatus::Running;
                 }
@@ -684,17 +735,18 @@ impl<S> Synchronizer<S>
                 // - broadcast SYNC msg with collected
                 //   STOP-DATA proofs so other replicas
                 //   can repeat the leader's computation
-                let proof = self.highest_proof(self.view(), node);
+                let proof = Self::highest_proof(&*collects_guard, current_view, node);
+
                 let curr_cid = proof
                     .map(|p| p.pre_prepare().message().sequence_number())
                     .map(|seq| SeqNo::from(u32::from(seq) + 1))
                     .unwrap_or(SeqNo::ZERO);
 
-                let normalized_collects: Vec<Option<&CollectData<Request<S>>>> = self
-                    .normalized_collects(curr_cid)
+                let normalized_collects: Vec<Option<&CollectData<Request<S>>>> =
+                    Self::normalized_collects(&*collects_guard, curr_cid)
                     .collect();
 
-                let sound = sound(self.view(), &normalized_collects);
+                let sound = sound(current_view, &normalized_collects);
                 if !sound.test() {
                     // FIXME: BFT-SMaRt doesn't do anything if `sound`
                     // evaluates to false; do we keep the same behavior,
@@ -711,11 +763,11 @@ impl<S> Synchronizer<S>
                     .cloned()
                     .collect();
                 let message = SystemMessage::ViewChange(ViewChangeMessage::new(
-                    self.view().sequence_number(),
+                    current_view.sequence_number(),
                     ViewChangeMessageKind::Sync(LeaderCollects { proposed: p.clone(), collects }),
                 ));
                 let node_id = node.id();
-                let targets = NodeId::targets(0..self.view().params().n())
+                let targets = NodeId::targets(0..current_view.params().n())
                     .filter(move |&id| id != node_id);
                 node.broadcast(message, targets);
 
@@ -737,23 +789,33 @@ impl<S> Synchronizer<S>
             }
             ProtoPhase::Syncing => {
                 let msg_seq = message.sequence_number();
-                let seq = self.view().sequence_number();
+                let current_view = self.view();
+                let seq = current_view.sequence_number();
 
                 // reject SYNC messages if these were not sent by the leader
                 let (proposed, collects) = match message.kind() {
                     ViewChangeMessageKind::Stop(_) => {
-                        self.queue_stop(header, message);
+                        let mut guard = self.tbo.lock();
+
+                        guard.queue_stop(header, message);
+
                         return SynchronizerStatus::Running;
                     }
                     ViewChangeMessageKind::StopData(_) => {
-                        self.queue_stop_data(header, message);
+                        let mut guard = self.tbo.lock();
+
+                        guard.queue_stop_data(header, message);
+
                         return SynchronizerStatus::Running;
                     }
                     ViewChangeMessageKind::Sync(_) if msg_seq != seq => {
-                        self.queue_sync(header, message);
+                        let mut guard = self.tbo.lock();
+
+                        guard.queue_sync(header, message);
+
                         return SynchronizerStatus::Running;
                     }
-                    ViewChangeMessageKind::Sync(_) if header.from() != self.view().leader() => {
+                    ViewChangeMessageKind::Sync(_) if header.from() != current_view.leader() => {
                         return SynchronizerStatus::Running;
                     }
                     ViewChangeMessageKind::Sync(_) => {
@@ -765,7 +827,7 @@ impl<S> Synchronizer<S>
                 // leader has already performed this computation in the
                 // STOP-DATA phase of Mod-SMaRt
                 let signed: Vec<_> = signed_collects::<S>(node, collects);
-                let proof = highest_proof::<S, _>(self.view(), node, signed.iter());
+                let proof = highest_proof::<S, _>(current_view, node, signed.iter());
                 let curr_cid = proof
                     .map(|p| p.pre_prepare().message().sequence_number())
                     .map(|seq| SeqNo::from(u32::from(seq) + 1))
@@ -775,7 +837,7 @@ impl<S> Synchronizer<S>
                         .collect()
                 };
 
-                let sound = sound(self.view(), &normalized_collects);
+                let sound = sound(current_view, &normalized_collects);
                 if !sound.test() {
                     // FIXME: BFT-SMaRt doesn't do anything if `sound`
                     // evaluates to false; do we keep the same behavior,
@@ -790,12 +852,14 @@ impl<S> Synchronizer<S>
                     sound,
                     proposed,
                 };
+                let mut collects_guard = self.collects.lock();
+
                 finalize_view_change!(
                     self,
                     state,
                     proof,
-                    normalized_collects,
                     collects_guard,
+                    normalized_collects,
                     log,
                     consensus,
                     node,
@@ -930,12 +994,14 @@ impl<S> Synchronizer<S>
         // from peer nodes' STOP messages
         let requests = self.stopped_requests(timed_out);
 
+        let current_view = self.view();
+
         let message = SystemMessage::ViewChange(ViewChangeMessage::new(
-            self.view().sequence_number().next(),
+            current_view.sequence_number().next(),
             ViewChangeMessageKind::Stop(requests),
         ));
 
-        let targets = NodeId::targets(0..self.view().params().n());
+        let targets = NodeId::targets(0..current_view.params().n());
 
         node.broadcast(message, targets);
     }
@@ -1010,19 +1076,17 @@ impl<S> Synchronizer<S>
 
     // collects whose in execution cid is different from the given `in_exec` become `None`
     #[inline]
-    fn normalized_collects<'a>(&'a self, in_exec: SeqNo) -> impl Iterator<Item=Option<&'a CollectData<Request<S>>>> {
-        let mut guard = self.collects.lock();
+    fn normalized_collects<'a>(collects: &'a IntMap<StoredMessage<ViewChangeMessage<Request<S>>>>, in_exec: SeqNo) -> impl Iterator<Item=Option<&'a CollectData<Request<S>>>> {
+        let values = collects.values();
 
-        let values = guard.values().collect();
+        let collects = normalized_collects(in_exec, collect_data(values));
 
-        normalized_collects(in_exec, collect_data(values))
+        collects
     }
 
     // TODO: quorum sizes may differ when we implement reconfiguration
     #[inline]
-    fn highest_proof<'a>(&'a self, view: ViewInfo, node: &Node<S::Data>) -> Option<&'a Proof<Request<S>>> {
-        let mut guard = self.collects.lock();
-
+    fn highest_proof<'a>(guard: &'a IntMap<StoredMessage<ViewChangeMessage<Request<S>>>>, view: ViewInfo, node: &Node<S::Data>) -> Option<&'a Proof<Request<S>>> {
         highest_proof::<S, _>(view, node, guard.values())
     }
 
@@ -1111,6 +1175,7 @@ impl<S> Synchronizer<S>
     }
 }
 
+/*
 impl<S> Deref for Synchronizer<S>
     where
         S: Service + Send + 'static,
@@ -1124,7 +1189,7 @@ impl<S> Deref for Synchronizer<S>
     fn deref(&self) -> &Self::Target {
         &self.tbo
     }
-}
+}*/
 
 ////////////////////////////////////////////////////////////////////////////////
 //

@@ -50,6 +50,8 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
     }
     threadpool::init(c.pool_threads)?;
     async_runtime::init(c.async_threads)?;
+
+    println!("Async threads {}", c.async_threads);
     communication::socket::init()?;
     INITIALIZED.set();
     Ok(Some(InitGuard))

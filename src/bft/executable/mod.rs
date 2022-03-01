@@ -95,7 +95,7 @@ pub type Reply<S> = <<S as Service>::Data as SharedData>::Reply;
 /// A user defined `Service`.
 ///
 /// Application logic is implemented by this trait.
-pub trait Service {
+pub trait Service : Send {
     /// The data types used by the application and the SMR protocol.
     ///
     /// This includes their respective serialization routines.
@@ -273,7 +273,7 @@ where
 
         rt::spawn(async move {
             let m = Message::ExecutionFinishedWithAppstate(cloned_state);
-            system_tx.push_request(m);
+            system_tx.push_request(m).await;
         });
     }
 

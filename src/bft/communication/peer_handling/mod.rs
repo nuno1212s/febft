@@ -1,9 +1,10 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::RecvError;
+use std::sync::mpsc::{RecvError, SendError};
 use std::thread::JoinHandle;
-use dsrust::channels::queue_channel::{Receiver, Sender};
+use dsrust::channels::async_ch::ReceiverMultFut;
+use dsrust::channels::queue_channel::{make_mult_recv_from, make_mult_recv_partial_from, Receiver, ReceiverMult, ReceiverPartialMult, Sender};
 use dsrust::queues::lf_array_queue::LFBQueue;
 
 use dsrust::queues::mqueue::MQueue;
@@ -23,8 +24,16 @@ use crate::bft::threadpool;
 
 type QueueType<T> = LFBQueue<Vec<T>>;
 
+type ClientQueueType<T> = MQueue<T>;
+
 fn channel_init<T>(capacity: usize) -> (Sender<Vec<T>, QueueType<T>>, Receiver<Vec<T>, QueueType<T>>) {
     dsrust::channels::queue_channel::bounded_lf_queue(capacity)
+}
+
+fn client_channel_init<T>(capacity: usize) -> (Sender<T, ClientQueueType<T>>, ReceiverPartialMult<T, ClientQueueType<T>>) {
+    let (tx, rx) = dsrust::channels::queue_channel::bounded_mutex_backoff_queue(capacity);
+
+    (tx, make_mult_recv_partial_from(rx))
 }
 
 pub struct NodePeers<T: 'static> {
@@ -43,6 +52,7 @@ pub struct NodePeers<T: 'static> {
 ///And the replicas are going to be handled by another class.
 /// There is no possibility of 2 threads accessing the client_rx or replica_rx concurrently
 unsafe impl<T> Sync for NodePeers<T> {}
+
 unsafe impl<T> Send for NodePeers<T> {}
 
 impl<T> NodePeers<T> {
@@ -52,8 +62,7 @@ impl<T> NodePeers<T> {
 
         let client_channel;
 
-        if id >= first_cli {
-
+        if id < first_cli {
             let (client_tx, client_rx) = channel_init(NODE_CHAN_BOUND);
 
             client_handling = Some(ConnectedPeersGroup::new(32,
@@ -95,12 +104,14 @@ impl<T> NodePeers<T> {
             replica_rx,
         };
 
-        (peers)
+        peers
     }
 
     pub fn init_peer_conn(&self, peer: NodeId) -> Arc<ConnectedPeer<T>> {
+        println!("Initializing peer connection for peer {:?} on peer {:?}", peer, self.own_id);
+
         return if peer >= self.first_cli {
-            self.client_handling.expect("Tried to init client request from client itself?")
+            self.client_handling.as_ref().expect("Tried to init client request from client itself?")
                 .init_client(peer)
         } else {
             self.replica_handling.init_client(peer)
@@ -115,13 +126,13 @@ impl<T> NodePeers<T> {
         return if peer < self.first_cli {
             self.replica_handling.get_client_conn(peer)
         } else {
-            self.client_handling.expect("Tried to resolve client conn in the client")
+            self.client_handling.as_ref().expect("Tried to resolve client conn in the client")
                 .get_client_conn(peer)
         };
     }
 
     pub fn peer_loopback(&self) -> &Arc<ConnectedPeer<T>> {
-        &self.peer_loopback.clone()
+        &self.peer_loopback
     }
 
     pub fn receive_from_clients(&self) -> Result<Vec<T>> {
@@ -135,7 +146,8 @@ impl<T> NodePeers<T> {
                         Ok(vec)
                     }
                     Err(_) => {
-                        Err(Error::simple(ErrorKind::Communication))}
+                        Err(Error::simple(ErrorKind::Communication))
+                    }
                 }
             }
         };
@@ -165,7 +177,8 @@ impl<T> NodePeers<T> {
                 Ok(vec)
             }
             Err(_) => {
-                Err(Error::simple(ErrorKind::Communication))}
+                Err(Error::simple(ErrorKind::Communication))
+            }
         }
     }
 
@@ -175,21 +188,22 @@ impl<T> NodePeers<T> {
                 Ok(vec)
             }
             Err(_) => {
-                Err(Error::simple(ErrorKind::Communication))}
+                Err(Error::simple(ErrorKind::Communication))
+            }
         }
     }
 
     pub fn client_count(&self) -> Option<usize> {
         return match &self.client_handling {
-            None => {None}
+            None => { None }
             Some(client) => {
                 Some(client.connected_clients.load(Ordering::Relaxed))
             }
-        }
+        };
     }
 
     pub fn replica_count(&self) -> usize {
-        return self.replica_handling.connected_clients.load(Ordering::Relaxed)
+        return self.replica_handling.connected_clients.load(Ordering::Relaxed);
     }
 }
 
@@ -204,7 +218,7 @@ impl<T> NodePeers<T> {
 /// no socket handling is done here
 /// This is just built on top of the actual per client connection socket stuff and each socket
 /// should push items into its own ConnectedPeer instance
-pub struct ConnectedPeersGroup<T:'static> {
+pub struct ConnectedPeersGroup<T: 'static> {
     //We can use mutexes here since there will only be concurrency on client connections and dcs
     //And since each client has his own reference to push data to, this only needs to be accessed by the thread
     //That's producing the batches and the threads of clients connecting and disconnecting
@@ -229,11 +243,11 @@ pub struct ConnectedPeersPool<T: 'static> {
 
 pub struct ConnectedPeer<T> {
     client_id: NodeId,
-    request_queue: MQueue<T>,
-    disconnected: AtomicBool,
+    sender: Mutex<Option<Sender<T, ClientQueueType<T>>>>,
+    receiver: ReceiverPartialMult<T, ClientQueueType<T>>,
 }
 
-impl<T:'static> ConnectedPeersGroup<T> {
+impl<T: 'static> ConnectedPeersGroup<T> {
     pub fn new(per_client_bound: usize, batch_size: usize, batch_transmission: Sender<Vec<T>, QueueType<T>>) -> Arc<Self> {
         Arc::new(Self {
             client_pools: parking_lot::Mutex::new(Vec::new()),
@@ -253,6 +267,8 @@ impl<T:'static> ConnectedPeersGroup<T> {
         cached_clients.insert(peer_id.0 as u64, connected_client.clone());
 
         drop(cached_clients);
+
+        self.connected_clients.fetch_add(1, Ordering::SeqCst);
 
         let mut clone_queue = connected_client.clone();
 
@@ -285,12 +301,9 @@ impl<T:'static> ConnectedPeersGroup<T> {
 
         guard.push(pool);
 
-        self.connected_clients.fetch_add(1, Ordering::SeqCst);
-
         //Spawn the thread that will collect client requests
         //and then send the batches to the channel.
         std::thread::spawn(move || {
-
             loop {
                 if pool_clone.finish_execution.load(Ordering::Relaxed) {
                     break;
@@ -463,10 +476,12 @@ impl<T> ConnectedPeersPool<T> {
 
 impl<T> ConnectedPeer<T> {
     pub fn new(client_id: NodeId, per_client_bound: usize) -> Self {
+        let (tx, rx) = client_channel_init(per_client_bound);
+
         Self {
             client_id,
-            request_queue: MQueue::new(per_client_bound, true),
-            disconnected: AtomicBool::new(false),
+            sender: Mutex::new(Some(tx)),
+            receiver: rx
         }
     }
 
@@ -474,26 +489,30 @@ impl<T> ConnectedPeer<T> {
         &self.client_id
     }
 
-    pub fn request_queue(&self) -> &MQueue<T> {
-        &self.request_queue
-    }
-
     pub fn is_dc(&self) -> bool {
-        self.disconnected.load(Ordering::Relaxed) && self.request_queue.is_empty()
+        self.receiver.is_dc()
     }
 
     pub fn disconnect(&self) {
-        self.disconnected.store(true, Ordering::Relaxed);
+        //By destroying the sender, we close the channel when
+        self.sender.lock().take();
     }
 
     ///Dump n requests into the provided vector
     ///Returns the amount of requests that were dumped into the array
     pub fn dump_n_requests(&self, rq_bound: usize, dump_vec: &mut Vec<T>) -> usize {
-        self.request_queue.dump_partial(dump_vec, rq_bound).unwrap()
+        self.receiver.recv_mult(dump_vec, rq_bound).unwrap()
     }
 
     pub async fn push_request(&self, msg: T) {
-        self.request_queue.enqueue_blk(msg)
+        /*let sender = self.sender.lock().as_ref().unwrap().clone();
+
+        match sender.send_async(msg).await {
+            Ok(_) => {}
+            Err(err) => {
+                panic!("Failed to send because {:?}", err);
+            }
+        };*/
     }
 }
 

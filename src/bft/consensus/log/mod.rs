@@ -498,7 +498,13 @@ pub struct Log<S, O, P> {
     _marker: PhantomData<P>,
 }
 
-//TODO: Might have to unsafe impl Sync
+///Justification/Sketch of proof:
+/// The current sequence number, decision log, decided and checkpoint
+/// Will only be accessed by the replica request thread, since they require communication
+/// from the other threads and actual consensus to be reached.
+/// The requests, latest_op and batch meta can be accessed and altered by both the replica request thread
+/// and the client request thread, so we protected only those fields
+unsafe impl<S, O, P> Sync for Log<S, O, P> {}
 
 // TODO:
 // - garbage collect the log
@@ -558,7 +564,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
             S: Clone,
             O: Clone,
     {
-        match *self.checkpoint.borrow() {
+        match &*self.checkpoint.borrow() {
             CheckpointState::Complete(checkpoint) => {
                 Ok(RecoveryState::new(
                     view,
@@ -609,7 +615,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
                 //Is only accessed by one thread.
                 let stored = StoredMessage::new(header, message);
 
-                let dec_log = self.declog.borrow_mut();
+                let mut dec_log = self.declog.borrow_mut();
 
                 match stored.message().kind() {
                     ConsensusMessageKind::PrePrepare(_) => dec_log.pre_prepares.push(stored),

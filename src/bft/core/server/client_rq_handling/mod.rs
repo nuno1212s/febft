@@ -75,8 +75,12 @@ impl<S: Service> RqProcessor<S> {
                         Message::System(header, sysmsg) => {
                             match &sysmsg {
                                 SystemMessage::Request(req) => {
-                                    if is_leader {
-                                        final_batch.unwrap().push(StoredMessage::new(header, (*req).clone()));
+
+                                    match &mut final_batch {
+                                        None => {}
+                                        Some(batch) => {
+                                            batch.push(StoredMessage::new(header, (*req).clone()));
+                                        }
                                     }
 
                                     //Store the message in the log in this thread.
@@ -112,7 +116,7 @@ impl<S: Service> RqProcessor<S> {
 
                 //Send the finished batches to the other thread
                 if is_leader {
-                    rt::block_on(self.batch_channel.0.send(final_batch.unwrap()));
+                    rt::block_on(self.batch_channel.0.clone().send(final_batch.unwrap()));
                 }
             }
         })

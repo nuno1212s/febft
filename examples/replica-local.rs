@@ -21,10 +21,11 @@ fn main() {
         pool_threads: num_cpus::get(),
     };
     let _guard = unsafe { init(conf).unwrap() };
-    rt::block_on(async_main());
+
+    main_();
 }
 
-async fn async_main() {
+fn main_() {
     let mut secret_keys: IntMap<KeyPair> = sk_stream()
         .take(4)
         .enumerate()
@@ -34,6 +35,8 @@ async fn async_main() {
         .iter()
         .map(|(id, sk)| (*id, sk.public_key().into()))
         .collect();
+
+    let mut pending_threads = Vec::with_capacity(4);
 
     for id in NodeId::targets(0..4) {
         let addrs = map! {
@@ -53,20 +56,29 @@ async fn async_main() {
             addrs,
             public_keys.clone(),
         );
-        rt::spawn(async move {
-            println!("Bootstrapping replica #{}", u32::from(id));
-            let mut replica = fut.await.unwrap();
-            println!("Running replica #{}", u32::from(id));
-            replica.run().await.unwrap();
-        });
+
+        pending_threads.push(std::thread::spawn(move || {
+            let mut replica = rt::block_on(async move {
+                println!("Bootstrapping replica #{}", u32::from(id));
+                let replica = fut.await.unwrap();
+                println!("Running replica #{}", u32::from(id));
+
+                replica
+            });
+
+            replica.run().unwrap();
+        }));
     }
+
     drop((secret_keys, public_keys));
 
     // run forever
-    std::future::pending().await
+    for x in pending_threads {
+        x.join();
+    }
 }
 
-fn sk_stream() -> impl Iterator<Item = KeyPair> {
+fn sk_stream() -> impl Iterator<Item=KeyPair> {
     std::iter::repeat_with(|| {
         // only valid for ed25519!
         let buf = [0; 32];

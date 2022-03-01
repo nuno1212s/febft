@@ -155,8 +155,8 @@ pub struct Header {
 #[cfg(feature = "serialize_serde")]
 impl serde::Serialize for Header {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
+        where
+            S: serde::Serializer,
     {
         // TODO: improve this, to avoid allocating a `Vec`
         let mut bytes = vec![0; Self::LENGTH];
@@ -169,8 +169,8 @@ impl serde::Serialize for Header {
 #[cfg(feature = "serialize_serde")]
 impl<'de> serde::Deserialize<'de> for Header {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Header, D::Error>
-    where
-        D: serde::Deserializer<'de>,
+        where
+            D: serde::Deserializer<'de>,
     {
         let bytes: Vec<u8> = serde_bytes::deserialize(deserializer)?;
         let mut hdr: [u8; Self::LENGTH] = [0; Self::LENGTH];
@@ -197,7 +197,7 @@ pub struct OwnedWireMessage<T> {
 /// The `Message` type encompasses all the messages traded between different
 /// asynchronous tasks in the system.
 ///
-pub enum Message<S, O, P> {
+pub enum Message<S, O, P> where S: Send, O: Send, P: Send {
     /// Client requests and process sub-protocol messages.
     System(Header, SystemMessage<S, O, P>),
 
@@ -301,7 +301,7 @@ impl<O> ViewChangeMessage<O> {
             _ => {
                 self.kind = kind;
                 None
-            },
+            }
         }
     }
 }
@@ -359,7 +359,7 @@ impl<S, O> CstMessage<S, O> {
             _ => {
                 self.kind = kind;
                 None
-            },
+            }
         }
     }
 }
@@ -503,7 +503,7 @@ impl<O> ConsensusMessage<O> {
             ConsensusMessageKind::PrePrepare(_) => None,
             ConsensusMessageKind::Prepare(d) | ConsensusMessageKind::Commit(d) => {
                 Some(&d == digest)
-            },
+            }
         }
     }
 
@@ -524,7 +524,7 @@ impl<O> ConsensusMessage<O> {
             _ => {
                 self.kind = kind;
                 None
-            },
+            }
         }
     }
 }
@@ -537,13 +537,13 @@ impl Header {
 
     unsafe fn serialize_into_unchecked(self, buf: &mut [u8]) {
         #[cfg(target_endian = "big")]
-        {
-            self.version = self.version.to_le();
-            self.nonce = self.nonce.to_le();
-            self.from = self.from.to_le();
-            self.to = self.to.to_le();
-            self.length = self.length.to_le();
-        }
+            {
+                self.version = self.version.to_le();
+                self.nonce = self.nonce.to_le();
+                self.from = self.from.to_le();
+                self.to = self.to.to_le();
+                self.length = self.length.to_le();
+            }
         let hdr: [u8; Self::LENGTH] = std::mem::transmute(self);
         (&mut buf[..Self::LENGTH]).copy_from_slice(&hdr[..]);
     }
@@ -564,13 +564,13 @@ impl Header {
         };
         (&mut hdr[..]).copy_from_slice(&buf[..Self::LENGTH]);
         #[cfg(target_endian = "big")]
-        {
-            hdr.version = hdr.version.to_be();
-            hdr.nonce = hdr.nonce.to_be();
-            hdr.from = hdr.from.to_be();
-            hdr.to = hdr.to.to_le();
-            hdr.length = hdr.length.to_be();
-        }
+            {
+                hdr.version = hdr.version.to_be();
+                hdr.nonce = hdr.nonce.to_be();
+                hdr.from = hdr.from.to_be();
+                hdr.to = hdr.to.to_le();
+                hdr.length = hdr.length.to_be();
+            }
         std::mem::transmute(hdr)
     }
 
@@ -647,7 +647,7 @@ impl From<WireMessage<'_>> for OwnedWireMessage<Vec<u8>> {
     }
 }
 
-impl<T: Array<Item = u8>> From<WireMessage<'_>> for OwnedWireMessage<SmallVec<T>> {
+impl<T: Array<Item=u8>> From<WireMessage<'_>> for OwnedWireMessage<SmallVec<T>> {
     fn from(wm: WireMessage<'_>) -> Self {
         OwnedWireMessage {
             header: wm.header,
@@ -690,7 +690,7 @@ impl<'a> WireMessage<'a> {
     ) -> Self {
         let digest = digest
             // safety: digests have repr(transparent)
-            .map(|d| unsafe {std::mem::transmute(d) })
+            .map(|d| unsafe { std::mem::transmute(d) })
             // if payload length is 0
             .unwrap_or([0; Digest::LENGTH]);
         let signature = sk
@@ -788,7 +788,7 @@ impl<'a> WireMessage<'a> {
     pub fn is_valid(&self, public_key: Option<&PublicKey>) -> bool {
         let preliminary_check_failed =
             self.header.version != WireMessage::CURRENT_VERSION
-            || self.header.length != self.payload.len() as u64;
+                || self.header.length != self.payload.len() as u64;
         if preliminary_check_failed {
             return false;
         }
@@ -840,7 +840,7 @@ impl<'a> WireMessage<'a> {
     }
 }
 
-impl<S, O, P> Message<S, O, P> {
+impl<S: Send, O: Send, P: Send> Message<S, O, P> {
     /// Returns the `Header` of this message, if it is
     /// a `SystemMessage`.
     pub fn header(&self) -> Result<&Header> {

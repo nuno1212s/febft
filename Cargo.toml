@@ -13,7 +13,7 @@ readme = "README.md"
 [features]
 # Consult the crate documentation for more details on the features.
 default = [
-    "async_runtime_tokio",
+    "async_runtime_async_std",
     "threadpool_rayon",
     "socket_tokio_tcp",
     "serialize_serde",

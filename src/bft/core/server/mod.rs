@@ -222,6 +222,9 @@ impl<S> Replica<S>
             client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts),
         };
 
+        //Start receiving and processing client requests
+        replica.client_rqs.clone().start();
+
         // handle rogue messages
         for message in rogue {
             match message {
@@ -260,18 +263,18 @@ impl<S> Replica<S>
     }
 
     /// The main loop of a replica.
-    pub async fn run(&mut self) -> Result<()> {
+    pub fn run(&mut self) -> Result<()> {
         // TODO: exit condition?
         loop {
             match self.phase {
-                ReplicaPhase::RetrievingState => self.update_retrieving_state().await?,
-                ReplicaPhase::NormalPhase => self.update_normal_phase().await?,
-                ReplicaPhase::SyncPhase => self.update_sync_phase().await.map(|_| ())?,
+                ReplicaPhase::RetrievingState => self.update_retrieving_state()?,
+                ReplicaPhase::NormalPhase => self.update_normal_phase()?,
+                ReplicaPhase::SyncPhase => self.update_sync_phase().map(|_| ())?,
             }
         }
     }
 
-    async fn update_retrieving_state(&mut self) -> Result<()> {
+    fn update_retrieving_state(&mut self) -> Result<()> {
         let messages = self.node.receive_from_replicas().unwrap();
 
         for message in messages {
@@ -390,7 +393,7 @@ impl<S> Replica<S>
         Ok(())
     }
 
-    async fn update_sync_phase(&mut self) -> Result<bool> {
+    fn update_sync_phase(&mut self) -> Result<bool> {
         // retrieve a view change message to be processed
         let messages = match self.synchronizer.poll() {
             SynchronizerPollStatus::Recv => {
@@ -500,12 +503,12 @@ impl<S> Replica<S>
         Ok(true)
     }
 
-    async fn update_normal_phase(&mut self) -> Result<()> {
+    fn update_normal_phase(&mut self) -> Result<()> {
         // check if we have STOP messages to be processed,
         // and update our phase when we start installing
         // the new view
         if self.synchronizer.can_process_stops() {
-            let running = self.update_sync_phase().await?;
+            let running = self.update_sync_phase()?;
             if running {
                 self.phase = ReplicaPhase::SyncPhase;
                 return Ok(());
@@ -590,7 +593,7 @@ impl<S> Replica<S>
                             );
                             match status {
                                 // if deciding, nothing to do
-                                ConsensusStatus::Deciding => rt::yield_now().await,
+                                ConsensusStatus::Deciding => std::hint::spin_loop(),
                                 // FIXME: implement this
                                 ConsensusStatus::VotedTwice(_) => todo!(),
                                 // reached agreement, execute requests
@@ -626,7 +629,7 @@ impl<S> Replica<S>
                             // yield execution since `signal()`
                             // will probably force a value from the
                             // TBO queue in the consensus layer
-                            rt::yield_now().await;
+                            std::hint::spin_loop();
                         }
                         // FIXME: handle rogue reply messages
                         SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
