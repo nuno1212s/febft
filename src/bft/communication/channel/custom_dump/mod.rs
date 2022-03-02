@@ -10,42 +10,34 @@ use futures::future::FusedFuture;
 
 use crate::bft::error::*;
 
+#[cfg(feature = "channel_custom_dump_lfb")]
+type QueueType<T> = LFBQueue<T>;
+
+#[cfg(not(feature = "channel_custom_dump_lfb"))]
+type QueueType<T> = LFBRArrayQueue<T>;
+
+
 pub struct ChannelTx<T> where {
-    #[cfg(feature = "channel_custom_dump_lfb")]
-    inner: Sender<T, LFBQueue<T>>,
-    #[cfg(not(feature = "channel_custom_dump_lfb"))]
-    inner: Sender<T, LFBRArrayQueue<T>>,
+    inner: Sender<T, QueueType<T>>,
 }
 
 pub struct ChannelRx<T> where
 {
-    #[cfg(feature = "channel_custom_dump_lfb")]
-    inner: Receiver<T, LFBQueue<T>>,
-    #[cfg(not(feature = "channel_custom_dump_lfb"))]
-    inner: Receiver<T, LFBRArrayQueue<T>>,
+    inner: Receiver<T, QueueType<T>>,
 }
 
 pub struct ChannelRxFut<'a, T> where {
-    #[cfg(feature = "channel_custom_dump_lfb")]
-    inner: ReceiverFut<'a, T, LFBQueue<T>>,
-    #[cfg(not(feature = "channel_custom_dump_lfb"))]
-    inner: ReceiverFut<'a, T, LFBRArrayQueue<T>>,
+    inner: ReceiverFut<'a, T, QueueType<T>>,
 }
 
 pub struct ChannelRxMult<T> where
 {
-    #[cfg(feature = "channel_custom_dump_lfb")]
-    inner: ReceiverMult<T, LFBQueue<T>>,
-    #[cfg(not(feature = "channel_custom_dump_lfb"))]
-    inner: ReceiverMult<T, LFBRArrayQueue<T>>,
+    inner: ReceiverMult<T, QueueType<T>>,
 }
 
 pub struct ChannelRxMultFut<'a, T> where
 {
-    #[cfg(feature = "channel_custom_dump_lfb")]
-    inner: ReceiverMultFut<'a, T, LFBQueue<T>>,
-    #[cfg(not(feature = "channel_custom_dump_lfb"))]
-    inner: ReceiverMultFut<'a, T, LFBRArrayQueue<T>>,
+    inner: ReceiverMultFut<'a, T, QueueType<T>>,
 }
 
 impl<T> ChannelTx<T> where {

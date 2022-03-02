@@ -94,6 +94,15 @@ impl<T> Clone for ChannelTx<T> {
     }
 }
 
+impl<T> Clone for ChannelRx<T> {
+
+    #[inline]
+    fn clone(&self) -> Self {
+        let inner = self.inner.clone();
+        Self { inner }
+    }
+}
+
 /// Creates a new general purpose channel that can queue up to
 /// `bound` messages from different async senders.
 #[inline]

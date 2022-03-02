@@ -275,6 +275,7 @@ impl<S> Replica<S>
     }
 
     fn update_retrieving_state(&mut self) -> Result<()> {
+        //println!("Retrieving state...");
         let messages = self.node.receive_from_replicas().unwrap();
 
         for message in messages {
@@ -394,6 +395,7 @@ impl<S> Replica<S>
     }
 
     fn update_sync_phase(&mut self) -> Result<bool> {
+        //println!("Updating Sync phase");
         // retrieve a view change message to be processed
         let messages = match self.synchronizer.poll() {
             SynchronizerPollStatus::Recv => {
@@ -504,6 +506,7 @@ impl<S> Replica<S>
     }
 
     fn update_normal_phase(&mut self) -> Result<()> {
+        //println!("Updating normal phase...");
         // check if we have STOP messages to be processed,
         // and update our phase when we start installing
         // the new view
@@ -519,7 +522,11 @@ impl<S> Replica<S>
         //
         // the order of the next consensus message is guaranteed by
         // `TboQueue`, in the consensus module.
-        let messages = match self.consensus.poll(&mut self.log) {
+        let polled_message = self.consensus.poll(&self.log);
+
+        //println!("Polled {:?}", polled_message);
+
+        let messages = match polled_message {
             ConsensusPollStatus::Recv => {
                 self.node.receive_from_replicas()?
             }
@@ -527,7 +534,12 @@ impl<S> Replica<S>
                 vec![Message::System(h, SystemMessage::Consensus(m))]
             }
             ConsensusPollStatus::TryProposeAndRecv => {
-                if let Some(requests) = self.log.next_batch() {
+
+                //TODO: Calling this might mess up as the phase isn't changed to init!!!
+                //Further investigations are required
+                if let Ok(requests) = rt::block_on(self.client_rqs.receiver_channel().recv()) {
+                    //println!("Proposing requests {}", requests.len());
+
                     self.consensus.propose(requests, &self.synchronizer, &self.node);
                 }
 
@@ -643,10 +655,10 @@ impl<S> Replica<S>
                 }
                 Message::ConnectedTx(id, sock) => {
                     //self.node.handle_connected_tx(id, sock)
-                },
+                }
                 Message::ConnectedRx(id, sock) => {
                     //self.node.handle_connected_rx(id, sock)
-                },
+                }
                 Message::DisconnectedTx(id) if id >= self.node.first_client_id() => println!("{:?} disconnected TX", id),
                 Message::DisconnectedRx(Some(id)) if id >= self.node.first_client_id() => println!("{:?} disconnected RX", id),
                 // TODO: node disconnected on send side

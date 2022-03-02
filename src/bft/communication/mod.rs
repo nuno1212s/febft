@@ -70,7 +70,7 @@ pub mod peer_handling;
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[repr(transparent)]
-pub struct NodeId(u32);
+pub struct NodeId(pub u32);
 
 impl NodeId {
     pub fn targets_u32<I>(into_iterator: I) -> impl Iterator<Item=Self>
@@ -89,6 +89,10 @@ impl NodeId {
         into_iterator
             .into_iter()
             .map(NodeId::from)
+    }
+
+    pub fn id(&self) -> u32 {
+        self.0
     }
 }
 
@@ -199,6 +203,8 @@ pub struct NodeConfig {
     ///
     /// Every other client id of the form `first_cli + i`.
     pub first_cli: NodeId,
+    ///The max size for batches of client operations
+    pub batch_size: usize,
     /// The addresses of all nodes in the system (including clients),
     /// as well as the domain name associated with each address.
     ///
@@ -271,7 +277,7 @@ impl<D> Node<D>
         });
 
         //Setup all the peer message reception handling.
-        let peers = NodePeers::new(cfg.id, cfg.first_cli);
+        let peers = NodePeers::new(cfg.id, cfg.first_cli, cfg.batch_size);
 
         let rng = ThreadSafePrng::new();
 
@@ -314,7 +320,7 @@ impl<D> Node<D>
             //Any received messages will be handled by the connection pool buffers
             println!("Connected to {} replicas on the node {:?}", node.node_handling.replica_count(), node.id);
 
-            Delay::new(Duration::from_secs(1)).await;
+            Delay::new(Duration::from_secs(2)).await;
         }
 
         println!("Found all nodes required {}", node.node_handling.replica_count());
@@ -838,7 +844,7 @@ impl<D> Node<D>
 
     /// Method called upon a `Message::ConnectedRx`.
     /// Handles client connections
-    pub fn handle_connected_rx(self: Arc<Self>, peer_id: NodeId, mut sock: SecureSocketRecv) {
+    pub async fn handle_connected_rx(self: Arc<Self>, peer_id: NodeId, mut sock: SecureSocketRecv) {
         // we are a server node
         if let PeerTx::Server(_) = &self.peer_tx {
             // the node whose conn we accepted is a client
@@ -870,64 +876,62 @@ impl<D> Node<D>
 
         let client = self.node_handling.init_peer_conn(peer_id.clone());
 
-        rt::spawn(async move {
-            let mut buf = SmallVec::<[u8; 16384]>::new();
+        let mut buf = SmallVec::<[u8; 16384]>::new();
 
-            // TODO
-            //  - verify signatures???
-            //  - exit condition (when the `Replica` or `Client` is dropped)
-            loop {
-                // reserve space for header
-                buf.clear();
-                buf.resize(Header::LENGTH, 0);
+        // TODO
+        //  - verify signatures???
+        //  - exit condition (when the `Replica` or `Client` is dropped)
+        loop {
+            // reserve space for header
+            buf.clear();
+            buf.resize(Header::LENGTH, 0);
 
-                // read the peer's header
-                if let Err(_) = sock.read_exact(&mut buf[..Header::LENGTH]).await {
-                    // errors reading -> faulty connection;
-                    // drop this socket
-                    break;
-                }
-
-                // we are passing the correct length, safe to use unwrap()
-                let header = Header::deserialize_from(&buf[..Header::LENGTH]).unwrap();
-
-                // reserve space for message
-                //
-                // FIXME: add a max bound on the message payload length;
-                // if the length is exceeded, reject connection;
-                // the bound can be application defined, i.e.
-                // returned by `SharedData`
-                buf.clear();
-                buf.reserve(header.payload_length());
-                buf.resize(header.payload_length(), 0);
-
-                // read the peer's payload
-                if let Err(_) = sock.read_exact(&mut buf[..header.payload_length()]).await {
-                    // errors reading -> faulty connection;
-                    // drop this socket
-                    break;
-                }
-
-                // deserialize payload
-                let message = match D::deserialize_message(&buf[..header.payload_length()]) {
-                    Ok(m) => m,
-                    Err(_) => {
-                        // errors deserializing -> faulty connection;
-                        // drop this socket
-                        break;
-                    }
-                };
-
-                client.push_request(Message::System(header, message)).await;
-
-                //tx.send(Message::System(header, message)).await.unwrap_or(());
+            // read the peer's header
+            if let Err(_) = sock.read_exact(&mut buf[..Header::LENGTH]).await {
+                // errors reading -> faulty connection;
+                // drop this socket
+                break;
             }
 
-            // announce we have disconnected
-            client.disconnect();
+            // we are passing the correct length, safe to use unwrap()
+            let header = Header::deserialize_from(&buf[..Header::LENGTH]).unwrap();
 
-            //tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
-        });
+            // reserve space for message
+            //
+            // FIXME: add a max bound on the message payload length;
+            // if the length is exceeded, reject connection;
+            // the bound can be application defined, i.e.
+            // returned by `SharedData`
+            buf.clear();
+            buf.reserve(header.payload_length());
+            buf.resize(header.payload_length(), 0);
+
+            // read the peer's payload
+            if let Err(_) = sock.read_exact(&mut buf[..header.payload_length()]).await {
+                // errors reading -> faulty connection;
+                // drop this socket
+                break;
+            }
+
+            // deserialize payload
+            let message = match D::deserialize_message(&buf[..header.payload_length()]) {
+                Ok(m) => m,
+                Err(_) => {
+                    // errors deserializing -> faulty connection;
+                    // drop this socket
+                    break;
+                }
+            };
+
+            client.push_request(Message::System(header, message)).await;
+
+            //tx.send(Message::System(header, message)).await.unwrap_or(());
+        }
+
+        // announce we have disconnected
+        client.disconnect();
+
+        //tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
     }
 
     #[inline]
@@ -953,7 +957,7 @@ impl<D> Node<D>
             let arc = self.clone();
 
             rt::spawn(arc.tx_side_connect_task(my_id, first_cli, peer_id,
-                                                  nonce, connector, addr));
+                                               nonce, connector, addr));
         }
     }
 
@@ -969,7 +973,6 @@ impl<D> Node<D>
         const SECS: u64 = 1;
         const RETRY: usize = 3 * 60;
 
-        println!("TRYING TIMES {} for Node {:?} from peer {:?}", RETRY, peer_id, my_id);
         // NOTE:
         // ========
         //
@@ -1020,8 +1023,11 @@ impl<D> Node<D>
 
                 // success
                 self.handle_connected_tx(peer_id, sock);
+
+                println!("Ended connection attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
                 return;
             }
+
             // sleep for `SECS` seconds and retry
             Delay::new(Duration::from_secs(SECS)).await;
         }
@@ -1098,7 +1104,7 @@ impl<D> Node<D>
                 }
             };
 
-            self.handle_connected_rx(peer_id, sock);
+            self.handle_connected_rx(peer_id, sock).await;
             //tx.send(Message::ConnectedRx(peer_id, sock)).await.unwrap_or(());
 
             return;

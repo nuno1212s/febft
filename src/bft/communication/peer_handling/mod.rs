@@ -3,13 +3,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{RecvError, SendError};
 use std::thread::JoinHandle;
+use std::time::Duration;
 use dsrust::channels::async_ch::ReceiverMultFut;
 use dsrust::channels::queue_channel::{make_mult_recv_from, make_mult_recv_partial_from, Receiver, ReceiverMult, ReceiverPartialMult, Sender};
 use dsrust::queues::lf_array_queue::LFBQueue;
 
 use dsrust::queues::mqueue::MQueue;
 use dsrust::queues::queues::{BQueue, PartiallyDumpable, Queue, SizableQueue};
+use dsrust::utils::backoff::BackoffN;
 use futures::select;
+use futures_timer::Delay;
 use intmap::IntMap;
 use parking_lot::{Mutex, RwLock};
 
@@ -56,7 +59,7 @@ unsafe impl<T> Sync for NodePeers<T> {}
 unsafe impl<T> Send for NodePeers<T> {}
 
 impl<T> NodePeers<T> {
-    pub fn new(id: NodeId, first_cli: NodeId) -> NodePeers<T> {
+    pub fn new(id: NodeId, first_cli: NodeId, batch_size: usize) -> NodePeers<T> {
         //We only want to setup client handling if we are a replica
         let client_handling;
 
@@ -66,7 +69,7 @@ impl<T> NodePeers<T> {
             let (client_tx, client_rx) = channel_init(NODE_CHAN_BOUND);
 
             client_handling = Some(ConnectedPeersGroup::new(32,
-                                                            NODE_CHAN_BOUND,
+                                                            batch_size,
                                                             client_tx.clone()));
             client_channel = Some((client_tx, client_rx));
         } else {
@@ -301,21 +304,11 @@ impl<T: 'static> ConnectedPeersGroup<T> {
 
         guard.push(pool);
 
-        //Spawn the thread that will collect client requests
-        //and then send the batches to the channel.
-        std::thread::spawn(move || {
-            loop {
-                if pool_clone.finish_execution.load(Ordering::Relaxed) {
-                    break;
-                }
+        let id = guard.len();
 
-                let vec = pool_clone.collect_requests(pool_clone.batch_size, &pool_clone.owner);
+        drop (guard);
 
-                if !vec.is_empty() {
-                    pool_clone.batch_transmission.send(vec);
-                }
-            }
-        });
+        pool_clone.start(id as u32);
 
         connected_client
     }
@@ -336,13 +329,13 @@ impl<T: 'static> ConnectedPeersGroup<T> {
     fn del_cached_clients(&self, clients: Vec<NodeId>) {
         let mut cache_guard = self.client_connections_cache.write();
 
-        for client_id in clients {
+        for client_id in &clients {
             cache_guard.remove(client_id.0 as u64);
         }
 
         drop(cache_guard);
 
-        self.connected_clients.fetch_sub(1, Ordering::SeqCst);
+        self.connected_clients.fetch_sub(clients.len(), Ordering::Relaxed);
     }
 
     pub fn del_client(&self, client_id: &NodeId) -> bool {
@@ -359,7 +352,7 @@ impl<T: 'static> ConnectedPeersGroup<T> {
                 Ok(empty) => {
                     if empty {
                         //Since order of the pools is not really important
-                        //Use the O(1) remove instead of the O(n)
+                        //Use the O(1) remove instead of the O(n) normal remove
                         guard.swap_remove(i).shutdown();
                     }
 
@@ -391,6 +384,37 @@ impl<T> ConnectedPeersPool<T> {
         let pool = Arc::new(result);
 
         pool
+    }
+
+    pub fn start(self: Arc<Self>, pool_id: u32) {
+
+        //Spawn the thread that will collect client requests
+        //and then send the batches to the channel.
+        std::thread::spawn(move || {
+            let backoff = BackoffN::new();
+
+            loop {
+                if self.finish_execution.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let vec = self.collect_requests(self.batch_size, &self.owner);
+
+                //println!("Collected {} requests...pool {} with {} clients", vec.len(), pool_id,
+                //         self.connected_clients.lock().len());
+
+                if !vec.is_empty() {
+                    self.batch_transmission.send(vec);
+
+                    backoff.reset();
+                } else {
+
+                    //std::thread::sleep(Duration::from_secs(1));
+
+                    backoff.snooze();
+                }
+            }
+        });
     }
 
     pub fn attempt_to_add(&self, client: Arc<ConnectedPeer<T>>) -> std::result::Result<(), Arc<ConnectedPeer<T>>> {
@@ -442,6 +466,7 @@ impl<T> ConnectedPeersPool<T> {
             let client = &guard[(start_point + index) % guard.len()];
 
             if client.is_dc() {
+                //FIXME: When multiple clients dc this gets weird.
                 dced.push(guard.swap_remove(index).client_id);
 
                 //Assign the remaining slots to the next client
@@ -501,18 +526,18 @@ impl<T> ConnectedPeer<T> {
     ///Dump n requests into the provided vector
     ///Returns the amount of requests that were dumped into the array
     pub fn dump_n_requests(&self, rq_bound: usize, dump_vec: &mut Vec<T>) -> usize {
-        self.receiver.recv_mult(dump_vec, rq_bound).unwrap()
+        self.receiver.try_recv_mult(dump_vec, rq_bound).unwrap()
     }
 
     pub async fn push_request(&self, msg: T) {
-        /*let sender = self.sender.lock().as_ref().unwrap().clone();
+        let sender = self.sender.lock().as_ref().unwrap().clone();
 
         match sender.send_async(msg).await {
             Ok(_) => {}
             Err(err) => {
                 panic!("Failed to send because {:?}", err);
             }
-        };*/
+        };
     }
 }
 

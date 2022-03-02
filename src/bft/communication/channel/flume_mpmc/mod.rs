@@ -25,6 +25,13 @@ impl<T> Clone for ChannelTx<T> {
     }
 }
 
+impl<T> Clone for ChannelRx<T> {
+    fn clone(&self) -> Self {
+        let inner = self.inner.clone();
+        Self { inner }
+    }
+}
+
 pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
     let (tx, rx) = ::flume::bounded(bound);
     let tx = ChannelTx { inner: tx };

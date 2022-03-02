@@ -49,6 +49,10 @@ impl<S: Service> RqProcessor<S> {
         })
     }
 
+    pub fn receiver_channel(&self) -> ChannelRx<Vec<StoredMessage<RequestMessage<Request<S>>>>> {
+        self.batch_channel.1.clone()
+    }
+
     ///Start this work
     pub fn start(self: Arc<Self>) -> JoinHandle<()> {
         std::thread::spawn(move || {
@@ -62,7 +66,12 @@ impl<S: Service> RqProcessor<S> {
 
                 //We only want to produce batches to the channel if we are the leader, as
                 //Only the leader will propose things
-                let is_leader = self.synchronizer.view().leader() == self.node_ref.id();
+                let mut is_leader = self.synchronizer.view().leader() == self.node_ref.id();
+
+                println!("Received batch of {} messages from clients, processing them, is_leader? {}", messages.len(), is_leader);
+
+                //For now
+                is_leader = true;
 
                 let mut final_batch = if is_leader {
                     Some(Vec::with_capacity(messages.len()))
@@ -84,8 +93,6 @@ impl<S: Service> RqProcessor<S> {
                                     }
 
                                     //Store the message in the log in this thread.
-                                    //TODO: this has to be synchronized since it requires a mut self...
-                                    //have to make it not require a mut self
                                     self.request_received(header, sysmsg);
                                 }
                                 SystemMessage::Reply(rep) => {
@@ -116,7 +123,9 @@ impl<S: Service> RqProcessor<S> {
 
                 //Send the finished batches to the other thread
                 if is_leader {
-                    rt::block_on(self.batch_channel.0.clone().send(final_batch.unwrap()));
+                    let mut tx = self.batch_channel.0.clone();
+
+                    rt::block_on(tx.send(final_batch.unwrap()));
                 }
             }
         })

@@ -1,6 +1,7 @@
 //! The consensus algorithm used for `febft` and other logic.
 
 use std::collections::VecDeque;
+use std::fmt::{Debug, Formatter};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
@@ -64,6 +65,22 @@ pub enum ConsensusPollStatus<O> {
     TryProposeAndRecv,
     /// A new consensus message is available to be processed.
     NextMessage(Header, ConsensusMessage<O>),
+}
+
+impl<O> Debug for ConsensusPollStatus<O> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConsensusPollStatus::Recv => {
+                write!(f, "Recv")
+            }
+            ConsensusPollStatus::TryProposeAndRecv => {
+                write!(f, "TryPropose and recv")
+            }
+            ConsensusPollStatus::NextMessage(_, _) => {
+                write!(f, "Next message")
+            }
+        }
+    }
 }
 
 /// Represents a queue of messages to be ordered in a consensus instance.
@@ -272,19 +289,29 @@ impl<S> Consensus<S>
         synchronizer: &Synchronizer<S>,
         node: &Node<S::Data>,
     ) {
+        //println!("Phase {:?}", self.phase);
+
         match self.phase {
             ProtoPhase::Init => self.phase = ProtoPhase::PrePreparing,
             _ => return,
         }
-        if node.id() != synchronizer.view().leader() {
+
+        let view = synchronizer.view();
+
+        //println!("Is leader? {:?} {:?} = {:?}", node.id(), view.leader(),
+        //         node.id() == view.leader());
+
+        if node.id() != view.leader() {
             return;
         }
+
         let message = SystemMessage::Consensus(ConsensusMessage::new(
             self.sequence_number(),
-            synchronizer.view().sequence_number(),
+            view.sequence_number(),
             ConsensusMessageKind::PrePrepare(requests),
         ));
-        let targets = NodeId::targets(0..synchronizer.view().params().n());
+
+        let targets = NodeId::targets(0..view.params().n());
         node.broadcast(message, targets);
     }
 
