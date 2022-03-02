@@ -49,6 +49,7 @@ async fn async_main() {
         // clients
         1000 => addr!("cli1000" => "127.0.0.1:11000")
     };
+
     let client = setup_client(
         id,
         sk,

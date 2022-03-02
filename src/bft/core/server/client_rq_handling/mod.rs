@@ -103,18 +103,6 @@ impl<S: Service> RqProcessor<S> {
                                 }
                             }
                         }
-                        Message::ConnectedTx(_, _) => {
-                            panic!("Received connected Tx")
-                        }
-                        Message::ConnectedRx(_, _) => {
-                            panic!("Received connected Rx")
-                        }
-                        Message::DisconnectedTx(_) => {
-                            panic!("Received disconnected Tx")
-                        }
-                        Message::DisconnectedRx(_) => {
-                            panic!("Received disconnected Rx")
-                        }
                         Message::ExecutionFinishedWithAppstate(_) => {}
                         Message::Timeout(_) => {}
                         Message::RequestBatch(_, _) => {}

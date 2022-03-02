@@ -275,7 +275,7 @@ impl<S> Replica<S>
     }
 
     fn update_retrieving_state(&mut self) -> Result<()> {
-        //println!("Retrieving state...");
+        println!("Retrieving state...");
         let messages = self.node.receive_from_replicas().unwrap();
 
         for message in messages {
@@ -373,21 +373,6 @@ impl<S> Replica<S>
                     // TODO: verify if ignoring the checkpoint state while
                     // receiving state from peer nodes is correct
                 }
-                Message::ConnectedTx(id, sock) => {
-                    //self.node.handle_connected_tx(id, sock)
-                }
-                Message::ConnectedRx(id, sock) => {
-                    //self.node.handle_connected_rx(id, sock)
-                }
-                //If a client has disconnected, print
-                Message::DisconnectedTx(id) if id >= self.node.first_client_id() => println!("{:?} disconnected TX", id),
-                Message::DisconnectedRx(Some(id)) if id >= self.node.first_client_id() => println!("{:?} disconnected RX", id),
-
-                //TODO: Panics on replica disconnection?
-                // TODO: node disconnected on send side
-                Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
-                // TODO: node disconnected on receive side
-                Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
             }
         }
 
@@ -395,7 +380,7 @@ impl<S> Replica<S>
     }
 
     fn update_sync_phase(&mut self) -> Result<bool> {
-        //println!("Updating Sync phase");
+        println!("Updating Sync phase");
         // retrieve a view change message to be processed
         let messages = match self.synchronizer.poll() {
             SynchronizerPollStatus::Recv => {
@@ -487,18 +472,6 @@ impl<S> Replica<S>
                 Message::ExecutionFinishedWithAppstate(appstate) => {
                     self.execution_finished_with_appstate(appstate)?;
                 }
-                Message::ConnectedTx(id, sock) => {
-                    //self.node.handle_connected_tx(id, sock)
-                }
-                Message::ConnectedRx(id, sock) => {
-                    //self.node.handle_connected_rx(id, sock)
-                }
-                Message::DisconnectedTx(id) if id >= self.node.first_client_id() => println!("{:?} disconnected TX", id),
-                Message::DisconnectedRx(Some(id)) if id >= self.node.first_client_id() => println!("{:?} disconnected RX", id),
-                // TODO: node disconnected on send side
-                Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
-                // TODO: node disconnected on receive side
-                Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
             }
         }
 
@@ -506,7 +479,7 @@ impl<S> Replica<S>
     }
 
     fn update_normal_phase(&mut self) -> Result<()> {
-        //println!("Updating normal phase...");
+        println!("Updating normal phase... {:?}", self.id());
         // check if we have STOP messages to be processed,
         // and update our phase when we start installing
         // the new view
@@ -524,30 +497,39 @@ impl<S> Replica<S>
         // `TboQueue`, in the consensus module.
         let polled_message = self.consensus.poll(&self.log);
 
-        //println!("Polled {:?}", polled_message);
+        let leader = self.synchronizer.view().leader() == self.id();
+
+        println!("Polled {:?}, {:?}, is leader {}", polled_message, self.id(),
+                 leader);
 
         let messages = match polled_message {
             ConsensusPollStatus::Recv => {
-                self.node.receive_from_replicas()?
+                println!("Receiving from replicas {:?}, is leader {}", self.id(), leader);
+                let vec1 = self.node.receive_from_replicas()?;
+                println!("Received from replicas {:?}, is leader {}", self.id(), leader);
+
+                vec1
             }
             ConsensusPollStatus::NextMessage(h, m) => {
                 vec![Message::System(h, SystemMessage::Consensus(m))]
             }
             ConsensusPollStatus::TryProposeAndRecv => {
-
-                //TODO: Calling this might mess up as the phase isn't changed to init!!!
-                //Further investigations are required
+                println!("Receiving client requests. {:?}", self.id());
                 if let Ok(requests) = rt::block_on(self.client_rqs.receiver_channel().recv()) {
                     //println!("Proposing requests {}", requests.len());
 
                     self.consensus.propose(requests, &self.synchronizer, &self.node);
                 }
+                println!("Receiving replica requests. {:?}", self.id());
 
                 self.node.receive_from_replicas()?
             }
         };
 
+        println!("Processing messages {:?}, {:?}", messages.len(), self.id());
+
         for message in messages {
+            println!("Processing message {:?}, {:?}", message, self.id());
             match message {
                 Message::RequestBatch(time, batch) => {
                     self.requests_received(time, batch);
@@ -653,18 +635,6 @@ impl<S> Replica<S>
                 Message::ExecutionFinishedWithAppstate(appstate) => {
                     self.execution_finished_with_appstate(appstate)?;
                 }
-                Message::ConnectedTx(id, sock) => {
-                    //self.node.handle_connected_tx(id, sock)
-                }
-                Message::ConnectedRx(id, sock) => {
-                    //self.node.handle_connected_rx(id, sock)
-                }
-                Message::DisconnectedTx(id) if id >= self.node.first_client_id() => println!("{:?} disconnected TX", id),
-                Message::DisconnectedRx(Some(id)) if id >= self.node.first_client_id() => println!("{:?} disconnected RX", id),
-                // TODO: node disconnected on send side
-                Message::DisconnectedTx(id) => panic!("{:?} disconnected", id),
-                // TODO: node disconnected on receive side
-                Message::DisconnectedRx(some_id) => panic!("{:?} disconnected", some_id),
             }
         }
 

@@ -141,6 +141,7 @@ impl<D> Client<D>
                 .take(num_cpus::get())
                 .collect(),
         });
+
         let task_data = Arc::clone(&data);
 
         // get `SendNode` before giving up ownership on the `Node`
@@ -277,12 +278,6 @@ impl<D> Client<D>
                             _ => panic!("rogue message detected"),
                         }
                     }
-                    Message::ConnectedTx(id, sock) => todo!(),
-                    Message::ConnectedRx(id, sock) => todo!(),
-                    // TODO: node disconnected on send side
-                    Message::DisconnectedTx(_id) => todo!(),
-                    // TODO: node disconnected on receive side
-                    Message::DisconnectedRx(_some_id) => todo!(),
                     // we don't receive any other type of messages as a client node
                     _ => (),
                 }

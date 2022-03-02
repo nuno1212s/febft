@@ -4,10 +4,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{RecvError, SendError};
 use std::thread::JoinHandle;
 use std::time::Duration;
+
 use dsrust::channels::async_ch::ReceiverMultFut;
 use dsrust::channels::queue_channel::{make_mult_recv_from, make_mult_recv_partial_from, Receiver, ReceiverMult, ReceiverPartialMult, Sender};
 use dsrust::queues::lf_array_queue::LFBQueue;
-
 use dsrust::queues::mqueue::MQueue;
 use dsrust::queues::queues::{BQueue, PartiallyDumpable, Queue, SizableQueue};
 use dsrust::utils::backoff::BackoffN;
@@ -51,6 +51,9 @@ pub struct NodePeers<T: 'static> {
     replica_rx: Receiver<Vec<T>, QueueType<T>>,
 }
 
+const DEFAULT_CLIENT_QUEUE: usize = 1024;
+const DEFAULT_REPLICA_QUEUE: usize = 1024;
+
 ///We make this class Sync and send since the clients are going to be handled by a single class
 ///And the replicas are going to be handled by another class.
 /// There is no possibility of 2 threads accessing the client_rx or replica_rx concurrently
@@ -68,7 +71,7 @@ impl<T> NodePeers<T> {
         if id < first_cli {
             let (client_tx, client_rx) = channel_init(NODE_CHAN_BOUND);
 
-            client_handling = Some(ConnectedPeersGroup::new(32,
+            client_handling = Some(ConnectedPeersGroup::new(DEFAULT_CLIENT_QUEUE,
                                                             batch_size,
                                                             client_tx.clone()));
             client_channel = Some((client_tx, client_rx));
@@ -84,7 +87,7 @@ impl<T> NodePeers<T> {
         //Both replicas and clients have to interact with replicas, so we always need this pool
         //We have a much larger queue because we don't want small slowdowns slowing down the connections
         //And also because there are few replicas, while there can be a very large amount of clients
-        let replica_handling = ConnectedPeersGroup::new(1024, NODE_CHAN_BOUND,
+        let replica_handling = ConnectedPeersGroup::new(DEFAULT_REPLICA_QUEUE, NODE_CHAN_BOUND,
                                                         replica_tx.clone());
 
         let loopback_address = replica_handling.init_client(id);
@@ -306,7 +309,7 @@ impl<T: 'static> ConnectedPeersGroup<T> {
 
         let id = guard.len();
 
-        drop (guard);
+        drop(guard);
 
         pool_clone.start(id as u32);
 
@@ -400,17 +403,13 @@ impl<T> ConnectedPeersPool<T> {
 
                 let vec = self.collect_requests(self.batch_size, &self.owner);
 
-                //println!("Collected {} requests...pool {} with {} clients", vec.len(), pool_id,
-                //         self.connected_clients.lock().len());
-
                 if !vec.is_empty() {
                     self.batch_transmission.send(vec);
 
                     backoff.reset();
+
+                    backoff.snooze();
                 } else {
-
-                    //std::thread::sleep(Duration::from_secs(1));
-
                     backoff.snooze();
                 }
             }
@@ -454,6 +453,11 @@ impl<T> ConnectedPeersPool<T> {
         //We can do this because our pooling system prevents the number of clients
         //In each pool to be larger than the batch size, so the requests_per_client is always
         //> 1, leading to no starvation
+
+        if guard.len() == 0 {
+            return vec![];
+        }
+
         let requests_per_client = batch_size / guard.len();
         let requests_remainder = batch_size % guard.len();
 
@@ -466,8 +470,7 @@ impl<T> ConnectedPeersPool<T> {
             let client = &guard[(start_point + index) % guard.len()];
 
             if client.is_dc() {
-                //FIXME: When multiple clients dc this gets weird.
-                dced.push(guard.swap_remove(index).client_id);
+                dced.push(client.client_id);
 
                 //Assign the remaining slots to the next client
                 next_client_requests += requests_per_client;
@@ -483,13 +486,24 @@ impl<T> ConnectedPeersPool<T> {
             next_client_requests += requests_per_client;
         }
 
-        drop(guard);
 
         //This might cause some lag since it has to access the intmap, but
         //Should be fine as it will only happen on client dcs
         if !dced.is_empty() {
+            for node in &dced {
+                //This is O(n*c) but there isn't really a much better way to do it I guess
+                let option = guard.iter().position(|x| {
+                    x.client_id.0 == node.0
+                }).unwrap();
+
+                guard.swap_remove(option);
+            }
+
+            drop(guard);
+
             owner.del_cached_clients(dced);
         }
+
 
         batch
     }
@@ -506,7 +520,7 @@ impl<T> ConnectedPeer<T> {
         Self {
             client_id,
             sender: Mutex::new(Some(tx)),
-            receiver: rx
+            receiver: rx,
         }
     }
 

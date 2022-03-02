@@ -679,6 +679,8 @@ impl<S, O: Clone, P> Log<S, O, P> {
     {
         let mut batch = UpdateBatch::new();
 
+        println!("Finalized batch of OPS seq {:?}", seq);
+
         for digest in digests {
             let (header, message) = self.requests
                 .remove(digest)

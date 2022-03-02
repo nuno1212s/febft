@@ -309,59 +309,17 @@ impl<D> Node<D>
             &mut rng,
         );
 
-        // receive peer connections from channel
         let mut rogue = Vec::new();
-        let mut c = vec![0; cfg.n];
-
-        //TODO: Wait for all the replicas to have connected
 
         while node.node_handling.replica_count() < 4 {
 
             //Any received messages will be handled by the connection pool buffers
             println!("Connected to {} replicas on the node {:?}", node.node_handling.replica_count(), node.id);
 
-            Delay::new(Duration::from_secs(2)).await;
+            Delay::new(Duration::from_secs(1)).await;
         }
 
         println!("Found all nodes required {}", node.node_handling.replica_count());
-
-        // while c
-        //     .iter()
-        //     .enumerate()
-        //     .any(|(id, &n)| id != usize::from(node.id) && n != 2_i32)
-        // {
-        //     // let message = node..recv().await.unwrap();
-        //
-        //     match message {
-        //         Message::ConnectedTx(id, sock) => {
-        //             node.handle_connected_tx(id, sock);
-        //             if id < cfg.first_cli {
-        //                 // not a client connection, increase count
-        //                 c[usize::from(id)] += 1;
-        //             }
-        //         }
-        //         Message::ConnectedRx(id, sock) => {
-        //             node.handle_connected_rx(id, sock);
-        //             if id < cfg.first_cli {
-        //                 // not a client connection, increase count
-        //                 c[usize::from(id)] += 1;
-        //             }
-        //         }
-        //         Message::DisconnectedTx(NodeId(i)) => {
-        //             let s = format!("Node {} disconnected from send side", i);
-        //             return Err(s).wrapped(ErrorKind::Communication);
-        //         }
-        //         Message::DisconnectedRx(Some(NodeId(i))) => {
-        //             let s = format!("Node {} disconnected from receive side", i);
-        //             return Err(s).wrapped(ErrorKind::Communication);
-        //         }
-        //         Message::DisconnectedRx(None) => {
-        //             let s = "Disconnected from receive side";
-        //             return Err(s).wrapped(ErrorKind::Communication);
-        //         }
-        //         m => rogue.push(m),
-        //     }
-        // }
 
         // success
         Ok((node, rogue))
@@ -1208,6 +1166,7 @@ impl<D> SendNode<D>
             None,
             targets,
         );
+
         let nonce = self.rng.next_state();
         <Node<D>>::broadcast_impl(message, mine, others, nonce)
     }

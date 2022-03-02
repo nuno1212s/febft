@@ -1,8 +1,10 @@
 //! This module contains types associated with messages traded
 //! between the system processes.
 
+use std::fmt::{Debug, Formatter};
 use std::io;
 use std::mem::MaybeUninit;
+use std::ptr::write;
 
 use chrono::DateTime;
 use chrono::offset::Utc;
@@ -200,20 +202,6 @@ pub struct OwnedWireMessage<T> {
 pub enum Message<S, O, P> where S: Send, O: Send, P: Send {
     /// Client requests and process sub-protocol messages.
     System(Header, SystemMessage<S, O, P>),
-
-    ///TODO: These messages are no longer needed since connections are now handled differently
-    /// A client with id `NodeId` has finished connecting to the socket `Socket`.
-    /// This socket should only perform write operations.
-    ConnectedTx(NodeId, SecureSocketSend),
-    /// A client with id `NodeId` has finished connecting to the socket `Socket`.
-    /// This socket should only perform read operations.
-    ConnectedRx(NodeId, SecureSocketRecv),
-    /// Send half of node with id `NodeId` has disconnected.
-    DisconnectedTx(NodeId),
-    /// Receive half of node with id `Some(NodeId)` has disconnected.
-    ///
-    /// The id is only equal to `None` during a `Node` bootstrap process.
-    DisconnectedRx(Option<NodeId>),
     /// Same as `Message::ExecutionFinished`, but includes a snapshot of
     /// the application state.
     ///
@@ -222,6 +210,55 @@ pub enum Message<S, O, P> where S: Send, O: Send, P: Send {
     /// We received a timeout from the timeouts layer.
     Timeout(TimeoutKind),
     RequestBatch(DateTime<Utc>, Vec<StoredMessage<RequestMessage<O>>>),
+}
+
+impl<S, O, P> Debug for Message<S, O, P> where S: Send, O: Send, P: Send {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Message::System(header, msg) => {
+                match msg {
+                    SystemMessage::Request(rq) => {
+                        write!(f, "System message Request")
+                    }
+                    SystemMessage::Reply(re) => {
+                        write!(f, "System message Reply")
+                    }
+                    SystemMessage::Consensus(cs) => {
+                        match cs.kind() {
+                            ConsensusMessageKind::PrePrepare(list) => {
+                                write!(f, "System message Consensus PrePrepare with {} requests", list.len())
+                            }
+                            ConsensusMessageKind::Prepare(prepare) => {
+                                write!(f, "System message Consensus prepare {:?}", prepare)
+                            }
+                            ConsensusMessageKind::Commit(commit) => {
+                                write!(f, "System message Consensus commit {:?}", commit)
+                            }
+                        }
+                    }
+                    SystemMessage::Cst(cst) => {
+                        write!(f, "System message cst")
+                    }
+                    SystemMessage::ViewChange(vchange) => {
+                        write!(f, "System message view change")
+                    }
+                    SystemMessage::ForwardedRequests(fr) => {
+                        write!(f, "System message forwarded requests")
+                    }
+                }
+            }
+
+            Message::ExecutionFinishedWithAppstate(_) => {
+                write!(f, "Execution finished")
+            }
+            Message::Timeout(_) => {
+                write!(f, "timeout")
+            }
+            Message::RequestBatch(_, _) => {
+                write!(f, "rq batch")
+            }
+        }
+    }
 }
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
@@ -847,18 +884,6 @@ impl<S: Send, O: Send, P: Send> Message<S, O, P> {
         match self {
             Message::System(ref h, _) =>
                 Ok(h),
-            Message::ConnectedTx(_, _) =>
-                Err("Expected System found ConnectedTx")
-                    .wrapped(ErrorKind::CommunicationMessage),
-            Message::ConnectedRx(_, _) =>
-                Err("Expected System found ConnectedRx")
-                    .wrapped(ErrorKind::CommunicationMessage),
-            Message::DisconnectedTx(_) =>
-                Err("Expected System found DisconnectedTx")
-                    .wrapped(ErrorKind::CommunicationMessage),
-            Message::DisconnectedRx(_) =>
-                Err("Expected System found DisconnectedRx")
-                    .wrapped(ErrorKind::CommunicationMessage),
             Message::ExecutionFinishedWithAppstate(_) =>
                 Err("Expected System found ExecutionFinishedWithAppstate")
                     .wrapped(ErrorKind::CommunicationMessage),

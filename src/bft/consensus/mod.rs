@@ -312,6 +312,7 @@ impl<S> Consensus<S>
         ));
 
         let targets = NodeId::targets(0..view.params().n());
+
         node.broadcast(message, targets);
     }
 
@@ -375,6 +376,7 @@ impl<S> Consensus<S>
                 synchronizer.view().sequence_number(),
                 ConsensusMessageKind::Prepare(self.current_digest.clone()),
             ));
+
             let targets = NodeId::targets(0..synchronizer.view().params().n());
             node.broadcast(message, targets);
         }
@@ -613,6 +615,7 @@ impl<S> Consensus<S>
                     let targets = NodeId::targets(0..synchronizer.view().params().n());
                     node.broadcast(message, targets);
                 }
+
                 log.batch_meta().lock().prepare_sent_time = Utc::now();
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
@@ -687,6 +690,7 @@ impl<S> Consensus<S>
                             synchronizer.view().sequence_number(),
                             ConsensusMessageKind::Commit(self.current_digest.clone()),
                         ));
+
                         let targets = NodeId::targets(0..synchronizer.view().params().n());
                         node.broadcast_signed(message, targets);
                     }
