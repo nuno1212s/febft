@@ -394,8 +394,6 @@ impl<T> ConnectedPeersPool<T> {
         //Spawn the thread that will collect client requests
         //and then send the batches to the channel.
         std::thread::spawn(move || {
-            let backoff = BackoffN::new();
-
             loop {
                 if self.finish_execution.load(Ordering::Relaxed) {
                     break;
@@ -403,15 +401,18 @@ impl<T> ConnectedPeersPool<T> {
 
                 let vec = self.collect_requests(self.batch_size, &self.owner);
 
+                let i = self.connected_clients.lock().len();
+
+                if i > 5 {
+                    println!("Collected {} requests from the pool {} with {}", vec.len(), pool_id,
+                             i);
+                }
+
                 if !vec.is_empty() {
                     self.batch_transmission.send(vec);
-
-                    backoff.reset();
-
-                    backoff.snooze();
-                } else {
-                    backoff.snooze();
                 }
+
+                std::thread::sleep(Duration::from_millis(1));
             }
         });
     }

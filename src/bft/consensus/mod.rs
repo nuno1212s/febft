@@ -17,17 +17,7 @@ use crate::bft::communication::{
     Node,
     NodeId,
 };
-use crate::bft::communication::message::{
-    ConsensusMessage,
-    ConsensusMessageKind,
-    Header,
-    RequestMessage,
-    SerializedMessage,
-    StoredMessage,
-    StoredSerializedSystemMessage,
-    SystemMessage,
-    WireMessage,
-};
+use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, Message, RequestMessage, SerializedMessage, StoredMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
 use crate::bft::communication::serialize::DigestData;
 use crate::bft::consensus::log::Log;
 use crate::bft::crypto::hash::Digest;
@@ -683,7 +673,14 @@ impl<S> Consensus<S>
                     let speculative_commits = self.take_speculative_commits();
 
                     if valid_spec_commits(&speculative_commits, self, synchronizer) {
+
+                        /*for (_, msg) in speculative_commits.iter() {
+                            println!("Sending speculative commit message {:?} to {} targets",
+                                     msg.message().original(), synchronizer.view().params().n());
+                        }*/
+
                         node.broadcast_serialized(speculative_commits);
+
                     } else {
                         let message = SystemMessage::Consensus(ConsensusMessage::new(
                             self.sequence_number(),
@@ -692,6 +689,9 @@ impl<S> Consensus<S>
                         ));
 
                         let targets = NodeId::targets(0..synchronizer.view().params().n());
+
+                        //println!("Sending commit message {:?} to {} targets", message, synchronizer.view().params().n());
+
                         node.broadcast_signed(message, targets);
                     }
 

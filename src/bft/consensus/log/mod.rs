@@ -24,6 +24,7 @@ use crate::bft::communication::message::{
     StoredMessage,
     SystemMessage,
 };
+use crate::bft::communication::NodeId;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
@@ -475,6 +476,7 @@ impl<O: Clone> DecisionLog<O> {
 
 /// Represents a log of messages received by the BFT system.
 pub struct Log<S, O, P> {
+    node_id: NodeId,
     //This item will only be accessed by the replica request thread
     curr_seq: Cell<SeqNo>,
     batch_size: usize,
@@ -514,8 +516,9 @@ impl<S, O: Clone, P> Log<S, O, P> {
     ///
     /// The value `batch_size` represents the maximum number of
     /// client requests to queue before executing a consensus instance.
-    pub fn new(batch_size: usize) -> Arc<Self> {
+    pub fn new(node: NodeId, batch_size: usize) -> Arc<Self> {
         Arc::new(Self {
+            node_id: node,
             batch_size,
             curr_seq: Cell::new(SeqNo::ZERO),
             latest_op: RwLock::new(IntMap::new()),
@@ -679,7 +682,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
     {
         let mut batch = UpdateBatch::new();
 
-        println!("Finalized batch of OPS seq {:?}", seq);
+        //println!("Finalized batch of OPS seq {:?} on Node {:?}", seq, self.node_id);
 
         for digest in digests {
             let (header, message) = self.requests

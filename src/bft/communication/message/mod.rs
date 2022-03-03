@@ -216,38 +216,8 @@ impl<S, O, P> Debug for Message<S, O, P> where S: Send, O: Send, P: Send {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Message::System(header, msg) => {
-                match msg {
-                    SystemMessage::Request(rq) => {
-                        write!(f, "System message Request")
-                    }
-                    SystemMessage::Reply(re) => {
-                        write!(f, "System message Reply")
-                    }
-                    SystemMessage::Consensus(cs) => {
-                        match cs.kind() {
-                            ConsensusMessageKind::PrePrepare(list) => {
-                                write!(f, "System message Consensus PrePrepare with {} requests", list.len())
-                            }
-                            ConsensusMessageKind::Prepare(prepare) => {
-                                write!(f, "System message Consensus prepare {:?}", prepare)
-                            }
-                            ConsensusMessageKind::Commit(commit) => {
-                                write!(f, "System message Consensus commit {:?}", commit)
-                            }
-                        }
-                    }
-                    SystemMessage::Cst(cst) => {
-                        write!(f, "System message cst")
-                    }
-                    SystemMessage::ViewChange(vchange) => {
-                        write!(f, "System message view change")
-                    }
-                    SystemMessage::ForwardedRequests(fr) => {
-                        write!(f, "System message forwarded requests")
-                    }
-                }
+                write!(f, "System message {:?}", msg)
             }
-
             Message::ExecutionFinishedWithAppstate(_) => {
                 write!(f, "Execution finished")
             }
@@ -277,6 +247,42 @@ pub enum SystemMessage<S, O, P> {
     ViewChange(ViewChangeMessage<O>),
     ForwardedRequests(ForwardedRequestsMessage<O>),
 }
+
+impl<S, O, P> Debug for SystemMessage<S, O, P> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SystemMessage::Request(rq) => {
+                write!(f, "Request")
+            }
+            SystemMessage::Reply(re) => {
+                write!(f, "Reply")
+            }
+            SystemMessage::Consensus(cs) => {
+                match cs.kind() {
+                    ConsensusMessageKind::PrePrepare(list) => {
+                        write!(f, "Consensus PrePrepare with {} requests", list.len())
+                    }
+                    ConsensusMessageKind::Prepare(prepare) => {
+                        write!(f, "Consensus prepare {:?}", prepare)
+                    }
+                    ConsensusMessageKind::Commit(commit) => {
+                        write!(f, "Consensus commit {:?}", commit)
+                    }
+                }
+            }
+            SystemMessage::Cst(cst) => {
+                write!(f, "Cst")
+            }
+            SystemMessage::ViewChange(vchange) => {
+                write!(f, "view change")
+            }
+            SystemMessage::ForwardedRequests(fr) => {
+                write!(f, "forwarded requests")
+            }
+        }
+    }
+}
+
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]

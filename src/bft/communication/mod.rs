@@ -784,7 +784,7 @@ impl<D> Node<D>
     /// Method called upon a `Message::ConnectedTx`.
     /// Registers the newly created transmission socket to the peer
     pub fn handle_connected_tx(&self, peer_id: NodeId, sock: SecureSocketSend) {
-        println!("Connected TX to peer {:?} from peer {:?}", peer_id, self.id);
+        //println!("Connected TX to peer {:?} from peer {:?}", peer_id, self.id);
 
         match &self.peer_tx {
             ///If we are a replica?
@@ -830,7 +830,7 @@ impl<D> Node<D>
         }
 
         //Init the per client queue and start putting the received messages into it
-        println!("Handling connection of peer {:?} in peer {:?}", peer_id, self.id);
+        //println!("Handling connection of peer {:?} in peer {:?}", peer_id, self.id);
 
         let client = self.node_handling.init_peer_conn(peer_id.clone());
 
@@ -910,7 +910,7 @@ impl<D> Node<D>
             let connector = connector.clone();
             let nonce = rng.next_state();
 
-            println!("Attempting to connect to peer {:?} with address {:?} from node {:?}", peer_id, addr, my_id);
+            //println!("Attempting to connect to peer {:?} with address {:?} from node {:?}", peer_id, addr, my_id);
 
             let arc = self.clone();
 
@@ -941,7 +941,7 @@ impl<D> Node<D>
         // 2) try to connect up to `RETRY` times, then announce
         // failure with a channel send op
         for _try in 0..RETRY {
-            println!("Trying attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
+            //println!("Trying attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
             if let Ok(mut sock) = socket::connect(addr).await {
                 // create header
                 let (header, _) = WireMessage::new(
@@ -982,7 +982,7 @@ impl<D> Node<D>
                 // success
                 self.handle_connected_tx(peer_id, sock);
 
-                println!("Ended connection attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
+                //println!("Ended connection attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
                 return;
             }
 
@@ -1033,7 +1033,7 @@ impl<D> Node<D>
                 break;
             }
 
-            println!("Node {:?} received connection from node", my_id);
+            //println!("Node {:?} received connection from node", my_id);
 
             // we are passing the correct length, safe to use unwrap()
             let header = Header::deserialize_from(&buf_header[..]).unwrap();
@@ -1050,7 +1050,7 @@ impl<D> Node<D>
                 Err(_) => break,
             };
 
-            println!("Node {:?} received connection from node {:?}", my_id, peer_id);
+            //println!("Node {:?} received connection from node {:?}", my_id, peer_id);
 
             // TLS handshake; drop connection if it fails
             let sock = if peer_id >= first_cli || my_id >= first_cli {
@@ -1253,7 +1253,10 @@ impl<D> SendTo<D>
             SendTo::Me { my_id, shared: ref sh, tx } => {
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Right((m, n, d, b)) = m {
-                    Self::me(my_id, m, n, d, b, key, tx).await
+                    //let msg = format!("{:?}", m);
+
+                    //println!("Sending NORMAL message {} myself, Node {:?}", msg, my_id);
+                    Self::me(my_id, m, n, d, b, key, tx).await;
                 } else {
                     // optimize code path
                     unreachable!()
@@ -1265,7 +1268,10 @@ impl<D> SendTo<D>
             } => {
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Left((n, d, b)) = m {
-                    Self::peers(flush, my_id, peer_id, n, d, b, key, sock, tx).await
+                    //let msg = format!("{:?}", d);
+
+                    //println!("Sending NORMAL message {:?} peer {:?}, my ID is {:?}", msg, peer_id, my_id);
+                    Self::peers(flush, my_id, peer_id, n, d, b, key, sock, tx).await;
                 } else {
                     // optimize code path
                     unreachable!()
@@ -1308,6 +1314,8 @@ impl<D> SendTo<D>
         lock: Arc<Mutex<SecureSocketSend>>,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
+
+        //let print = format!("DONE SENDING MESSAGE {:?}", d);
         // create wire msg
         let wm = WireMessage::new(
             my_id,
@@ -1331,6 +1339,8 @@ impl<D> SendTo<D>
             cli.disconnect();
             //tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
         }
+
+        //println!("{}", print);
     }
 }
 
@@ -1348,10 +1358,19 @@ impl<D> SerializedSendTo<D>
     ) {
         match self {
             SerializedSendTo::Me { tx, .. } => {
-                Self::me(h, m, tx).await
+                let msg = format!("{:?}", m.original());
+                let peer = format!("{:?}", tx.client_id());
+
+                //println!("Sending SERIALIZED message {:?} to myself, node {:?}", msg, peer);
+                Self::me(h, m, tx).await;
             }
             SerializedSendTo::Peers { id, sock, tx } => {
-                Self::peers(id, h, m, sock, tx).await
+
+                let msg = format!("{:?}", m.original());
+                let peer = format!("{:?}", tx.client_id());
+
+                //println!("Sending SERIALIZED message {} to other peer {:?} from node {:?}", msg, id, peer);
+                Self::peers(id, h, m, sock, tx).await;
             }
         }
     }
@@ -1374,6 +1393,9 @@ impl<D> SerializedSendTo<D>
         lock: Arc<Mutex<SecureSocketSend>>,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
+
+        //let print = format!("DONE SENDING MESSAGE {:?}", m.original());
+
         // create wire msg
         let (_, raw) = m.into_inner();
         let wm = WireMessage::from_parts(h, &raw[..]).unwrap();
@@ -1391,5 +1413,7 @@ impl<D> SerializedSendTo<D>
             cli.disconnect();
             //tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
         }
+
+        //println!("{}", print);
     }
 }

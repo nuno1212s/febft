@@ -198,7 +198,7 @@ impl<S> Replica<S>
         );
 
         // TODO: get log from persistent storage
-        let log = Log::new(batch_size);
+        let log = Log::new(node.id(), batch_size);
 
         // TODO:
         // - client req timeout base dur configure param
@@ -479,7 +479,7 @@ impl<S> Replica<S>
     }
 
     fn update_normal_phase(&mut self) -> Result<()> {
-        println!("Updating normal phase... {:?}", self.id());
+        //println!("Updating normal phase... {:?}", self.id());
         // check if we have STOP messages to be processed,
         // and update our phase when we start installing
         // the new view
@@ -499,14 +499,13 @@ impl<S> Replica<S>
 
         let leader = self.synchronizer.view().leader() == self.id();
 
-        println!("Polled {:?}, {:?}, is leader {}", polled_message, self.id(),
-                 leader);
+       //println!("Polled {:?}, {:?}, is leader {}", polled_message, self.id(), leader);
 
         let messages = match polled_message {
             ConsensusPollStatus::Recv => {
-                println!("Receiving from replicas {:?}, is leader {}", self.id(), leader);
+                //println!("Receiving from replicas {:?}, is leader {}", self.id(), leader);
                 let vec1 = self.node.receive_from_replicas()?;
-                println!("Received from replicas {:?}, is leader {}", self.id(), leader);
+                //println!("Received from replicas {:?}, is leader {}", self.id(), leader);
 
                 vec1
             }
@@ -514,22 +513,22 @@ impl<S> Replica<S>
                 vec![Message::System(h, SystemMessage::Consensus(m))]
             }
             ConsensusPollStatus::TryProposeAndRecv => {
-                println!("Receiving client requests. {:?}", self.id());
+                //println!("Receiving client requests. {:?}", self.id());
                 if let Ok(requests) = rt::block_on(self.client_rqs.receiver_channel().recv()) {
                     //println!("Proposing requests {}", requests.len());
 
                     self.consensus.propose(requests, &self.synchronizer, &self.node);
                 }
-                println!("Receiving replica requests. {:?}", self.id());
+                //println!("Receiving replica requests. {:?}", self.id());
 
                 self.node.receive_from_replicas()?
             }
         };
 
-        println!("Processing messages {:?}, {:?}", messages.len(), self.id());
+        //println!("Processing messages {:?}, {:?}", messages.len(), self.id());
 
         for message in messages {
-            println!("Processing message {:?}, {:?}", message, self.id());
+            //println!("Processing message {:?}, {:?}", message, self.id());
             match message {
                 Message::RequestBatch(time, batch) => {
                     self.requests_received(time, batch);
