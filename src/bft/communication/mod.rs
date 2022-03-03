@@ -832,6 +832,7 @@ impl<D> Node<D>
         //Init the per client queue and start putting the received messages into it
         //println!("Handling connection of peer {:?} in peer {:?}", peer_id, self.id);
 
+        //TODO: Change how replicas are handled because of latency
         let client = self.node_handling.init_peer_conn(peer_id.clone());
 
         let mut buf = SmallVec::<[u8; 16384]>::new();

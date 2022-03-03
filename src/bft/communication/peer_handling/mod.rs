@@ -6,7 +6,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use dsrust::channels::async_ch::ReceiverMultFut;
-use dsrust::channels::queue_channel::{make_mult_recv_from, make_mult_recv_partial_from, Receiver, ReceiverMult, ReceiverPartialMult, Sender};
+use dsrust::channels::queue_channel::{bounded_lf_queue, make_mult_recv_from, make_mult_recv_partial_from, Receiver, ReceiverMult, ReceiverPartialMult, RecvMultError, Sender};
 use dsrust::queues::lf_array_queue::LFBQueue;
 use dsrust::queues::mqueue::MQueue;
 use dsrust::queues::queues::{BQueue, PartiallyDumpable, Queue, SizableQueue};
@@ -27,10 +27,18 @@ use crate::bft::threadpool;
 
 type QueueType<T> = LFBQueue<Vec<T>>;
 
+type ReplicaQueueType<T> = LFBQueue<T>;
+
 type ClientQueueType<T> = MQueue<T>;
 
 fn channel_init<T>(capacity: usize) -> (Sender<Vec<T>, QueueType<T>>, Receiver<Vec<T>, QueueType<T>>) {
     dsrust::channels::queue_channel::bounded_lf_queue(capacity)
+}
+
+fn replica_channel_init<T>(capacity: usize) -> (Sender<T, ReplicaQueueType<T>>, ReceiverMult<T, ReplicaQueueType<T>>) {
+    let (tx, rx) = bounded_lf_queue(capacity);
+
+    (tx, make_mult_recv_from(rx))
 }
 
 fn client_channel_init<T>(capacity: usize) -> (Sender<T, ClientQueueType<T>>, ReceiverPartialMult<T, ClientQueueType<T>>) {
@@ -43,12 +51,10 @@ pub struct NodePeers<T: 'static> {
     first_cli: NodeId,
     own_id: NodeId,
     peer_loopback: Arc<ConnectedPeer<T>>,
-    replica_handling: Arc<ConnectedPeersGroup<T>>,
+    replica_handling: Arc<ReplicaHandling<T>>,
     client_handling: Option<Arc<ConnectedPeersGroup<T>>>,
-    replica_tx: Sender<Vec<T>, QueueType<T>>,
     client_tx: Option<Sender<Vec<T>, QueueType<T>>>,
     client_rx: Option<Receiver<Vec<T>, QueueType<T>>>,
-    replica_rx: Receiver<Vec<T>, QueueType<T>>,
 }
 
 const DEFAULT_CLIENT_QUEUE: usize = 1024;
@@ -80,15 +86,11 @@ impl<T> NodePeers<T> {
             client_channel = None;
         };
 
-        //TODO: maybe change the channel bound?
-        let (replica_tx, replica_rx) = channel_init(NODE_CHAN_BOUND);
-
         //TODO: Batch size is not correct, should be the value found in env
         //Both replicas and clients have to interact with replicas, so we always need this pool
         //We have a much larger queue because we don't want small slowdowns slowing down the connections
         //And also because there are few replicas, while there can be a very large amount of clients
-        let replica_handling = ConnectedPeersGroup::new(DEFAULT_REPLICA_QUEUE, NODE_CHAN_BOUND,
-                                                        replica_tx.clone());
+        let replica_handling = ReplicaHandling::new(NODE_CHAN_BOUND);
 
         let loopback_address = replica_handling.init_client(id);
 
@@ -104,10 +106,8 @@ impl<T> NodePeers<T> {
             peer_loopback: loopback_address,
             replica_handling,
             client_handling,
-            replica_tx,
             client_tx: cl_tx,
             client_rx: cl_rx,
-            replica_rx,
         };
 
         peers
@@ -130,7 +130,7 @@ impl<T> NodePeers<T> {
         }
 
         return if peer < self.first_cli {
-            self.replica_handling.get_client_conn(peer)
+            self.replica_handling.resolve_connection(peer)
         } else {
             self.client_handling.as_ref().expect("Tried to resolve client conn in the client")
                 .get_client_conn(peer)
@@ -178,25 +178,11 @@ impl<T> NodePeers<T> {
     }
 
     pub fn receive_from_replicas(&self) -> Result<Vec<T>> {
-        match self.replica_rx.recv_blk() {
-            Ok(vec) => {
-                Ok(vec)
-            }
-            Err(_) => {
-                Err(Error::simple(ErrorKind::Communication))
-            }
-        }
+        Ok(self.replica_handling.receive_from_replicas())
     }
 
     pub async fn receive_from_replicas_async(&self) -> Result<Vec<T>> {
-        match self.replica_rx.recv_fut().await {
-            Ok(vec) => {
-                Ok(vec)
-            }
-            Err(_) => {
-                Err(Error::simple(ErrorKind::Communication))
-            }
-        }
+        Ok(self.replica_handling.receive_from_replicas_async().await)
     }
 
     pub fn client_count(&self) -> Option<usize> {
@@ -209,7 +195,93 @@ impl<T> NodePeers<T> {
     }
 
     pub fn replica_count(&self) -> usize {
-        return self.replica_handling.connected_clients.load(Ordering::Relaxed);
+        return self.replica_handling.connected_client_count.load(Ordering::Relaxed);
+    }
+}
+
+///Represents a connected peer
+///Can either be a pooled peer with an individual queue and a thread that will collect all requests
+///Or an unpooled connection that puts the messages straight into the channel where the consumer
+///Will collect.
+pub enum ConnectedPeer<T> {
+    PoolConnection {
+        client_id: NodeId,
+        sender: Mutex<Option<Sender<T, ClientQueueType<T>>>>,
+        receiver: ReceiverPartialMult<T, ClientQueueType<T>>,
+    },
+    UnpooledConnection {
+        client_id: NodeId,
+        sender: Mutex<Option<Sender<T, ReplicaQueueType<T>>>>,
+    },
+}
+
+///Handling replicas is different from handling clients
+///We want to handle the requests differently as in communication between replicas
+///Latency is extremely important and we have to minimize it to the least amount possible
+pub struct ReplicaHandling<T> {
+    capacity: usize,
+    channel_tx_replica: Sender<T, ReplicaQueueType<T>>,
+    channel_rx_replica: ReceiverMult<T, ReplicaQueueType<T>>,
+    connected_clients: RwLock<IntMap<Arc<ConnectedPeer<T>>>>,
+    connected_client_count: AtomicUsize
+}
+
+impl<T> ReplicaHandling<T> {
+    pub fn new(capacity: usize) -> Arc<Self> {
+        let (sender, receiver) = replica_channel_init(capacity);
+
+        Arc::new(
+            Self {
+                capacity,
+                channel_rx_replica: receiver,
+                channel_tx_replica: sender,
+                connected_clients: RwLock::new(IntMap::new()),
+                connected_client_count: AtomicUsize::new(0)
+            }
+        )
+    }
+
+    pub fn init_client(&self, peer_id: NodeId) -> Arc<ConnectedPeer<T>> {
+        let peer = Arc::new(ConnectedPeer::UnpooledConnection {
+            client_id: peer_id,
+            sender: Mutex::new(Some(self.channel_tx_replica.clone()))
+        });
+
+        //TODO: Handle replica disconnects
+        self.connected_clients.write().insert(peer_id.id() as u64, peer.clone());
+        self.connected_client_count.fetch_add(1, Ordering::Relaxed);
+
+        peer
+    }
+
+    pub fn resolve_connection(&self, peer_id: NodeId) -> Option<Arc<ConnectedPeer<T>>> {
+        match self.connected_clients.read().get(peer_id.id() as u64) {
+            None => {
+                None
+            }
+            Some(peer) => {
+                Some(Arc::clone(peer))
+            }
+        }
+    }
+
+    pub fn receive_from_replicas(&self) -> Vec<T> {
+        let mut vec = Vec::with_capacity(self.capacity);
+
+        self.channel_rx_replica.recv_mult(&mut vec);
+
+        vec
+    }
+
+    pub async fn receive_from_replicas_async(&self) -> Vec<T> {
+        match self.channel_rx_replica.recv_fut().await {
+            Ok(vec) => {
+                vec
+            }
+            Err(_) => {
+                panic!("Failed to collect requests from replicas")
+            }
+        }
     }
 }
 
@@ -247,12 +319,6 @@ pub struct ConnectedPeersPool<T: 'static> {
     owner: Arc<ConnectedPeersGroup<T>>,
 }
 
-pub struct ConnectedPeer<T> {
-    client_id: NodeId,
-    sender: Mutex<Option<Sender<T, ClientQueueType<T>>>>,
-    receiver: ReceiverPartialMult<T, ClientQueueType<T>>,
-}
-
 impl<T: 'static> ConnectedPeersGroup<T> {
     pub fn new(per_client_bound: usize, batch_size: usize, batch_transmission: Sender<Vec<T>, QueueType<T>>) -> Arc<Self> {
         Arc::new(Self {
@@ -266,7 +332,13 @@ impl<T: 'static> ConnectedPeersGroup<T> {
     }
 
     pub fn init_client(self: &Arc<Self>, peer_id: NodeId) -> Arc<ConnectedPeer<T>> {
-        let connected_client = Arc::new(ConnectedPeer::new(peer_id, self.per_client_cache));
+        let (sender, receiver) = client_channel_init(self.per_client_cache);
+
+        let connected_client = Arc::new(ConnectedPeer::PoolConnection {
+            client_id: peer_id,
+            sender: Mutex::new(Option::Some(sender)),
+            receiver,
+        });
 
         let mut cached_clients = self.client_connections_cache.write();
 
@@ -471,7 +543,7 @@ impl<T> ConnectedPeersPool<T> {
             let client = &guard[(start_point + index) % guard.len()];
 
             if client.is_dc() {
-                dced.push(client.client_id);
+                dced.push(client.client_id().clone());
 
                 //Assign the remaining slots to the next client
                 next_client_requests += requests_per_client;
@@ -494,7 +566,7 @@ impl<T> ConnectedPeersPool<T> {
             for node in &dced {
                 //This is O(n*c) but there isn't really a much better way to do it I guess
                 let option = guard.iter().position(|x| {
-                    x.client_id.0 == node.0
+                    x.client_id().0 == node.0
                 }).unwrap();
 
                 guard.swap_remove(option);
@@ -515,44 +587,74 @@ impl<T> ConnectedPeersPool<T> {
 }
 
 impl<T> ConnectedPeer<T> {
-    pub fn new(client_id: NodeId, per_client_bound: usize) -> Self {
-        let (tx, rx) = client_channel_init(per_client_bound);
-
-        Self {
-            client_id,
-            sender: Mutex::new(Some(tx)),
-            receiver: rx,
+    pub fn client_id(&self) -> &NodeId {
+        match self {
+            Self::PoolConnection { client_id, .. } => {
+                client_id
+            }
+            Self::UnpooledConnection { client_id, .. } => {
+                client_id
+            }
         }
     }
 
-    pub fn client_id(&self) -> &NodeId {
-        &self.client_id
-    }
-
     pub fn is_dc(&self) -> bool {
-        self.receiver.is_dc()
+        match self {
+            Self::PoolConnection { receiver, .. } => {
+                receiver.is_dc()
+            }
+            Self::UnpooledConnection { sender, .. } => {
+                sender.lock().is_none()
+            }
+        }
     }
 
     pub fn disconnect(&self) {
-        //By destroying the sender, we close the channel when
-        self.sender.lock().take();
+        match self {
+            Self::PoolConnection { sender, .. } => {
+                sender.lock().take();
+            }
+            Self::UnpooledConnection { sender, .. } => {
+                sender.lock().take();
+            }
+        };
     }
 
     ///Dump n requests into the provided vector
     ///Returns the amount of requests that were dumped into the array
     pub fn dump_n_requests(&self, rq_bound: usize, dump_vec: &mut Vec<T>) -> usize {
-        self.receiver.try_recv_mult(dump_vec, rq_bound).unwrap()
+        match self {
+            Self::PoolConnection { receiver, .. } => {
+                receiver.try_recv_mult(dump_vec, rq_bound).unwrap()
+            }
+            Self::UnpooledConnection { .. } => {
+                0
+            }
+        }
     }
 
     pub async fn push_request(&self, msg: T) {
-        let sender = self.sender.lock().as_ref().unwrap().clone();
+        match self {
+            Self::PoolConnection { sender, .. } => {
+                let sender_guard = sender.lock().as_ref().unwrap().clone();
 
-        match sender.send_async(msg).await {
-            Ok(_) => {}
-            Err(err) => {
-                panic!("Failed to send because {:?}", err);
+                match sender_guard.send_async(msg).await {
+                    Ok(_) => {}
+                    Err(err) => {
+                        panic!("Failed to send because {:?}", err);
+                    }
+                };
             }
-        };
+            Self::UnpooledConnection { sender, .. } => {
+                let sender_guard = sender.lock().as_ref().unwrap().clone();
+
+                match sender_guard.send_async(msg).await {
+                    Ok(_) => {}
+                    Err(err) => {
+                        panic!("Failed to send because {:?}", err);
+                    }
+                };
+            }
+        }
     }
 }
-
