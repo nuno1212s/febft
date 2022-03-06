@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{RecvError, SendError};
@@ -14,6 +15,7 @@ use dsrust::utils::backoff::BackoffN;
 use futures::select;
 use futures_timer::Delay;
 use intmap::IntMap;
+use log::debug;
 use parking_lot::{Mutex, RwLock};
 
 use crate::bft::communication::{NODE_CHAN_BOUND, NodeConfig, NodeId};
@@ -21,6 +23,7 @@ use crate::bft::communication::channel::{ChannelRx, ChannelTx, new_bounded};
 use crate::bft::communication::message::Message;
 use crate::bft::error::*;
 use crate::bft::threadpool;
+use crate::bft::async_runtime as rt;
 
 ///Handles the communication between two peers (replica - replica, replica - client)
 /// Only handles reception of requests, not transmission
@@ -114,7 +117,7 @@ impl<T> NodePeers<T> {
     }
 
     pub fn init_peer_conn(&self, peer: NodeId) -> Arc<ConnectedPeer<T>> {
-        println!("Initializing peer connection for peer {:?} on peer {:?}", peer, self.own_id);
+        debug!("Initializing peer connection for peer {:?} on peer {:?}", peer, self.own_id);
 
         return if peer >= self.first_cli {
             self.client_handling.as_ref().expect("Tried to init client request from client itself?")
@@ -211,32 +214,39 @@ pub enum ConnectedPeer<T> {
     },
     UnpooledConnection {
         client_id: NodeId,
-        sender: Mutex<Option<Sender<T, ReplicaQueueType<T>>>>,
+        sender: Mutex<Option<ChannelTx<T>>>,
     },
 }
 
 ///Handling replicas is different from handling clients
 ///We want to handle the requests differently as in communication between replicas
 ///Latency is extremely important and we have to minimize it to the least amount possible
+/// So in this implementation, we will just use a single channel with dumping capabilities (Able to remove capacity items in a couple CAS operations,
+/// making it much more efficient than just removing 1 at a time and also minimizing concurrency)
+/// for all messages
+///
+/// FIXME: See if having a multiple channel approach with something like a select is
+/// worth the overhead of having to pool multiple channels. We may also get problems with fairness.
+/// Probably not worth it
 pub struct ReplicaHandling<T> {
     capacity: usize,
-    channel_tx_replica: Sender<T, ReplicaQueueType<T>>,
-    channel_rx_replica: ReceiverMult<T, ReplicaQueueType<T>>,
+    channel_tx_replica: ChannelTx<T>,
+    channel_rx_replica: RefCell<ChannelRx<T>>,
     connected_clients: RwLock<IntMap<Arc<ConnectedPeer<T>>>>,
-    connected_client_count: AtomicUsize
+    connected_client_count: AtomicUsize,
 }
 
 impl<T> ReplicaHandling<T> {
     pub fn new(capacity: usize) -> Arc<Self> {
-        let (sender, receiver) = replica_channel_init(capacity);
+        let (sender, receiver) = new_bounded(capacity);
 
         Arc::new(
             Self {
                 capacity,
-                channel_rx_replica: receiver,
+                channel_rx_replica: RefCell::new(receiver),
                 channel_tx_replica: sender,
                 connected_clients: RwLock::new(IntMap::new()),
-                connected_client_count: AtomicUsize::new(0)
+                connected_client_count: AtomicUsize::new(0),
             }
         )
     }
@@ -244,7 +254,7 @@ impl<T> ReplicaHandling<T> {
     pub fn init_client(&self, peer_id: NodeId) -> Arc<ConnectedPeer<T>> {
         let peer = Arc::new(ConnectedPeer::UnpooledConnection {
             client_id: peer_id,
-            sender: Mutex::new(Some(self.channel_tx_replica.clone()))
+            sender: Mutex::new(Some(self.channel_tx_replica.clone())),
         });
 
         //TODO: Handle replica disconnects
@@ -266,17 +276,20 @@ impl<T> ReplicaHandling<T> {
     }
 
     pub fn receive_from_replicas(&self) -> Vec<T> {
-        let mut vec = Vec::with_capacity(self.capacity);
+        vec![rt::block_on(self.channel_rx_replica.borrow_mut().recv()).unwrap()]
 
-        self.channel_rx_replica.recv_mult(&mut vec);
-
-        vec
+        //
+        // let mut vec = Vec::with_capacity(self.capacity);
+        //
+        // self.channel_rx_replica.recv_mult(&mut vec);
+        //
+        // vec
     }
 
     pub async fn receive_from_replicas_async(&self) -> Vec<T> {
-        match self.channel_rx_replica.recv_fut().await {
+        match self.channel_rx_replica.borrow_mut().recv().await {
             Ok(vec) => {
-                vec
+                vec![vec]
             }
             Err(_) => {
                 panic!("Failed to collect requests from replicas")
@@ -466,6 +479,7 @@ impl<T> ConnectedPeersPool<T> {
         //Spawn the thread that will collect client requests
         //and then send the batches to the channel.
         std::thread::spawn(move || {
+            let backoff = BackoffN::new();
             loop {
                 if self.finish_execution.load(Ordering::Relaxed) {
                     break;
@@ -473,18 +487,11 @@ impl<T> ConnectedPeersPool<T> {
 
                 let vec = self.collect_requests(self.batch_size, &self.owner);
 
-                let i = self.connected_clients.lock().len();
-
-                if i > 5 {
-                    println!("Collected {} requests from the pool {} with {}", vec.len(), pool_id,
-                             i);
-                }
-
                 if !vec.is_empty() {
                     self.batch_transmission.send(vec);
                 }
 
-                std::thread::sleep(Duration::from_millis(1));
+                backoff.snooze();
             }
         });
     }
@@ -632,6 +639,37 @@ impl<T> ConnectedPeer<T> {
             }
         }
     }
+    
+    pub async fn push_request_(&self, msg: T, own_id: &NodeId) where T: Debug {
+        match self {
+            Self::PoolConnection { sender, .. } => {
+                debug!("{:?} // Pushing request {:?} into queue, from {:?}",
+                    own_id, msg, self.client_id());
+
+                let sender_guard = sender.lock().as_ref().unwrap().clone();
+
+                match sender_guard.send_async(msg).await {
+                    Ok(_) => {}
+                    Err(err) => {
+                        panic!("Failed to send because {:?}", err);
+                    }
+                };
+            }
+            Self::UnpooledConnection { sender, .. } => {
+                debug!("{:?} // Pushing request {:?} into queue, from {:?}",
+                    own_id, msg, self.client_id());
+
+                let mut sender_guard = sender.lock().as_ref().unwrap().clone();
+
+                match sender_guard.send(msg).await {
+                    Ok(_) => {}
+                    Err(err) => {
+                        panic!("Failed to send because {:?}", err);
+                    }
+                };
+            }
+        }
+    }
 
     pub async fn push_request(&self, msg: T) {
         match self {
@@ -646,9 +684,9 @@ impl<T> ConnectedPeer<T> {
                 };
             }
             Self::UnpooledConnection { sender, .. } => {
-                let sender_guard = sender.lock().as_ref().unwrap().clone();
+                let mut sender_guard = sender.lock().as_ref().unwrap().clone();
 
-                match sender_guard.send_async(msg).await {
+                match sender_guard.send(msg).await {
                     Ok(_) => {}
                     Err(err) => {
                         panic!("Failed to send because {:?}", err);

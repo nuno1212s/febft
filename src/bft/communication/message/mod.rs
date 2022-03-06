@@ -216,7 +216,7 @@ impl<S, O, P> Debug for Message<S, O, P> where S: Send, O: Send, P: Send {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Message::System(header, msg) => {
-                write!(f, "System message {:?}", msg)
+                write!(f, "System message {:?} ({:?})", msg, header.digest())
             }
             Message::ExecutionFinishedWithAppstate(_) => {
                 write!(f, "Execution finished")
@@ -260,7 +260,7 @@ impl<S, O, P> Debug for SystemMessage<S, O, P> {
             SystemMessage::Consensus(cs) => {
                 match cs.kind() {
                     ConsensusMessageKind::PrePrepare(list) => {
-                        write!(f, "Consensus PrePrepare with {} requests", list.len())
+                        write!(f, "Consensus PrePrepare with {}", list.len())
                     }
                     ConsensusMessageKind::Prepare(prepare) => {
                         write!(f, "Consensus prepare {:?}", prepare)

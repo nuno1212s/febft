@@ -23,6 +23,7 @@ use futures::io::{
 use futures::lock::Mutex;
 use futures_timer::Delay;
 use intmap::IntMap;
+use log::debug;
 use parking_lot::RwLock;
 use rustls::{
     ClientConfig,
@@ -679,6 +680,7 @@ impl<D> Node<D>
                 let sock = Arc::clone(map.get(id.into()).unwrap());
                 let s = SerializedSendTo::Peers {
                     id,
+                    our_id: my_id,
                     sock,
                     //Get the RX channel for the peer to mark as DCed if it fails
                     tx: self.resolve_client_rx_connection(id),
@@ -784,7 +786,7 @@ impl<D> Node<D>
     /// Method called upon a `Message::ConnectedTx`.
     /// Registers the newly created transmission socket to the peer
     pub fn handle_connected_tx(&self, peer_id: NodeId, sock: SecureSocketSend) {
-        //println!("Connected TX to peer {:?} from peer {:?}", peer_id, self.id);
+        //debug!("Connected TX to peer {:?} from peer {:?}", peer_id, self.id);
 
         match &self.peer_tx {
             ///If we are a replica?
@@ -830,7 +832,7 @@ impl<D> Node<D>
         }
 
         //Init the per client queue and start putting the received messages into it
-        //println!("Handling connection of peer {:?} in peer {:?}", peer_id, self.id);
+        //debug!("Handling connection of peer {:?} in peer {:?}", peer_id, self.id);
 
         //TODO: Change how replicas are handled because of latency
         let client = self.node_handling.init_peer_conn(peer_id.clone());
@@ -882,7 +884,9 @@ impl<D> Node<D>
                 }
             };
 
-            client.push_request(Message::System(header, message)).await;
+            let msg = Message::System(header, message);
+
+            client.push_request_(msg, &self.id()).await;
 
             //tx.send(Message::System(header, message)).await.unwrap_or(());
         }
@@ -1232,6 +1236,8 @@ enum SerializedSendTo<D: SharedData> {
     Peers {
         // the id of the peer
         id: NodeId,
+        //Our own ID
+        our_id: NodeId,
         // handle to socket
         sock: Arc<Mutex<SecureSocketSend>>,
         // a handle to the message channel of the corresponding client
@@ -1254,9 +1260,6 @@ impl<D> SendTo<D>
             SendTo::Me { my_id, shared: ref sh, tx } => {
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Right((m, n, d, b)) = m {
-                    //let msg = format!("{:?}", m);
-
-                    //println!("Sending NORMAL message {} myself, Node {:?}", msg, my_id);
                     Self::me(my_id, m, n, d, b, key, tx).await;
                 } else {
                     // optimize code path
@@ -1269,9 +1272,6 @@ impl<D> SendTo<D>
             } => {
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Left((n, d, b)) = m {
-                    //let msg = format!("{:?}", d);
-
-                    //println!("Sending NORMAL message {:?} peer {:?}, my ID is {:?}", msg, peer_id, my_id);
                     Self::peers(flush, my_id, peer_id, n, d, b, key, sock, tx).await;
                 } else {
                     // optimize code path
@@ -1301,7 +1301,7 @@ impl<D> SendTo<D>
         ).into_inner();
 
         // send
-        cli.push_request(Message::System(h, m)).await;
+        cli.push_request_(Message::System(h, m), cli.client_id()).await;
     }
 
     async fn peers(
@@ -1362,15 +1362,14 @@ impl<D> SerializedSendTo<D>
                 let msg = format!("{:?}", m.original());
                 let peer = format!("{:?}", tx.client_id());
 
-                //println!("Sending SERIALIZED message {:?} to myself, node {:?}", msg, peer);
+                debug!("{:?} // Sending SERIALIZED message {:?} to myself", peer,  msg);
                 Self::me(h, m, tx).await;
             }
-            SerializedSendTo::Peers { id, sock, tx } => {
-
+            SerializedSendTo::Peers { id, our_id, sock, tx } => {
                 let msg = format!("{:?}", m.original());
                 let peer = format!("{:?}", tx.client_id());
 
-                //println!("Sending SERIALIZED message {} to other peer {:?} from node {:?}", msg, id, peer);
+                debug!("{:?} // Sending SERIALIZED message {} to other peer {:?} ",our_id,  msg, id);
                 Self::peers(id, h, m, sock, tx).await;
             }
         }
@@ -1384,7 +1383,7 @@ impl<D> SerializedSendTo<D>
         let (original, _) = m.into_inner();
 
         // send to ourselves
-        cli.push_request(Message::System(h, original)).await;
+        cli.push_request_(Message::System(h, original), &cli.client_id()).await;
     }
 
     async fn peers(

@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
 use chrono::{DateTime, Utc};
+use log::debug;
 
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::channel::{ChannelRx, ChannelTx, new_bounded};
@@ -68,7 +69,8 @@ impl<S: Service> RqProcessor<S> {
                 //Only the leader will propose things
                 let mut is_leader = self.synchronizer.view().leader() == self.node_ref.id();
 
-                println!("Received batch of {} messages from clients, processing them, is_leader? {}", messages.len(), is_leader);
+                debug!("{:?} // Received batch of {} messages from clients, processing them, is_leader? {}",
+                    self.node_ref.id(), messages.len(), is_leader);
 
                 //For now
                 is_leader = true;

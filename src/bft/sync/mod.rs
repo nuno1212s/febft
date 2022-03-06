@@ -439,7 +439,19 @@ impl<S> Synchronizer<S>
         for (header, request) in requests {
             let digest = header.unique_digest();
             self.watch_request_impl(phase, digest, timeouts);
+
+            //TODO: Is this even necessary, since all requests are added into the log
+            //When we first store them?
+
+            //It's possible that, if the latency of the client to a given replica A is smaller than the
+            //Latency to leader replica B + time taken to process request in B + Latency between A and B,
+            //This replica does not know of the request and yet it is valid.
+            //This means that that client would not be able to process requests from that replica, which could
+            //break some of the quorum properties (replica A would always be faulty for that client even if it is
+            //not, so we could only tolerate f-1 faults for clients that are in that situation)
+
             log.insert(header, SystemMessage::Request(request));
+
             digests.push(digest);
         }
 
@@ -744,7 +756,7 @@ impl<S> Synchronizer<S>
 
                 let normalized_collects: Vec<Option<&CollectData<Request<S>>>> =
                     Self::normalized_collects(&*collects_guard, curr_cid)
-                    .collect();
+                        .collect();
 
                 let sound = sound(current_view, &normalized_collects);
                 if !sound.test() {

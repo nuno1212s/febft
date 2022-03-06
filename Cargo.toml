@@ -102,6 +102,9 @@ fxhash = { version = "0.2", optional = true }
 #dsrust = { version = "0.1.7", git = "https://github.com/nuno1212s/DSRust" }
 dsrust = { path = "/home/nunogneto/Documents/Development/Rust/dsrust" }
 
+log = "0.4.14"
+env_logger = "0.8"
+
 # https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.release]
 opt-level = 3

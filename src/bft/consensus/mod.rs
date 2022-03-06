@@ -5,6 +5,7 @@ use std::fmt::{Debug, Formatter};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
+use ::log::debug;
 use chrono::offset::Utc;
 use either::{
     Left,
@@ -173,6 +174,7 @@ pub struct Consensus<S: Service> {
     // can be smaller than the config's max batch size,
     // but never longer
     batch_size: usize,
+    node_id: NodeId,
     phase: ProtoPhase,
     tbo: TboQueue<Request<S>>,
     current: Vec<Digest>,
@@ -220,9 +222,10 @@ impl<S> Consensus<S>
         Reply<S>: Send + 'static,
 {
     /// Starts a new consensus protocol tracker.
-    pub fn new(initial_seq_no: SeqNo, batch_size: usize) -> Self {
+    pub fn new(initial_seq_no: SeqNo, id: NodeId, batch_size: usize) -> Self {
         Self {
             batch_size: 0,
+            node_id: id,
             phase: ProtoPhase::Init,
             missing_swapbuf: Vec::new(),
             missing_requests: VecDeque::new(),
@@ -279,7 +282,7 @@ impl<S> Consensus<S>
         synchronizer: &Synchronizer<S>,
         node: &Node<S::Data>,
     ) {
-        //println!("Phase {:?}", self.phase);
+        //debug!("Phase {:?}", self.phase);
 
         match self.phase {
             ProtoPhase::Init => self.phase = ProtoPhase::PrePreparing,
@@ -288,7 +291,7 @@ impl<S> Consensus<S>
 
         let view = synchronizer.view();
 
-        //println!("Is leader? {:?} {:?} = {:?}", node.id(), view.leader(),
+        //debug!("Is leader? {:?} {:?} = {:?}", node.id(), view.leader(),
         //         node.id() == view.leader());
 
         if node.id() != view.leader() {
@@ -518,12 +521,20 @@ impl<S> Consensus<S>
             ProtoPhase::PrePreparing => {
                 // queue message if we're not pre-preparing
                 // or in the same seq as the message
+                let view = synchronizer.view();
+
                 match message.kind() {
-                    ConsensusMessageKind::PrePrepare(_) if message.view() != synchronizer.view().sequence_number() => {
+                    ConsensusMessageKind::PrePrepare(_) if message.view() != view.sequence_number() => {
                         // drop proposed value in a different view (from different leader)
+                        debug!("{:?} // Dropped pre prepare message because of view {:?} vs {:?} (ours)",
+                            self.node_id, message.view(), synchronizer.view().sequence_number());
+
                         return ConsensusStatus::Deciding;
                     }
                     ConsensusMessageKind::PrePrepare(_) if message.sequence_number() != self.sequence_number() => {
+                        debug!("{:?} // Queued pre prepare message because of seq num {:?} vs {:?} (ours)",
+                            self.node_id, message.sequence_number(), self.sequence_number());
+
                         self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     }
@@ -538,31 +549,38 @@ impl<S> Consensus<S>
                         self.current_digest = header.digest().clone();
                         (&mut self.current[..digests.len()]).copy_from_slice(&digests[..]);
                     }
-                    ConsensusMessageKind::Prepare(_) => {
+                    ConsensusMessageKind::Prepare(d) => {
+                        debug!("{:?} // Received prepare message {:?} while in prepreparing ", self.node_id, d);
                         self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     }
-                    ConsensusMessageKind::Commit(_) => {
+                    ConsensusMessageKind::Commit(d) => {
+                        debug!("{:?} // Received commit message {:?} while in pre preparing", self.node_id, d);
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
                     }
                 }
+
                 // start speculatively creating COMMIT messages,
                 // which involve potentially expensive signing ops
-                for peer_id in NodeId::targets(0..synchronizer.view().params().n()) {
-                    let my_id = node.id();
-                    let seq = self.sequence_number();
-                    let view = synchronizer.view().sequence_number();
+                let my_id = node.id();
 
-                    let sign_detached = node.sign_detached();
-                    let current_digest = self.current_digest.clone();
-                    let speculative_commits = Arc::clone(&self.speculative_commits);
+                let seq = self.sequence_number();
+                let view_seq = view.sequence_number();
 
-                    threadpool::execute(move || {
+                let sign_detached = node.sign_detached();
+                let current_digest = self.current_digest.clone();
+                let speculative_commits = Arc::clone(&self.speculative_commits);
+                let n = view.params().n();
+
+                //Speculate in another thread.
+                threadpool::execute(move || {
+                    for peer_id in NodeId::targets(0..n) {
+
                         // create COMMIT
                         let message = SystemMessage::Consensus(ConsensusMessage::new(
                             seq,
-                            view,
+                            view_seq,
                             ConsensusMessageKind::Commit(current_digest),
                         ));
 
@@ -593,16 +611,21 @@ impl<S> Consensus<S>
 
                         let mut map = speculative_commits.lock();
                         map.insert(peer_id.into(), stored);
-                    });
-                }
+                    }
+                });
+
                 // leader can't vote for a PREPARE
-                if node.id() != synchronizer.view().leader() {
+                if node.id() != view.leader() {
                     let message = SystemMessage::Consensus(ConsensusMessage::new(
                         self.sequence_number(),
-                        synchronizer.view().sequence_number(),
+                        view.sequence_number(),
                         ConsensusMessageKind::Prepare(self.current_digest.clone()),
                     ));
-                    let targets = NodeId::targets(0..synchronizer.view().params().n());
+
+                    debug!("{:?} // Broadcasting prepare consensus message {:?}", self.node_id, message);
+
+                    let targets = NodeId::targets(0..view.params().n());
+
                     node.broadcast(message, targets);
                 }
 
@@ -626,14 +649,17 @@ impl<S> Consensus<S>
                 // queue the message for later
                 match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
+                        debug!("{:?} // Received pre prepare message while in preparing requests", self.node_id);
                         self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     }
                     ConsensusMessageKind::Prepare(_) => {
+                        debug!("{:?} // Received prepare while in preparing requests", self.node_id);
                         self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     }
                     ConsensusMessageKind::Commit(_) => {
+                        debug!("{:?} // Received commit message while in preparing requests", self.node_id);
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
                     }
@@ -644,23 +670,35 @@ impl<S> Consensus<S>
                 // or in the same seq as the message
                 let i = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
+                        debug!("{:?} // Received pre prepare {:?} message while in preparing", self.node_id,
+                            header.digest());
                         self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     }
-                    ConsensusMessageKind::Prepare(_) if message.view() != synchronizer.view().sequence_number() => {
+                    ConsensusMessageKind::Prepare(d) if message.view() != synchronizer.view().sequence_number() => {
                         // drop msg in a different view
+
+                        debug!("{:?} // Dropped prepare message {:?} because of view {:?} vs {:?} (ours)",
+                            self.node_id, d, message.view(), synchronizer.view().sequence_number());
                         return ConsensusStatus::Deciding;
                     }
                     ConsensusMessageKind::Prepare(d) if d != &self.current_digest => {
                         // drop msg with different digest from proposed value
+                        debug!("{:?} // Dropped prepare message {:?} because of digest {:?} vs {:?} (ours)",
+                            self.node_id, d, d, self.current_digest);
                         return ConsensusStatus::Deciding;
                     }
-                    ConsensusMessageKind::Prepare(_) if message.sequence_number() != self.sequence_number() => {
+                    ConsensusMessageKind::Prepare(d) if message.sequence_number() != self.sequence_number() => {
+                        debug!("{:?} // Queued prepare message {:?} because of seqnumber {:?} vs {:?} (ours)",
+                            self.node_id, d, message.sequence_number(), self.sequence_number());
+
                         self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     }
                     ConsensusMessageKind::Prepare(_) => i + 1,
-                    ConsensusMessageKind::Commit(_) => {
+                    ConsensusMessageKind::Commit(d) => {
+                        debug!("{:?} // Received commit message {:?} while in preparing", self.node_id, d);
+
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
                     }
@@ -673,14 +711,13 @@ impl<S> Consensus<S>
                     let speculative_commits = self.take_speculative_commits();
 
                     if valid_spec_commits(&speculative_commits, self, synchronizer) {
-
-                        /*for (_, msg) in speculative_commits.iter() {
-                            println!("Sending speculative commit message {:?} to {} targets",
-                                     msg.message().original(), synchronizer.view().params().n());
-                        }*/
+                        for (_, msg) in speculative_commits.iter() {
+                            debug!("{:?} // Broadcasting speculative commit message {:?} (total of {} messages) to {} targets",
+                                 self.node_id, msg.message().original(), speculative_commits.len(), synchronizer.view().params().n());
+                            break;
+                        }
 
                         node.broadcast_serialized(speculative_commits);
-
                     } else {
                         let message = SystemMessage::Consensus(ConsensusMessage::new(
                             self.sequence_number(),
@@ -688,9 +725,9 @@ impl<S> Consensus<S>
                             ConsensusMessageKind::Commit(self.current_digest.clone()),
                         ));
 
-                        let targets = NodeId::targets(0..synchronizer.view().params().n());
+                        debug!("{:?} // Broadcasting commit consensus message {:?}", self.node_id, message);
 
-                        //println!("Sending commit message {:?} to {} targets", message, synchronizer.view().params().n());
+                        let targets = NodeId::targets(0..synchronizer.view().params().n());
 
                         node.broadcast_signed(message, targets);
                     }
@@ -708,22 +745,34 @@ impl<S> Consensus<S>
                 // or in the same seq as the message
                 let i = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
+                        debug!("{:?} // Received pre prepare message {:?} while in committing", self.node_id,
+                         header.digest());
                         self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     }
-                    ConsensusMessageKind::Prepare(_) => {
+                    ConsensusMessageKind::Prepare(d) => {
+                        debug!("{:?} // Received prepare message {:?} while in committing", self.node_id, d);
                         self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     }
-                    ConsensusMessageKind::Commit(_) if message.view() != synchronizer.view().sequence_number() => {
+                    ConsensusMessageKind::Commit(d) if message.view() != synchronizer.view().sequence_number() => {
                         // drop msg in a different view
+                        debug!("{:?} // Dropped commit message {:?} because of view {:?} vs {:?} (ours)",
+                            self.node_id, d, message.view(), synchronizer.view().sequence_number());
+
                         return ConsensusStatus::Deciding;
                     }
                     ConsensusMessageKind::Commit(d) if d != &self.current_digest => {
                         // drop msg with different digest from proposed value
+                        debug!("{:?} // Dropped commit message {:?} because of digest {:?} vs {:?} (ours)",
+                            self.node_id, d, d, self.current_digest);
+
                         return ConsensusStatus::Deciding;
                     }
-                    ConsensusMessageKind::Commit(_) if message.sequence_number() != self.sequence_number() => {
+                    ConsensusMessageKind::Commit(d) if message.sequence_number() != self.sequence_number() => {
+                        debug!("{:?} // Queued commit message {:?} because of seqnumber {:?} vs {:?} (ours)",
+                            self.node_id, d, message.sequence_number(), self.sequence_number());
+
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
                     }
@@ -809,9 +858,15 @@ fn valid_spec_commits<S>(
         Request<S>: Send + Clone + 'static,
         Reply<S>: Send + 'static,
 {
-    if speculative_commits.len() != synchronizer.view().params().n() {
+    let len = speculative_commits.len();
+
+    let n = synchronizer.view().params().n();
+    if len != n {
+        debug!("{:?} // Failed to read speculative commits, {} vs {}", consensus.node_id, len, n);
+
         return false;
     }
+
     let seq_no = consensus.sequence_number();
     speculative_commits
         .values()

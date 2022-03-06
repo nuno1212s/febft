@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use chrono::DateTime;
 use chrono::offset::Utc;
+use log::debug;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 
@@ -212,7 +213,7 @@ impl<S> Replica<S>
         let mut replica = Replica {
             cst: CollabStateTransfer::new(CST_BASE_DUR),
             synchronizer: synchronizer.clone(),
-            consensus: Consensus::new(next_consensus_seq, batch_size),
+            consensus: Consensus::new(next_consensus_seq, node.id(), batch_size),
             phase: ReplicaPhase::NormalPhase,
             phase_stack: None,
             timeouts: timeouts.clone(),
@@ -275,7 +276,7 @@ impl<S> Replica<S>
     }
 
     fn update_retrieving_state(&mut self) -> Result<()> {
-        println!("Retrieving state...");
+        debug!("{:?} // Retrieving state...", self.id());
         let messages = self.node.receive_from_replicas().unwrap();
 
         for message in messages {
@@ -380,7 +381,7 @@ impl<S> Replica<S>
     }
 
     fn update_sync_phase(&mut self) -> Result<bool> {
-        println!("Updating Sync phase");
+        debug!("{:?} // Updating Sync phase", self.id());
         // retrieve a view change message to be processed
         let messages = match self.synchronizer.poll() {
             SynchronizerPollStatus::Recv => {
@@ -479,7 +480,8 @@ impl<S> Replica<S>
     }
 
     fn update_normal_phase(&mut self) -> Result<()> {
-        //println!("Updating normal phase... {:?}", self.id());
+        debug!("{:?} // Updating normal phase...", self.id());
+
         // check if we have STOP messages to be processed,
         // and update our phase when we start installing
         // the new view
@@ -499,13 +501,13 @@ impl<S> Replica<S>
 
         let leader = self.synchronizer.view().leader() == self.id();
 
-       //println!("Polled {:?}, {:?}, is leader {}", polled_message, self.id(), leader);
+        debug!("{:?} // Polled {:?}, is leader {}", self.id(),polled_message,  leader);
 
         let messages = match polled_message {
             ConsensusPollStatus::Recv => {
-                //println!("Receiving from replicas {:?}, is leader {}", self.id(), leader);
+                debug!("{:?} // Receiving from replicas is leader {}", self.id(), leader);
                 let vec1 = self.node.receive_from_replicas()?;
-                //println!("Received from replicas {:?}, is leader {}", self.id(), leader);
+                debug!("{:?} // Received from replicas is leader {}", self.id(), leader);
 
                 vec1
             }
@@ -513,22 +515,23 @@ impl<S> Replica<S>
                 vec![Message::System(h, SystemMessage::Consensus(m))]
             }
             ConsensusPollStatus::TryProposeAndRecv => {
-                //println!("Receiving client requests. {:?}", self.id());
+                debug!("Receiving client requests. {:?}", self.id());
                 if let Ok(requests) = rt::block_on(self.client_rqs.receiver_channel().recv()) {
-                    //println!("Proposing requests {}", requests.len());
+                    debug!("{:?} // Proposing requests {}",self.id(), requests.len());
 
                     self.consensus.propose(requests, &self.synchronizer, &self.node);
                 }
-                //println!("Receiving replica requests. {:?}", self.id());
+
+                debug!("{:?} // Receiving replica requests.", self.id());
 
                 self.node.receive_from_replicas()?
             }
         };
 
-        //println!("Processing messages {:?}, {:?}", messages.len(), self.id());
+        debug!("{:?} // Processing messages {:?}",self.id(), messages.len());
 
         for message in messages {
-            //println!("Processing message {:?}, {:?}", message, self.id());
+            debug!("{:?} // Processing message {:?}", self.id(), message);
             match message {
                 Message::RequestBatch(time, batch) => {
                     self.requests_received(time, batch);
@@ -598,7 +601,12 @@ impl<S> Replica<S>
                                     for digest in digests.iter() {
                                         self.synchronizer.unwatch_request(digest);
                                     }
+
+                                    //TODO: This can be extracted to another thread, which will make
+                                    //The consensus a lot faster, since this requires a lot of copying and
+                                    //Moving in the log and stuffzzz
                                     let (info, batch) = self.log.finalize_batch(seq, digests)?;
+
                                     match info {
                                         // normal execution
                                         Info::Nil => self.executor.queue_update(
@@ -611,6 +619,7 @@ impl<S> Replica<S>
                                             batch,
                                         )?,
                                     }
+
                                     self.consensus.next_instance();
                                 }
                             }

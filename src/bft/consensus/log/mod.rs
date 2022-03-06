@@ -493,6 +493,8 @@ pub struct Log<S, O, P> {
     requests: ConcurrentHashMap<Digest, StoredMessage<RequestMessage<O>>>,
     //This will only be accessed from the replica request thread so we can wrap it
     //In a simple cell
+    //This is a vec of Arc<O> because we will also need the operations in the
+    //Service thread, so we avoid a copy by doing this.
     decided: RefCell<Vec<O>>,
     checkpoint: RefCell<CheckpointState<S>>,
     //Some stuff for statistics.
@@ -543,11 +545,19 @@ impl<S, O: Clone, P> Log<S, O, P> {
     }
 
     /// Update the log state, received from the CST protocol.
-    pub fn install_state(&self, last_seq: SeqNo, rs: RecoveryState<S, O>) {
+    pub fn install_state(&self, last_seq: SeqNo, mut rs: RecoveryState<S, O>) {
         // FIXME: what to do with `self.deciding`..?
 
         //Replace the log
         self.declog.replace(rs.declog);
+
+        /*let mut new_requests = Vec::with_capacity(rs.requests.len());
+
+        while let Some(popped) = rs.requests.pop() {
+
+            new_requests.push(Arc::new(popped));
+
+        }*/
 
         self.decided.replace(rs.requests);
         self.checkpoint.replace(CheckpointState::Complete(rs.checkpoint));
@@ -680,20 +690,23 @@ impl<S, O: Clone, P> Log<S, O, P> {
         where
             O: Clone,
     {
+        //TODO: This has to be run in a thread that is different from the consensus thread,
+        //As it's just way too heavy
         let mut batch = UpdateBatch::new();
 
         //println!("Finalized batch of OPS seq {:?} on Node {:?}", seq, self.node_id);
+
+        let mut latest_op_guard = self.latest_op.write();
 
         for digest in digests {
             let (header, message) = self.requests
                 .remove(digest)
                 .map(|f| f.1)
                 .map(StoredMessage::into_inner)
-                .ok_or(Error::simple(ErrorKind::ConsensusLog))?;
+                .ok_or(Error::simpleWithMsg(ErrorKind::ConsensusLog,
+                                            "Request not present in log when finalizing"))?;
 
             let key = operation_key::<O>(&header, &message);
-
-            let mut latest_op_guard = self.latest_op.write();
 
             let seq_no = latest_op_guard
                 .get(key)
@@ -704,8 +717,6 @@ impl<S, O: Clone, P> Log<S, O, P> {
                 latest_op_guard.insert(key, message.sequence_number());
             }
 
-            drop(latest_op_guard);
-
             batch.add(
                 header.from(),
                 message.session_id(),
@@ -713,6 +724,8 @@ impl<S, O: Clone, P> Log<S, O, P> {
                 message.into_inner_operation(),
             );
         }
+
+        drop(latest_op_guard);
 
         // TODO: optimize batch cloning, as this can take
         // several ms if the batch size is large, and each

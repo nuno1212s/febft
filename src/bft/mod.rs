@@ -48,6 +48,9 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
     if INITIALIZED.test() {
         return Ok(None);
     }
+
+    env_logger::init();
+
     threadpool::init(c.pool_threads)?;
     async_runtime::init(c.async_threads)?;
 
