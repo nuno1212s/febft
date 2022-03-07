@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
+use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use log::debug;
@@ -8,6 +9,7 @@ use log::debug;
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::channel::{ChannelRx, ChannelTx, new_bounded};
 use crate::bft::communication::message::{Header, Message, RequestMessage, StoredMessage, SystemMessage};
+use crate::bft::communication::message::Message::System;
 use crate::bft::communication::Node;
 use crate::bft::communication::peer_handling::NodePeers;
 use crate::bft::communication::serialize::SharedData;
@@ -81,21 +83,22 @@ impl<S: Service> RqProcessor<S> {
                     None
                 };
 
+                let mut to_log = Vec::with_capacity(messages.len());
+
                 for message in messages {
                     match message {
                         Message::System(header, sysmsg) => {
-                            match &sysmsg {
+                            match sysmsg {
                                 SystemMessage::Request(req) => {
-
                                     match &mut final_batch {
                                         None => {}
                                         Some(batch) => {
-                                            batch.push(StoredMessage::new(header, (*req).clone()));
+                                            batch.push(StoredMessage::new(header, req.clone()));
                                         }
                                     }
 
                                     //Store the message in the log in this thread.
-                                    self.request_received(header, sysmsg);
+                                    to_log.push(StoredMessage::new(header, req));
                                 }
                                 SystemMessage::Reply(rep) => {
                                     panic!("Received system reply msg")
@@ -105,17 +108,21 @@ impl<S: Service> RqProcessor<S> {
                                 }
                             }
                         }
-                        Message::ExecutionFinishedWithAppstate(_) => {}
-                        Message::Timeout(_) => {}
-                        Message::RequestBatch(_, _) => {}
+                        _ => {
+                            panic!("Client sent a message that he should not have sent!");
+                        }
                     }
                 }
 
+                //TODO: If we are the leader, preemptively hash the preprepare message so we don't have
+                //To wait for that?
+                self.requests_received(DateTime::from(SystemTime::now()), to_log);
+
                 //Send the finished batches to the other thread
                 if is_leader {
-                    let mut tx = self.batch_channel.0.clone();
+                    let tx = &self.batch_channel.0;
 
-                    rt::block_on(tx.send(final_batch.unwrap()));
+                    tx.send_sync(final_batch.unwrap());
                 }
             }
         })
@@ -144,6 +151,6 @@ impl<S: Service> RqProcessor<S> {
             &self.timeouts,
         );
 
-        self.log.insert(h, r);
+        // self.log.insert(h, r);
     }
 }

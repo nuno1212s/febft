@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use intmap::IntMap;
+use log::debug;
 use parking_lot::{Mutex, RwLock};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
@@ -29,11 +30,8 @@ use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
-use crate::bft::executable::UpdateBatch;
-use crate::bft::ordering::{
-    Orderable,
-    SeqNo,
-};
+use crate::bft::executable::{Request, UpdateBatch};
+use crate::bft::ordering::{Orderable, SeqNo, tbo_pop_message};
 
 /// Checkpoint period.
 ///
@@ -486,11 +484,15 @@ pub struct Log<S, O, P> {
     //This item will also be accessed from both the client request thread and the
     //replica request thread. However the client request thread will always only read
     //And the replica request thread writes and reads from it
-    latest_op: RwLock<IntMap<SeqNo>>,
+    latest_op: Mutex<IntMap<SeqNo>>,
     ///TODO: Implement a concurrent IntMap and replace this one with it
     //This item will be accessed from both the client request thread and the
     //Replica request thread
+    //This stores all requests
     requests: ConcurrentHashMap<Digest, StoredMessage<RequestMessage<O>>>,
+    //Stores just request batches. Much faster than individually storing all the requests and
+    //Then having to always access them one by one
+    request_batches: ConcurrentHashMap<Digest, Vec<StoredMessage<RequestMessage<O>>>>,
     //This will only be accessed from the replica request thread so we can wrap it
     //In a simple cell
     //This is a vec of Arc<O> because we will also need the operations in the
@@ -523,11 +525,12 @@ impl<S, O: Clone, P> Log<S, O, P> {
             node_id: node,
             batch_size,
             curr_seq: Cell::new(SeqNo::ZERO),
-            latest_op: RwLock::new(IntMap::new()),
+            latest_op: Mutex::new(IntMap::new()),
             declog: RefCell::new(DecisionLog::new()),
             // TODO: use config value instead of const
             decided: RefCell::new(Vec::with_capacity(PERIOD as usize)),
             requests: collections::concurrent_hash_map_with_capacity(PERIOD as usize),
+            request_batches: collections::concurrent_hash_map(),
             checkpoint: RefCell::new(CheckpointState::None),
             meta: Mutex::new(BatchMeta::new()),
             _marker: PhantomData,
@@ -604,7 +607,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
             SystemMessage::Request(message) => {
                 let key = operation_key::<O>(&header, &message);
 
-                let latest_op_guard = self.latest_op.read();
+                let latest_op_guard = self.latest_op.lock();
 
                 let seq_no = latest_op_guard
                     .get(key)
@@ -638,6 +641,21 @@ impl<S, O: Clone, P> Log<S, O, P> {
             }
             // rest are not handled by the log
             _ => (),
+        }
+    }
+
+    pub fn insert_batched(&self, batch_digest: Digest, batch: Vec<StoredMessage<RequestMessage<O>>>) {
+        self.request_batches.insert(batch_digest, batch);
+    }
+
+    pub fn take_batched_requests(&self, batch_digest: Digest) -> Option<Vec<StoredMessage<RequestMessage<O>>>> {
+        match self.request_batches.remove(&batch_digest) {
+            None => {
+                None
+            }
+            Some((digest, batch)) => {
+                Some(batch)
+            }
         }
     }
 
@@ -686,7 +704,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
     ///
     /// The log may be cleared resulting from this operation. Check the enum variant of
     /// `Info`, to perform a local checkpoint when appropriate.
-    pub fn finalize_batch(&self, seq: SeqNo, digests: &[Digest]) -> Result<(Info, UpdateBatch<O>)>
+    pub fn finalize_batch(&self, seq: SeqNo, batch_digest: Digest, digests: &[Digest]) -> Result<(Info, UpdateBatch<O>)>
         where
             O: Clone,
     {
@@ -696,36 +714,66 @@ impl<S, O: Clone, P> Log<S, O, P> {
 
         //println!("Finalized batch of OPS seq {:?} on Node {:?}", seq, self.node_id);
 
-        let mut latest_op_guard = self.latest_op.write();
+        match self.take_batched_requests(batch_digest) {
+            None => {
+                debug!("Could not find batched requests, having to go 1 by 1");
+                let mut latest_op_guard = self.latest_op.lock();
 
-        for digest in digests {
-            let (header, message) = self.requests
-                .remove(digest)
-                .map(|f| f.1)
-                .map(StoredMessage::into_inner)
-                .ok_or(Error::simpleWithMsg(ErrorKind::ConsensusLog,
-                                            "Request not present in log when finalizing"))?;
+                for digest in digests {
+                    let (header, message) = self.requests
+                        .remove(digest)
+                        .map(|f| f.1)
+                        .map(StoredMessage::into_inner)
+                        .ok_or(Error::simpleWithMsg(ErrorKind::ConsensusLog,
+                                                    "Request not present in log when finalizing"))?;
 
-            let key = operation_key::<O>(&header, &message);
+                    let key = operation_key::<O>(&header, &message);
 
-            let seq_no = latest_op_guard
-                .get(key)
-                .copied()
-                .unwrap_or(SeqNo::ZERO);
+                    let seq_no = latest_op_guard
+                        .get(key)
+                        .copied()
+                        .unwrap_or(SeqNo::ZERO);
 
-            if message.sequence_number() > seq_no {
-                latest_op_guard.insert(key, message.sequence_number());
+                    if message.sequence_number() > seq_no {
+                        latest_op_guard.insert(key, message.sequence_number());
+                    }
+
+                    batch.add(
+                        header.from(),
+                        message.session_id(),
+                        message.sequence_number(),
+                        message.into_inner_operation(),
+                    );
+                }
             }
+            Some(requests) => {
+                let mut latest_op_guard = self.latest_op.lock();
 
-            batch.add(
-                header.from(),
-                message.session_id(),
-                message.sequence_number(),
-                message.into_inner_operation(),
-            );
+                for x in requests {
+                    let (header, message) = x.into_inner();
+
+                    let key = operation_key::<O>(&header, &message);
+
+                    let seq_no = latest_op_guard
+                        .get(key)
+                        .copied()
+                        .unwrap_or(SeqNo::ZERO);
+
+                    if message.sequence_number() > seq_no {
+                        latest_op_guard.insert(key, message.sequence_number());
+                    }
+
+                    batch.add(
+                        header.from(),
+                        message.session_id(),
+                        message.sequence_number(),
+                        message.into_inner_operation(),
+                    );
+                }
+
+                //TODO: Cleanup the actual log of the individual messages
+            }
         }
-
-        drop(latest_op_guard);
 
         // TODO: optimize batch cloning, as this can take
         // several ms if the batch size is large, and each

@@ -194,7 +194,9 @@ pub enum ConsensusStatus<'a> {
     Deciding,
     /// A `febft` quorum decided on the execution of
     /// the batch of requests with the given digests.
-    Decided(&'a [Digest]),
+    /// The first digest is the digest of the Prepare message
+    /// And therefore the entire batch digest
+    Decided(Digest, &'a [Digest]),
 }
 
 macro_rules! extract_msg {
@@ -540,11 +542,13 @@ impl<S> Consensus<S>
                     }
                     ConsensusMessageKind::PrePrepare(request_batch) => {
                         let digests = request_batch_received(
+                            header.digest().clone(),
                             request_batch.clone(),
                             timeouts,
                             synchronizer,
                             log,
                         );
+
                         self.batch_size = digests.len();
                         self.current_digest = header.digest().clone();
                         (&mut self.current[..digests.len()]).copy_from_slice(&digests[..]);
@@ -741,6 +745,8 @@ impl<S> Consensus<S>
                 ConsensusStatus::Deciding
             }
             ProtoPhase::Committing(i) => {
+                let batch_digest;
+
                 // queue message if we're not committing
                 // or in the same seq as the message
                 let i = match message.kind() {
@@ -776,7 +782,12 @@ impl<S> Consensus<S>
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
                     }
-                    ConsensusMessageKind::Commit(_) => i + 1,
+                    ConsensusMessageKind::Commit(d) => {
+
+                        batch_digest = d.clone();
+
+                        i + 1
+                    },
                 };
 
                 // add message to the log
@@ -788,7 +799,7 @@ impl<S> Consensus<S>
                     // notify core protocol
                     self.phase = ProtoPhase::Init;
                     log.batch_meta().lock().consensus_decision_time = Utc::now();
-                    ConsensusStatus::Decided(&self.current[..self.batch_size])
+                    ConsensusStatus::Decided(batch_digest, &self.current[..self.batch_size])
                 } else {
                     self.phase = ProtoPhase::Committing(i);
                     ConsensusStatus::Deciding
@@ -828,6 +839,7 @@ impl<S> DerefMut for Consensus<S>
 
 #[inline]
 fn request_batch_received<S>(
+    batch_digest: Digest,
     requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
     timeouts: &TimeoutsHandle<S>,
     synchronizer: &Arc<Synchronizer<S>>,
@@ -840,6 +852,7 @@ fn request_batch_received<S>(
         Reply<S>: Send + 'static,
 {
     synchronizer.watch_request_batch(
+        batch_digest,
         requests,
         timeouts,
         log,

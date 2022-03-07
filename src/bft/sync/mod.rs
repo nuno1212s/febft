@@ -413,6 +413,7 @@ impl<S> Synchronizer<S>
         log: &Log<State<S>, Request<S>, Reply<S>>,
     ) {
         let phase = TimeoutPhase::TimedOutOnce(Instant::now());
+
         let requests = requests
             .into_inner()
             .into_iter()
@@ -426,34 +427,31 @@ impl<S> Synchronizer<S>
 
     pub fn watch_request_batch(
         &self,
+        batch_digest: Digest,
         requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         timeouts: &TimeoutsHandle<S>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> Vec<Digest> {
         let mut digests = Vec::new();
         let phase = TimeoutPhase::Init(Instant::now());
-        let requests = requests
-            .into_iter()
-            .map(StoredMessage::into_inner);
 
-        for (header, request) in requests {
+        for x in &requests {
+            let header = x.header();
             let digest = header.unique_digest();
             self.watch_request_impl(phase, digest, timeouts);
-
-            //TODO: Is this even necessary, since all requests are added into the log
-            //When we first store them?
-
-            //It's possible that, if the latency of the client to a given replica A is smaller than the
-            //Latency to leader replica B + time taken to process request in B + Latency between A and B,
-            //This replica does not know of the request and yet it is valid.
-            //This means that that client would not be able to process requests from that replica, which could
-            //break some of the quorum properties (replica A would always be faulty for that client even if it is
-            //not, so we could only tolerate f-1 faults for clients that are in that situation)
-
-            log.insert(header, SystemMessage::Request(request));
-
             digests.push(digest);
         }
+
+        //TODO: Is this even necessary, since all requests are added into the log
+        //When we first store them?
+
+        //It's possible that, if the latency of the client to a given replica A is smaller than the
+        //Latency to leader replica B + time taken to process request in B + Latency between A and B,
+        //This replica does not know of the request and yet it is valid.
+        //This means that that client would not be able to process requests from that replica, which could
+        //break some of the quorum properties (replica A would always be faulty for that client even if it is
+        //not, so we could only tolerate f-1 faults for clients that are in that situation)
+        log.insert_batched(batch_digest, requests);
 
         digests
     }

@@ -16,7 +16,8 @@ use futures::select;
 use futures_timer::Delay;
 use intmap::IntMap;
 use log::debug;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Mutex, RawMutex, RwLock};
+use parking_lot::lock_api::MutexGuard;
 
 use crate::bft::communication::{NODE_CHAN_BOUND, NodeConfig, NodeId};
 use crate::bft::communication::channel::{ChannelRx, ChannelTx, new_bounded};
@@ -38,10 +39,10 @@ fn channel_init<T>(capacity: usize) -> (Sender<Vec<T>, QueueType<T>>, Receiver<V
     dsrust::channels::queue_channel::bounded_lf_queue(capacity)
 }
 
-fn replica_channel_init<T>(capacity: usize) -> (Sender<T, ReplicaQueueType<T>>, ReceiverMult<T, ReplicaQueueType<T>>) {
+fn replica_channel_init<T>(capacity: usize) -> (Sender<T, ReplicaQueueType<T>>, Receiver<T, ReplicaQueueType<T>>) {
     let (tx, rx) = bounded_lf_queue(capacity);
 
-    (tx, make_mult_recv_from(rx))
+    (tx, rx)
 }
 
 fn client_channel_init<T>(capacity: usize) -> (Sender<T, ClientQueueType<T>>, ReceiverPartialMult<T, ClientQueueType<T>>) {
@@ -231,7 +232,7 @@ pub enum ConnectedPeer<T> {
 pub struct ReplicaHandling<T> {
     capacity: usize,
     channel_tx_replica: ChannelTx<T>,
-    channel_rx_replica: RefCell<ChannelRx<T>>,
+    channel_rx_replica: ChannelRx<T>,
     connected_clients: RwLock<IntMap<Arc<ConnectedPeer<T>>>>,
     connected_client_count: AtomicUsize,
 }
@@ -243,7 +244,7 @@ impl<T> ReplicaHandling<T> {
         Arc::new(
             Self {
                 capacity,
-                channel_rx_replica: RefCell::new(receiver),
+                channel_rx_replica: receiver,
                 channel_tx_replica: sender,
                 connected_clients: RwLock::new(IntMap::new()),
                 connected_client_count: AtomicUsize::new(0),
@@ -276,7 +277,7 @@ impl<T> ReplicaHandling<T> {
     }
 
     pub fn receive_from_replicas(&self) -> Vec<T> {
-        vec![rt::block_on(self.channel_rx_replica.borrow_mut().recv()).unwrap()]
+        vec![self.channel_rx_replica.recv_sync().unwrap()]
 
         //
         // let mut vec = Vec::with_capacity(self.capacity);
@@ -287,7 +288,7 @@ impl<T> ReplicaHandling<T> {
     }
 
     pub async fn receive_from_replicas_async(&self) -> Vec<T> {
-        match self.channel_rx_replica.borrow_mut().recv().await {
+        match self.channel_rx_replica.clone().recv().await {
             Ok(vec) => {
                 vec![vec]
             }
@@ -639,7 +640,7 @@ impl<T> ConnectedPeer<T> {
             }
         }
     }
-    
+
     pub async fn push_request_(&self, msg: T, own_id: &NodeId) where T: Debug {
         match self {
             Self::PoolConnection { sender, .. } => {
@@ -659,14 +660,29 @@ impl<T> ConnectedPeer<T> {
                 debug!("{:?} // Pushing request {:?} into queue, from {:?}",
                     own_id, msg, self.client_id());
 
-                let mut sender_guard = sender.lock().as_ref().unwrap().clone();
+                let mut send_clone;
 
-                match sender_guard.send(msg).await {
+                {
+                    let send_lock = sender.lock();
+                    let mut sender_guard = send_lock.as_ref();
+
+                    match sender_guard {
+                        None => {
+                            debug!("{:?} // Failed to receive because there is no sender.", self.client_id());
+                            return
+                        }
+                        Some(send) => {
+                            send_clone = send.clone();
+                        }
+                    }
+                }
+
+                match send_clone.send(msg).await {
                     Ok(_) => {}
                     Err(err) => {
-                        panic!("Failed to send because {:?}", err);
+                        panic!("Failed to receive data from {:?} because {:?}", self.client_id(), err);
                     }
-                };
+                }
             }
         }
     }
@@ -684,14 +700,30 @@ impl<T> ConnectedPeer<T> {
                 };
             }
             Self::UnpooledConnection { sender, .. } => {
-                let mut sender_guard = sender.lock().as_ref().unwrap().clone();
 
-                match sender_guard.send(msg).await {
+                let mut send_clone;
+
+                {
+                    let send_lock = sender.lock();
+                    let mut sender_guard = send_lock.as_ref();
+
+                    match sender_guard {
+                        None => {
+                            debug!("{:?} // Failed to receive because there is no sender.", self.client_id());
+                            return
+                        }
+                        Some(send) => {
+                            send_clone = send.clone();
+                        }
+                    }
+                }
+
+                match send_clone.send(msg).await {
                     Ok(_) => {}
                     Err(err) => {
-                        panic!("Failed to send because {:?}", err);
+                        panic!("Failed to receive data from {:?} because {:?}", self.client_id(), err);
                     }
-                };
+                }
             }
         }
     }

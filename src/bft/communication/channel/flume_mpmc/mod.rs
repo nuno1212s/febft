@@ -1,6 +1,7 @@
 use std::pin::Pin;
 use std::future::Future;
 use std::task::{Poll, Context};
+use flume::RecvError;
 
 use futures::future::FusedFuture;
 
@@ -41,10 +42,17 @@ pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
 
 impl<T> ChannelTx<T> {
     #[inline]
-    pub async fn send(&mut self, message: T) -> Result<()> {
+    pub async fn send(&self, message: T) -> Result<()> {
         self.inner.send_async(message).await
             .simple(ErrorKind::CommunicationChannelFlumeMpmc)
     }
+
+    #[inline]
+    pub fn send_sync(&self, message: T) -> Result<()> {
+        self.inner.send(message)
+            .simple(ErrorKind::CommunicationChannelFlumeMpmc)
+    }
+
 }
 
 impl<T> ChannelRx<T> {
@@ -52,6 +60,19 @@ impl<T> ChannelRx<T> {
     pub fn recv<'a>(&'a mut self) -> ChannelRxFut<'a, T> {
         let inner = self.inner.recv_async();
         ChannelRxFut { inner }
+    }
+
+    #[inline]
+    pub fn recv_sync(&self) -> Result<T> {
+        match self.inner.recv() {
+            Ok(elem) => {
+                Ok(elem)
+            }
+            Err(err) => {
+                Err(Error::simpleWithMsg(ErrorKind::CommunicationChannelFlumeMpmc,
+                                     format!("{:?}", err).as_str()))
+            }
+        }
     }
 }
 

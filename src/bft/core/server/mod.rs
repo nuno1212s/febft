@@ -597,7 +597,7 @@ impl<S> Replica<S>
                                 // FIXME: execution layer needs to receive the id
                                 // attributed by the consensus layer to each op,
                                 // to execute in order
-                                ConsensusStatus::Decided(digests) => {
+                                ConsensusStatus::Decided(batch_digest, digests) => {
                                     for digest in digests.iter() {
                                         self.synchronizer.unwatch_request(digest);
                                     }
@@ -605,7 +605,7 @@ impl<S> Replica<S>
                                     //TODO: This can be extracted to another thread, which will make
                                     //The consensus a lot faster, since this requires a lot of copying and
                                     //Moving in the log and stuffzzz
-                                    let (info, batch) = self.log.finalize_batch(seq, digests)?;
+                                    let (info, batch) = self.log.finalize_batch(seq, batch_digest, digests)?;
 
                                     match info {
                                         // normal execution

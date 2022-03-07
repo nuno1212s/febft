@@ -24,12 +24,14 @@ use crate::bft::communication::message::{
 use crate::bft::error::*;
 
 #[cfg(feature = "channel_futures_mpsc")]
+///TODO: Remove this
 mod futures_mpsc;
 
 #[cfg(feature = "channel_flume_mpmc")]
 mod flume_mpmc;
 
 #[cfg(feature = "channel_async_channel_mpmc")]
+///TODO: Remove this
 mod async_channel_mpmc;
 
 #[cfg(feature = "channel_custom_dump")]
@@ -146,6 +148,17 @@ impl<T> ChannelTx<T> {
             }
         }
     }
+    #[inline]
+    pub fn send_sync(&self, message: T) -> Result<()> {
+        match self.inner.send_sync(message) {
+            Ok(_) => {
+                Ok(())
+            }
+            Err(_) => {
+                Err(Error::simple(ErrorKind::CommunicationChannelAsyncChannelMpmc))
+            }
+        }
+    }
 }
 
 impl<T> ChannelRx<T> {
@@ -153,6 +166,11 @@ impl<T> ChannelRx<T> {
     pub fn recv<'a>(&'a mut self) -> ChannelRxFut<'a, T> {
         let inner = self.inner.recv();
         ChannelRxFut { inner }
+    }
+
+    #[inline]
+    pub fn recv_sync(&self) -> Result<T> {
+        self.inner.recv_sync()
     }
 }
 
