@@ -87,7 +87,7 @@ impl Error {
         Error { inner }
     }
 
-    pub fn simpleWithMsg(kind: ErrorKind, msg: &str) -> Self {
+    pub fn simple_with_msg(kind: ErrorKind, msg: &str) -> Self {
         let inner = ErrorInner::Simple(kind, String::from(msg));
         Error { inner }
     }

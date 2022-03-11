@@ -273,6 +273,13 @@ impl<S> Consensus<S>
         self.signal();
     }
 
+    pub fn propose_non_leader(&mut self) {
+        match self.phase {
+            ProtoPhase::Init => self.phase = ProtoPhase::PrePreparing,
+            _ => return
+        }
+    }
+
     /// Proposes a new request with digest `dig`.
     ///
     /// This function will only succeed if the `node` is
@@ -579,21 +586,22 @@ impl<S> Consensus<S>
 
                 //Speculate in another thread.
                 threadpool::execute(move || {
+
+                    // create COMMIT
+                    let message = SystemMessage::Consensus(ConsensusMessage::new(
+                        seq,
+                        view_seq,
+                        ConsensusMessageKind::Commit(current_digest),
+                    ));
+
+                    // serialize raw msg
+                    let mut buf = Vec::new();
+                    let digest = <S::Data as DigestData>::serialize_digest(
+                        &message,
+                        &mut buf,
+                    ).unwrap();
+
                     for peer_id in NodeId::targets(0..n) {
-
-                        // create COMMIT
-                        let message = SystemMessage::Consensus(ConsensusMessage::new(
-                            seq,
-                            view_seq,
-                            ConsensusMessageKind::Commit(current_digest),
-                        ));
-
-                        // serialize raw msg
-                        let mut buf = Vec::new();
-                        let digest = <S::Data as DigestData>::serialize_digest(
-                            &message,
-                            &mut buf,
-                        ).unwrap();
 
                         // create header
                         let (header, _) = WireMessage::new(
@@ -610,7 +618,9 @@ impl<S> Consensus<S>
                         ).into_inner();
 
                         // store serialized header + message
-                        let serialized = SerializedMessage::new(message, buf);
+                        let serialized = SerializedMessage::new(message.clone(),
+                                                                buf.clone());
+
                         let stored = StoredMessage::new(header, serialized);
 
                         let mut map = speculative_commits.lock();

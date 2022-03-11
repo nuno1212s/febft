@@ -101,6 +101,7 @@ serde_bytes = { version = "0.11", optional = true }
 fxhash = { version = "0.2", optional = true }
 #dsrust = { version = "0.1.7", git = "https://github.com/nuno1212s/DSRust" }
 dsrust = { path = "/home/nunogneto/Documents/Development/Rust/dsrust" }
+crossbeam-channel = "0.5.2"
 
 log = "0.4.14"
 env_logger = "0.8"

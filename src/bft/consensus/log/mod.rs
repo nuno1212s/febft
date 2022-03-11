@@ -489,15 +489,15 @@ pub struct Log<S, O, P> {
     //This item will be accessed from both the client request thread and the
     //Replica request thread
     //This stores all requests
-    requests: ConcurrentHashMap<Digest, StoredMessage<RequestMessage<O>>>,
+    requests: ConcurrentHashMap<Digest, StoredMessage<RequestMessage<Arc<O>>>>,
     //Stores just request batches. Much faster than individually storing all the requests and
     //Then having to always access them one by one
-    request_batches: ConcurrentHashMap<Digest, Vec<StoredMessage<RequestMessage<O>>>>,
+    request_batches: ConcurrentHashMap<Digest, Vec<StoredMessage<RequestMessage<Arc<O>>>>>,
     //This will only be accessed from the replica request thread so we can wrap it
     //In a simple cell
     //This is a vec of Arc<O> because we will also need the operations in the
     //Service thread, so we avoid a copy by doing this.
-    decided: RefCell<Vec<O>>,
+    decided: RefCell<Vec<Arc<O>>>,
     checkpoint: RefCell<CheckpointState<S>>,
     //Some stuff for statistics.
     meta: Mutex<BatchMeta>,
@@ -537,6 +537,10 @@ impl<S, O: Clone, P> Log<S, O, P> {
         })
     }
 
+    pub fn latest_op(&self) -> &Mutex<IntMap<SeqNo>> {
+        &self.latest_op
+    }
+
     pub fn batch_meta(&self) -> &Mutex<BatchMeta> {
         &self.meta
     }
@@ -554,15 +558,13 @@ impl<S, O: Clone, P> Log<S, O, P> {
         //Replace the log
         self.declog.replace(rs.declog);
 
-        /*let mut new_requests = Vec::with_capacity(rs.requests.len());
+        let mut new_requests = Vec::with_capacity(rs.requests.len());
 
-        while let Some(popped) = rs.requests.pop() {
-
+        for popped in rs.requests {
             new_requests.push(Arc::new(popped));
+        }
 
-        }*/
-
-        self.decided.replace(rs.requests);
+        self.decided.replace(new_requests);
         self.checkpoint.replace(CheckpointState::Complete(rs.checkpoint));
         self.curr_seq.replace(last_seq);
     }
@@ -582,10 +584,18 @@ impl<S, O: Clone, P> Log<S, O, P> {
     {
         match &*self.checkpoint.borrow() {
             CheckpointState::Complete(checkpoint) => {
+                let x = self.decided.borrow();
+
+                let mut decided_res = Vec::with_capacity(x.len());
+
+                for dec_req in &*x {
+                    decided_res.push(*dec_req.clone());
+                }
+
                 Ok(RecoveryState::new(
                     view,
                     checkpoint.clone(),
-                    self.decided.borrow().clone(),
+                    decided_res,
                     self.declog.borrow().clone(),
                 ))
             }
@@ -621,6 +631,12 @@ impl<S, O: Clone, P> Log<S, O, P> {
                     return;
                 }
 
+                let message = RequestMessage::new(
+                    message.session_id(),
+                    message.sequence_number(),
+                    Arc::new(message.into_inner_operation()),
+                );
+
                 let digest = header.unique_digest();
                 let stored = StoredMessage::new(header, message);
 
@@ -644,33 +660,18 @@ impl<S, O: Clone, P> Log<S, O, P> {
         }
     }
 
-    pub fn insert_batched(&self, batch_digest: Digest, batch: Vec<StoredMessage<RequestMessage<O>>>) {
+    pub fn insert_batched(&self, batch_digest: Digest, batch: Vec<StoredMessage<RequestMessage<Arc<O>>>>) {
         self.request_batches.insert(batch_digest, batch);
     }
 
-    pub fn take_batched_requests(&self, batch_digest: Digest) -> Option<Vec<StoredMessage<RequestMessage<O>>>> {
-        match self.request_batches.remove(&batch_digest) {
+    pub fn take_batched_requests(&self, batch_digest: &Digest) -> Option<Vec<StoredMessage<RequestMessage<Arc<O>>>>> {
+        match self.request_batches.remove(batch_digest) {
             None => {
                 None
             }
             Some((digest, batch)) => {
                 Some(batch)
             }
-        }
-    }
-
-    /// Retrieves the next batch of requests available for proposing, if any.
-    pub fn next_batch(&self) -> Option<Vec<StoredMessage<RequestMessage<O>>>> {
-        // TODO:
-        // - we may include another condition here to decide on a
-        // smaller batch size, so that client request latency is lower
-        // - prevent non leader replicas from collecting a batch of digests,
-        // as only the leader will actually propose!
-        if self.requests.len() > 0 {
-            //TODO: Remove all requests from map and build a batch?
-            None
-        } else {
-            None
         }
     }
 
@@ -687,7 +688,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
     }
 
     /// Clone the requests corresponding to the provided list of hash digests.
-    pub fn clone_requests(&self, digests: &[Digest]) -> Vec<StoredMessage<RequestMessage<O>>>
+    pub fn clone_requests(&self, digests: &[Digest]) -> Vec<StoredMessage<RequestMessage<Arc<O>>>>
         where
             O: Clone,
     {
@@ -704,88 +705,41 @@ impl<S, O: Clone, P> Log<S, O, P> {
     ///
     /// The log may be cleared resulting from this operation. Check the enum variant of
     /// `Info`, to perform a local checkpoint when appropriate.
-    pub fn finalize_batch(&self, seq: SeqNo, batch_digest: Digest, digests: &[Digest]) -> Result<(Info, UpdateBatch<O>)>
-        where
-            O: Clone,
+    pub fn finalize_batch(&self, seq: SeqNo, batch_digest: Digest, digests: &[Digest])
+                          -> Result<(Info, Vec<StoredMessage<RequestMessage<Arc<O>>>>)>
     {
-        //TODO: This has to be run in a thread that is different from the consensus thread,
-        //As it's just way too heavy
-        let mut batch = UpdateBatch::new();
-
         //println!("Finalized batch of OPS seq {:?} on Node {:?}", seq, self.node_id);
 
-        match self.take_batched_requests(batch_digest) {
+        let mut rqs;
+
+        match self.take_batched_requests(&batch_digest) {
             None => {
                 debug!("Could not find batched requests, having to go 1 by 1");
-                let mut latest_op_guard = self.latest_op.lock();
+
+                rqs = Vec::with_capacity(digests.len());
 
                 for digest in digests {
-                    let (header, message) = self.requests
+                    let message = self.requests
                         .remove(digest)
                         .map(|f| f.1)
-                        .map(StoredMessage::into_inner)
-                        .ok_or(Error::simpleWithMsg(ErrorKind::ConsensusLog,
-                                                    "Request not present in log when finalizing"))?;
+                        .ok_or(Error::simple_with_msg(ErrorKind::ConsensusLog,
+                                                      "Request not present in log when finalizing"))?;
 
-                    let key = operation_key::<O>(&header, &message);
-
-                    let seq_no = latest_op_guard
-                        .get(key)
-                        .copied()
-                        .unwrap_or(SeqNo::ZERO);
-
-                    if message.sequence_number() > seq_no {
-                        latest_op_guard.insert(key, message.sequence_number());
-                    }
-
-                    batch.add(
-                        header.from(),
-                        message.session_id(),
-                        message.sequence_number(),
-                        message.into_inner_operation(),
-                    );
+                    rqs.push(message);
                 }
             }
             Some(requests) => {
-                let mut latest_op_guard = self.latest_op.lock();
-
-                for x in requests {
-                    let (header, message) = x.into_inner();
-
-                    let key = operation_key::<O>(&header, &message);
-
-                    let seq_no = latest_op_guard
-                        .get(key)
-                        .copied()
-                        .unwrap_or(SeqNo::ZERO);
-
-                    if message.sequence_number() > seq_no {
-                        latest_op_guard.insert(key, message.sequence_number());
-                    }
-
-                    batch.add(
-                        header.from(),
-                        message.session_id(),
-                        message.sequence_number(),
-                        message.into_inner_operation(),
-                    );
-                }
-
-                //TODO: Cleanup the actual log of the individual messages
+                rqs = requests;
             }
         }
 
-        // TODO: optimize batch cloning, as this can take
-        // several ms if the batch size is large, and each
-        // request also large
-
         let mut guard = self.decided.borrow_mut();
 
-        for update in batch.as_ref() {
-            guard.push(update.operation().clone());
+        for request in &rqs {
+            guard.push(Arc::clone(request.message().operation()));
         }
 
-        // retrive the sequence number stored within the PRE-PREPARE message
+        // retrieve the sequence number stored within the PRE-PREPARE message
         // pertaining to the current request being executed
         let mut dec_log_guard = self.declog.borrow_mut();
 
@@ -810,7 +764,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
         // the last executed sequence number
         dec_log_guard.last_exec = Some(seq);
 
-        Ok((info, batch))
+        Ok((info, rqs))
     }
 
     fn begin_checkpoint(&self, seq: SeqNo) -> Result<Info> {
@@ -877,7 +831,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
 }
 
 #[inline]
-fn operation_key<O>(header: &Header, message: &RequestMessage<O>) -> u64 {
+pub fn operation_key<O>(header: &Header, message: &RequestMessage<O>) -> u64 {
     // both of these values are 32-bit in width
     let client_id: u64 = header.from().into();
     let session_id: u64 = message.session_id().into();

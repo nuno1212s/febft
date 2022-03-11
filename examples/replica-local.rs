@@ -1,5 +1,6 @@
 mod common;
 
+use std::fmt::format;
 use common::*;
 
 use intmap::IntMap;
@@ -57,7 +58,7 @@ fn main_() {
             public_keys.clone(),
         );
 
-        pending_threads.push(std::thread::spawn(move || {
+        let main_thread = std::thread::Builder::new().name(format!("Main thread for {:?}", id)).spawn(move || {
             let mut replica = rt::block_on(async move {
                 println!("Bootstrapping replica #{}", u32::from(id));
                 let replica = fut.await.unwrap();
@@ -67,7 +68,10 @@ fn main_() {
             });
 
             replica.run().unwrap();
-        }));
+        }).unwrap();
+
+
+        pending_threads.push(main_thread);
     }
 
     drop((secret_keys, public_keys));

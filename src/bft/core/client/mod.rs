@@ -214,8 +214,7 @@ impl<D> Client<D>
         let mut last_operation_ids: IntMap<SeqNo> = IntMap::new();
         let mut replica_votes: IntMap<ReplicaVotes> = IntMap::new();
 
-        while let Ok(messages) = node.receive_from_replicas() {
-            for message in messages {
+        while let Ok(message) = node.receive_from_replicas() {
                 match message {
                     Message::System(header, message) => {
                         match message {
@@ -281,7 +280,6 @@ impl<D> Client<D>
                     // we don't receive any other type of messages as a client node
                     _ => (),
                 }
-            }
         }
     }
 }

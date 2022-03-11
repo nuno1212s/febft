@@ -69,8 +69,8 @@ impl<T> ChannelRx<T> {
                 Ok(elem)
             }
             Err(err) => {
-                Err(Error::simpleWithMsg(ErrorKind::CommunicationChannelFlumeMpmc,
-                                     format!("{:?}", err).as_str()))
+                Err(Error::simple_with_msg(ErrorKind::CommunicationChannelFlumeMpmc,
+                                           format!("{:?}", err).as_str()))
             }
         }
     }

@@ -2,27 +2,29 @@
 
 // XXX: maybe `Box<(BatchMeta, UpdateBatch<O>)>`
 
+use std::sync::{Arc, mpsc};
 use std::thread;
-use std::sync::mpsc;
+
 use parking_lot::Mutex;
 
-use crate::bft::error::*;
-use crate::bft::ordering::SeqNo;
 use crate::bft::async_runtime as rt;
 use crate::bft::benchmarks::BatchMeta;
-use crate::bft::communication::serialize::{
-    //ReplicaDurability,
-    SharedData,
+use crate::bft::communication::{
+    NodeId,
+    SendNode,
 };
 use crate::bft::communication::message::{
     Message,
     ReplyMessage,
     SystemMessage,
 };
-use crate::bft::communication::{
-    NodeId,
-    SendNode,
+use crate::bft::communication::serialize::{
+    //ReplicaDurability,
+    SharedData,
 };
+use crate::bft::core::server::client_replier::ReplyHandle;
+use crate::bft::error::*;
+use crate::bft::ordering::SeqNo;
 
 /// Represents a single client update request, to be executed.
 #[derive(Clone)]
@@ -95,7 +97,7 @@ pub type Reply<S> = <<S as Service>::Data as SharedData>::Reply;
 /// A user defined `Service`.
 ///
 /// Application logic is implemented by this trait.
-pub trait Service : Send {
+pub trait Service: Send {
     /// The data types used by the application and the SMR protocol.
     ///
     /// This includes their respective serialization routines.
@@ -148,25 +150,28 @@ pub trait Service : Send {
     }
 }
 
+const EXECUTING_BUFFER: usize = 8096;
+
 /// Stateful data of the task responsible for executing
 /// client requests.
 pub struct Executor<S: Service + 'static> {
     service: S,
     state: State<S>,
-    e_rx: mpsc::Receiver<ExecutionRequest<State<S>, Request<S>>>,
+    e_rx: crossbeam_channel::Receiver<ExecutionRequest<State<S>, Request<S>>>,
+    reply_worker: ReplyHandle<S>,
     send_node: SendNode<S::Data>,
 }
 
 /// Represents a handle to the client request executor.
 pub struct ExecutorHandle<S: Service> {
-    e_tx: mpsc::Sender<ExecutionRequest<State<S>, Request<S>>>,
+    e_tx: crossbeam_channel::Sender<ExecutionRequest<State<S>, Request<S>>>,
 }
 
 impl<S: Service> ExecutorHandle<S>
-where
-    S: Service + Send + 'static,
-    Request<S>: Send + 'static,
-    Reply<S>: Send + 'static,
+    where
+        S: Service + Send + 'static,
+        Request<S>: Send + 'static,
+        Reply<S>: Send + 'static,
 {
     /// Sets the current state of the execution layer to the given value.
     pub fn install_state(&mut self, state: State<S>, after: Vec<Request<S>>) -> Result<()> {
@@ -206,25 +211,28 @@ impl<S: Service> Clone for ExecutorHandle<S> {
 }
 
 impl<S> Executor<S>
-where
-    S: Service + Send + 'static,
-    State<S>: Send + Clone + 'static,
-    Request<S>: Send + 'static,
-    Reply<S>: Send + 'static,
+    where
+        S: Service + Send + 'static,
+        State<S>: Send + Clone + 'static,
+        Request<S>: Send + 'static,
+        Reply<S>: Send + 'static,
 {
     /// Spawns a new service executor into the async runtime.
     pub fn new(
-        send_node: SendNode<S::Data>,
+        reply_worker: ReplyHandle<S>,
         mut service: S,
+        send_node: SendNode<S::Data>,
     ) -> Result<ExecutorHandle<S>> {
-        let (e_tx, e_rx) = mpsc::channel();
+        let (e_tx, e_rx) = crossbeam_channel::bounded(EXECUTING_BUFFER);
 
         let state = service.initial_state()?;
+
         let mut exec = Executor {
             e_rx,
-            send_node,
             service,
             state,
+            reply_worker,
+            send_node,
         };
 
         // this thread is responsible for actually executing
@@ -232,7 +240,8 @@ where
         //
         // FIXME: maybe use threadpool to execute instead
         // FIXME: serialize data on exit
-        thread::spawn(move || {
+
+        std::thread::Builder::new().name(format!("{:?} // Executor thread", send_node.id())).spawn(move || {
             while let Ok(exec_req) = exec.e_rx.recv() {
                 match exec_req {
                     ExecutionRequest::InstallState(checkpoint, after) => {
@@ -240,13 +249,13 @@ where
                         for req in after {
                             exec.service.update(&mut exec.state, req);
                         }
-                    },
+                    }
                     ExecutionRequest::Update(meta, batch) => {
                         let reply_batch = exec.service.update_batch(&mut exec.state, batch, meta);
 
                         // deliver replies
                         exec.execution_finished(reply_batch);
-                    },
+                    }
                     ExecutionRequest::UpdateAndGetAppstate(meta, batch) => {
                         let reply_batch = exec.service.update_batch(&mut exec.state, batch, meta);
 
@@ -255,10 +264,10 @@ where
 
                         // deliver replies
                         exec.execution_finished(reply_batch);
-                    },
+                    }
                     ExecutionRequest::Read(_peer_id) => {
                         todo!()
-                    },
+                    }
                 }
             }
         });
@@ -278,47 +287,7 @@ where
     }
 
     fn execution_finished(&mut self, batch: UpdateBatchReplies<Reply<S>>) {
-        // sort batch by node ids,
-        // such that we can send as many replies as possible
-        // to a single node before flushing everything
-        let mut batch = batch.into_inner();
-        batch.sort_unstable_by_key(|update_reply| update_reply.to());
-
-        // keep track of the last message and node id
-        // we iterated over
-        let mut curr_send = None;
-
-        for update_reply in batch {
-            let (peer_id, session_id, operation_id, payload) = update_reply.into_inner();
-
-            // NOTE: the technique used here to peek the next reply is a
-            // hack... when we port this fix over to the production
-            // branch, perhaps we can come up with a better approach,
-            // but for now this will do
-            if let Some((message, last_peer_id)) = curr_send.take() {
-                let flush = peer_id != last_peer_id;
-                self.send_node.send(message, last_peer_id, flush);
-            }
-
-            // store previous reply message and peer id,
-            // for the next iteration
-            let message = SystemMessage::Reply(ReplyMessage::new(
-                session_id,
-                operation_id,
-                payload,
-            ));
-            curr_send = Some((message, peer_id));
-        }
-
-        // deliver last reply
-        if let Some((message, last_peer_id)) = curr_send {
-            self.send_node.send(message, last_peer_id, true);
-        } else {
-            // slightly optimize code path;
-            // the previous if branch will always execute
-            // (there is always at least one request in the batch)
-            unreachable!();
-        }
+        self.reply_worker.send(batch).unwrap();
     }
 }
 
@@ -326,6 +295,10 @@ impl<O> UpdateBatch<O> {
     /// Returns a new, empty batch of requests.
     pub fn new() -> Self {
         Self { inner: Vec::new() }
+    }
+
+    pub fn new_with_cap(capacity: usize) -> Self {
+        Self { inner: Vec::with_capacity(capacity) }
     }
 
     /// Adds a new update request to the batch.
@@ -363,12 +336,12 @@ impl<O> Update<O> {
 }
 
 impl<P> UpdateBatchReplies<P> {
-/*
-    /// Returns a new, empty batch of replies.
-    pub fn new() -> Self {
-        Self { inner: Vec::new() }
-    }
-*/
+    /*
+        /// Returns a new, empty batch of replies.
+        pub fn new() -> Self {
+            Self { inner: Vec::new() }
+        }
+    */
 
     /// Returns a new, empty batch of replies, with the given capacity.
     pub fn with_capacity(n: usize) -> Self {

@@ -23,6 +23,11 @@ use crate::bft::communication::message::{
 };
 use crate::bft::error::*;
 
+///TODO: This has to be reworked in order to incorporate
+/// The fact that most of these channels do not support
+/// sync operation. We want to add maybe a mix of these?
+/// idk
+
 #[cfg(feature = "channel_futures_mpsc")]
 ///TODO: Remove this
 mod futures_mpsc;

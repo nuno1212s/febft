@@ -432,14 +432,28 @@ impl<S> Synchronizer<S>
         timeouts: &TimeoutsHandle<S>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> Vec<Digest> {
-        let mut digests = Vec::new();
+        let mut digests = Vec::with_capacity(requests.len());
+
+        let mut final_rqs = Vec::with_capacity(requests.len());
+
         let phase = TimeoutPhase::Init(Instant::now());
 
-        for x in &requests {
+        for x in requests {
             let header = x.header();
             let digest = header.unique_digest();
             self.watch_request_impl(phase, digest, timeouts);
+
             digests.push(digest);
+
+            let (header, msg) = x.into_inner();
+
+            let msg = RequestMessage::new(
+                msg.session_id(),
+                msg.sequence_number(),
+                Arc::new(msg.into_inner_operation())
+            );
+
+            final_rqs.push(StoredMessage::new(header, msg));
         }
 
         //TODO: Is this even necessary, since all requests are added into the log
@@ -451,7 +465,7 @@ impl<S> Synchronizer<S>
         //This means that that client would not be able to process requests from that replica, which could
         //break some of the quorum properties (replica A would always be faulty for that client even if it is
         //not, so we could only tolerate f-1 faults for clients that are in that situation)
-        log.insert_batched(batch_digest, requests);
+        log.insert_batched(batch_digest, final_rqs);
 
         digests
     }

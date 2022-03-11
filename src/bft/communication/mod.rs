@@ -259,8 +259,10 @@ impl<D> Node<D>
                 .wrapped(ErrorKind::Communication);
         }
 
-        let listener = socket::bind(cfg.addrs.get(id.into()).unwrap().0).await
-            .wrapped(ErrorKind::Communication)?;
+        let addr = cfg.addrs.get(id.into()).unwrap().0;
+        
+        let listener = socket::bind(addr).await
+            .wrapped_msg(ErrorKind::Communication, format!("Failed to bind to address {:?}", addr).as_str())?;
 
         let acceptor: TlsAcceptor = cfg.server_config.into();
         let connector: TlsConnector = cfg.client_config.into();
@@ -769,20 +771,9 @@ impl<D> Node<D>
     }
 
     //Receive messages from the replicas we are connected to
-    pub fn receive_from_replicas(&self) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
+    pub fn receive_from_replicas(&self) -> Result<Message<D::State, D::Request, D::Reply>> {
         self.node_handling.receive_from_replicas()
     }
-
-    //Receive messages from the clients we are connected to
-    pub async fn receive_from_clients_async(&self) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
-        self.node_handling.receive_from_client_async().await
-    }
-
-    //Receive messages from the replicas we are connected to
-    pub async fn receive_from_replicas_async(&self) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
-        self.node_handling.receive_from_replicas_async().await
-    }
-
     /// Method called upon a `Message::ConnectedTx`.
     /// Registers the newly created transmission socket to the peer
     pub fn handle_connected_tx(&self, peer_id: NodeId, sock: SecureSocketSend) {
