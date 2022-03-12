@@ -174,13 +174,13 @@ impl<S: Service> ExecutorHandle<S>
         Reply<S>: Send + 'static,
 {
     /// Sets the current state of the execution layer to the given value.
-    pub fn install_state(&mut self, state: State<S>, after: Vec<Request<S>>) -> Result<()> {
+    pub fn install_state(&self, state: State<S>, after: Vec<Request<S>>) -> Result<()> {
         self.e_tx.send(ExecutionRequest::InstallState(state, after))
             .simple(ErrorKind::Executable)
     }
 
     /// Queues a batch of requests `batch` for execution.
-    pub fn queue_update(&mut self, meta: &Mutex<BatchMeta>, batch: UpdateBatch<Request<S>>) -> Result<()> {
+    pub fn queue_update(&self, meta: &Mutex<BatchMeta>, batch: UpdateBatch<Request<S>>) -> Result<()> {
         let guard = meta.lock();
 
         self.e_tx.send(ExecutionRequest::Update(*guard, batch))
@@ -192,7 +192,7 @@ impl<S: Service> ExecutorHandle<S>
     ///
     /// This is useful during local checkpoints.
     pub fn queue_update_and_get_appstate(
-        &mut self,
+        &self,
         meta: &Mutex<BatchMeta>,
         batch: UpdateBatch<Request<S>>,
     ) -> Result<()> {
@@ -227,6 +227,8 @@ impl<S> Executor<S>
 
         let state = service.initial_state()?;
 
+        let id = send_node.id();
+
         let mut exec = Executor {
             e_rx,
             service,
@@ -241,7 +243,7 @@ impl<S> Executor<S>
         // FIXME: maybe use threadpool to execute instead
         // FIXME: serialize data on exit
 
-        std::thread::Builder::new().name(format!("{:?} // Executor thread", send_node.id())).spawn(move || {
+        std::thread::Builder::new().name(format!("{:?} // Executor thread", id)).spawn(move || {
             while let Ok(exec_req) = exec.e_rx.recv() {
                 match exec_req {
                     ExecutionRequest::InstallState(checkpoint, after) => {

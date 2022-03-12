@@ -445,15 +445,7 @@ impl<S> Synchronizer<S>
 
             digests.push(digest);
 
-            let (header, msg) = x.into_inner();
-
-            let msg = RequestMessage::new(
-                msg.session_id(),
-                msg.sequence_number(),
-                Arc::new(msg.into_inner_operation())
-            );
-
-            final_rqs.push(StoredMessage::new(header, msg));
+            final_rqs.push(x);
         }
 
         //TODO: Is this even necessary, since all requests are added into the log

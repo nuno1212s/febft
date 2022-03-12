@@ -489,15 +489,13 @@ pub struct Log<S, O, P> {
     //This item will be accessed from both the client request thread and the
     //Replica request thread
     //This stores all requests
-    requests: ConcurrentHashMap<Digest, StoredMessage<RequestMessage<Arc<O>>>>,
+    requests: ConcurrentHashMap<Digest, StoredMessage<RequestMessage<O>>>,
     //Stores just request batches. Much faster than individually storing all the requests and
     //Then having to always access them one by one
-    request_batches: ConcurrentHashMap<Digest, Vec<StoredMessage<RequestMessage<Arc<O>>>>>,
+    request_batches: ConcurrentHashMap<Digest, Vec<StoredMessage<RequestMessage<O>>>>,
     //This will only be accessed from the replica request thread so we can wrap it
     //In a simple cell
-    //This is a vec of Arc<O> because we will also need the operations in the
-    //Service thread, so we avoid a copy by doing this.
-    decided: RefCell<Vec<Arc<O>>>,
+    decided: RefCell<Vec<O>>,
     checkpoint: RefCell<CheckpointState<S>>,
     //Some stuff for statistics.
     meta: Mutex<BatchMeta>,
@@ -558,13 +556,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
         //Replace the log
         self.declog.replace(rs.declog);
 
-        let mut new_requests = Vec::with_capacity(rs.requests.len());
-
-        for popped in rs.requests {
-            new_requests.push(Arc::new(popped));
-        }
-
-        self.decided.replace(new_requests);
+        self.decided.replace(rs.requests);
         self.checkpoint.replace(CheckpointState::Complete(rs.checkpoint));
         self.curr_seq.replace(last_seq);
     }
@@ -584,18 +576,10 @@ impl<S, O: Clone, P> Log<S, O, P> {
     {
         match &*self.checkpoint.borrow() {
             CheckpointState::Complete(checkpoint) => {
-                let x = self.decided.borrow();
-
-                let mut decided_res = Vec::with_capacity(x.len());
-
-                for dec_req in &*x {
-                    decided_res.push(*dec_req.clone());
-                }
-
                 Ok(RecoveryState::new(
                     view,
                     checkpoint.clone(),
-                    decided_res,
+                    self.decided.borrow().clone(),
                     self.declog.borrow().clone(),
                 ))
             }
@@ -631,12 +615,6 @@ impl<S, O: Clone, P> Log<S, O, P> {
                     return;
                 }
 
-                let message = RequestMessage::new(
-                    message.session_id(),
-                    message.sequence_number(),
-                    Arc::new(message.into_inner_operation()),
-                );
-
                 let digest = header.unique_digest();
                 let stored = StoredMessage::new(header, message);
 
@@ -660,11 +638,11 @@ impl<S, O: Clone, P> Log<S, O, P> {
         }
     }
 
-    pub fn insert_batched(&self, batch_digest: Digest, batch: Vec<StoredMessage<RequestMessage<Arc<O>>>>) {
+    pub fn insert_batched(&self, batch_digest: Digest, batch: Vec<StoredMessage<RequestMessage<O>>>) {
         self.request_batches.insert(batch_digest, batch);
     }
 
-    pub fn take_batched_requests(&self, batch_digest: &Digest) -> Option<Vec<StoredMessage<RequestMessage<Arc<O>>>>> {
+    pub fn take_batched_requests(&self, batch_digest: &Digest) -> Option<Vec<StoredMessage<RequestMessage<O>>>> {
         match self.request_batches.remove(batch_digest) {
             None => {
                 None
@@ -688,7 +666,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
     }
 
     /// Clone the requests corresponding to the provided list of hash digests.
-    pub fn clone_requests(&self, digests: &[Digest]) -> Vec<StoredMessage<RequestMessage<Arc<O>>>>
+    pub fn clone_requests(&self, digests: &[Digest]) -> Vec<StoredMessage<RequestMessage<O>>>
         where
             O: Clone,
     {
@@ -706,7 +684,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
     /// The log may be cleared resulting from this operation. Check the enum variant of
     /// `Info`, to perform a local checkpoint when appropriate.
     pub fn finalize_batch(&self, seq: SeqNo, batch_digest: Digest, digests: &[Digest])
-                          -> Result<(Info, Vec<StoredMessage<RequestMessage<Arc<O>>>>)>
+                          -> Result<(Info, Vec<StoredMessage<RequestMessage<O>>>)>
     {
         //println!("Finalized batch of OPS seq {:?} on Node {:?}", seq, self.node_id);
 
@@ -736,7 +714,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
         let mut guard = self.decided.borrow_mut();
 
         for request in &rqs {
-            guard.push(Arc::clone(request.message().operation()));
+            guard.push(request.message().operation().clone());
         }
 
         // retrieve the sequence number stored within the PRE-PREPARE message

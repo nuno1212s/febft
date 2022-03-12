@@ -14,7 +14,7 @@ use crate::bft::crypto::hash::Digest;
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UpdateBatch};
 use crate::bft::ordering::{Orderable, SeqNo};
 
-type RequestToProcess<O> = (Info, Vec<StoredMessage<RequestMessage<Arc<O>>>>);
+type RequestToProcess<O> = (Info, Vec<StoredMessage<RequestMessage<O>>>);
 
 const REQ_BATCH_BUFF: usize = 1024;
 
@@ -25,25 +25,24 @@ pub struct RqFinalizer<S> where S: Service {
     channel: Receiver<RequestToProcess<Request<S>>>,
 }
 
-pub struct RqFinalizerHandle<S> where S: Service
+pub struct RqFinalizerHandle<S> where S: Service + 'static
 {
     channel: Sender<RequestToProcess<Request<S>>>,
 }
 
-impl<S> RqFinalizerHandle<S> where S: Service {
-
+impl<S> RqFinalizerHandle<S> where S: Service + 'static {
     pub fn new(sender: Sender<RequestToProcess<Request<S>>>) -> Self {
         Self {
             channel: sender
         }
     }
 
-    pub fn queue_finalize(&self, info: Info, rqs: Vec<StoredMessage<RequestMessage<Arc<Request<S>>>>>) {
+    pub fn queue_finalize(&self, info: Info, rqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
         self.channel.send((info, rqs)).unwrap()
     }
 }
 
-impl<S> Deref for RqFinalizerHandle<S> where S: Service{
+impl<S> Deref for RqFinalizerHandle<S> where S: Service + 'static {
     type Target = Sender<RequestToProcess<Request<S>>>;
 
     fn deref(&self) -> &Self::Target {
@@ -51,7 +50,7 @@ impl<S> Deref for RqFinalizerHandle<S> where S: Service{
     }
 }
 
-impl<S> Clone for RqFinalizerHandle<S> where S: Service {
+impl<S> Clone for RqFinalizerHandle<S> where S: Service + 'static{
     fn clone(&self) -> Self {
         Self {
             channel: self.channel.clone()
@@ -59,7 +58,7 @@ impl<S> Clone for RqFinalizerHandle<S> where S: Service {
     }
 }
 
-impl<S> RqFinalizer<S> where S: Service {
+impl<S> RqFinalizer<S> where S: Service + 'static {
     pub fn new(node: NodeId,
                log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
                executor_handle: ExecutorHandle<S>) ->
@@ -79,72 +78,70 @@ impl<S> RqFinalizer<S> where S: Service {
         RqFinalizerHandle::new(ch_tx)
     }
 
-    pub fn start(mut self) {
+    pub fn start(self) {
         std::thread::Builder::new().name(format!("{:?} // Request finalizer thread", self.node_id))
             .spawn(move || {
-            loop {
-                let (info, rqs) = self.channel.recv().unwrap();
+                loop {
+                    let (info, rqs) = self.channel.recv().unwrap();
 
-                let mut batch = UpdateBatch::new_with_cap(rqs.len());
+                    let mut batch = UpdateBatch::new_with_cap(rqs.len());
 
-                let mut latest_op_update = BTreeMap::new();
+                    let mut latest_op_update = BTreeMap::new();
 
-                for x in rqs {
-                    let (header, message) = x.into_inner();
+                    for x in rqs {
+                        let (header, message) = x.into_inner();
 
-                    let key = operation_key::<Arc<Request<S>>>(&header, &message);
+                        let key = operation_key::<Request<S>>(&header, &message);
 
-                    let seq_no = latest_op_update
-                        .get(&key)
-                        .copied()
-                        .unwrap_or(SeqNo::ZERO);
+                        let seq_no = latest_op_update
+                            .get(&key)
+                            .copied()
+                            .unwrap_or(SeqNo::ZERO);
 
-                    if message.sequence_number() > seq_no {
-                        latest_op_update.insert(key, message.sequence_number());
+                        if message.sequence_number() > seq_no {
+                            latest_op_update.insert(key, message.sequence_number());
+                        }
+
+                        batch.add(
+                            header.from(),
+                            message.session_id(),
+                            message.sequence_number(),
+                            message.into_inner_operation(),
+                        );
                     }
 
-                    let msg = message.into_inner_operation();
+                    //Send the finalized rqs into the executor thread for execution
+                    match info {
+                        Info::Nil => self.executor.queue_update(
+                            self.log.batch_meta(),
+                            batch,
+                        ),
+                        // execute and begin local checkpoint
+                        Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
+                            self.log.batch_meta(),
+                            batch,
+                        ),
+                    }.unwrap();
 
-                    batch.add(
-                        header.from(),
-                        message.session_id(),
-                        message.sequence_number(),
-                        (*msg).clone(),
-                    );
-                }
+                    let mut latest_op_guard = self.log.latest_op().lock();
 
-                //Send the finalized rqs into the executor thread for execution
-                match info {
-                    Info::Nil => self.executor.queue_update(
-                        self.log.batch_meta(),
-                        batch,
-                    ),
-                    // execute and begin local checkpoint
-                    Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
-                        self.log.batch_meta(),
-                        batch,
-                    ),
-                }.unwrap();
+                    for (key, seq) in latest_op_update.into_iter() {
 
-                let mut latest_op_guard = self.log.latest_op().lock();
+                        //Update the latest operations
+                        let current_seq = latest_op_guard.get(key);
 
-                for (key, seq) in latest_op_update.into_iter() {
-
-                    //Update the latest operations
-                    let current_seq = latest_op_guard.get(key);
-
-                    match current_seq {
-                        None => {
-                            latest_op_guard.insert(key, seq);
-                        }
-                        Some(curr_seq) => {
-                            if seq > *curr_seq {
+                        match current_seq {
+                            None => {
                                 latest_op_guard.insert(key, seq);
+                            }
+                            Some(curr_seq) => {
+                                if seq > *curr_seq {
+                                    latest_op_guard.insert(key, seq);
+                                }
                             }
                         }
                     }
                 }
-            }
-        });
+            });
     }
 }
