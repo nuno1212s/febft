@@ -2,7 +2,7 @@ use std::fmt::format;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use crossbeam_channel::{bounded, Receiver, Sender};
@@ -36,6 +36,7 @@ pub struct RqProcessor<S: Service + 'static> {
     cancelled: AtomicBool,
 }
 
+const TIMEOUT : Duration = Duration::from_micros(10);
 
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
@@ -63,13 +64,19 @@ impl<S: Service> RqProcessor<S> {
     ///Start this work
     pub fn start(self: Arc<Self>) -> JoinHandle<()> {
         std::thread::Builder::new().name(format!("Client RQ Handling {:?}", self.node_ref.id())).spawn(move || {
+
+            let mut currently_accumulating_batch:
+                Option<Vec<StoredMessage<RequestMessage<Request<S>>>>> = None;
+
+            let mut timeout = None;
+
             loop {
                 if self.cancelled.load(Ordering::Relaxed) {
                     break;
                 }
 
                 ///Receive the requests from the clients and process them
-                let messages = self.node_ref.receive_from_clients().unwrap();
+                let messages = self.node_ref.receive_from_clients(timeout).unwrap();
 
                 //We only want to produce batches to the channel if we are the leader, as
                 //Only the leader will propose things
@@ -101,7 +108,7 @@ impl<S: Service> RqProcessor<S> {
 
                                     if req.sequence_number() < current_seq_for_client {
                                         //Avoid repeating requests for clients
-                                        continue
+                                        continue;
                                     }
 
                                     match &mut final_batch {
@@ -136,9 +143,33 @@ impl<S: Service> RqProcessor<S> {
 
                 //Send the finished batches to the other thread
                 if is_leader {
-                    let tx = &self.batch_channel.0;
+                    if self.batch_channel.0.len() > 3 {
+                        match &mut currently_accumulating_batch {
+                            None => {
+                                currently_accumulating_batch = Some(final_batch.unwrap());
 
-                    tx.send(final_batch.unwrap());
+                                timeout = Some(TIMEOUT.clone());
+                            }
+                            Some(current_batch) => {
+                                current_batch.append(&mut final_batch.unwrap());
+                            }
+                        }
+                    } else {
+                        match currently_accumulating_batch.take() {
+                            None => {
+                                let tx = &self.batch_channel.0;
+
+                                tx.send(final_batch.unwrap());
+                            }
+                            Some(mut current_batch) => {
+                                current_batch.append(&mut final_batch.unwrap());
+
+                                self.batch_channel.0.send(current_batch);
+
+                                timeout = None
+                            }
+                        }
+                    }
                 }
             }
         }).unwrap()

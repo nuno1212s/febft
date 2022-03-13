@@ -766,8 +766,8 @@ impl<D> Node<D>
     }
 
     //Receive messages from the clients we are connected to
-    pub fn receive_from_clients(&self) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
-        self.node_handling.receive_from_clients()
+    pub fn receive_from_clients(&self, timeout: Option<Duration>) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
+        self.node_handling.receive_from_clients(timeout)
     }
 
     //Receive messages from the replicas we are connected to

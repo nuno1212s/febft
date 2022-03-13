@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{RecvError, SendError};
 use std::thread::JoinHandle;
 use std::time::Duration;
+use crossbeam_channel::RecvTimeoutError;
 
 use dsrust::channels::async_ch::ReceiverMultFut;
 use dsrust::channels::queue_channel::{bounded_lf_queue, make_mult_recv_from, make_mult_recv_partial_from, Receiver, ReceiverMult, ReceiverPartialMult, RecvMultError, Sender};
@@ -145,18 +146,38 @@ impl<T> NodePeers<T> where T: Send {
         &self.peer_loopback
     }
 
-    pub fn receive_from_clients(&self) -> Result<Vec<T>> {
+    pub fn receive_from_clients(&self, timeout: Option<Duration>) -> Result<Vec<T>> {
         return match &self.client_rx {
             None => {
                 Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive from clients as there are no clients connected"))
             }
             Some(rx) => {
-                match rx.recv() {
-                    Ok(vec) => {
-                        Ok(vec)
-                    }
-                    Err(_) => {
-                        Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive"))
+
+                match timeout {
+                    None => {
+                        match rx.recv() {
+                            Ok(vec) => {
+                                Ok(vec)
+                            }
+                            Err(_) => {
+                                Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive"))
+                            }
+                        }}
+                    Some(timeout) => {
+                        match rx.recv_timeout(timeout) {
+                            Ok(vec) => {
+                                Ok(vec)
+                            }
+                            Err(err) => {
+                                match err {
+                                    RecvTimeoutError::Timeout => {
+                                        Ok(vec![])}
+                                    RecvTimeoutError::Disconnected => {
+                                        Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive"))
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -455,7 +476,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                             self.batch_transmission.send(vec);
                         }
 
-                        backoff.spin();
+                        // backoff.spin();
                     }
                 }).unwrap();
     }
