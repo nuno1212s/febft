@@ -36,7 +36,7 @@ pub struct RqProcessor<S: Service + 'static> {
     cancelled: AtomicBool,
 }
 
-const TIMEOUT : Duration = Duration::from_micros(10);
+const TIMEOUT: Duration = Duration::from_micros(10);
 
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
@@ -65,25 +65,20 @@ impl<S: Service> RqProcessor<S> {
     pub fn start(self: Arc<Self>) -> JoinHandle<()> {
         std::thread::Builder::new().name(format!("Client RQ Handling {:?}", self.node_ref.id())).spawn(move || {
 
-            let mut currently_accumulating_batch:
-                Option<Vec<StoredMessage<RequestMessage<Request<S>>>>> = None;
-
-            let mut timeout = None;
-
             loop {
                 if self.cancelled.load(Ordering::Relaxed) {
                     break;
                 }
 
                 ///Receive the requests from the clients and process them
-                let messages = self.node_ref.receive_from_clients(timeout).unwrap();
+                let messages = self.node_ref.receive_from_clients(None).unwrap();
 
                 //We only want to produce batches to the channel if we are the leader, as
                 //Only the leader will propose things
                 let mut is_leader = self.synchronizer.view().leader() == self.node_ref.id();
 
-                debug!("{:?} // Received batch of {} messages from clients, processing them, is_leader? {}",
-                    self.node_ref.id(), messages.len(), is_leader);
+                //debug!("{:?} // Received batch of {} messages from clients, processing them, is_leader? {}",
+                //    self.node_ref.id(), messages.len(), is_leader);
 
                 let mut final_batch = if is_leader {
                     Some(Vec::with_capacity(messages.len()))
@@ -143,33 +138,9 @@ impl<S: Service> RqProcessor<S> {
 
                 //Send the finished batches to the other thread
                 if is_leader {
-                    if self.batch_channel.0.len() > 3 {
-                        match &mut currently_accumulating_batch {
-                            None => {
-                                currently_accumulating_batch = Some(final_batch.unwrap());
+                    let tx = &self.batch_channel.0;
 
-                                timeout = Some(TIMEOUT.clone());
-                            }
-                            Some(current_batch) => {
-                                current_batch.append(&mut final_batch.unwrap());
-                            }
-                        }
-                    } else {
-                        match currently_accumulating_batch.take() {
-                            None => {
-                                let tx = &self.batch_channel.0;
-
-                                tx.send(final_batch.unwrap());
-                            }
-                            Some(mut current_batch) => {
-                                current_batch.append(&mut final_batch.unwrap());
-
-                                self.batch_channel.0.send(current_batch);
-
-                                timeout = None
-                            }
-                        }
-                    }
+                    tx.send(final_batch.unwrap());
                 }
             }
         }).unwrap()
@@ -180,13 +151,6 @@ impl<S: Service> RqProcessor<S> {
     }
 
     fn requests_received(&self, t: DateTime<Utc>, reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
-        let mut batch_meta = self.log.batch_meta().lock();
-
-        batch_meta.reception_time = t;
-        batch_meta.batch_size = reqs.len();
-
-        drop(batch_meta);
-
         for (h, r) in reqs.into_iter().map(StoredMessage::into_inner) {
             self.request_received(h, SystemMessage::Request(r))
         }

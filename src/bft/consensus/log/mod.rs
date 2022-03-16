@@ -684,7 +684,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
     /// The log may be cleared resulting from this operation. Check the enum variant of
     /// `Info`, to perform a local checkpoint when appropriate.
     pub fn finalize_batch(&self, seq: SeqNo, batch_digest: Digest, digests: &[Digest])
-                          -> Result<(Info, Vec<StoredMessage<RequestMessage<O>>>)>
+                          -> Result<(Info, UpdateBatch<O>)>
     {
         //println!("Finalized batch of OPS seq {:?} on Node {:?}", seq, self.node_id);
 
@@ -717,6 +717,33 @@ impl<S, O: Clone, P> Log<S, O, P> {
             guard.push(request.message().operation().clone());
         }
 
+        let mut latest_op_guard = self.log.latest_op().lock();
+
+        let mut batch = UpdateBatch::new_with_cap(rqs.len());
+
+        for x in rqs {
+            let (header, message) = x.into_inner();
+
+            let key = operation_key::<Request<S>>(&header, &message);
+
+            let seq_no = latest_op_guard
+                .get(&key)
+                .copied()
+                .unwrap_or(SeqNo::ZERO);
+
+            if message.sequence_number() > seq_no {
+                latest_op_guard.insert(key, message.sequence_number());
+            }
+
+            batch.add(
+                header.from(),
+                message.session_id(),
+                message.sequence_number(),
+                message.into_inner_operation(),
+            );
+        }
+
+
         // retrieve the sequence number stored within the PRE-PREPARE message
         // pertaining to the current request being executed
         let mut dec_log_guard = self.declog.borrow_mut();
@@ -742,7 +769,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
         // the last executed sequence number
         dec_log_guard.last_exec = Some(seq);
 
-        Ok((info, rqs))
+        Ok((info, batch))
     }
 
     fn begin_checkpoint(&self, seq: SeqNo) -> Result<Info> {

@@ -636,7 +636,7 @@ impl<S> Consensus<S>
                         ConsensusMessageKind::Prepare(self.current_digest.clone()),
                     ));
 
-                    debug!("{:?} // Broadcasting prepare consensus message {:?}", self.node_id, message);
+                    //debug!("{:?} // Broadcasting prepare consensus message {:?}", self.node_id, message);
 
                     let targets = NodeId::targets(0..view.params().n());
 
@@ -861,6 +861,11 @@ fn request_batch_received<S>(
         Request<S>: Send + Clone + 'static,
         Reply<S>: Send + 'static,
 {
+    let mut batch_guard = log.batch_meta().lock();
+
+    batch_guard.batch_size = requests.len();
+    batch_guard.reception_time = Utc::now();
+
     synchronizer.watch_request_batch(
         batch_digest,
         requests,

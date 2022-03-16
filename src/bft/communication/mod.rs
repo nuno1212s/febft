@@ -1353,14 +1353,14 @@ impl<D> SerializedSendTo<D>
                 let msg = format!("{:?}", m.original());
                 let peer = format!("{:?}", tx.client_id());
 
-                debug!("{:?} // Sending SERIALIZED message {:?} to myself", peer,  msg);
+                //debug!("{:?} // Sending SERIALIZED message {:?} to myself", peer,  msg);
                 Self::me(h, m, tx).await;
             }
             SerializedSendTo::Peers { id, our_id, sock, tx } => {
                 let msg = format!("{:?}", m.original());
                 let peer = format!("{:?}", tx.client_id());
 
-                debug!("{:?} // Sending SERIALIZED message {} to other peer {:?} ",our_id,  msg, id);
+                //debug!("{:?} // Sending SERIALIZED message {} to other peer {:?} ",our_id,  msg, id);
                 Self::peers(id, h, m, sock, tx).await;
             }
         }

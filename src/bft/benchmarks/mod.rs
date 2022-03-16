@@ -3,7 +3,8 @@ use std::default::Default;
 use chrono::DateTime;
 use chrono::offset::Utc;
 
-#[derive(Default)]
+use crate::bft::communication::NodeId;
+
 pub struct Measurements {
     pub total_latency: BenchmarkHelper,
     pub consensus_latency: BenchmarkHelper,
@@ -13,6 +14,23 @@ pub struct Measurements {
     pub prepare_latency: BenchmarkHelper,
     pub commit_latency: BenchmarkHelper,
     pub batch_size: BenchmarkHelper,
+}
+
+const CAP: usize = 2048;
+
+impl Measurements {
+    pub fn new(id: NodeId) -> Self {
+        Measurements {
+            total_latency: BenchmarkHelper::new(id, CAP),
+            consensus_latency: BenchmarkHelper::new(id, CAP),
+            pre_cons_latency: BenchmarkHelper::new(id, CAP),
+            pos_cons_latency: BenchmarkHelper::new(id, CAP),
+            pre_prepare_latency: BenchmarkHelper::new(id, CAP),
+            prepare_latency: BenchmarkHelper::new(id, CAP),
+            commit_latency: BenchmarkHelper::new(id, CAP),
+            batch_size: BenchmarkHelper::new(id, CAP),
+        }
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -41,9 +59,9 @@ impl BatchMeta {
     }
 }
 
-#[derive(Default)]
 pub struct BenchmarkHelper {
     values: Vec<i64>,
+    node: NodeId,
 }
 
 pub trait BenchmarkHelperStore {
@@ -54,8 +72,9 @@ pub trait BenchmarkHelperStore {
 // even its oddities, such as cloning the values array,
 // and bugs (overflowing standard deviation)
 impl BenchmarkHelper {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(id: NodeId, capacity: usize) -> Self {
         Self {
+            node: id,
             values: Vec::with_capacity(capacity),
         }
     }
@@ -89,7 +108,7 @@ impl BenchmarkHelper {
             .reduce(|x, y| x.wrapping_add(y))
             .unwrap_or(0);
 
-        (count as f64) / ((values.len() - 2*limit) as f64)
+        (count as f64) / ((values.len() - 2 * limit) as f64)
     }
 
     pub fn standard_deviation(&mut self, percent: bool) -> f64 {
@@ -109,27 +128,35 @@ impl BenchmarkHelper {
             .reduce(|x, y| x.wrapping_add(y))
             .unwrap_or(0);
         let quad = quad as f64;
-        let var = (quad - (num*(med*med)))/(num-1.0);
+        let var = (quad - (num * (med * med))) / (num - 1.0);
 
         var.sqrt()
     }
 
     #[inline(always)]
     pub fn log_latency(&mut self, name: &str) {
-        println!("{} latency = {} (+/- {}) us",
-            name,
-            self.average(false) / 1000.0,
-            self.standard_deviation(false) / 1000.0,
+        let id = self.node.clone();
+
+        println!("{:?} // {} latency = {} (+/- {}) us",
+                 id,
+                 name,
+                 self.average(false) / 1000.0,
+                 self.standard_deviation(false) / 1000.0,
         );
+
         self.reset();
     }
 
     #[inline(always)]
     pub fn log_batch(&mut self) {
-        println!("Batch average size = {} (+/- {}) requests",
-            self.average(false),
-            self.standard_deviation(false),
+        let id = self.node.clone();
+
+        println!("{:?} // Batch average size = {} (+/- {}) requests",
+                 id,
+                 self.average(false),
+                 self.standard_deviation(false),
         );
+
         self.reset();
     }
 }

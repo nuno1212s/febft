@@ -243,6 +243,7 @@ pub enum SystemMessage<S, O, P> {
     Request(RequestMessage<O>),
     Reply(ReplyMessage<P>),
     Consensus(ConsensusMessage<O>),
+    ///Collaborative state transfer messages
     Cst(CstMessage<S, O>),
     ViewChange(ViewChangeMessage<O>),
     ForwardedRequests(ForwardedRequestsMessage<O>),

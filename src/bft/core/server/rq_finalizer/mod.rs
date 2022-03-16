@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 use intmap::IntMap;
+use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::message::{RequestMessage, StoredMessage};
 use crate::bft::communication::NodeId;
 use crate::bft::communication::serialize::SharedData;
@@ -14,7 +15,7 @@ use crate::bft::crypto::hash::Digest;
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UpdateBatch};
 use crate::bft::ordering::{Orderable, SeqNo};
 
-type RequestToProcess<O> = (Info, Vec<StoredMessage<RequestMessage<O>>>);
+type RequestToProcess<O> = (Info, BatchMeta, Vec<StoredMessage<RequestMessage<O>>>);
 
 const REQ_BATCH_BUFF: usize = 1024;
 
@@ -37,8 +38,8 @@ impl<S> RqFinalizerHandle<S> where S: Service + 'static {
         }
     }
 
-    pub fn queue_finalize(&self, info: Info, rqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
-        self.channel.send((info, rqs)).unwrap()
+    pub fn queue_finalize(&self, info: Info, batch_meta: BatchMeta, rqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
+        self.channel.send((info, batch_meta, rqs)).unwrap()
     }
 }
 
@@ -82,7 +83,7 @@ impl<S> RqFinalizer<S> where S: Service + 'static {
         std::thread::Builder::new().name(format!("{:?} // Request finalizer thread", self.node_id))
             .spawn(move || {
                 loop {
-                    let (info, rqs) = self.channel.recv().unwrap();
+                    let (info, batch_meta, rqs) = self.channel.recv().unwrap();
 
                     let mut batch = UpdateBatch::new_with_cap(rqs.len());
 
@@ -113,12 +114,12 @@ impl<S> RqFinalizer<S> where S: Service + 'static {
                     //Send the finalized rqs into the executor thread for execution
                     match info {
                         Info::Nil => self.executor.queue_update(
-                            self.log.batch_meta(),
+                            batch_meta,
                             batch,
                         ),
                         // execute and begin local checkpoint
                         Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
-                            self.log.batch_meta(),
+                            batch_meta,
                             batch,
                         ),
                     }.unwrap();

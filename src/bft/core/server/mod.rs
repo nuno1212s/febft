@@ -8,6 +8,7 @@ use chrono::offset::Utc;
 use log::debug;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+use tracing::{event, Level, span};
 
 use crate::bft::async_runtime as rt;
 use crate::bft::async_runtime::JoinHandle;
@@ -198,7 +199,7 @@ impl<S> Replica<S>
         let executor = Executor::new(
             reply_handle,
             service,
-            node.send_node()
+            node.send_node(),
         )?;
 
         // start timeouts handler
@@ -490,8 +491,6 @@ impl<S> Replica<S>
     }
 
     fn update_normal_phase(&mut self) -> Result<()> {
-        debug!("{:?} // Updating normal phase...", self.id());
-
         // check if we have STOP messages to be processed,
         // and update our phase when we start installing
         // the new view
@@ -503,6 +502,12 @@ impl<S> Replica<S>
             }
         }
 
+        ///Tracing start
+        let span = span!(Level::TRACE, " Poll consensus and messages from replica.",node = ?self.id());
+
+        let _enter = span.enter();
+        ///Tracing end
+
         // retrieve the next message to be processed.
         //
         // the order of the next consensus message is guaranteed by
@@ -511,13 +516,9 @@ impl<S> Replica<S>
 
         let leader = self.synchronizer.view().leader() == self.id();
 
-        debug!("{:?} // Polled {:?}, is leader {}", self.id(),polled_message,  leader);
-
         let message = match polled_message {
             ConsensusPollStatus::Recv => {
-                debug!("{:?} // Receiving from replicas is leader {}", self.id(), leader);
                 let vec1 = self.node.receive_from_replicas()?;
-                debug!("{:?} // Received from replicas is leader {}", self.id(), leader);
 
                 vec1
             }
@@ -525,12 +526,10 @@ impl<S> Replica<S>
                 Message::System(h, SystemMessage::Consensus(m))
             }
             ConsensusPollStatus::TryProposeAndRecv => {
-                debug!("Receiving client requests. {:?}", self.id());
+                event!(Level::DEBUG, node = ?self.id(), "Polled propose and recv");
 
                 if leader {
                     if let Ok(requests) = self.client_rqs.receiver_channel().recv() {
-                        debug!("{:?} // Proposing requests {}",self.id(), requests.len());
-
                         self.consensus.propose(requests, &self.synchronizer, &self.node);
                     }
                 } else {
@@ -539,13 +538,21 @@ impl<S> Replica<S>
                     self.consensus.propose_non_leader();
                 }
 
-                debug!("{:?} // Receiving replica requests.", self.id());
+                //debug!("{:?} // Receiving replica requests.", self.id());
 
                 self.node.receive_from_replicas()?
             }
         };
 
-        debug!("{:?} // Processing message {:?}", self.id(), message);
+        ///Drop tracing
+        drop(_enter);
+
+        // debug!("{:?} // Processing message {:?}", self.id(), message);
+
+        ///Tracing start
+        let span = span!(Level::TRACE, "Process message.",node = ?self.id());
+
+        let _enter = span.enter();
 
         match message {
             Message::RequestBatch(time, batch) => {
@@ -594,6 +601,9 @@ impl<S> Replica<S>
                     }
                     SystemMessage::Consensus(message) => {
                         let seq = self.consensus.sequence_number();
+
+                        event!(Level::DEBUG, node = ?self.id(), "Processing consensus message");
+
                         let status = self.consensus.process_message(
                             header,
                             message,
@@ -602,6 +612,7 @@ impl<S> Replica<S>
                             &self.log,
                             &self.node,
                         );
+
                         match status {
                             // if deciding, nothing to do
                             ConsensusStatus::Deciding => {}
@@ -617,12 +628,25 @@ impl<S> Replica<S>
                                     self.synchronizer.unwatch_request(digest);
                                 }
 
-                                let (info, rqs) = self.log.finalize_batch(seq, batch_digest, digests)?;
+                                let (info, batch) = self.log.finalize_batch(seq, batch_digest, digests)?;
+
+                                let meta = (*self.log.batch_meta().lock()).clone();
 
                                 //Send the finalized batch to the rq finalizer
                                 //So everything can be removed from the correct logs and
                                 //Given to the service thread to execute
-                                self.rq_finalizer.queue_finalize(info, rqs);
+                                //self.rq_finalizer.queue_finalize(info, meta, rqs);
+                                match info {
+                                    Info::Nil => self.executor.queue_update(
+                                        meta,
+                                        batch,
+                                    ),
+                                    // execute and begin local checkpoint
+                                    Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
+                                        meta,
+                                        batch,
+                                    ),
+                                }.unwrap();
 
                                 self.consensus.next_instance();
                             }
@@ -631,6 +655,8 @@ impl<S> Replica<S>
                         // we processed a consensus message,
                         // signal the consensus layer of this event
                         self.consensus.signal();
+
+                        event!(Level::DEBUG, node = ?self.id(), "Done processing consensus message");
 
                         // yield execution since `signal()`
                         // will probably force a value from the

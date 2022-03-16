@@ -119,7 +119,7 @@ impl<T> NodePeers<T> where T: Send {
     }
 
     pub fn init_peer_conn(&self, peer: NodeId) -> Arc<ConnectedPeer<T>> {
-        debug!("Initializing peer connection for peer {:?} on peer {:?}", peer, self.own_id);
+        //debug!("Initializing peer connection for peer {:?} on peer {:?}", peer, self.own_id);
 
         return if peer >= self.first_cli {
             self.client_handling.as_ref().expect("Tried to init client request from client itself?")
@@ -628,8 +628,8 @@ impl<T> ConnectedPeer<T> where T: Send {
     pub async fn push_request_(&self, msg: T, own_id: &NodeId) where T: Debug {
         match self {
             Self::PoolConnection { sender, .. } => {
-                debug!("{:?} // Pushing request {:?} into queue, from {:?}",
-                    own_id, msg, self.client_id());
+               // debug!("{:?} // Pushing request {:?} into queue, from {:?}",
+               //     own_id, msg, self.client_id());
 
                 let sender_guard = sender.lock().as_ref().unwrap().clone();
 
@@ -641,8 +641,8 @@ impl<T> ConnectedPeer<T> where T: Send {
                 };
             }
             Self::UnpooledConnection { sender, .. } => {
-                debug!("{:?} // Pushing request {:?} into queue, from {:?}",
-                    own_id, msg, self.client_id());
+                //debug!("{:?} // Pushing request {:?} into queue, from {:?}",
+                //    own_id, msg, self.client_id());
 
                 let mut send_clone;
 
@@ -652,7 +652,7 @@ impl<T> ConnectedPeer<T> where T: Send {
 
                     match sender_guard {
                         None => {
-                            debug!("{:?} // Failed to receive because there is no sender.", self.client_id());
+                            //debug!("{:?} // Failed to receive because there is no sender.", self.client_id());
                             return;
                         }
                         Some(send) => {
@@ -692,7 +692,7 @@ impl<T> ConnectedPeer<T> where T: Send {
 
                     match sender_guard {
                         None => {
-                            debug!("{:?} // Failed to receive because there is no sender.", self.client_id());
+                            //debug!("{:?} // Failed to receive because there is no sender.", self.client_id());
                             return;
                         }
                         Some(send) => {

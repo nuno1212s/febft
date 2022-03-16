@@ -180,10 +180,8 @@ impl<S: Service> ExecutorHandle<S>
     }
 
     /// Queues a batch of requests `batch` for execution.
-    pub fn queue_update(&self, meta: &Mutex<BatchMeta>, batch: UpdateBatch<Request<S>>) -> Result<()> {
-        let guard = meta.lock();
-
-        self.e_tx.send(ExecutionRequest::Update(*guard, batch))
+    pub fn queue_update(&self, meta: BatchMeta, batch: UpdateBatch<Request<S>>) -> Result<()> {
+        self.e_tx.send(ExecutionRequest::Update(meta, batch))
             .simple(ErrorKind::Executable)
     }
 
@@ -193,12 +191,10 @@ impl<S: Service> ExecutorHandle<S>
     /// This is useful during local checkpoints.
     pub fn queue_update_and_get_appstate(
         &self,
-        meta: &Mutex<BatchMeta>,
+        meta: BatchMeta,
         batch: UpdateBatch<Request<S>>,
     ) -> Result<()> {
-        let guard = meta.lock();
-
-        self.e_tx.send(ExecutionRequest::UpdateAndGetAppstate(*guard, batch))
+        self.e_tx.send(ExecutionRequest::UpdateAndGetAppstate(meta, batch))
             .simple(ErrorKind::Executable)
     }
 }

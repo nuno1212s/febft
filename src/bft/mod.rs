@@ -21,6 +21,9 @@ pub mod sync;
 pub mod cst;
 
 use std::ops::Drop;
+use tracing::Dispatch;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_timing::{Builder, Histogram};
 
 use error::*;
 use globals::Flag;
@@ -49,12 +52,17 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
         return Ok(None);
     }
 
-    env_logger::init();
+    let subs = Builder::default().build(|| Histogram::new_with_max(1000000, 2).unwrap());
+
+    let dispatch = Dispatch::new(subs);
+
+    tracing::dispatcher::set_global_default(dispatch).expect("Setting tracing default failed");
 
     threadpool::init(c.pool_threads)?;
     async_runtime::init(c.async_threads)?;
 
     println!("Async threads {}", c.async_threads);
+
     communication::socket::init()?;
     INITIALIZED.set();
     Ok(Some(InitGuard))
