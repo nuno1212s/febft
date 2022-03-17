@@ -443,6 +443,22 @@ pub struct ConsensusMessage<O> {
     kind: ConsensusMessageKind<O>,
 }
 
+impl<O> Debug for ConsensusMessage<O> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.kind {
+            ConsensusMessageKind::PrePrepare(_) => {
+                write!(f, "Pre prepare message")
+            }
+            ConsensusMessageKind::Prepare(_) => {
+                write!(f, "Prepare message")
+            }
+            ConsensusMessageKind::Commit(_) => {
+                write!(f, "Commit message")
+            }
+        }
+    }
+}
+
 /// Represents one of many different consensus stages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
@@ -536,6 +552,10 @@ impl<O> ConsensusMessage<O> {
     /// Returns a reference to the consensus message kind.
     pub fn kind(&self) -> &ConsensusMessageKind<O> {
         &self.kind
+    }
+
+    pub fn into_kind(self) -> ConsensusMessageKind<O> {
+        self.kind
     }
 
     /// Checks if a consensus message refers to the digest of the

@@ -74,7 +74,8 @@ impl<S> RqFinalizer<S> where S: Service + 'static {
                 channel: ch_rx,
             };
 
-        rq_finalizer.start();
+        //TODO: Currently disabled
+        //rq_finalizer.start();
 
         RqFinalizerHandle::new(ch_tx)
     }

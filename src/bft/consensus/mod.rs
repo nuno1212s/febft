@@ -548,7 +548,9 @@ impl<S> Consensus<S>
                         return ConsensusStatus::Deciding;
                     }
                     ConsensusMessageKind::PrePrepare(request_batch) => {
-                        let digests = request_batch_received(
+                        log.batch_meta().lock().pre_prepare_received_time = Utc::now();
+
+                        let mut digests = request_batch_received(
                             header.digest().clone(),
                             request_batch.clone(),
                             timeouts,
@@ -558,7 +560,8 @@ impl<S> Consensus<S>
 
                         self.batch_size = digests.len();
                         self.current_digest = header.digest().clone();
-                        (&mut self.current[..digests.len()]).copy_from_slice(&digests[..]);
+                        self.current.clear();
+                        self.current.append(&mut digests);
                     }
                     ConsensusMessageKind::Prepare(d) => {
                         debug!("{:?} // Received prepare message {:?} while in prepreparing ", self.node_id, d);
@@ -636,14 +639,13 @@ impl<S> Consensus<S>
                         ConsensusMessageKind::Prepare(self.current_digest.clone()),
                     ));
 
-                    //debug!("{:?} // Broadcasting prepare consensus message {:?}", self.node_id, message);
-
                     let targets = NodeId::targets(0..view.params().n());
 
                     node.broadcast(message, targets);
                 }
 
                 log.batch_meta().lock().prepare_sent_time = Utc::now();
+
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
                 // try entering preparing phase
@@ -717,6 +719,7 @@ impl<S> Consensus<S>
                         return ConsensusStatus::Deciding;
                     }
                 };
+
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
                 // check if we have gathered enough votes,

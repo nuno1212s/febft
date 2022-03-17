@@ -111,6 +111,8 @@ impl<S> Replier<S> where S: Service + 'static{
                         // (there is always at least one request in the batch)
                         unreachable!();
                     }
+
+
                 }
             });
 

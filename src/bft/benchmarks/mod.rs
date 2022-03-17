@@ -14,6 +14,9 @@ pub struct Measurements {
     pub prepare_latency: BenchmarkHelper,
     pub commit_latency: BenchmarkHelper,
     pub batch_size: BenchmarkHelper,
+    pub prepare_msg_latency: BenchmarkHelper,
+    pub propose_time_latency: BenchmarkHelper,
+    pub message_recv_latency: BenchmarkHelper
 }
 
 const CAP: usize = 2048;
@@ -29,6 +32,9 @@ impl Measurements {
             prepare_latency: BenchmarkHelper::new(id, CAP),
             commit_latency: BenchmarkHelper::new(id, CAP),
             batch_size: BenchmarkHelper::new(id, CAP),
+            prepare_msg_latency: BenchmarkHelper::new(id, CAP),
+            propose_time_latency: BenchmarkHelper::new(id, CAP),
+            message_recv_latency: BenchmarkHelper::new(id, CAP),
         }
     }
 }
@@ -37,11 +43,16 @@ impl Measurements {
 pub struct BatchMeta {
     pub batch_size: usize,
     pub consensus_start_time: DateTime<Utc>,
+    pub message_received_time: DateTime<Utc>,
+    pub started_propose: DateTime<Utc>,
+    pub done_propose: DateTime<Utc>,
     pub consensus_decision_time: DateTime<Utc>,
+    pub pre_prepare_received_time: DateTime<Utc>,
     pub prepare_sent_time: DateTime<Utc>,
     pub commit_sent_time: DateTime<Utc>,
     pub reception_time: DateTime<Utc>,
     pub execution_time: DateTime<Utc>,
+    pub replied_time: DateTime<Utc>
 }
 
 impl BatchMeta {
@@ -50,11 +61,16 @@ impl BatchMeta {
         Self {
             batch_size: 0,
             consensus_start_time: now,
+            message_received_time: now,
+            started_propose: now,
+            done_propose: now,
             consensus_decision_time: now,
+            pre_prepare_received_time: now,
             prepare_sent_time: now,
             commit_sent_time: now,
             reception_time: now,
             execution_time: now,
+            replied_time: now
         }
     }
 }

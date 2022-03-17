@@ -717,17 +717,17 @@ impl<S, O: Clone, P> Log<S, O, P> {
             guard.push(request.message().operation().clone());
         }
 
-        let mut latest_op_guard = self.log.latest_op().lock();
+        let mut latest_op_guard = self.latest_op().lock();
 
         let mut batch = UpdateBatch::new_with_cap(rqs.len());
 
         for x in rqs {
             let (header, message) = x.into_inner();
 
-            let key = operation_key::<Request<S>>(&header, &message);
+            let key = operation_key::<O>(&header, &message);
 
             let seq_no = latest_op_guard
-                .get(&key)
+                .get(key)
                 .copied()
                 .unwrap_or(SeqNo::ZERO);
 
@@ -742,7 +742,6 @@ impl<S, O: Clone, P> Log<S, O, P> {
                 message.into_inner_operation(),
             );
         }
-
 
         // retrieve the sequence number stored within the PRE-PREPARE message
         // pertaining to the current request being executed

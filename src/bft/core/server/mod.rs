@@ -1,14 +1,14 @@
 //! Contains the server side core protocol logic of `febft`.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::DateTime;
 use chrono::offset::Utc;
 use log::debug;
+use parking_lot::Mutex;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
-use tracing::{event, Level, span};
 
 use crate::bft::async_runtime as rt;
 use crate::bft::async_runtime::JoinHandle;
@@ -395,6 +395,7 @@ impl<S> Replica<S>
 
     fn update_sync_phase(&mut self) -> Result<bool> {
         debug!("{:?} // Updating Sync phase", self.id());
+
         // retrieve a view change message to be processed
         let message = match self.synchronizer.poll() {
             SynchronizerPollStatus::Recv => {
@@ -502,12 +503,6 @@ impl<S> Replica<S>
             }
         }
 
-        ///Tracing start
-        let span = span!(Level::TRACE, " Poll consensus and messages from replica.",node = ?self.id());
-
-        let _enter = span.enter();
-        ///Tracing end
-
         // retrieve the next message to be processed.
         //
         // the order of the next consensus message is guaranteed by
@@ -526,11 +521,20 @@ impl<S> Replica<S>
                 Message::System(h, SystemMessage::Consensus(m))
             }
             ConsensusPollStatus::TryProposeAndRecv => {
-                event!(Level::DEBUG, node = ?self.id(), "Polled propose and recv");
+                debug!("{:?} // Polled propose and recv.", self.id());
+
+                let start = Instant::now();
 
                 if leader {
                     if let Ok(requests) = self.client_rqs.receiver_channel().recv() {
+                        let mut guard = self.log.batch_meta().lock();
+
+                        guard.message_received_time = Utc::now();
+                        guard.started_propose = Utc::now();
+
                         self.consensus.propose(requests, &self.synchronizer, &self.node);
+
+                        guard.done_propose = Utc::now();
                     }
                 } else {
                     ///We want the phase to move to Preparing if we are not the leader as we will never receive messages
@@ -538,21 +542,16 @@ impl<S> Replica<S>
                     self.consensus.propose_non_leader();
                 }
 
-                //debug!("{:?} // Receiving replica requests.", self.id());
 
-                self.node.receive_from_replicas()?
+                let replicas = self.node.receive_from_replicas()?;
+
+                debug!("{:?} // Received from replicas. Took {:?}", self.id(), Instant::now().duration_since(start));
+
+                replicas
             }
         };
 
-        ///Drop tracing
-        drop(_enter);
-
-        // debug!("{:?} // Processing message {:?}", self.id(), message);
-
-        ///Tracing start
-        let span = span!(Level::TRACE, "Process message.",node = ?self.id());
-
-        let _enter = span.enter();
+        debug!("{:?} // Processing message {:?}", self.id(), message);
 
         match message {
             Message::RequestBatch(time, batch) => {
@@ -602,7 +601,9 @@ impl<S> Replica<S>
                     SystemMessage::Consensus(message) => {
                         let seq = self.consensus.sequence_number();
 
-                        event!(Level::DEBUG, node = ?self.id(), "Processing consensus message");
+                        debug!("{:?} // Processing consensus message {:?} ", self.id(), message);
+
+                        let start = Instant::now();
 
                         let status = self.consensus.process_message(
                             header,
@@ -656,7 +657,7 @@ impl<S> Replica<S>
                         // signal the consensus layer of this event
                         self.consensus.signal();
 
-                        event!(Level::DEBUG, node = ?self.id(), "Done processing consensus message");
+                        debug!("{:?} // Done processing consensus message. Took {:?}", self.id(), Instant::now().duration_since(start));
 
                         // yield execution since `signal()`
                         // will probably force a value from the
