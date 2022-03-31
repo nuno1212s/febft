@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{RecvError, SendError};
 use std::thread::JoinHandle;
 use std::time::Duration;
-use crossbeam_channel::RecvTimeoutError;
 
+use crossbeam_channel::RecvTimeoutError;
 use dsrust::channels::async_ch::ReceiverMultFut;
 use dsrust::channels::queue_channel::{bounded_lf_queue, make_mult_recv_from, make_mult_recv_partial_from, Receiver, ReceiverMult, ReceiverPartialMult, RecvMultError, Sender};
 use dsrust::queues::lf_array_queue::LFBQueue;
@@ -20,12 +20,12 @@ use log::debug;
 use parking_lot::{Mutex, RawMutex, RwLock};
 use parking_lot::lock_api::MutexGuard;
 
+use crate::bft::async_runtime as rt;
 use crate::bft::communication::{NODE_CHAN_BOUND, NodeConfig, NodeId};
 use crate::bft::communication::channel::{ChannelRx, ChannelTx, new_bounded};
 use crate::bft::communication::message::Message;
 use crate::bft::error::*;
 use crate::bft::threadpool;
-use crate::bft::async_runtime as rt;
 
 ///Handles the communication between two peers (replica - replica, replica - client)
 /// Only handles reception of requests, not transmission
@@ -53,6 +53,7 @@ fn client_channel_init<T>(capacity: usize) -> (Sender<T, ClientQueueType<T>>, Re
 }
 
 pub struct NodePeers<T: Send + 'static> {
+    batch_size: usize,
     first_cli: NodeId,
     own_id: NodeId,
     peer_loopback: Arc<ConnectedPeer<T>>,
@@ -106,6 +107,7 @@ impl<T> NodePeers<T> where T: Send {
         };
 
         let peers = NodePeers {
+            batch_size,
             first_cli,
             own_id: id,
             peer_loopback: loopback_address,
@@ -116,6 +118,10 @@ impl<T> NodePeers<T> where T: Send {
         };
 
         peers
+    }
+
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
     }
 
     pub fn init_peer_conn(&self, peer: NodeId) -> Arc<ConnectedPeer<T>> {
@@ -146,13 +152,21 @@ impl<T> NodePeers<T> where T: Send {
         &self.peer_loopback
     }
 
+    pub fn rqs_len_from_clients(&self) -> usize {
+        return match &self.client_rx {
+            None => { 0 }
+            Some(rx) => {
+                rx.len()
+            }
+        };
+    }
+
     pub fn receive_from_clients(&self, timeout: Option<Duration>) -> Result<Vec<T>> {
         return match &self.client_rx {
             None => {
                 Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive from clients as there are no clients connected"))
             }
             Some(rx) => {
-
                 match timeout {
                     None => {
                         match rx.recv() {
@@ -162,7 +176,8 @@ impl<T> NodePeers<T> where T: Send {
                             Err(_) => {
                                 Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive"))
                             }
-                        }}
+                        }
+                    }
                     Some(timeout) => {
                         match rx.recv_timeout(timeout) {
                             Ok(vec) => {
@@ -171,7 +186,8 @@ impl<T> NodePeers<T> where T: Send {
                             Err(err) => {
                                 match err {
                                     RecvTimeoutError::Timeout => {
-                                        Ok(vec![])}
+                                        Ok(vec![])
+                                    }
                                     RecvTimeoutError::Disconnected => {
                                         Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive"))
                                     }
@@ -625,11 +641,51 @@ impl<T> ConnectedPeer<T> where T: Send {
         }
     }
 
+    pub fn push_request_sync(&self, msg: T) {
+        match self {
+            Self::PoolConnection { sender, .. } => {
+                let sender_guard = sender.lock().as_ref().unwrap().clone();
+
+                match sender_guard.send(msg) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        panic!("Failed to send because {:?}", err);
+                    }
+                };
+            }
+            Self::UnpooledConnection { sender, .. } => {
+                let mut send_clone;
+
+                {
+                    let send_lock = sender.lock();
+                    let mut sender_guard = send_lock.as_ref();
+
+                    match sender_guard {
+                        None => {
+                            //debug!("{:?} // Failed to receive because there is no sender.", self.client_id());
+                            return;
+                        }
+                        Some(send) => {
+                            send_clone = send.clone();
+                        }
+                    }
+                }
+
+                match send_clone.send_sync(msg) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        panic!("Failed to receive data from {:?} because {:?}", self.client_id(), err);
+                    }
+                }
+            }
+        }
+    }
+
     pub async fn push_request_(&self, msg: T, own_id: &NodeId) where T: Debug {
         match self {
             Self::PoolConnection { sender, .. } => {
-               // debug!("{:?} // Pushing request {:?} into queue, from {:?}",
-               //     own_id, msg, self.client_id());
+                // debug!("{:?} // Pushing request {:?} into queue, from {:?}",
+                //     own_id, msg, self.client_id());
 
                 let sender_guard = sender.lock().as_ref().unwrap().clone();
 

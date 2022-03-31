@@ -12,7 +12,7 @@ use either::{
     Right,
 };
 use intmap::IntMap;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 
 use crate::bft::communication::{
     Node,
@@ -21,6 +21,7 @@ use crate::bft::communication::{
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, Message, RequestMessage, SerializedMessage, StoredMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
 use crate::bft::communication::serialize::DigestData;
 use crate::bft::consensus::log::Log;
+use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
 use crate::bft::executable::{
@@ -170,7 +171,7 @@ enum ProtoPhase {
 
 /// Contains the state of an active consensus instance, as well
 /// as future instances.
-pub struct Consensus<S: Service> {
+pub struct Consensus<'a, S: Service> {
     // can be smaller than the config's max batch size,
     // but never longer
     batch_size: usize,
@@ -183,6 +184,8 @@ pub struct Consensus<S: Service> {
     missing_requests: VecDeque<Digest>,
     missing_swapbuf: Vec<usize>,
     speculative_commits: Arc<Mutex<IntMap<StoredSerializedSystemMessage<S::Data>>>>,
+    consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
+    consensus_guard: Option<MutexGuard<'a, (SeqNo, ViewInfo)>>
 }
 
 /// Status returned from processing a consensus message.
@@ -216,7 +219,7 @@ macro_rules! extract_msg {
     };
 }
 
-impl<S> Consensus<S>
+impl<'a, S> Consensus<'a, S>
     where
         S: Service + Send + 'static,
         State<S>: Send + Clone + 'static,
@@ -224,7 +227,7 @@ impl<S> Consensus<S>
         Reply<S>: Send + 'static,
 {
     /// Starts a new consensus protocol tracker.
-    pub fn new(initial_seq_no: SeqNo, id: NodeId, batch_size: usize) -> Self {
+    pub fn new(initial_seq_no: SeqNo, id: NodeId, batch_size: usize, consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>) -> Self {
         Self {
             batch_size: 0,
             node_id: id,
@@ -239,6 +242,8 @@ impl<S> Consensus<S>
                 .flat_map(|d| d) // unwrap
                 .take(batch_size)
                 .collect(),
+            consensus_lock,
+            consensus_guard: None
         }
     }
 
@@ -273,7 +278,7 @@ impl<S> Consensus<S>
         self.signal();
     }
 
-    pub fn propose_non_leader(&mut self) {
+    pub fn advance_init_phase(&mut self) {
         match self.phase {
             ProtoPhase::Init => self.phase = ProtoPhase::PrePreparing,
             _ => return
@@ -438,8 +443,20 @@ impl<S> Consensus<S>
     }
 
     /// Starts a new consensus instance.
-    pub fn next_instance(&mut self) {
+    pub fn next_instance(&mut self, sync: &Arc<Synchronizer<S>>) {
         self.tbo.next_instance_queue();
+
+        match self.consensus_guard.take() {
+            None => {
+                panic!("Ended consensus without guard");
+            }
+            Some(mut guard) => {
+                //Update the guard to reflect the current consensus instance
+                *guard = (self.sequence_number(),
+                    sync.view());
+            }
+        }
+
         //self.voted.clear();
     }
 
@@ -495,7 +512,7 @@ impl<S> Consensus<S>
     }
 
     /// Process a message for a particular consensus instance.
-    pub fn process_message<'a>(
+    pub fn process_message(
         &'a mut self,
         header: Header,
         message: ConsensusMessage<Request<S>>,
@@ -548,6 +565,10 @@ impl<S> Consensus<S>
                         return ConsensusStatus::Deciding;
                     }
                     ConsensusMessageKind::PrePrepare(request_batch) => {
+
+                        //Acquire the consensus lock as we have officially started the consensus
+                        self.consensus_guard = Some(self.consensus_lock.lock());
+
                         log.batch_meta().lock().pre_prepare_received_time = Utc::now();
 
                         let mut digests = request_batch_received(
@@ -796,7 +817,6 @@ impl<S> Consensus<S>
                         return ConsensusStatus::Deciding;
                     }
                     ConsensusMessageKind::Commit(d) => {
-
                         batch_digest = d.clone();
 
                         i + 1
@@ -812,6 +832,7 @@ impl<S> Consensus<S>
                     // notify core protocol
                     self.phase = ProtoPhase::Init;
                     log.batch_meta().lock().consensus_decision_time = Utc::now();
+
                     ConsensusStatus::Decided(batch_digest, &self.current[..self.batch_size])
                 } else {
                     self.phase = ProtoPhase::Committing(i);
@@ -822,7 +843,7 @@ impl<S> Consensus<S>
     }
 }
 
-impl<S> Deref for Consensus<S>
+impl<'a, S> Deref for Consensus<'a, S>
     where
         S: Service + Send + 'static,
         State<S>: Send + Clone + 'static,
@@ -837,7 +858,7 @@ impl<S> Deref for Consensus<S>
     }
 }
 
-impl<S> DerefMut for Consensus<S>
+impl<'a, S> DerefMut for Consensus<'a, S>
     where
         S: Service + Send + 'static,
         State<S>: Send + Clone + 'static,

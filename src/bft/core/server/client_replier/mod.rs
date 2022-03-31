@@ -1,5 +1,4 @@
 use std::ops::Deref;
-use std::sync::Arc;
 use crossbeam_channel::{Receiver, Sender};
 use crate::bft::communication::{NodeId, SendNode};
 use crate::bft::communication::message::{ReplyMessage, SystemMessage};

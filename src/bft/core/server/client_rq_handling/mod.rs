@@ -7,17 +7,19 @@ use std::time::{Duration, SystemTime};
 use chrono::{DateTime, Utc};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use log::debug;
+use parking_lot::lock_api::MutexGuard;
+use parking_lot::{Mutex, RawMutex};
 
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::channel::{ChannelRx, ChannelTx, new_bounded};
-use crate::bft::communication::message::{Header, Message, RequestMessage, StoredMessage, SystemMessage};
+use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, Message, RequestMessage, StoredMessage, SystemMessage};
 use crate::bft::communication::message::Message::System;
-use crate::bft::communication::Node;
+use crate::bft::communication::{Node, NodeId};
 use crate::bft::communication::peer_handling::NodePeers;
 use crate::bft::communication::serialize::SharedData;
-use crate::bft::consensus::log::Log;
 use crate::bft::consensus::log as logg;
-use crate::bft::core::server::Replica;
+use crate::bft::consensus::log::Log;
+use crate::bft::core::server::{Replica, ViewInfo};
 use crate::bft::executable::{Reply, Request, Service, State};
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::sync::Synchronizer;
@@ -33,6 +35,7 @@ pub struct RqProcessor<S: Service + 'static> {
     synchronizer: Arc<Synchronizer<S>>,
     timeouts: Arc<TimeoutsHandle<S>>,
     log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
+    consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
     cancelled: AtomicBool,
 }
 
@@ -44,7 +47,8 @@ const BATCH_CHANNEL_SIZE: usize = 128;
 impl<S: Service> RqProcessor<S> {
     pub fn new(node: Arc<Node<S::Data>>, sync: Arc<Synchronizer<S>>,
                log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
-               timeouts: Arc<TimeoutsHandle<S>>) -> Arc<Self> {
+               timeouts: Arc<TimeoutsHandle<S>>,
+               consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>) -> Arc<Self> {
         let (channel_tx, channel_rx) = crossbeam_channel::bounded(BATCH_CHANNEL_SIZE);
 
         Arc::new(Self {
@@ -54,6 +58,7 @@ impl<S: Service> RqProcessor<S> {
             timeouts,
             log,
             cancelled: AtomicBool::new(false),
+            consensus_lock,
         })
     }
 
@@ -64,83 +69,157 @@ impl<S: Service> RqProcessor<S> {
     ///Start this work
     pub fn start(self: Arc<Self>) -> JoinHandle<()> {
         std::thread::Builder::new().name(format!("Client RQ Handling {:?}", self.node_ref.id())).spawn(move || {
+            //TODO: Handle overflow
+
+            let mut overflowed = Vec::with_capacity(self.node_ref.batch_size());
+
+            let mut currently_accumulated = Vec::with_capacity(self.node_ref.batch_size());
+
+            let mut last_seq = Option::None;
 
             loop {
                 if self.cancelled.load(Ordering::Relaxed) {
                     break;
                 }
 
-                ///Receive the requests from the clients and process them
-                let messages = self.node_ref.receive_from_clients(None).unwrap();
-
                 //We only want to produce batches to the channel if we are the leader, as
                 //Only the leader will propose things
                 let mut is_leader = self.synchronizer.view().leader() == self.node_ref.id();
 
-                //debug!("{:?} // Received batch of {} messages from clients, processing them, is_leader? {}",
-                //    self.node_ref.id(), messages.len(), is_leader);
+                //We do this as we don't want to get stuck waiting for requests that might never arrive
+                //Or even just waiting for any type of request. We want to minimize the amount of time the
+                //Consensus is waiting for new requests
 
-                let mut final_batch = if is_leader {
-                    Some(Vec::with_capacity(messages.len()))
-                } else {
-                    None
-                };
+                //We don't need to do this for non leader replicas, as that would cause unnecessary strain as the
+                //Thread is in an infinite loop
+                if !is_leader || self.node_ref.rqs_len_from_clients() > 0 {
+                    ///Receive the requests from the clients and process them
+                    let messages = self.node_ref.receive_from_clients(None).unwrap();
 
-                let mut to_log = Vec::with_capacity(messages.len());
+                    //debug!("{:?} // Received batch of {} messages from clients, processing them, is_leader? {}",
+                    //    self.node_ref.id(), messages.len(), is_leader);
 
-                let lock_guard = self.log.latest_op().lock();
+                    let mut final_batch = if is_leader {
+                        Some(Vec::with_capacity(messages.len()))
+                    } else {
+                        None
+                    };
 
-                for message in messages {
-                    match message {
-                        Message::System(header, sysmsg) => {
-                            match sysmsg {
-                                SystemMessage::Request(req) => {
-                                    let key = logg::operation_key(&header, &req);
+                    let mut to_log = Vec::with_capacity(messages.len());
 
-                                    let current_seq_for_client = lock_guard.get(key)
-                                        .copied()
-                                        .unwrap_or(SeqNo::ZERO);
+                    let lock_guard = self.log.latest_op().lock();
 
-                                    if req.sequence_number() < current_seq_for_client {
-                                        //Avoid repeating requests for clients
-                                        continue;
-                                    }
+                    for message in messages {
+                        match message {
+                            Message::System(header, sysmsg) => {
+                                match sysmsg {
+                                    SystemMessage::Request(req) => {
+                                        let key = logg::operation_key(&header, &req);
 
-                                    match &mut final_batch {
-                                        None => {}
-                                        Some(batch) => {
-                                            batch.push(StoredMessage::new(header, req.clone()));
+                                        let current_seq_for_client = lock_guard.get(key)
+                                            .copied()
+                                            .unwrap_or(SeqNo::ZERO);
+
+                                        if req.sequence_number() < current_seq_for_client {
+                                            //Avoid repeating requests for clients
+                                            continue;
                                         }
-                                    }
 
-                                    //Store the message in the log in this thread.
-                                    to_log.push(StoredMessage::new(header, req));
-                                }
-                                SystemMessage::Reply(rep) => {
-                                    panic!("Received system reply msg")
-                                }
-                                _ => {
-                                    panic!("Received system message that was unexpected!");
+                                        match &mut final_batch {
+                                            None => {}
+                                            Some(batch) => {
+                                                batch.push(StoredMessage::new(header, req.clone()));
+                                            }
+                                        }
+
+                                        //Store the message in the log in this thread.
+                                        to_log.push(StoredMessage::new(header, req));
+                                    }
+                                    SystemMessage::Reply(rep) => {
+                                        panic!("Received system reply msg")
+                                    }
+                                    _ => {
+                                        panic!("Received system message that was unexpected!");
+                                    }
                                 }
                             }
-                        }
-                        _ => {
-                            panic!("Client sent a message that he should not have sent!");
+                            _ => {
+                                panic!("Client sent a message that he should not have sent!");
+                            }
                         }
                     }
+
+                    drop(lock_guard);
+
+                    match final_batch {
+                        None => {}
+                        Some(mut rqs) => {
+                            if currently_accumulated.len() + rqs.len() > self.node_ref.batch_size() {
+
+                                for _ in 0..self.node_ref.batch_size() - currently_accumulated.len() {
+                                    currently_accumulated.push(rqs.pop().unwrap());
+                                }
+
+                                overflowed.append(&mut rqs);
+
+                            } else {
+                                currently_accumulated.append(&mut rqs)
+                            }
+                        }
+                    }
+
+                    //TODO: If we are the leader, preemptively hash the preprepare message so we don't have
+                    //To wait for that?
+                    self.requests_received(DateTime::from(SystemTime::now()), to_log);
                 }
 
-                drop(lock_guard);
-
-                //TODO: If we are the leader, preemptively hash the preprepare message so we don't have
-                //To wait for that?
-                self.requests_received(DateTime::from(SystemTime::now()), to_log);
-
-                //Send the finished batches to the other thread
                 if is_leader {
-                    let tx = &self.batch_channel.0;
+                    //Attempt to propose new batch
+                    match self.consensus_lock.try_lock() {
+                        None => {
+                            //Currently executing the consensus, cannot propose new batch
+                        }
+                        Some(guard) => {
+                            let (seq, view) = *guard;
 
-                    tx.send(final_batch.unwrap());
+                            match &last_seq {
+                                None =>  {
+
+                                },
+                                Some(last_exec) => {
+                                    if *last_exec >= seq {
+                                        //We are still in the same consensus instance,
+                                        //Don't produce more pre prepares
+                                        continue
+                                    }
+                                }
+                            }
+
+                            last_seq = Some(seq);
+
+                            let message = SystemMessage::Consensus(ConsensusMessage::new(
+                                seq,
+                                view.sequence_number(),
+                                ConsensusMessageKind::PrePrepare(currently_accumulated),
+                            ));
+
+                            let mut new_overflow = Vec::with_capacity(self.node_ref.batch_size());
+
+                            if overflowed.len() > self.node_ref.batch_size() {
+                                let mut vec = overflowed[self.node_ref.batch_size()..].to_vec();
+
+                                new_overflow.append(&mut vec);
+                            }
+
+                            currently_accumulated = overflowed;
+
+                            overflowed = new_overflow;
+
+                            let targets = NodeId::targets(0..view.params().n());
+
+                            self.node_ref.broadcast(message, targets);
+                        }
+                    }
                 }
             }
         }).unwrap()

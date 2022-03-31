@@ -3,6 +3,7 @@
 
 use std::fmt::{Debug, Formatter};
 use std::io;
+use std::io::Write;
 use std::mem::MaybeUninit;
 use std::ptr::write;
 
@@ -33,10 +34,6 @@ use crate::bft::crypto::hash::{
 use crate::bft::ordering::{
     SeqNo,
     Orderable,
-};
-use crate::bft::communication::socket::{
-    SecureSocketSend,
-    SecureSocketRecv,
 };
 use crate::bft::consensus::log::CollectData;
 use crate::bft::communication::serialize::SharedData;
@@ -882,6 +879,25 @@ impl<'a> WireMessage<'a> {
         }
         if flush {
             w.flush().await?;
+        }
+
+        Ok(())
+    }
+
+    /// Serialize a `WireMessage` into an async writer.
+    pub fn write_to_sync<W: Write>(&self, mut w: W, flush: bool) -> io::Result<()> {
+        let mut buf = [0; Header::LENGTH];
+        self.header.serialize_into(&mut buf[..]).unwrap();
+
+        // FIXME: switch to vectored writes?
+        w.write_all(&buf[..]);
+
+        if self.payload.len() > 0 {
+            w.write_all(&self.payload);
+        }
+
+        if flush {
+            w.flush();
         }
 
         Ok(())

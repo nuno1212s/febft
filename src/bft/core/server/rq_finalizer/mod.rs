@@ -7,11 +7,8 @@ use intmap::IntMap;
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::message::{RequestMessage, StoredMessage};
 use crate::bft::communication::NodeId;
-use crate::bft::communication::serialize::SharedData;
 
 use crate::bft::consensus::log::{Info, Log, operation_key};
-use crate::bft::core::server::client_replier::ReplyHandle;
-use crate::bft::crypto::hash::Digest;
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UpdateBatch};
 use crate::bft::ordering::{Orderable, SeqNo};
 

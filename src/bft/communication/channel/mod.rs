@@ -1,6 +1,5 @@
 //! FIFO channels used to send messages between async tasks.
 
-use std::collections::LinkedList;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -13,14 +12,6 @@ use futures::select;
 use parking_lot::Mutex;
 
 use crate::bft::async_runtime as rt;
-use crate::bft::communication::message::{
-    ConsensusMessage,
-    Message,
-    ReplyMessage,
-    RequestMessage,
-    StoredMessage,
-    SystemMessage,
-};
 use crate::bft::error::*;
 
 ///TODO: This has to be reworked in order to incorporate

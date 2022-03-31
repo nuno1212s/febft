@@ -1,6 +1,6 @@
 //! Communication primitives for `febft`, such as wire message formats.
 
-use std::cell::RefCell;
+use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,15 +20,10 @@ use futures::io::{
     BufReader,
     BufWriter,
 };
-use futures::lock::Mutex;
 use futures_timer::Delay;
 use intmap::IntMap;
-use log::debug;
-use parking_lot::RwLock;
-use rustls::{
-    ClientConfig,
-    ServerConfig,
-};
+use parking_lot::{RwLock};
+use rustls::{ClientConfig, ServerConfig, Stream};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -41,12 +36,7 @@ use crate::bft::communication::serialize::{
     DigestData,
     SharedData,
 };
-use crate::bft::communication::socket::{
-    Listener,
-    SecureSocketRecv,
-    SecureSocketSend,
-    Socket,
-};
+use crate::bft::communication::socket::{Listener, ReplicaListener, ReplicaSocket, SecureSocketRecvClient, SecureSocketRecvReplica, SecureSocketSend, SecureSocketSendClient, SecureSocketSendReplica, Socket};
 use crate::bft::crypto::hash::Digest;
 use crate::bft::crypto::signature::{
     KeyPair,
@@ -151,10 +141,50 @@ enum PeerTx {
     // lock allows us to take ownership of a copy of the socket, so we
     // don't block the thread with the guard of the first lock waiting
     // on the second one
-    Client(Arc<RwLock<IntMap<Arc<Mutex<SecureSocketSend>>>>>),
+    Client {
+        first_cli: NodeId,
+        connected: Arc<RwLock<IntMap<SecureSocketSend<'static>>>>,
+    },
     // replicas don't need shared access to the hashmap, so
     // we only need one lock (to restrict I/O to one producer at a time)
-    Server(Arc<RwLock<IntMap<Arc<Mutex<SecureSocketSend>>>>>),
+    Server {
+        first_cli: NodeId,
+        connected: Arc<RwLock<IntMap<SecureSocketSend<'static>>>>,
+    },
+}
+
+impl PeerTx {
+    ///Add a tx peer connection to the registry
+    ///Requires knowing the first_cli
+    pub fn add_peer(&self, client_id: u64, socket: SecureSocketSend<'static>) {
+        match self {
+            PeerTx::Client { connected, .. } => {
+                let mut guard = connected.write();
+
+                guard.insert(client_id, socket);
+            }
+            PeerTx::Server { connected, .. } => {
+                let mut guard = connected.write();
+
+                guard.insert(client_id, socket);
+            }
+        }
+    }
+
+    pub fn find_peer(&self, client_id: u64) -> Option<&SecureSocketSend<'static>> {
+        match self {
+            PeerTx::Client { connected, .. } => {
+                let mut guard = connected.read();
+
+                guard.get(client_id)
+            }
+            PeerTx::Server { connected, .. } => {
+                let mut guard = connected.read();
+
+                guard.get(client_id)
+            }
+        }
+    }
 }
 
 struct NodeShared {
@@ -184,7 +214,15 @@ pub struct Node<D: SharedData + 'static> {
     shared: Arc<NodeShared>,
     peer_tx: PeerTx,
     connector: TlsConnector,
-    peer_addrs: IntMap<(SocketAddr, String)>,
+    peer_addrs: IntMap<PeerAddr>,
+}
+
+///Represents the server addresses of a peer
+///Clients will only have 1 address while replicas will have 2 addresses (1 for facing clients,
+/// 1 for facing replicas)
+struct PeerAddr {
+    client_addr: (SocketAddr, String),
+    replica_addr: Option<(SocketAddr, String)>,
 }
 
 /// Represents a configuration used to bootstrap a `Node`.
@@ -211,15 +249,19 @@ pub struct NodeConfig {
     ///
     /// For any `NodeConfig` assigned to `c`, the IP address of
     /// `c.addrs[&c.id]` should be equivalent to `localhost`.
-    pub addrs: IntMap<(SocketAddr, String)>,
+    pub addrs: IntMap<PeerAddr>,
     /// The list of public keys of all nodes in the system.
     pub pk: IntMap<PublicKey>,
     /// The secret key of this particular `Node`.
     pub sk: KeyPair,
-    /// The TLS configuration used to connect to peer nodes.
+    /// The TLS configuration used to connect to replica nodes. (from client nodes)
     pub client_config: ClientConfig,
-    /// The TLS configuration used to accept connections from peer nodes.
+    /// The TLS configuration used to accept connections from client nodes.
     pub server_config: ServerConfig,
+    ///The TLS configuration used to accept connections from replica nodes
+    pub replica_server_config: rustls::ServerConfig,
+    ///The TLS configuration used to connect to replica nodes (from replica nodes)
+    pub replica_client_config: rustls::ClientConfig,
 }
 
 // max no. of messages allowed in the channel
@@ -259,19 +301,42 @@ impl<D> Node<D>
                 .wrapped(ErrorKind::Communication);
         }
 
-        let addr = cfg.addrs.get(id.into()).unwrap().0;
-        
-        let listener = socket::bind(addr).await
-            .wrapped_msg(ErrorKind::Communication, format!("Failed to bind to address {:?}", addr).as_str())?;
+        let peer_addr = cfg.addrs.get(id.into()).unwrap();
+
+        let tokio_server_addr = peer_addr.client_addr.0.clone();
+
+        ///Initialize the client facing server
+        let listener = socket::bind(tokio_server_addr).await
+            .wrapped_msg(ErrorKind::Communication, format!("Failed to bind to address {:?}", tokio_server_addr).as_str())?;
+
+        ///Initialize the replica facing server
+        let replica_listener = if id >= cfg.first_cli {
+            //Clients don't have a replica facing server
+            None
+        } else {
+            let server_addr = peer_addr.replica_addr.as_ref().unwrap().0.clone();
+
+            Some(socket::bind_replica_server(server_addr)
+                .wrapped_msg(ErrorKind::Communication, format!("Failed to bind to address {:?}", server_addr).as_str())?)
+        };
 
         let acceptor: TlsAcceptor = cfg.server_config.into();
         let connector: TlsConnector = cfg.client_config.into();
 
+        let replica_acceptor = Arc::new(cfg.replica_server_config);
+        let replica_connector = Arc::new(cfg.replica_client_config);
+
         // node def
         let peer_tx = if id >= cfg.first_cli {
-            PeerTx::Client(Arc::new(RwLock::new(IntMap::new())))
+            PeerTx::Client {
+                first_cli: cfg.first_cli,
+                connected: Arc::new(RwLock::new(IntMap::new())),
+            }
         } else {
-            PeerTx::Server(Arc::new(RwLock::new(IntMap::new())))
+            PeerTx::Server {
+                first_cli: cfg.first_cli,
+                connected: Arc::new(RwLock::new(IntMap::new())),
+            }
         };
 
         let shared = Arc::new(NodeShared {
@@ -297,17 +362,29 @@ impl<D> Node<D>
 
         let rx_node_clone = node.clone();
 
-        // rx side (accept conns from replica)
-        rt::spawn(rx_node_clone.rx_side_accept(cfg.first_cli, id, listener, acceptor));
+        // rx side (accept conns from clients)
+        rt::spawn(rx_node_clone.clone().rx_side_accept(cfg.first_cli, id, listener, acceptor));
+
+        match replica_listener {
+            None => {}
+            Some(replica_listener) => {
+                let first_cli = cfg.first_cli;
+
+                std::thread::Builder::new().name(format!("Replica connection acceptor"))
+                    .spawn(move || {
+                        rx_node_clone.rx_side_accept_sync(first_cli, id, replica_listener, replica_acceptor);
+                    });
+            }
+        }
 
         // tx side (connect to replica)
         let mut rng = prng::State::new();
 
-        node.clone().tx_side_connect(
+        node.clone().tx_side_connect_sync(
             cfg.n as u32,
             cfg.first_cli,
             id,
-            connector,
+            replica_connector,
             &node.peer_addrs,
             &mut rng,
         );
@@ -326,6 +403,10 @@ impl<D> Node<D>
 
         // success
         Ok((node, rogue))
+    }
+
+    pub fn batch_size(&self) -> usize {
+        self.node_handling.batch_size()
     }
 
     fn resolve_client_rx_connection(&self, node_id: NodeId) -> Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
@@ -440,14 +521,26 @@ impl<D> Node<D>
             // send
             if my_id == target {
                 // Right -> our turn
-                rt::spawn(async move {
-                    send_to.value(Right((message, nonce, digest, buf))).await;
+
+                //Send to myself, always synchronous since only replicas send to themselves
+                threadpool::execute(move || {
+                    send_to.value_sync(Right((message, nonce, digest, buf)));
                 });
             } else {
+
                 // Left -> peer turn
-                rt::spawn(async move {
-                    send_to.value(Left((nonce, digest, buf))).await;
-                });
+                match send_to.socket_type().unwrap() {
+                    SecureSocketSend::Client(_) => {
+                        rt::spawn(async move {
+                            send_to.value(Left((nonce, digest, buf))).await;
+                        });
+                    }
+                    SecureSocketSend::Replica(_) => {
+                        threadpool::execute(move || {
+                            send_to.value_sync(Left((nonce, digest, buf)));
+                        });
+                    }
+                }
             }
         });
     }
@@ -518,12 +611,14 @@ impl<D> Node<D>
                     SerializedSendTo::Me { id, .. } => *id,
                     _ => unreachable!(),
                 };
+
                 let (header, message) = messages
                     .remove(id.into())
                     .map(|stored| stored.into_inner())
                     .unwrap();
-                rt::spawn(async move {
-                    send_to.value(header, message).await;
+
+                threadpool::execute(move || {
+                    send_to.value_sync(header, message);
                 });
             }
 
@@ -537,9 +632,19 @@ impl<D> Node<D>
                     .remove(id.into())
                     .map(|stored| stored.into_inner())
                     .unwrap();
-                rt::spawn(async move {
-                    send_to.value(header, message).await;
-                });
+
+                match send_to.socket_type().unwrap() {
+                    SecureSocketSend::Client(_) => {
+                        rt::spawn(async move {
+                            send_to.value(header, message).await;
+                        });
+                    }
+                    SecureSocketSend::Replica(_) => {
+                        threadpool::execute(move || {
+                            send_to.value_sync(header, message);
+                        });
+                    }
+                }
             }
         });
     }
@@ -562,19 +667,30 @@ impl<D> Node<D>
             // send to ourselves
             if let Some(mut send_to) = my_send_to {
                 let buf = buf.clone();
-                rt::spawn(async move {
+
+                threadpool::execute(move || {
                     // Right -> our turn
-                    send_to.value(Right((message, nonce, digest, buf))).await;
+                    send_to.value_sync(Right((message, nonce, digest, buf)));
                 });
             }
 
             // send to others
             for mut send_to in other_send_tos {
                 let buf = buf.clone();
-                rt::spawn(async move {
-                    // Left -> peer turn
-                    send_to.value(Left((nonce, digest, buf))).await;
-                });
+
+                match send_to.socket_type().unwrap() {
+                    SecureSocketSend::Client(_) => {
+                        rt::spawn(async move {
+                            // Left -> peer turn
+                            send_to.value(Left((nonce, digest, buf))).await;
+                        });
+                    }
+                    SecureSocketSend::Replica(_) => {
+                        threadpool::execute(move || {
+                            send_to.value_sync(Left((nonce, digest, buf)));
+                        });
+                    }
+                }
             }
 
             // NOTE: an either enum is used, which allows
@@ -594,32 +710,14 @@ impl<D> Node<D>
         let mut my_send_to = None;
         let mut other_send_tos = SendTos::new();
 
-        match peer_tx {
-            PeerTx::Client(ref lock) => {
-                let map = lock.read();
-
-                self.create_send_tos(
-                    my_id,
-                    shared,
-                    &*map,
-                    targets,
-                    &mut my_send_to,
-                    &mut other_send_tos,
-                );
-            }
-            PeerTx::Server(ref lock) => {
-                let map = lock.read();
-
-                self.create_send_tos(
-                    my_id,
-                    shared,
-                    &*map,
-                    targets,
-                    &mut my_send_to,
-                    &mut other_send_tos,
-                );
-            }
-        };
+        self.create_send_tos(
+            my_id,
+            shared,
+            peer_tx,
+            targets,
+            &mut my_send_to,
+            &mut other_send_tos,
+        );
 
         (my_send_to, other_send_tos)
     }
@@ -634,28 +732,10 @@ impl<D> Node<D>
         let mut my_send_to = None;
         let mut other_send_tos = SerializedSendTos::new();
 
-        match peer_tx {
-            PeerTx::Client(ref lock) => {
-                let map = lock.read();
-                self.create_serialized_send_tos(
-                    my_id,
-                    &*map,
-                    headers,
-                    &mut my_send_to,
-                    &mut other_send_tos,
-                );
-            }
-            PeerTx::Server(ref lock) => {
-                let map = lock.read();
-                self.create_serialized_send_tos(
-                    my_id,
-                    &*map,
-                    headers,
-                    &mut my_send_to,
-                    &mut other_send_tos,
-                );
-            }
-        };
+        self.create_serialized_send_tos(my_id,
+                                        peer_tx, headers,
+                                        &mut my_send_to,
+                                        &mut other_send_tos);
 
         (my_send_to, other_send_tos)
     }
@@ -664,7 +744,7 @@ impl<D> Node<D>
     fn create_serialized_send_tos<'a>(
         &self,
         my_id: NodeId,
-        map: &IntMap<Arc<Mutex<SecureSocketSend>>>,
+        peer_tx: &PeerTx,
         headers: impl Iterator<Item=&'a Header>,
         mine: &mut Option<SerializedSendTo<D>>,
         others: &mut SerializedSendTos<D>,
@@ -679,7 +759,8 @@ impl<D> Node<D>
                 };
                 *mine = Some(s);
             } else {
-                let sock = Arc::clone(map.get(id.into()).unwrap());
+                let sock = peer_tx.find_peer(id.id() as u64).unwrap().clone();
+
                 let s = SerializedSendTo::Peers {
                     id,
                     our_id: my_id,
@@ -687,6 +768,7 @@ impl<D> Node<D>
                     //Get the RX channel for the peer to mark as DCed if it fails
                     tx: self.resolve_client_rx_connection(id),
                 };
+
                 others.push(s);
             }
         }
@@ -697,7 +779,7 @@ impl<D> Node<D>
         &self,
         my_id: NodeId,
         shared: Option<&Arc<NodeShared>>,
-        map: &IntMap<Arc<Mutex<SecureSocketSend>>>,
+        tx_peers: &PeerTx,
         targets: impl Iterator<Item=NodeId>,
         mine: &mut Option<SendTo<D>>,
         others: &mut SendTos<D>,
@@ -712,7 +794,8 @@ impl<D> Node<D>
                 };
                 *mine = Some(s);
             } else {
-                let sock = Arc::clone(map.get(id.into()).unwrap());
+                let sock = tx_peers.find_peer(id.id() as u64).unwrap().clone();
+
                 let s = SendTo::Peers {
                     sock,
                     my_id,
@@ -722,6 +805,7 @@ impl<D> Node<D>
                     tx: self.resolve_client_rx_connection(id),
                     shared: shared.map(|sh| Arc::clone(sh)),
                 };
+
                 others.push(s);
             }
         }
@@ -744,16 +828,8 @@ impl<D> Node<D>
                 tx: cli,
             }
         } else {
-            let sock = match peer_tx {
-                PeerTx::Client(ref lock) => {
-                    let map = lock.read();
-                    Arc::clone(map.get(peer_id.into()).unwrap())
-                }
-                PeerTx::Server(ref lock) => {
-                    let map = lock.read();
-                    Arc::clone(map.get(peer_id.into()).unwrap())
-                }
-            };
+            let sock = peer_tx.find_peer(peer_id.id() as u64).unwrap().clone();
+
             SendTo::Peers {
                 flush,
                 sock,
@@ -765,6 +841,11 @@ impl<D> Node<D>
         }
     }
 
+    //Get how many pending messages are in the requests channel
+    pub fn rqs_len_from_clients(&self) -> usize {
+        self.node_handling.rqs_len_from_clients()
+    }
+
     //Receive messages from the clients we are connected to
     pub fn receive_from_clients(&self, timeout: Option<Duration>) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
         self.node_handling.receive_from_clients(timeout)
@@ -774,30 +855,366 @@ impl<D> Node<D>
     pub fn receive_from_replicas(&self) -> Result<Message<D::State, D::Request, D::Reply>> {
         self.node_handling.receive_from_replicas()
     }
-    /// Method called upon a `Message::ConnectedTx`.
-    /// Registers the newly created transmission socket to the peer
-    pub fn handle_connected_tx(&self, peer_id: NodeId, sock: SecureSocketSend) {
-        //debug!("Connected TX to peer {:?} from peer {:?}", peer_id, self.id);
 
-        match &self.peer_tx {
-            ///If we are a replica?
-            PeerTx::Server(ref lock) => {
-                let mut peer_tx = lock.write();
-                peer_tx.insert(peer_id.into(), Arc::new(Mutex::new(sock)));
+    /// Registers the newly created transmission socket to the peer
+    pub fn handle_connected_tx(&self, peer_id: NodeId, sock: SecureSocketSend<'static>) {
+        //debug!("Connected TX to peer {:?} from peer {:?}", peer_id, self.id);
+        self.peer_tx.add_peer(peer_id.id() as u64, sock);
+    }
+
+    ///Connect to all other replicas in the cluster
+    #[inline]
+    fn tx_side_connect_sync(
+        self: Arc<Self>,
+        n: u32,
+        first_cli: NodeId,
+        my_id: NodeId,
+        connector: Arc<rustls::ClientConfig>,
+        addrs: &IntMap<PeerAddr>,
+        rng: &mut prng::State,
+    ) {
+        for peer_id in NodeId::targets_u32(0..n).filter(|&id| id != my_id) {
+            // FIXME: this line can crash the program if the user
+            // provides an invalid HashMap, maybe return a Result<()>
+            // from this function
+            let addr = addrs.get(peer_id.id() as u64).unwrap().clone();
+            let connector = connector.clone();
+            let nonce = rng.next_state();
+
+            let peer_addr = addr.replica_addr.unwrap().clone();
+            //println!("Attempting to connect to peer {:?} with address {:?} from node {:?}", peer_id, addr, my_id);
+
+            let arc = self.clone();
+
+            threadpool::execute(move || {
+                arc.tx_side_connect_task_sync(my_id, first_cli, peer_id,
+                                              nonce, connector, peer_addr)
+            });
+        }
+    }
+
+    ///Connect to a particular replica
+    fn tx_side_connect_task_sync(
+        self: Arc<Self>,
+        my_id: NodeId,
+        first_cli: NodeId,
+        peer_id: NodeId,
+        nonce: u64,
+        connector: Arc<rustls::ClientConfig>,
+        (addr, hostname): (SocketAddr, String),
+    ) {
+        const SECS: u64 = 1;
+        const RETRY: usize = 3 * 60;
+
+        // NOTE:
+        // ========
+        //
+        // 1) not an issue if `tx` is closed, this is not a
+        // permanently running task, so channel send failures
+        // are tolerated
+        //
+        // 2) try to connect up to `RETRY` times, then announce
+        // failure with a channel send op
+        for _try in 0..RETRY {
+            if let Ok(mut sock) = socket::connect_replica(addr) {
+                // create header
+                let (header, _) = WireMessage::new(
+                    my_id,
+                    peer_id,
+                    &[],
+                    nonce,
+                    None,
+                    None,
+                ).into_inner();
+
+                // serialize header
+                let mut buf = [0; Header::LENGTH];
+                header.serialize_into(&mut buf[..]).unwrap();
+
+                // send header
+                if let Err(_) = sock.write_all(&buf[..]) {
+                    // errors writing -> faulty connection;
+                    // drop this socket
+                    break;
+                }
+
+                if let Err(_) = sock.flush() {
+                    // errors flushing -> faulty connection;
+                    // drop this socket
+                    break;
+                }
+
+                // TLS handshake; drop connection if it fails
+                let sock = if peer_id >= first_cli || my_id >= first_cli {
+                    SecureSocketSendReplica::Plain(sock)
+                } else {
+                    let dns_ref = webpki::DNSNameRef::try_from_ascii_str(hostname.as_str()).expect("Failed to parse DNS hostname");
+
+                    let mut session = rustls::ClientSession::new(&connector, dns_ref);
+
+                    let stream = Stream::new(&mut session, &mut sock);
+
+                    SecureSocketSendReplica::Tls {
+                        session,
+                        socket: sock,
+                        stream,
+                    }
+                };
+
+                let final_sock = SecureSocketSend::Replica(Arc::new(parking_lot::Mutex::new(sock)));
+
+                // success
+                self.handle_connected_tx(peer_id, final_sock);
+
+                //println!("Ended connection attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
+                return;
             }
-            ///If we are a client?
-            PeerTx::Client(ref lock) => {
-                let mut peer_tx = lock.write();
-                peer_tx.insert(peer_id.into(), Arc::new(Mutex::new(sock)));
+
+            // sleep for `SECS` seconds and retry
+            std::thread::sleep(Duration::from_secs(SECS));
+        }
+    }
+
+    async fn tx_side_connect_task(
+        self: Arc<Self>,
+        my_id: NodeId,
+        first_cli: NodeId,
+        peer_id: NodeId,
+        nonce: u64,
+        connector: TlsConnector,
+        (addr, hostname): (SocketAddr, String),
+    ) {
+        const SECS: u64 = 1;
+        const RETRY: usize = 3 * 60;
+
+        // NOTE:
+        // ========
+        //
+        // 1) not an issue if `tx` is closed, this is not a
+        // permanently running task, so channel send failures
+        // are tolerated
+        //
+        // 2) try to connect up to `RETRY` times, then announce
+        // failure with a channel send op
+        for _try in 0..RETRY {
+            //println!("Trying attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
+            if let Ok(mut sock) = socket::connect(addr).await {
+                // create header
+                let (header, _) = WireMessage::new(
+                    my_id,
+                    peer_id,
+                    &[],
+                    nonce,
+                    None,
+                    None,
+                ).into_inner();
+
+                // serialize header
+                let mut buf = [0; Header::LENGTH];
+                header.serialize_into(&mut buf[..]).unwrap();
+
+                // send header
+                if let Err(_) = sock.write_all(&buf[..]).await {
+                    // errors writing -> faulty connection;
+                    // drop this socket
+                    break;
+                }
+                if let Err(_) = sock.flush().await {
+                    // errors flushing -> faulty connection;
+                    // drop this socket
+                    break;
+                }
+
+                // TLS handshake; drop connection if it fails
+                let sock = if peer_id >= first_cli || my_id >= first_cli {
+                    SecureSocketSendClient::Plain(BufWriter::new(sock))
+                } else {
+                    match connector.connect(hostname, sock).await {
+                        Ok(s) => SecureSocketSendClient::Tls(s),
+                        Err(_) => break,
+                    }
+                };
+
+                let final_sock = SecureSocketSend::Client(
+                    Arc::new(futures::lock::Mutex::new(sock)));
+
+                // success
+                self.handle_connected_tx(peer_id, final_sock);
+
+                //println!("Ended connection attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
+                return;
+            }
+
+            // sleep for `SECS` seconds and retry
+            Delay::new(Duration::from_secs(SECS)).await;
+        }
+
+        // announce we have failed to connect to the peer node
+        //if we fail to connect, then just ignore
+        //tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
+    }
+
+    fn rx_side_accept_sync(
+        self: Arc<Self>,
+        first_cli: NodeId,
+        my_id: NodeId,
+        listener: ReplicaListener,
+        acceptor: Arc<ServerConfig>,
+    ) {
+        loop {
+            if let Ok(sock) = listener.accept() {
+                let replica_acceptor = acceptor.clone();
+
+                std::thread::Builder::new().name(format!("Replica Receiver Thread"))
+                    .spawn(move || {
+                        self.clone().rx_side_establish_conn_task_sync(first_cli, my_id, replica_acceptor, sock);
+                    });
             }
         }
     }
 
-    /// Method called upon a `Message::ConnectedRx`.
+    // TODO: check if we have terminated the node, and exit
+    async fn rx_side_accept(
+        self: Arc<Self>,
+        first_cli: NodeId,
+        my_id: NodeId,
+        listener: Listener,
+        acceptor: TlsAcceptor,
+    ) {
+        loop {
+            if let Ok(sock) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                rt::spawn(self.clone().rx_side_establish_conn_task(first_cli, my_id, acceptor, sock));
+            }
+        }
+    }
+
+    /// performs a cryptographic handshake with a peer node;
+    /// header doesn't need to be signed, since we won't be
+    /// storing this message in the log
+    /// So the same as [`rx_side_accept_task()`] but synchronously.
+    fn rx_side_establish_conn_task_sync(self: Arc<Self>,
+                                        first_cli: NodeId,
+                                        my_id: NodeId,
+                                        acceptor: Arc<ServerConfig>,
+                                        mut sock: ReplicaSocket) {
+        let mut buf_header = [0; Header::LENGTH];
+
+        // this loop is just a trick;
+        // the `break` instructions act as a `goto` statement
+        loop {
+            // read the peer's header
+            if let Err(_) = sock.read_exact(&mut buf_header[..]) {
+                // errors reading -> faulty connection;
+                // drop this socket
+                break;
+            }
+
+            //println!("Node {:?} received connection from node", my_id);
+
+            // we are passing the correct length, safe to use unwrap()
+            let header = Header::deserialize_from(&buf_header[..]).unwrap();
+
+            // extract peer id
+            let peer_id = match WireMessage::from_parts(header, &[]) {
+                // drop connections from other clis if we are a cli
+                Ok(wm) if wm.header().from() >= first_cli && my_id >= first_cli => break,
+                // drop connections to the wrong dest
+                Ok(wm) if wm.header().to() != my_id => break,
+                // accept all other conns
+                Ok(wm) => wm.header().from(),
+                // drop connections with invalid headers
+                Err(_) => break,
+            };
+
+            //println!("Node {:?} received connection from node {:?}", my_id, peer_id);
+
+            // TLS handshake; drop connection if it fails
+            let sock = if peer_id >= first_cli || my_id >= first_cli {
+                SecureSocketRecvReplica::Plain(sock)
+            } else {
+                let mut tls_session = rustls::ServerSession::new(&acceptor);
+
+                let stream = rustls::Stream::new(&mut tls_session, &mut sock);
+
+                SecureSocketRecvReplica::Tls {
+                    socket: sock,
+                    session: tls_session,
+                    stream,
+                }
+            };
+
+            self.handle_connected_rx_sync(peer_id, sock);
+
+            return;
+        }
+    }
+
+    // performs a cryptographic handshake with a peer node;
+    // header doesn't need to be signed, since we won't be
+    // storing this message in the log
+    async fn rx_side_establish_conn_task(
+        self: Arc<Self>,
+        first_cli: NodeId,
+        my_id: NodeId,
+        acceptor: TlsAcceptor,
+        mut sock: Socket,
+    ) {
+        let mut buf_header = [0; Header::LENGTH];
+
+        // this loop is just a trick;
+        // the `break` instructions act as a `goto` statement
+        loop {
+            // read the peer's header
+            if let Err(_) = sock.read_exact(&mut buf_header[..]).await {
+                // errors reading -> faulty connection;
+                // drop this socket
+                break;
+            }
+
+            //println!("Node {:?} received connection from node", my_id);
+
+            // we are passing the correct length, safe to use unwrap()
+            let header = Header::deserialize_from(&buf_header[..]).unwrap();
+
+            // extract peer id
+            let peer_id = match WireMessage::from_parts(header, &[]) {
+                // drop connections from other clis if we are a cli
+                Ok(wm) if wm.header().from() >= first_cli && my_id >= first_cli => break,
+                // drop connections to the wrong dest
+                Ok(wm) if wm.header().to() != my_id => break,
+                // accept all other conns
+                Ok(wm) => wm.header().from(),
+                // drop connections with invalid headers
+                Err(_) => break,
+            };
+
+            //println!("Node {:?} received connection from node {:?}", my_id, peer_id);
+
+            // TLS handshake; drop connection if it fails
+            let sock = if peer_id >= first_cli || my_id >= first_cli {
+                SecureSocketRecvClient::Plain(BufReader::new(sock))
+            } else {
+                match acceptor.accept(sock).await {
+                    Ok(s) => SecureSocketRecvClient::Tls(s),
+                    Err(_) => break,
+                }
+            };
+
+            self.handle_connected_rx(peer_id, sock).await;
+            //tx.send(Message::ConnectedRx(peer_id, sock)).await.unwrap_or(());
+
+            return;
+        }
+
+        // announce we have failed to connect to the peer node
+        //tx.send(Message::DisconnectedRx(None)).await.unwrap_or(());
+    }
+
     /// Handles client connections
-    pub async fn handle_connected_rx(self: Arc<Self>, peer_id: NodeId, mut sock: SecureSocketRecv) {
+    pub async fn handle_connected_rx(self: Arc<Self>, peer_id: NodeId, mut sock: SecureSocketRecvClient) {
         // we are a server node
-        if let PeerTx::Server(_) = &self.peer_tx {
+        if let PeerTx::Server { .. } = &self.peer_tx {
             // the node whose conn we accepted is a client
             // and we aren't connected to it yet
             if peer_id >= self.first_cli {
@@ -817,7 +1234,7 @@ impl<D> Node<D>
                     peer_id,
                     nonce,
                     self.connector.clone(),
-                    addr,
+                    addr.client_addr.clone(),
                 ));
             }
         }
@@ -888,184 +1305,67 @@ impl<D> Node<D>
         //tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
     }
 
-    #[inline]
-    fn tx_side_connect(
-        self: Arc<Self>,
-        n: u32,
-        first_cli: NodeId,
-        my_id: NodeId,
-        connector: TlsConnector,
-        addrs: &IntMap<(SocketAddr, String)>,
-        rng: &mut prng::State,
-    ) {
-        for peer_id in NodeId::targets_u32(0..n).filter(|&id| id != my_id) {
-            // FIXME: this line can crash the program if the user
-            // provides an invalid HashMap, maybe return a Result<()>
-            // from this function
-            let addr = addrs.get(peer_id.into()).unwrap().clone();
-            let connector = connector.clone();
-            let nonce = rng.next_state();
+    /// Handles replica connections, reading from stream and pushing message into the correct queue
+    pub fn handle_connected_rx_sync(self: Arc<Self>, peer_id: NodeId, mut sock: SecureSocketRecvReplica) {
 
-            //println!("Attempting to connect to peer {:?} with address {:?} from node {:?}", peer_id, addr, my_id);
+        //We don't need to reply to the connection as that will automatically be done by the connect tasks
+        //(To the replicas)
+        let client = self.node_handling.init_peer_conn(peer_id.clone());
 
-            let arc = self.clone();
+        let mut buf = SmallVec::<[u8; 16384]>::new();
 
-            rt::spawn(arc.tx_side_connect_task(my_id, first_cli, peer_id,
-                                               nonce, connector, addr));
-        }
-    }
-
-    async fn tx_side_connect_task(
-        self: Arc<Self>,
-        my_id: NodeId,
-        first_cli: NodeId,
-        peer_id: NodeId,
-        nonce: u64,
-        connector: TlsConnector,
-        (addr, hostname): (SocketAddr, String),
-    ) {
-        const SECS: u64 = 1;
-        const RETRY: usize = 3 * 60;
-
-        // NOTE:
-        // ========
-        //
-        // 1) not an issue if `tx` is closed, this is not a
-        // permanently running task, so channel send failures
-        // are tolerated
-        //
-        // 2) try to connect up to `RETRY` times, then announce
-        // failure with a channel send op
-        for _try in 0..RETRY {
-            //println!("Trying attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
-            if let Ok(mut sock) = socket::connect(addr).await {
-                // create header
-                let (header, _) = WireMessage::new(
-                    my_id,
-                    peer_id,
-                    &[],
-                    nonce,
-                    None,
-                    None,
-                ).into_inner();
-
-                // serialize header
-                let mut buf = [0; Header::LENGTH];
-                header.serialize_into(&mut buf[..]).unwrap();
-
-                // send header
-                if let Err(_) = sock.write_all(&buf[..]).await {
-                    // errors writing -> faulty connection;
-                    // drop this socket
-                    break;
-                }
-                if let Err(_) = sock.flush().await {
-                    // errors flushing -> faulty connection;
-                    // drop this socket
-                    break;
-                }
-
-                // TLS handshake; drop connection if it fails
-                let sock = if peer_id >= first_cli || my_id >= first_cli {
-                    SecureSocketSend::Plain(BufWriter::new(sock))
-                } else {
-                    match connector.connect(hostname, sock).await {
-                        Ok(s) => SecureSocketSend::Tls(s),
-                        Err(_) => break,
-                    }
-                };
-
-                // success
-                self.handle_connected_tx(peer_id, sock);
-
-                //println!("Ended connection attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
-                return;
-            }
-
-            // sleep for `SECS` seconds and retry
-            Delay::new(Duration::from_secs(SECS)).await;
-        }
-
-        // announce we have failed to connect to the peer node
-        //if we fail to connect, then just ignore
-        //tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
-    }
-
-    // TODO: check if we have terminated the node, and exit
-    async fn rx_side_accept(
-        self: Arc<Self>,
-        first_cli: NodeId,
-        my_id: NodeId,
-        listener: Listener,
-        acceptor: TlsAcceptor,
-    ) {
+        // TODO
+        //  - verify signatures???
+        //  - exit condition (when the `Replica` or `Client` is dropped)
         loop {
-            if let Ok(sock) = listener.accept().await {
-                let acceptor = acceptor.clone();
-                rt::spawn(self.clone().rx_side_accept_task(first_cli, my_id, acceptor, sock));
-            }
-        }
-    }
+            // reserve space for header
+            buf.clear();
+            buf.resize(Header::LENGTH, 0);
 
-    // performs a cryptographic handshake with a peer node;
-    // header doesn't need to be signed, since we won't be
-    // storing this message in the log
-    async fn rx_side_accept_task(
-        self: Arc<Self>,
-        first_cli: NodeId,
-        my_id: NodeId,
-        acceptor: TlsAcceptor,
-        mut sock: Socket,
-    ) {
-        let mut buf_header = [0; Header::LENGTH];
-
-        // this loop is just a trick;
-        // the `break` instructions act as a `goto` statement
-        loop {
             // read the peer's header
-            if let Err(_) = sock.read_exact(&mut buf_header[..]).await {
+            if let Err(_) = sock.read_exact(&mut buf[..Header::LENGTH]) {
                 // errors reading -> faulty connection;
                 // drop this socket
                 break;
             }
 
-            //println!("Node {:?} received connection from node", my_id);
-
             // we are passing the correct length, safe to use unwrap()
-            let header = Header::deserialize_from(&buf_header[..]).unwrap();
+            let header = Header::deserialize_from(&buf[..Header::LENGTH]).unwrap();
 
-            // extract peer id
-            let peer_id = match WireMessage::from_parts(header, &[]) {
-                // drop connections from other clis if we are a cli
-                Ok(wm) if wm.header().from() >= first_cli && my_id >= first_cli => break,
-                // drop connections to the wrong dest
-                Ok(wm) if wm.header().to() != my_id => break,
-                // accept all other conns
-                Ok(wm) => wm.header().from(),
-                // drop connections with invalid headers
-                Err(_) => break,
-            };
+            // reserve space for message
+            //
+            // FIXME: add a max bound on the message payload length;
+            // if the length is exceeded, reject connection;
+            // the bound can be application defined, i.e.
+            // returned by `SharedData`
+            buf.clear();
+            buf.reserve(header.payload_length());
+            buf.resize(header.payload_length(), 0);
 
-            //println!("Node {:?} received connection from node {:?}", my_id, peer_id);
+            // read the peer's payload
+            if let Err(_) = sock.read_exact(&mut buf[..header.payload_length()]) {
+                // errors reading -> faulty connection;
+                // drop this socket
+                break;
+            }
 
-            // TLS handshake; drop connection if it fails
-            let sock = if peer_id >= first_cli || my_id >= first_cli {
-                SecureSocketRecv::Plain(BufReader::new(sock))
-            } else {
-                match acceptor.accept(sock).await {
-                    Ok(s) => SecureSocketRecv::Tls(s),
-                    Err(_) => break,
+            // deserialize payload
+            let message = match D::deserialize_message(&buf[..header.payload_length()]) {
+                Ok(m) => m,
+                Err(_) => {
+                    // errors deserializing -> faulty connection;
+                    // drop this socket
+                    break;
                 }
             };
 
-            self.handle_connected_rx(peer_id, sock).await;
-            //tx.send(Message::ConnectedRx(peer_id, sock)).await.unwrap_or(());
+            let msg = Message::System(header, message);
 
-            return;
+            client.push_request_sync(msg);
         }
 
-        // announce we have failed to connect to the peer node
-        //tx.send(Message::DisconnectedRx(None)).await.unwrap_or(());
+        // announce we have disconnected
+        client.disconnect();
     }
 }
 
@@ -1211,7 +1511,7 @@ enum SendTo<D: SharedData> {
         // shared data
         shared: Option<Arc<NodeShared>>,
         // handle to socket
-        sock: Arc<Mutex<SecureSocketSend>>,
+        sock: SecureSocketSend<'static>,
         // a handle to the message channel of the corresponding client
         tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     },
@@ -1230,7 +1530,7 @@ enum SerializedSendTo<D: SharedData> {
         //Our own ID
         our_id: NodeId,
         // handle to socket
-        sock: Arc<Mutex<SecureSocketSend>>,
+        sock: SecureSocketSend<'static>,
         // a handle to the message channel of the corresponding client
         tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     },
@@ -1243,6 +1543,56 @@ impl<D> SendTo<D>
         D::Request: Send + 'static,
         D::Reply: Send + 'static,
 {
+    fn socket_type(&self) -> Option<&SecureSocketSend<'static>> {
+        match self {
+            SendTo::Me { .. } => {
+                None
+            }
+            SendTo::Peers { sock, .. } => {
+                Some(sock)
+            }
+        }
+    }
+
+    fn value_sync(self,
+                  m: Either<(u64, Digest, Buf), (SystemMessage<D::State, D::Request, D::Reply>, u64, Digest, Buf)>) {
+        match self {
+            SendTo::Me { my_id, shared: ref sh, tx } => {
+                let key = sh.as_ref().map(|ref sh| &sh.my_key);
+
+                if let Right((m, n, d, b)) = m {
+                    Self::me_sync(my_id, m, n, d, b, key, tx);
+                } else {
+                    // optimize code path
+                    unreachable!()
+                }
+            }
+            SendTo::Peers {
+                flush, my_id, peer_id,
+                shared: ref sh, sock, tx
+            } => {
+
+                //Unwrap the socket that must be a async socket
+                let sock = match sock {
+                    SecureSocketSend::Client(_) => {
+                        panic!("Attempted to send synchronously through asynchronous channel")
+                    }
+                    SecureSocketSend::Replica(sock) => {
+                        sock
+                    }
+                };
+
+                let key = sh.as_ref().map(|ref sh| &sh.my_key);
+                if let Left((n, d, b)) = m {
+                    Self::peers_sync(flush, my_id, peer_id, n, d, b, key, sock, tx);
+                } else {
+                    // optimize code path
+                    unreachable!()
+                }
+            }
+        }
+    }
+
     async fn value(
         self,
         m: Either<(u64, Digest, Buf), (SystemMessage<D::State, D::Request, D::Reply>, u64, Digest, Buf)>,
@@ -1250,6 +1600,7 @@ impl<D> SendTo<D>
         match self {
             SendTo::Me { my_id, shared: ref sh, tx } => {
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
+
                 if let Right((m, n, d, b)) = m {
                     Self::me(my_id, m, n, d, b, key, tx).await;
                 } else {
@@ -1261,15 +1612,49 @@ impl<D> SendTo<D>
                 flush, my_id, peer_id,
                 shared: ref sh, sock, tx
             } => {
+
+                //Unwrap the socket that must be a async socket
+                let sock = match sock {
+                    SecureSocketSend::Client(sock) => {
+                        sock
+                    }
+                    SecureSocketSend::Replica(_) => {
+                        panic!("Attempted to send asynchronously to a synchronous socket");
+                    }
+                };
+
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Left((n, d, b)) = m {
-                    Self::peers(flush, my_id, peer_id, n, d, b, key, sock, tx).await;
+                    Self::peers(flush, my_id, peer_id, n, d, b, key,
+                                sock, tx).await;
                 } else {
                     // optimize code path
                     unreachable!()
                 }
             }
         }
+    }
+
+    fn me_sync(my_id: NodeId,
+               m: SystemMessage<D::State, D::Request, D::Reply>,
+               n: u64,
+               d: Digest,
+               b: Buf,
+               sk: Option<&KeyPair>,
+               cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>) {
+
+        // create wire msg
+        let (h, _) = WireMessage::new(
+            my_id,
+            my_id,
+            &b[..],
+            n,
+            Some(d),
+            sk,
+        ).into_inner();
+
+        // send
+        cli.push_request_sync(Message::System(h, m));
     }
 
     async fn me(
@@ -1303,7 +1688,7 @@ impl<D> SendTo<D>
         d: Digest,
         b: Buf,
         sk: Option<&KeyPair>,
-        lock: Arc<Mutex<SecureSocketSend>>,
+        lock: Arc<futures::lock::Mutex<SecureSocketSendClient>>,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
 
@@ -1331,8 +1716,43 @@ impl<D> SendTo<D>
             cli.disconnect();
             //tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
         }
+    }
 
-        //println!("{}", print);
+    fn peers_sync(
+        flush: bool,
+        my_id: NodeId,
+        peer_id: NodeId,
+        n: u64,
+        d: Digest,
+        b: Buf,
+        sk: Option<&KeyPair>,
+        lock: Arc<parking_lot::Mutex<SecureSocketSendReplica>>,
+        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>, ) {
+
+        //let print = format!("DONE SENDING MESSAGE {:?}", d);
+        // create wire msg
+        let wm = WireMessage::new(
+            my_id,
+            peer_id,
+            &b[..],
+            n,
+            Some(d),
+            sk,
+        );
+
+        // send
+        //
+        // FIXME: sending may hang forever, because of network
+        // problems; add a timeout
+        let mut sock = lock.lock();
+        if let Err(_) = wm.write_to_sync(&mut *sock, flush) {
+            // error sending, drop connection
+
+            //TODO: Since this only handles receiving stuff, do we have to disconnect?
+            //Idk...
+            cli.disconnect();
+            //tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
+        }
     }
 }
 
@@ -1343,6 +1763,41 @@ impl<D> SerializedSendTo<D>
         D::Request: Send + 'static,
         D::Reply: Send + 'static,
 {
+    fn socket_type(&self) -> Option<&SecureSocketSend<'static>> {
+        match self {
+            SerializedSendTo::Me { .. } => {
+                None
+            }
+            SerializedSendTo::Peers { sock, .. } => {
+                Some(sock)
+            }
+        }
+    }
+
+    fn value_sync(
+        self,
+        h: Header,
+        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
+    ) {
+        match self {
+            SerializedSendTo::Me { tx, .. } => {
+                Self::me_sync(h, m, tx);
+            }
+            SerializedSendTo::Peers { id, our_id, sock, tx } => {
+                let sock = match sock {
+                    SecureSocketSend::Client(_) => {
+                        panic!("Attempted to send messages asynchronously through a sync channel")
+                    }
+                    SecureSocketSend::Replica(sock) => {
+                        sock
+                    }
+                };
+
+                Self::peers_sync(id, h, m, sock, tx);
+            }
+        }
+    }
+
     async fn value(
         self,
         h: Header,
@@ -1350,20 +1805,40 @@ impl<D> SerializedSendTo<D>
     ) {
         match self {
             SerializedSendTo::Me { tx, .. } => {
-                let msg = format!("{:?}", m.original());
-                let peer = format!("{:?}", tx.client_id());
+                //let msg = format!("{:?}", m.original());
+                //let peer = format!("{:?}", tx.client_id());
 
                 //debug!("{:?} // Sending SERIALIZED message {:?} to myself", peer,  msg);
                 Self::me(h, m, tx).await;
             }
             SerializedSendTo::Peers { id, our_id, sock, tx } => {
-                let msg = format!("{:?}", m.original());
-                let peer = format!("{:?}", tx.client_id());
+                //let msg = format!("{:?}", m.original());
+                //let peer = format!("{:?}", tx.client_id());
 
                 //debug!("{:?} // Sending SERIALIZED message {} to other peer {:?} ",our_id,  msg, id);
+
+                let sock = match sock {
+                    SecureSocketSend::Client(sock) => {
+                        sock
+                    }
+                    SecureSocketSend::Replica(_) => {
+                        panic!("Attempted to send messages asynchronously through a sync channel")
+                    }
+                };
+
                 Self::peers(id, h, m, sock, tx).await;
             }
         }
+    }
+
+    fn me_sync(
+        h: Header,
+        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
+        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>, ) {
+        let (original, _) = m.into_inner();
+
+        // send to ourselves
+        cli.push_request_sync(Message::System(h, original));
     }
 
     async fn me(
@@ -1377,15 +1852,40 @@ impl<D> SerializedSendTo<D>
         cli.push_request_(Message::System(h, original), &cli.client_id()).await;
     }
 
+    fn peers_sync(
+        peer_id: NodeId,
+        h: Header,
+        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
+        lock: Arc<parking_lot::Mutex<SecureSocketSendReplica>>,
+        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+    ) {
+        // create wire msg
+        let (_, raw) = m.into_inner();
+        let wm = WireMessage::from_parts(h, &raw[..]).unwrap();
+
+        // send
+        //
+        // FIXME: sending may hang forever, because of network
+        // problems; add a timeout
+        let mut sock = lock.lock();
+        if let Err(_) = wm.write_to_sync(&mut *sock, true) {
+            // error sending, drop connection
+
+            //TODO: Since this only handles receiving stuff, do we have to disconnect?
+            //Idk...
+            cli.disconnect();
+        }
+    }
+
+    ///Asynchronous sending to peers
+    ///Sends Client->Replica, Replica->Client
     async fn peers(
         peer_id: NodeId,
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        lock: Arc<Mutex<SecureSocketSend>>,
+        lock: Arc<futures::lock::Mutex<SecureSocketSendClient>>,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
-
-        //let print = format!("DONE SENDING MESSAGE {:?}", m.original());
 
         // create wire msg
         let (_, raw) = m.into_inner();
@@ -1396,15 +1896,13 @@ impl<D> SerializedSendTo<D>
         // FIXME: sending may hang forever, because of network
         // problems; add a timeout
         let mut sock = lock.lock().await;
+
         if let Err(_) = wm.write_to(&mut *sock, true).await {
             // error sending, drop connection
 
             //TODO: Since this only handles receiving stuff, do we have to disconnect?
             //Idk...
             cli.disconnect();
-            //tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
         }
-
-        //println!("{}", print);
     }
 }

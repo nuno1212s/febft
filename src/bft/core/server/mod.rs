@@ -133,7 +133,7 @@ impl ViewInfo {
 }
 
 /// Represents a replica in `febft`.
-pub struct Replica<S: Service + 'static> {
+pub struct Replica<'a, S: Service + 'static> {
     phase: ReplicaPhase,
     // this value is primarily used to switch from
     // state transfer back to a view change
@@ -141,12 +141,13 @@ pub struct Replica<S: Service + 'static> {
     timeouts: Arc<TimeoutsHandle<S>>,
     executor: ExecutorHandle<S>,
     synchronizer: Arc<Synchronizer<S>>,
-    consensus: Consensus<S>,
+    consensus: Consensus<'a, S>,
     cst: CollabStateTransfer<S>,
     log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
     client_rqs: Arc<RqProcessor<S>>,
     node: Arc<Node<S::Data>>,
     rq_finalizer: RqFinalizerHandle<S>,
+    consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
 }
 
 /// Represents a configuration used to bootstrap a `Replica`.
@@ -166,7 +167,7 @@ pub struct ReplicaConfig<S> {
     pub node: NodeConfig,
 }
 
-impl<S> Replica<S>
+impl<'a, S> Replica<'a, S>
     where
         S: Service + Send + 'static,
         State<S>: Send + Clone + 'static,
@@ -224,18 +225,21 @@ impl<S> Replica<S>
             log.clone(),
             executor.clone());
 
+        let consensus_lock = Arc::new(Mutex::new((next_consensus_seq, view)));
+
         let mut replica = Replica {
             cst: CollabStateTransfer::new(CST_BASE_DUR),
             synchronizer: synchronizer.clone(),
-            consensus: Consensus::new(next_consensus_seq, node.id(), batch_size),
+            consensus: Consensus::new(next_consensus_seq, node.id(), batch_size, consensus_lock.clone()),
             phase: ReplicaPhase::NormalPhase,
             phase_stack: None,
             timeouts: timeouts.clone(),
             executor,
             node,
             log: log.clone(),
-            client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts),
+            client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts, Arc::clone(&consensus_lock)),
             rq_finalizer,
+            consensus_lock
         };
 
         //Start receiving and processing client requests
@@ -513,9 +517,7 @@ impl<S> Replica<S>
 
         let message = match polled_message {
             ConsensusPollStatus::Recv => {
-                let vec1 = self.node.receive_from_replicas()?;
-
-                vec1
+                self.node.receive_from_replicas()?
             }
             ConsensusPollStatus::NextMessage(h, m) => {
                 Message::System(h, SystemMessage::Consensus(m))
@@ -523,29 +525,12 @@ impl<S> Replica<S>
             ConsensusPollStatus::TryProposeAndRecv => {
                 debug!("{:?} // Polled propose and recv.", self.id());
 
-                let start = Instant::now();
+                self.consensus.advance_init_phase();
 
-                if leader {
-                    if let Ok(requests) = self.client_rqs.receiver_channel().recv() {
-                        let mut guard = self.log.batch_meta().lock();
-
-                        guard.message_received_time = Utc::now();
-                        guard.started_propose = Utc::now();
-
-                        self.consensus.propose(requests, &self.synchronizer, &self.node);
-
-                        guard.done_propose = Utc::now();
-                    }
-                } else {
-                    ///We want the phase to move to Preparing if we are not the leader as we will never receive messages
-                    /// From the client rqs handling thread
-                    self.consensus.propose_non_leader();
-                }
-
-
+                //Receive the PrePrepare message from the client rq handler thread
                 let replicas = self.node.receive_from_replicas()?;
 
-                debug!("{:?} // Received from replicas. Took {:?}", self.id(), Instant::now().duration_since(start));
+                //debug!("{:?} // Received from replicas. Took {:?}", self.id(), Instant::now().duration_since(start));
 
                 replicas
             }
@@ -649,7 +634,7 @@ impl<S> Replica<S>
                                     ),
                                 }.unwrap();
 
-                                self.consensus.next_instance();
+                                self.consensus.next_instance(&self.synchronizer);
                             }
                         }
 

@@ -93,7 +93,7 @@ pub fn debug_msg(m: Message<f32, Action, f32>) -> &'static str {
 async fn node_config(
     id: NodeId,
     sk: KeyPair,
-    addrs: IntMap<(SocketAddr, String)>,
+    addrs: IntMap<PeerAddr>,
     pk: IntMap<PublicKey>,
 ) -> NodeConfig {
     // read TLS configs concurrently

@@ -1,5 +1,27 @@
 //! Abstractions over different socket types of crates in the Rust ecosystem.
 
+use std::io;
+use std::io::{Read, Write};
+use std::net::SocketAddr;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use async_tls::{
+    client::TlsStream as TlsStreamCli,
+    server::TlsStream as TlsStreamSrv,
+};
+
+use futures::io::{
+    AsyncRead,
+    AsyncWrite,
+    BufReader,
+    BufWriter,
+};
+use rustls::{ClientSession, ServerSession, Stream};
+
+use crate::bft::error;
+
 #[cfg(feature = "socket_tokio_tcp")]
 mod tokio_tcp;
 
@@ -9,23 +31,7 @@ mod async_std_tcp;
 #[cfg(feature = "socket_rio_tcp")]
 mod rio_tcp;
 
-use std::io;
-use std::pin::Pin;
-use std::net::SocketAddr;
-use std::task::{Poll, Context};
-
-use futures::io::{
-    AsyncRead,
-    AsyncWrite,
-    BufWriter,
-    BufReader,
-};
-use async_tls::{
-    server::TlsStream as TlsStreamSrv,
-    client::TlsStream as TlsStreamCli,
-};
-
-use crate::bft::error;
+mod std_tcp;
 
 /// A `Listener` represents a socket listening on new communications
 /// initiated by peer nodes in the BFT system.
@@ -38,6 +44,12 @@ pub struct Listener {
 
     #[cfg(feature = "socket_rio_tcp")]
     inner: rio_tcp::Listener,
+}
+
+///A listener. Differs from the other listeners as this is a synchronous listener
+///meant to be used as communication between replicas
+pub struct ReplicaListener {
+    inner: std_tcp::Listener,
 }
 
 /// A `Socket` represents a connection between two peer processes
@@ -53,10 +65,16 @@ pub struct Socket {
     inner: rio_tcp::Socket,
 }
 
+///A ReplicaSocket represents a connection between two replicas in the BFT system.
+/// This is a synchronous socket
+pub struct ReplicaSocket {
+    inner: std_tcp::Socket,
+}
+
 /// Initialize the sockets module.
 pub unsafe fn init() -> error::Result<()> {
     #[cfg(feature = "socket_rio_tcp")]
-    { rio_tcp::init()?; }
+        { rio_tcp::init()?; }
 
     Ok(())
 }
@@ -64,7 +82,7 @@ pub unsafe fn init() -> error::Result<()> {
 /// Drops the global data associated with sockets.
 pub unsafe fn drop() -> error::Result<()> {
     #[cfg(feature = "socket_rio_tcp")]
-    { rio_tcp::drop()?; }
+        { rio_tcp::drop()?; }
 
     Ok(())
 }
@@ -73,28 +91,37 @@ pub unsafe fn drop() -> error::Result<()> {
 pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
     {
         #[cfg(feature = "socket_tokio_tcp")]
-        { tokio_tcp::bind(addr).await }
+            { tokio_tcp::bind(addr).await }
 
         #[cfg(feature = "socket_async_std_tcp")]
-        { async_std_tcp::bind(addr).await }
+            { async_std_tcp::bind(addr).await }
 
         #[cfg(feature = "socket_rio_tcp")]
-        { rio_tcp::bind(addr).await }
+            { rio_tcp::bind(addr).await }
     }.and_then(|inner| set_listener_options(Listener { inner }))
+}
+
+pub fn bind_replica_server<A: Into<SocketAddr>>(addr: A) -> io::Result<ReplicaListener> {
+    { std_tcp::bind(addr) }.and_then(|inner| set_listener_options_replica(ReplicaListener { inner }))
 }
 
 /// Connects to the remote node pointed to by the address `addr`.
 pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
     {
         #[cfg(feature = "socket_tokio_tcp")]
-        { tokio_tcp::connect(addr).await }
+            { tokio_tcp::connect(addr).await }
 
         #[cfg(feature = "socket_async_std_tcp")]
-        { async_std_tcp::connect(addr).await }
+            { async_std_tcp::connect(addr).await }
 
         #[cfg(feature = "socket_rio_tcp")]
-        { rio_tcp::connect(addr).await }
+            { rio_tcp::connect(addr).await }
     }.and_then(|inner| set_sockstream_options(Socket { inner }))
+}
+
+pub fn connect_replica<A: Into<SocketAddr>>(addr: A) -> io::Result<ReplicaSocket> {
+    { std_tcp::connect(addr) }
+        .and_then(|inner| set_sockstream_options_sync(ReplicaSocket { inner }))
 }
 
 impl Listener {
@@ -105,11 +132,18 @@ impl Listener {
     }
 }
 
+impl ReplicaListener {
+    pub fn accept(&self) -> io::Result<ReplicaSocket> {
+        self.inner.accept()
+            .and_then(|inner| set_sockstream_options_sync(ReplicaSocket { inner }))
+    }
+}
+
 impl AsyncRead for Socket {
     fn poll_read(
-        mut self: Pin<&mut Self>, 
-        cx: &mut Context<'_>, 
-        buf: &mut [u8]
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
     ) -> Poll<io::Result<usize>>
     {
         Pin::new(&mut self.inner).poll_read(cx, buf)
@@ -118,103 +152,194 @@ impl AsyncRead for Socket {
 
 impl AsyncWrite for Socket {
     fn poll_write(
-        mut self: Pin<&mut Self>, 
-        cx: &mut Context<'_>, 
-        buf: &[u8]
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
     ) -> Poll<io::Result<usize>>
     {
         Pin::new(&mut self.inner).poll_write(cx, buf)
     }
 
     fn poll_flush(
-        mut self: Pin<&mut Self>, 
-        cx: &mut Context<'_>
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
     ) -> Poll<io::Result<()>>
     {
         Pin::new(&mut self.inner).poll_flush(cx)
     }
 
     fn poll_close(
-        mut self: Pin<&mut Self>, 
-        cx: &mut Context<'_>
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
     ) -> Poll<io::Result<()>>
     {
         Pin::new(&mut self.inner).poll_close(cx)
     }
 }
 
-pub enum SecureSocketRecv {
+pub enum SecureSocketRecvClient {
     Plain(BufReader<Socket>),
     Tls(TlsStreamSrv<Socket>),
 }
 
-pub enum SecureSocketSend {
+pub enum SecureSocketSendClient {
     Plain(BufWriter<Socket>),
     Tls(TlsStreamCli<Socket>),
 }
 
-impl AsyncRead for SecureSocketRecv {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut [u8]
-    ) -> Poll<io::Result<usize>>
-    {
-        match &mut *self {
-            SecureSocketRecv::Plain(inner) => {
-                Pin::new(inner).poll_read(cx, buf)
-            },
-            SecureSocketRecv::Tls(inner) => {
-                Pin::new(inner).poll_read(cx, buf)
-            },
+pub enum SecureSocketRecvReplica<'a> {
+    Plain(ReplicaSocket),
+    Tls {
+        session: rustls::ServerSession,
+        socket: ReplicaSocket,
+        stream: Stream<'a, ServerSession, ReplicaSocket>,
+    },
+}
+
+pub enum SecureSocketSendReplica<'a> {
+    Plain(ReplicaSocket),
+    Tls {
+        session: rustls::ClientSession,
+        socket: ReplicaSocket,
+        stream: Stream<'a, ClientSession, ReplicaSocket>,
+    },
+}
+
+#[derive(Clone)]
+///Client stores asynchronous socket references (Client->replica, replica -> client)
+///Replicas stores synchronous socket references (Replica -> Replica)
+pub enum SecureSocketSend<'a> {
+    Client(Arc<futures::lock::Mutex<SecureSocketSendClient>>),
+    Replica(Arc<parking_lot::Mutex<SecureSocketSendReplica<'a>>>),
+}
+
+pub enum SecureSocketRecv<'a> {
+    Client(SecureSocketRecvClient),
+    Replica(SecureSocketRecvReplica<'a>),
+}
+
+impl Write for ReplicaSocket {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl Read for ReplicaSocket {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(buf)
+    }
+
+    fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        self.inner.read_exact(buf)
+    }
+}
+
+impl<'a> Write for SecureSocketSendReplica<'a> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            SecureSocketSendReplica::Plain(socket) => {
+                socket.write(buf)
+            }
+            SecureSocketSendReplica::Tls { stream, .. } => {
+                stream.write(buf)
+            }
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            SecureSocketSendReplica::Plain(socket) => {
+                socket.flush()
+            }
+            SecureSocketSendReplica::Tls {
+                stream,
+                ..
+            } => {
+                stream.flush()
+            }
         }
     }
 }
 
-impl AsyncWrite for SecureSocketSend {
-    fn poll_write(
+impl<'a> Read for SecureSocketRecvReplica<'a> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            SecureSocketRecvReplica::Plain(socket) => {
+                socket.read(buf)
+            }
+            SecureSocketRecvReplica::Tls { stream, .. } => {
+                stream.read(buf)
+            }
+        }
+    }
+}
+
+impl AsyncRead for SecureSocketRecvClient {
+    fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &[u8]
+        buf: &mut [u8],
     ) -> Poll<io::Result<usize>>
     {
         match &mut *self {
-            SecureSocketSend::Plain(inner) => {
+            SecureSocketRecvClient::Plain(inner) => {
+                Pin::new(inner).poll_read(cx, buf)
+            }
+            SecureSocketRecvClient::Tls(inner) => {
+                Pin::new(inner).poll_read(cx, buf)
+            }
+        }
+    }
+}
+
+impl AsyncWrite for SecureSocketSendClient {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>>
+    {
+        match &mut *self {
+            SecureSocketSendClient::Plain(inner) => {
                 Pin::new(inner).poll_write(cx, buf)
-            },
-            SecureSocketSend::Tls(inner) => {
+            }
+            SecureSocketSendClient::Tls(inner) => {
                 Pin::new(inner).poll_write(cx, buf)
-            },
+            }
         }
     }
 
     fn poll_flush(
         mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>
+        cx: &mut Context<'_>,
     ) -> Poll<io::Result<()>>
     {
         match &mut *self {
-            SecureSocketSend::Plain(inner) => {
+            SecureSocketSendClient::Plain(inner) => {
                 Pin::new(inner).poll_flush(cx)
-            },
-            SecureSocketSend::Tls(inner) => {
+            }
+            SecureSocketSendClient::Tls(inner) => {
                 Pin::new(inner).poll_flush(cx)
-            },
+            }
         }
     }
 
     fn poll_close(
         mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>
+        cx: &mut Context<'_>,
     ) -> Poll<io::Result<()>>
     {
         match &mut *self {
-            SecureSocketSend::Plain(inner) => {
+            SecureSocketSendClient::Plain(inner) => {
                 Pin::new(inner).poll_close(cx)
-            },
-            SecureSocketSend::Tls(inner) => {
+            }
+            SecureSocketSendClient::Tls(inner) => {
                 Pin::new(inner).poll_close(cx)
-            },
+            }
         }
     }
 }
@@ -233,9 +358,37 @@ fn set_listener_options(listener: Listener) -> io::Result<Listener> {
     Ok(listener)
 }
 
+
+// set listener socket options; translated from BFT-SMaRt
+#[inline]
+fn set_listener_options_replica(listener: ReplicaListener) -> io::Result<ReplicaListener> {
+    let sock = socket2::SockRef::from(&listener.inner);
+    sock.set_send_buffer_size(8 * 10240 * 1024)?;
+    sock.set_recv_buffer_size(8 * 10240 * 1024)?;
+    sock.set_reuse_address(true)?;
+    sock.set_keepalive(true)?;
+    sock.set_nodelay(true)?;
+    // ChannelOption.CONNECT_TIMEOUT_MILLIS ??
+    // ChannelOption.SO_BACKLOG ??
+    Ok(listener)
+}
+
+
 // set connection socket options; translated from BFT-SMaRt
 #[inline]
 fn set_sockstream_options(connection: Socket) -> io::Result<Socket> {
+    let sock = socket2::SockRef::from(&connection.inner);
+    sock.set_send_buffer_size(8 * 10240 * 1024)?;
+    sock.set_recv_buffer_size(8 * 10240 * 1024)?;
+    sock.set_keepalive(true)?;
+    sock.set_nodelay(true)?;
+    // ChannelOption.CONNECT_TIMEOUT_MILLIS ??
+    Ok(connection)
+}
+
+
+#[inline]
+fn set_sockstream_options_sync(connection: ReplicaSocket) -> io::Result<ReplicaSocket> {
     let sock = socket2::SockRef::from(&connection.inner);
     sock.set_send_buffer_size(8 * 10240 * 1024)?;
     sock.set_recv_buffer_size(8 * 10240 * 1024)?;
