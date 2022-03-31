@@ -22,7 +22,7 @@ use futures::io::{
 };
 use futures_timer::Delay;
 use intmap::IntMap;
-use parking_lot::{RwLock};
+use parking_lot::RwLock;
 use rustls::{ClientConfig, ServerConfig, Stream};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
@@ -143,20 +143,20 @@ enum PeerTx {
     // on the second one
     Client {
         first_cli: NodeId,
-        connected: Arc<RwLock<IntMap<SecureSocketSend<'static>>>>,
+        connected: Arc<RwLock<IntMap<SecureSocketSend>>>,
     },
     // replicas don't need shared access to the hashmap, so
     // we only need one lock (to restrict I/O to one producer at a time)
     Server {
         first_cli: NodeId,
-        connected: Arc<RwLock<IntMap<SecureSocketSend<'static>>>>,
+        connected: Arc<RwLock<IntMap<SecureSocketSend>>>,
     },
 }
 
 impl PeerTx {
     ///Add a tx peer connection to the registry
     ///Requires knowing the first_cli
-    pub fn add_peer(&self, client_id: u64, socket: SecureSocketSend<'static>) {
+    pub fn add_peer(&self, client_id: u64, socket: SecureSocketSend) {
         match self {
             PeerTx::Client { connected, .. } => {
                 let mut guard = connected.write();
@@ -171,17 +171,25 @@ impl PeerTx {
         }
     }
 
-    pub fn find_peer(&self, client_id: u64) -> Option<&SecureSocketSend<'static>> {
+    pub fn find_peer(&self, client_id: u64) -> Option<SecureSocketSend> {
         match self {
             PeerTx::Client { connected, .. } => {
-                let mut guard = connected.read();
+                let option = {
+                    let guard = connected.read();
 
-                guard.get(client_id)
+                    guard.get(client_id).cloned()
+                };
+
+                option
             }
             PeerTx::Server { connected, .. } => {
-                let mut guard = connected.read();
+                let option = {
+                    let guard = connected.read();
 
-                guard.get(client_id)
+                    guard.get(client_id).cloned()
+                };
+
+                option
             }
         }
     }
@@ -220,7 +228,7 @@ pub struct Node<D: SharedData + 'static> {
 ///Represents the server addresses of a peer
 ///Clients will only have 1 address while replicas will have 2 addresses (1 for facing clients,
 /// 1 for facing replicas)
-struct PeerAddr {
+pub struct PeerAddr {
     client_addr: (SocketAddr, String),
     replica_addr: Option<(SocketAddr, String)>,
 }
@@ -759,7 +767,7 @@ impl<D> Node<D>
                 };
                 *mine = Some(s);
             } else {
-                let sock = peer_tx.find_peer(id.id() as u64).unwrap().clone();
+                let sock = peer_tx.find_peer(id.id() as u64).unwrap();
 
                 let s = SerializedSendTo::Peers {
                     id,
@@ -794,7 +802,7 @@ impl<D> Node<D>
                 };
                 *mine = Some(s);
             } else {
-                let sock = tx_peers.find_peer(id.id() as u64).unwrap().clone();
+                let sock = tx_peers.find_peer(id.id() as u64).unwrap();
 
                 let s = SendTo::Peers {
                     sock,
@@ -851,13 +859,17 @@ impl<D> Node<D>
         self.node_handling.receive_from_clients(timeout)
     }
 
+    pub fn try_recv_from_clients(&self) -> Result<Option<Vec<Message<D::State, D::Request, D::Reply>>>> {
+        self.node_handling.try_receive_from_clients()
+    }
+
     //Receive messages from the replicas we are connected to
     pub fn receive_from_replicas(&self) -> Result<Message<D::State, D::Request, D::Reply>> {
         self.node_handling.receive_from_replicas()
     }
 
     /// Registers the newly created transmission socket to the peer
-    pub fn handle_connected_tx(&self, peer_id: NodeId, sock: SecureSocketSend<'static>) {
+    pub fn handle_connected_tx(&self, peer_id: NodeId, sock: SecureSocketSend) {
         //debug!("Connected TX to peer {:?} from peer {:?}", peer_id, self.id);
         self.peer_tx.add_peer(peer_id.id() as u64, sock);
     }
@@ -881,7 +893,7 @@ impl<D> Node<D>
             let connector = connector.clone();
             let nonce = rng.next_state();
 
-            let peer_addr = addr.replica_addr.unwrap().clone();
+            let peer_addr = addr.replica_addr.as_ref().unwrap().clone();
             //println!("Attempting to connect to peer {:?} with address {:?} from node {:?}", peer_id, addr, my_id);
 
             let arc = self.clone();
@@ -952,13 +964,7 @@ impl<D> Node<D>
 
                     let mut session = rustls::ClientSession::new(&connector, dns_ref);
 
-                    let stream = Stream::new(&mut session, &mut sock);
-
-                    SecureSocketSendReplica::Tls {
-                        session,
-                        socket: sock,
-                        stream,
-                    }
+                    SecureSocketSendReplica::new_tls(session, sock)
                 };
 
                 let final_sock = SecureSocketSend::Replica(Arc::new(parking_lot::Mutex::new(sock)));
@@ -1065,9 +1071,11 @@ impl<D> Node<D>
             if let Ok(sock) = listener.accept() {
                 let replica_acceptor = acceptor.clone();
 
+                let rx_ref = self.clone();
+
                 std::thread::Builder::new().name(format!("Replica Receiver Thread"))
                     .spawn(move || {
-                        self.clone().rx_side_establish_conn_task_sync(first_cli, my_id, replica_acceptor, sock);
+                        rx_ref.rx_side_establish_conn_task_sync(first_cli, my_id, replica_acceptor, sock);
                     });
             }
         }
@@ -1135,13 +1143,7 @@ impl<D> Node<D>
             } else {
                 let mut tls_session = rustls::ServerSession::new(&acceptor);
 
-                let stream = rustls::Stream::new(&mut tls_session, &mut sock);
-
-                SecureSocketRecvReplica::Tls {
-                    socket: sock,
-                    session: tls_session,
-                    stream,
-                }
+                SecureSocketRecvReplica::new_tls(tls_session, sock)
             };
 
             self.handle_connected_rx_sync(peer_id, sock);
@@ -1511,7 +1513,7 @@ enum SendTo<D: SharedData> {
         // shared data
         shared: Option<Arc<NodeShared>>,
         // handle to socket
-        sock: SecureSocketSend<'static>,
+        sock: SecureSocketSend,
         // a handle to the message channel of the corresponding client
         tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     },
@@ -1530,7 +1532,7 @@ enum SerializedSendTo<D: SharedData> {
         //Our own ID
         our_id: NodeId,
         // handle to socket
-        sock: SecureSocketSend<'static>,
+        sock: SecureSocketSend,
         // a handle to the message channel of the corresponding client
         tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     },
@@ -1543,7 +1545,7 @@ impl<D> SendTo<D>
         D::Request: Send + 'static,
         D::Reply: Send + 'static,
 {
-    fn socket_type(&self) -> Option<&SecureSocketSend<'static>> {
+    fn socket_type(&self) -> Option<&SecureSocketSend> {
         match self {
             SendTo::Me { .. } => {
                 None
@@ -1763,7 +1765,7 @@ impl<D> SerializedSendTo<D>
         D::Request: Send + 'static,
         D::Reply: Send + 'static,
 {
-    fn socket_type(&self) -> Option<&SecureSocketSend<'static>> {
+    fn socket_type(&self) -> Option<&SecureSocketSend> {
         match self {
             SerializedSendTo::Me { .. } => {
                 None

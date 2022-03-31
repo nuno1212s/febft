@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ::log::debug;
 use chrono::offset::Utc;
@@ -171,7 +172,7 @@ enum ProtoPhase {
 
 /// Contains the state of an active consensus instance, as well
 /// as future instances.
-pub struct Consensus<'a, S: Service> {
+pub struct Consensus<S: Service> {
     // can be smaller than the config's max batch size,
     // but never longer
     batch_size: usize,
@@ -185,7 +186,7 @@ pub struct Consensus<'a, S: Service> {
     missing_swapbuf: Vec<usize>,
     speculative_commits: Arc<Mutex<IntMap<StoredSerializedSystemMessage<S::Data>>>>,
     consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
-    consensus_guard: Option<MutexGuard<'a, (SeqNo, ViewInfo)>>
+    consensus_guard: Arc<AtomicBool>,
 }
 
 /// Status returned from processing a consensus message.
@@ -219,7 +220,7 @@ macro_rules! extract_msg {
     };
 }
 
-impl<'a, S> Consensus<'a, S>
+impl<S> Consensus<S>
     where
         S: Service + Send + 'static,
         State<S>: Send + Clone + 'static,
@@ -227,7 +228,9 @@ impl<'a, S> Consensus<'a, S>
         Reply<S>: Send + 'static,
 {
     /// Starts a new consensus protocol tracker.
-    pub fn new(initial_seq_no: SeqNo, id: NodeId, batch_size: usize, consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>) -> Self {
+    pub fn new(initial_seq_no: SeqNo, id: NodeId, batch_size: usize,
+               consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
+               consensus_guard: Arc<AtomicBool>) -> Self {
         Self {
             batch_size: 0,
             node_id: id,
@@ -243,7 +246,7 @@ impl<'a, S> Consensus<'a, S>
                 .take(batch_size)
                 .collect(),
             consensus_lock,
-            consensus_guard: None
+            consensus_guard,
         }
     }
 
@@ -446,18 +449,11 @@ impl<'a, S> Consensus<'a, S>
     pub fn next_instance(&mut self, sync: &Arc<Synchronizer<S>>) {
         self.tbo.next_instance_queue();
 
-        match self.consensus_guard.take() {
-            None => {
-                panic!("Ended consensus without guard");
-            }
-            Some(mut guard) => {
-                //Update the guard to reflect the current consensus instance
-                *guard = (self.sequence_number(),
-                    sync.view());
-            }
-        }
+        let mut lock = self.consensus_lock.lock();
 
-        //self.voted.clear();
+        *lock = (self.sequence_number(), sync.view());
+
+        self.consensus_guard.store(false, Ordering::Relaxed);
     }
 
     /// Sets the id of the current consensus.
@@ -512,7 +508,7 @@ impl<'a, S> Consensus<'a, S>
     }
 
     /// Process a message for a particular consensus instance.
-    pub fn process_message(
+    pub fn process_message<'a>(
         &'a mut self,
         header: Header,
         message: ConsensusMessage<Request<S>>,
@@ -567,7 +563,7 @@ impl<'a, S> Consensus<'a, S>
                     ConsensusMessageKind::PrePrepare(request_batch) => {
 
                         //Acquire the consensus lock as we have officially started the consensus
-                        self.consensus_guard = Some(self.consensus_lock.lock());
+                        self.consensus_guard.store(true, Ordering::Relaxed);
 
                         log.batch_meta().lock().pre_prepare_received_time = Utc::now();
 
@@ -820,7 +816,7 @@ impl<'a, S> Consensus<'a, S>
                         batch_digest = d.clone();
 
                         i + 1
-                    },
+                    }
                 };
 
                 // add message to the log
@@ -843,7 +839,7 @@ impl<'a, S> Consensus<'a, S>
     }
 }
 
-impl<'a, S> Deref for Consensus<'a, S>
+impl<S> Deref for Consensus<S>
     where
         S: Service + Send + 'static,
         State<S>: Send + Clone + 'static,
@@ -858,7 +854,7 @@ impl<'a, S> Deref for Consensus<'a, S>
     }
 }
 
-impl<'a, S> DerefMut for Consensus<'a, S>
+impl<S> DerefMut for Consensus<S>
     where
         S: Service + Send + 'static,
         State<S>: Send + Clone + 'static,

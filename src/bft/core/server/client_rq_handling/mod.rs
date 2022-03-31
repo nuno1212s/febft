@@ -7,14 +7,14 @@ use std::time::{Duration, SystemTime};
 use chrono::{DateTime, Utc};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use log::debug;
-use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
+use parking_lot::lock_api::MutexGuard;
 
 use crate::bft::async_runtime as rt;
+use crate::bft::communication::{Node, NodeId};
 use crate::bft::communication::channel::{ChannelRx, ChannelTx, new_bounded};
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, Message, RequestMessage, StoredMessage, SystemMessage};
 use crate::bft::communication::message::Message::System;
-use crate::bft::communication::{Node, NodeId};
 use crate::bft::communication::peer_handling::NodePeers;
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::consensus::log as logg;
@@ -36,6 +36,7 @@ pub struct RqProcessor<S: Service + 'static> {
     timeouts: Arc<TimeoutsHandle<S>>,
     log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
     consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
+    consensus_guard: Arc<AtomicBool>,
     cancelled: AtomicBool,
 }
 
@@ -48,7 +49,8 @@ impl<S: Service> RqProcessor<S> {
     pub fn new(node: Arc<Node<S::Data>>, sync: Arc<Synchronizer<S>>,
                log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
                timeouts: Arc<TimeoutsHandle<S>>,
-               consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>) -> Arc<Self> {
+               consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
+               consensus_guard: Arc<AtomicBool>) -> Arc<Self> {
         let (channel_tx, channel_rx) = crossbeam_channel::bounded(BATCH_CHANNEL_SIZE);
 
         Arc::new(Self {
@@ -59,6 +61,7 @@ impl<S: Service> RqProcessor<S> {
             log,
             cancelled: AtomicBool::new(false),
             consensus_lock,
+            consensus_guard,
         })
     }
 
@@ -92,13 +95,17 @@ impl<S: Service> RqProcessor<S> {
 
                 //We don't need to do this for non leader replicas, as that would cause unnecessary strain as the
                 //Thread is in an infinite loop
-                if !is_leader || self.node_ref.rqs_len_from_clients() > 0 {
-                    ///Receive the requests from the clients and process them
-                    let messages = self.node_ref.receive_from_clients(None).unwrap();
+                ///Receive the requests from the clients and process them
+                let opt_msgs = if is_leader {
+                    self.node_ref.try_recv_from_clients().unwrap()
+                } else {
+                    Some(self.node_ref.receive_from_clients(None).unwrap())
+                };
 
-                    //debug!("{:?} // Received batch of {} messages from clients, processing them, is_leader? {}",
-                    //    self.node_ref.id(), messages.len(), is_leader);
+                //debug!("{:?} // Received batch of {} messages from clients, processing them, is_leader? {}",
+                //    self.node_ref.id(), messages.len(), is_leader);
 
+                if let Some(messages) = opt_msgs {
                     let mut final_batch = if is_leader {
                         Some(Vec::with_capacity(messages.len()))
                     } else {
@@ -155,13 +162,11 @@ impl<S: Service> RqProcessor<S> {
                         None => {}
                         Some(mut rqs) => {
                             if currently_accumulated.len() + rqs.len() > self.node_ref.batch_size() {
-
                                 for _ in 0..self.node_ref.batch_size() - currently_accumulated.len() {
                                     currently_accumulated.push(rqs.pop().unwrap());
                                 }
 
                                 overflowed.append(&mut rqs);
-
                             } else {
                                 currently_accumulated.append(&mut rqs)
                             }
@@ -173,24 +178,22 @@ impl<S: Service> RqProcessor<S> {
                     self.requests_received(DateTime::from(SystemTime::now()), to_log);
                 }
 
+
                 if is_leader {
                     //Attempt to propose new batch
-                    match self.consensus_lock.try_lock() {
-                        None => {
-                            //Currently executing the consensus, cannot propose new batch
-                        }
-                        Some(guard) => {
+                    match self.consensus_guard.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed) {
+                        Ok(_) => {
+                            let guard = self.consensus_lock.lock();
+
                             let (seq, view) = *guard;
 
                             match &last_seq {
-                                None =>  {
-
-                                },
+                                None => {}
                                 Some(last_exec) => {
                                     if *last_exec >= seq {
                                         //We are still in the same consensus instance,
                                         //Don't produce more pre prepares
-                                        continue
+                                        continue;
                                     }
                                 }
                             }
@@ -218,7 +221,8 @@ impl<S: Service> RqProcessor<S> {
                             let targets = NodeId::targets(0..view.params().n());
 
                             self.node_ref.broadcast(message, targets);
-                        }
+                        },
+                        Err(_) => {}
                     }
                 }
             }
@@ -241,6 +245,7 @@ impl<S: Service> RqProcessor<S> {
             &self.timeouts,
         );
 
+        // This was replaced with a batched log instead of a per message log to save hashing ops
         // self.log.insert(h, r);
     }
 }

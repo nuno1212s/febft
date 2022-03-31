@@ -6,7 +6,7 @@ use std::sync::mpsc::{RecvError, SendError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crossbeam_channel::RecvTimeoutError;
+use crossbeam_channel::{RecvTimeoutError, TryRecvError};
 use dsrust::channels::async_ch::ReceiverMultFut;
 use dsrust::channels::queue_channel::{bounded_lf_queue, make_mult_recv_from, make_mult_recv_partial_from, Receiver, ReceiverMult, ReceiverPartialMult, RecvMultError, Sender};
 use dsrust::queues::lf_array_queue::LFBQueue;
@@ -192,6 +192,30 @@ impl<T> NodePeers<T> where T: Send {
                                         Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive"))
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    pub fn try_receive_from_clients(&self) -> Result<Option<Vec<T>>>{
+        return match &self.client_rx {
+            None => {
+                Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive from clients as there are no clients connected"))}
+            Some(rx) => {
+                match rx.try_recv() {
+                    Ok(msgs) => {
+                        Ok(Some(msgs))
+                    }
+                    Err(err) => {
+                        match err {
+                            TryRecvError::Empty => {
+                                Ok(None)
+                            }
+                            TryRecvError::Disconnected => {
+                                Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive from clients as there are no clients connected"))
                             }
                         }
                     }

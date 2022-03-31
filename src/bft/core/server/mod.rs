@@ -1,6 +1,7 @@
 //! Contains the server side core protocol logic of `febft`.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use chrono::DateTime;
@@ -133,7 +134,7 @@ impl ViewInfo {
 }
 
 /// Represents a replica in `febft`.
-pub struct Replica<'a, S: Service + 'static> {
+pub struct Replica<S: Service + 'static> {
     phase: ReplicaPhase,
     // this value is primarily used to switch from
     // state transfer back to a view change
@@ -141,7 +142,7 @@ pub struct Replica<'a, S: Service + 'static> {
     timeouts: Arc<TimeoutsHandle<S>>,
     executor: ExecutorHandle<S>,
     synchronizer: Arc<Synchronizer<S>>,
-    consensus: Consensus<'a, S>,
+    consensus: Consensus<S>,
     cst: CollabStateTransfer<S>,
     log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
     client_rqs: Arc<RqProcessor<S>>,
@@ -167,7 +168,7 @@ pub struct ReplicaConfig<S> {
     pub node: NodeConfig,
 }
 
-impl<'a, S> Replica<'a, S>
+impl<S> Replica<S>
     where
         S: Service + Send + 'static,
         State<S>: Send + Clone + 'static,
@@ -225,21 +226,25 @@ impl<'a, S> Replica<'a, S>
             log.clone(),
             executor.clone());
 
-        let consensus_lock = Arc::new(Mutex::new((next_consensus_seq, view)));
+        let consensus_info = Arc::new(Mutex::new((next_consensus_seq, view)));
+
+        let consensus_guard = Arc::new(AtomicBool::new(false));
 
         let mut replica = Replica {
             cst: CollabStateTransfer::new(CST_BASE_DUR),
             synchronizer: synchronizer.clone(),
-            consensus: Consensus::new(next_consensus_seq, node.id(), batch_size, consensus_lock.clone()),
+            consensus: Consensus::new(next_consensus_seq, node.id(), batch_size, consensus_info.clone(),
+                                      consensus_guard.clone()),
             phase: ReplicaPhase::NormalPhase,
             phase_stack: None,
             timeouts: timeouts.clone(),
             executor,
             node,
             log: log.clone(),
-            client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts, Arc::clone(&consensus_lock)),
+            client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts, consensus_info.clone(),
+                                         consensus_guard.clone()),
             rq_finalizer,
-            consensus_lock
+            consensus_lock: consensus_info,
         };
 
         //Start receiving and processing client requests

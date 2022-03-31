@@ -1,6 +1,6 @@
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 pub struct Socket {
     inner: TcpStream,
@@ -45,6 +45,13 @@ impl Deref for Socket {
         &self.inner
     }
 }
+
+impl DerefMut for Socket {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
 
 #[cfg(windows)]
 mod sys {

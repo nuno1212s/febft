@@ -1,5 +1,7 @@
 //! Abstractions over different socket types of crates in the Rust ecosystem.
 
+use std::borrow::BorrowMut;
+use std::cell::RefCell;
 use std::io;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
@@ -11,14 +13,13 @@ use async_tls::{
     client::TlsStream as TlsStreamCli,
     server::TlsStream as TlsStreamSrv,
 };
-
 use futures::io::{
     AsyncRead,
     AsyncWrite,
     BufReader,
     BufWriter,
 };
-use rustls::{ClientSession, ServerSession, Stream};
+use rustls::{ClientSession, ServerSession, Session, Stream, StreamOwned};
 
 use crate::bft::error;
 
@@ -187,44 +188,48 @@ pub enum SecureSocketSendClient {
     Tls(TlsStreamCli<Socket>),
 }
 
-pub enum SecureSocketRecvReplica<'a> {
+pub enum SecureSocketRecvReplica {
     Plain(ReplicaSocket),
-    Tls {
-        session: rustls::ServerSession,
-        socket: ReplicaSocket,
-        stream: Stream<'a, ServerSession, ReplicaSocket>,
-    },
+    Tls(StreamOwned<rustls::ServerSession, ReplicaSocket>),
 }
 
-pub enum SecureSocketSendReplica<'a> {
+pub enum SecureSocketSendReplica {
     Plain(ReplicaSocket),
-    Tls {
-        session: rustls::ClientSession,
-        socket: ReplicaSocket,
-        stream: Stream<'a, ClientSession, ReplicaSocket>,
-    },
+    Tls(StreamOwned<rustls::ClientSession, ReplicaSocket>),
+}
+
+impl SecureSocketRecvReplica {
+    pub fn new_tls(session: rustls::ServerSession, socket: ReplicaSocket) -> Self {
+        SecureSocketRecvReplica::Tls(StreamOwned::new(session, socket))
+    }
+}
+
+impl SecureSocketSendReplica {
+    pub fn new_tls(session: rustls::ClientSession, socket: ReplicaSocket) -> Self {
+        SecureSocketSendReplica::Tls(StreamOwned::new(session, socket))
+    }
 }
 
 #[derive(Clone)]
 ///Client stores asynchronous socket references (Client->replica, replica -> client)
 ///Replicas stores synchronous socket references (Replica -> Replica)
-pub enum SecureSocketSend<'a> {
+pub enum SecureSocketSend {
     Client(Arc<futures::lock::Mutex<SecureSocketSendClient>>),
-    Replica(Arc<parking_lot::Mutex<SecureSocketSendReplica<'a>>>),
+    Replica(Arc<parking_lot::Mutex<SecureSocketSendReplica>>),
 }
 
-pub enum SecureSocketRecv<'a> {
+pub enum SecureSocketRecv {
     Client(SecureSocketRecvClient),
-    Replica(SecureSocketRecvReplica<'a>),
+    Replica(SecureSocketRecvReplica),
 }
 
 impl Write for ReplicaSocket {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.inner.write(buf)
+        (&mut self.inner).write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
+        (&mut self.inner).flush()
     }
 }
 
@@ -238,13 +243,13 @@ impl Read for ReplicaSocket {
     }
 }
 
-impl<'a> Write for SecureSocketSendReplica<'a> {
+impl Write for SecureSocketSendReplica {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self {
             SecureSocketSendReplica::Plain(socket) => {
                 socket.write(buf)
             }
-            SecureSocketSendReplica::Tls { stream, .. } => {
+            SecureSocketSendReplica::Tls(stream) => {
                 stream.write(buf)
             }
         }
@@ -255,23 +260,20 @@ impl<'a> Write for SecureSocketSendReplica<'a> {
             SecureSocketSendReplica::Plain(socket) => {
                 socket.flush()
             }
-            SecureSocketSendReplica::Tls {
-                stream,
-                ..
-            } => {
+            SecureSocketSendReplica::Tls(stream) => {
                 stream.flush()
             }
         }
     }
 }
 
-impl<'a> Read for SecureSocketRecvReplica<'a> {
+impl Read for SecureSocketRecvReplica {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self {
             SecureSocketRecvReplica::Plain(socket) => {
                 socket.read(buf)
             }
-            SecureSocketRecvReplica::Tls { stream, .. } => {
+            SecureSocketRecvReplica::Tls(stream) => {
                 stream.read(buf)
             }
         }
