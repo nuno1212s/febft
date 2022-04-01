@@ -52,7 +52,6 @@ impl DerefMut for Socket {
     }
 }
 
-
 #[cfg(windows)]
 mod sys {
     compile_error!("Sorry Windows users! Switch to the `async-std` socket backend.");

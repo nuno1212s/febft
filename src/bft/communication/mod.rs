@@ -233,6 +233,22 @@ pub struct PeerAddr {
     replica_addr: Option<(SocketAddr, String)>,
 }
 
+impl PeerAddr {
+    pub fn new(client_addr: (SocketAddr, String)) -> Self {
+        Self {
+            client_addr,
+            replica_addr: None,
+        }
+    }
+
+    pub fn new_replica(client_addr: (SocketAddr, String), replica_addr: (SocketAddr, String)) -> Self {
+        Self {
+            client_addr,
+            replica_addr: Some(replica_addr),
+        }
+    }
+}
+
 /// Represents a configuration used to bootstrap a `Node`.
 pub struct NodeConfig {
     /// The total number of nodes in the system.
@@ -373,6 +389,7 @@ impl<D> Node<D>
         // rx side (accept conns from clients)
         rt::spawn(rx_node_clone.clone().rx_side_accept(cfg.first_cli, id, listener, acceptor));
 
+        //Rx side accept for client servers
         match replica_listener {
             None => {}
             Some(replica_listener) => {
@@ -531,9 +548,7 @@ impl<D> Node<D>
                 // Right -> our turn
 
                 //Send to myself, always synchronous since only replicas send to themselves
-                threadpool::execute(move || {
-                    send_to.value_sync(Right((message, nonce, digest, buf)));
-                });
+                send_to.value_sync(Right((message, nonce, digest, buf)));
             } else {
 
                 // Left -> peer turn
@@ -625,9 +640,7 @@ impl<D> Node<D>
                     .map(|stored| stored.into_inner())
                     .unwrap();
 
-                threadpool::execute(move || {
-                    send_to.value_sync(header, message);
-                });
+                send_to.value_sync(header, message);
             }
 
             // send to others
@@ -676,10 +689,8 @@ impl<D> Node<D>
             if let Some(mut send_to) = my_send_to {
                 let buf = buf.clone();
 
-                threadpool::execute(move || {
-                    // Right -> our turn
-                    send_to.value_sync(Right((message, nonce, digest, buf)));
-                });
+                // Right -> our turn
+                send_to.value_sync(Right((message, nonce, digest, buf)));
             }
 
             // send to others
@@ -886,6 +897,8 @@ impl<D> Node<D>
         rng: &mut prng::State,
     ) {
         for peer_id in NodeId::targets_u32(0..n).filter(|&id| id != my_id) {
+            println!("Connecting to the node {:?}", peer_id);
+
             // FIXME: this line can crash the program if the user
             // provides an invalid HashMap, maybe return a Result<()>
             // from this function
@@ -893,7 +906,12 @@ impl<D> Node<D>
             let connector = connector.clone();
             let nonce = rng.next_state();
 
-            let peer_addr = addr.replica_addr.as_ref().unwrap().clone();
+            let peer_addr = if my_id >= first_cli {
+                addr.client_addr.clone()
+            } else {
+                addr.replica_addr.as_ref().unwrap().clone()
+            };
+
             //println!("Attempting to connect to peer {:?} with address {:?} from node {:?}", peer_id, addr, my_id);
 
             let arc = self.clone();

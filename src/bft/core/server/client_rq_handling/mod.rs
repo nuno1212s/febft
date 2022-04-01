@@ -179,9 +179,9 @@ impl<S: Service> RqProcessor<S> {
                 }
 
 
-                if is_leader {
+                if is_leader && !currently_accumulated.is_empty() {
                     //Attempt to propose new batch
-                    match self.consensus_guard.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed) {
+                    match self.consensus_guard.compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed) {
                         Ok(_) => {
                             let guard = self.consensus_lock.lock();
 
