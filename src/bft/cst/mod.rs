@@ -7,6 +7,7 @@
 // consensus sequence number
 
 use std::cmp::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(feature = "serialize_serde")]
@@ -263,7 +264,7 @@ where
             message.sequence_number(),
             CstMessageKind::ReplyState(snapshot),
         ));
-        node.send(reply, header.from(), true);
+        node.send(reply, header.from(), true, Arc::clone(log.batch_meta()));
     }
 
     /// Advances the state of the CST state machine.
@@ -292,7 +293,7 @@ where
                             message.sequence_number(),
                             kind,
                         ));
-                        node.send(reply, header.from(), true);
+                        node.send(reply, header.from(), true, Arc::clone(log.batch_meta()));
                     },
                     CstMessageKind::RequestState => {
                         self.process_reply_state(header, message, synchronizer, log, node);
@@ -472,6 +473,7 @@ where
         synchronizer: &Synchronizer<S>,
         timeouts: &TimeoutsHandle<S>,
         node: &Node<S::Data>,
+        log: &Log<State<S>, Request<S>, Reply<S>>
     ) {
         // reset state of latest seq no. request
         self.latest_cid = SeqNo::ZERO;
@@ -486,7 +488,8 @@ where
             CstMessageKind::RequestLatestConsensusSeq,
         ));
         let targets = NodeId::targets(0..synchronizer.view().params().n());
-        node.broadcast(message, targets);
+
+        node.broadcast(message, targets, Arc::clone(log.batch_meta()));
     }
 
     /// Used by a recovering node to retrieve the latest state.
@@ -495,6 +498,7 @@ where
         synchronizer: &Synchronizer<S>,
         timeouts: &TimeoutsHandle<S>,
         node: &Node<S::Data>,
+        log: &Log<State<S>, Request<S>, Reply<S>>
     ) {
         // reset hashmap of received states
         self.received_states.clear();
@@ -508,6 +512,6 @@ where
             CstMessageKind::RequestState,
         ));
         let targets = NodeId::targets(0..synchronizer.view().params().n());
-        node.broadcast(message, targets);
+        node.broadcast(message, targets, Arc::clone(log.batch_meta()));
     }
 }

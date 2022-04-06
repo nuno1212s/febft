@@ -650,7 +650,7 @@ impl<S> Synchronizer<S>
                 // we have sent our own STOP message
                 if let ProtoPhase::Stopping(_) = *self.phase.borrow() {
                     return if i > current_view.params().f() {
-                        self.begin_view_change(None, node);
+                        self.begin_view_change(None, node, log);
                         SynchronizerStatus::Running
                     } else {
                         self.phase.replace(ProtoPhase::Stopping(i));
@@ -684,7 +684,7 @@ impl<S> Synchronizer<S>
                         ViewChangeMessageKind::StopData(collect),
                     ));
 
-                    node.send_signed(message, current_view.leader());
+                    node.send_signed(message, current_view.leader(), Arc::clone(log.batch_meta()));
                 } else {
                     self.phase.replace(ProtoPhase::Stopping2(i));
                 }
@@ -785,7 +785,7 @@ impl<S> Synchronizer<S>
                 let node_id = node.id();
                 let targets = NodeId::targets(0..current_view.params().n())
                     .filter(move |&id| id != node_id);
-                node.broadcast(message, targets);
+                node.broadcast(message, targets, Arc::clone(log.batch_meta()));
 
                 let state = FinalizeState {
                     curr_cid,
@@ -977,6 +977,7 @@ impl<S> Synchronizer<S>
         &self,
         timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
         node: &Node<S::Data>,
+        log: &Log<State<S>, Request<S>, Reply<S>>
     ) {
         match (&*self.phase.borrow(), &timed_out) {
             // we have received STOP messages from peer nodes,
@@ -1019,7 +1020,7 @@ impl<S> Synchronizer<S>
 
         let targets = NodeId::targets(0..current_view.params().n());
 
-        node.broadcast(message, targets);
+        node.broadcast(message, targets, Arc::clone(log.batch_meta()));
     }
 
     /// Forward the requests that timed out, `timed_out`, to all the nodes in the
@@ -1028,12 +1029,13 @@ impl<S> Synchronizer<S>
         &self,
         timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         node: &Node<S::Data>,
+        log: &Log<State<S>, Request<S>, Reply<S>>
     ) {
         let message = SystemMessage::ForwardedRequests(ForwardedRequestsMessage::new(
             timed_out,
         ));
         let targets = NodeId::targets(0..self.view().params().n());
-        node.broadcast(message, targets);
+        node.broadcast(message, targets, Arc::clone(log.batch_meta()));
     }
 
     /// Returns some information regarding the current view, such as

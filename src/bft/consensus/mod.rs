@@ -114,6 +114,11 @@ impl<O> TboQueue<O> {
         self.get_queue = true;
     }
 
+    /// Returns the seqno of the next consensus instance
+    fn next_instance_no_advance(&self) -> SeqNo {
+        self.curr_seq.clone().next()
+    }
+
     /// Advances the message queue, and updates the consensus instance id.
     fn next_instance_queue(&mut self) {
         self.curr_seq = self.curr_seq.next();
@@ -298,6 +303,7 @@ impl<S> Consensus<S>
         requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         synchronizer: &Synchronizer<S>,
         node: &Node<S::Data>,
+        log: &Log<State<S>, Request<S>, Reply<S>>
     ) {
         //debug!("Phase {:?}", self.phase);
 
@@ -323,7 +329,7 @@ impl<S> Consensus<S>
 
         let targets = NodeId::targets(0..view.params().n());
 
-        node.broadcast(message, targets);
+        node.broadcast(message, targets, Arc::clone(log.batch_meta()));
     }
 
     /// Returns true if there is a running consensus instance.
@@ -388,7 +394,7 @@ impl<S> Consensus<S>
             ));
 
             let targets = NodeId::targets(0..synchronizer.view().params().n());
-            node.broadcast(message, targets);
+            node.broadcast(message, targets, Arc::clone(log.batch_meta()));
         }
     }
 
@@ -449,11 +455,11 @@ impl<S> Consensus<S>
     pub fn next_instance(&mut self, sync: &Arc<Synchronizer<S>>) {
         self.tbo.next_instance_queue();
 
-        let mut lock = self.consensus_lock.lock();
+        let mut guard = self.consensus_lock.lock();
 
-        *lock = (self.sequence_number(), sync.view());
+        *guard = (self.curr_seq, sync.view());
 
-        self.consensus_guard.store(false, Ordering::Relaxed);
+        self.consensus_guard.store(false, Ordering::SeqCst);
     }
 
     /// Sets the id of the current consensus.
@@ -649,6 +655,7 @@ impl<S> Consensus<S>
                 });
 
                 // leader can't vote for a PREPARE
+                // Since the preprepare message is already "equivalent" to the leaders prepare message
                 if node.id() != view.leader() {
                     let message = SystemMessage::Consensus(ConsensusMessage::new(
                         self.sequence_number(),
@@ -658,13 +665,14 @@ impl<S> Consensus<S>
 
                     let targets = NodeId::targets(0..view.params().n());
 
-                    node.broadcast(message, targets);
+                    node.broadcast(message, targets, Arc::clone(log.batch_meta()));
                 }
 
                 log.batch_meta().lock().prepare_sent_time = Utc::now();
 
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
+
                 // try entering preparing phase
                 //for digest in self.current.iter().take(self.batch_size).filter(|d| !log.has_request(d)) {
                 //    self.missing_requests.push_back(digest.clone());
@@ -674,6 +682,8 @@ impl<S> Consensus<S>
                 //} else {
                 //    ProtoPhase::PreparingRequests
                 //};
+
+                //Start the count at one since the leader always agrees with his own pre-prepare message
                 self.phase = ProtoPhase::Preparing(1);
                 ConsensusStatus::Deciding
             }
@@ -701,6 +711,8 @@ impl<S> Consensus<S>
             ProtoPhase::Preparing(i) => {
                 // queue message if we're not preparing
                 // or in the same seq as the message
+                let curr_view = synchronizer.view();
+
                 let i = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) => {
                         debug!("{:?} // Received pre prepare {:?} message while in preparing", self.node_id,
@@ -708,7 +720,7 @@ impl<S> Consensus<S>
                         self.queue_pre_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     }
-                    ConsensusMessageKind::Prepare(d) if message.view() != synchronizer.view().sequence_number() => {
+                    ConsensusMessageKind::Prepare(d) if message.view() != curr_view.sequence_number() => {
                         // drop msg in a different view
 
                         debug!("{:?} // Dropped prepare message {:?} because of view {:?} vs {:?} (ours)",
@@ -739,9 +751,14 @@ impl<S> Consensus<S>
 
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
+
+                if i == 2 {
+                    log.batch_meta().lock().first_prepare_received = Utc::now();
+                }
+
                 // check if we have gathered enough votes,
                 // and transition to a new phase
-                self.phase = if i == synchronizer.view().params().quorum() {
+                self.phase = if i == curr_view.params().quorum() {
                     let speculative_commits = self.take_speculative_commits();
 
                     if valid_spec_commits(&speculative_commits, self, synchronizer) {
@@ -751,27 +768,32 @@ impl<S> Consensus<S>
                             break;
                         }
 
-                        node.broadcast_serialized(speculative_commits);
+                        node.broadcast_serialized(speculative_commits, Arc::clone(log.batch_meta()));
                     } else {
                         let message = SystemMessage::Consensus(ConsensusMessage::new(
                             self.sequence_number(),
-                            synchronizer.view().sequence_number(),
+                            curr_view.sequence_number(),
                             ConsensusMessageKind::Commit(self.current_digest.clone()),
                         ));
 
                         debug!("{:?} // Broadcasting commit consensus message {:?}", self.node_id, message);
 
-                        let targets = NodeId::targets(0..synchronizer.view().params().n());
+                        let targets = NodeId::targets(0..curr_view.params().n());
 
-                        node.broadcast_signed(message, targets);
+                        node.broadcast_signed(message, targets, Arc::clone(log.batch_meta()));
                     }
 
                     log.batch_meta().lock().commit_sent_time = Utc::now();
 
+                    //Preemptively store the next instance and view and allow the rq handler
+                    //to start sending the propose request for the next batch
+
+                    //We set at 0 since we broadcast the messages above, meaning we will also receive the message.
                     ProtoPhase::Committing(0)
                 } else {
                     ProtoPhase::Preparing(i)
                 };
+
                 ConsensusStatus::Deciding
             }
             ProtoPhase::Committing(i) => {
@@ -821,6 +843,11 @@ impl<S> Consensus<S>
 
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
+
+                if i == 1 {
+                    log.batch_meta().lock().first_commit_received = Utc::now();
+                }
+
                 // check if we have gathered enough votes,
                 // and transition to a new phase
                 if i == synchronizer.view().params().quorum() {

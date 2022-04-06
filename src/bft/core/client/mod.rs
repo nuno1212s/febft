@@ -10,6 +10,7 @@ use intmap::IntMap;
 use parking_lot::Mutex;
 
 use crate::bft::async_runtime as rt;
+use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::{
     Node,
     NodeConfig,
@@ -46,6 +47,7 @@ pub struct Client<D: SharedData + 'static> {
     data: Arc<ClientData<D::Reply>>,
     params: SystemParams,
     node: SendNode<D>,
+    dummy_meta: Arc<Mutex<BatchMeta>>
 }
 
 impl<D: SharedData> Clone for Client<D> {
@@ -61,6 +63,7 @@ impl<D: SharedData> Clone for Client<D> {
             node: self.node.clone(),
             data: Arc::clone(&self.data),
             operation_counter: SeqNo::ZERO,
+            dummy_meta: Arc::new(Mutex::new(BatchMeta::new()))
         }
     }
 }
@@ -167,6 +170,7 @@ impl<D> Client<D>
             session_id,
             node: send_node,
             operation_counter: SeqNo::ZERO,
+            dummy_meta: Arc::new(Mutex::new(BatchMeta::new()))
         })
     }
 
@@ -188,9 +192,10 @@ impl<D> Client<D>
             operation,
         ));
 
+
         // broadcast our request to the node group
         let targets = NodeId::targets(0..self.params.n());
-        self.node.broadcast(message, targets);
+        self.node.broadcast(message, targets, self.dummy_meta.clone());
 
         // await response
         let request_key = get_request_key(session_id, operation_id);

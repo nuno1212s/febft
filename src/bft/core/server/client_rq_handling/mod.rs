@@ -220,7 +220,7 @@ impl<S: Service> RqProcessor<S> {
 
                             let targets = NodeId::targets(0..view.params().n());
 
-                            self.node_ref.broadcast(message, targets);
+                            self.node_ref.broadcast(message, targets, Arc::clone(self.log.batch_meta()));
                         },
                         Err(_) => {}
                     }

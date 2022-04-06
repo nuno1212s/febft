@@ -1,5 +1,6 @@
 //! Contains the server side core protocol logic of `febft`.
 
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
@@ -13,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bft::async_runtime as rt;
 use crate::bft::async_runtime::JoinHandle;
+use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::{
     Node,
     NodeConfig,
@@ -190,12 +192,15 @@ impl<S> Replica<S>
         let f = node_config.f;
         let view = ViewInfo::new(view, n, f)?;
 
+        // TODO: get log from persistent storage
+        let log = Log::new(node_config.id.clone(), batch_size);
+
         // connect to peer nodes
         let (node, rogue) = Node::bootstrap(node_config).await?;
 
         let node_clone = node.clone();
 
-        let reply_handle = Replier::new(node.id(), node.send_node());
+        let reply_handle = Replier::new(node.id(), node.send_node(), log.clone());
 
         // start executor
         let executor = Executor::new(
@@ -208,9 +213,6 @@ impl<S> Replica<S>
         let timeouts = Timeouts::new(
             Arc::clone(node.loopback_channel()),
         );
-
-        // TODO: get log from persistent storage
-        let log = Log::new(node.id(), batch_size);
 
         // TODO:
         // - client req timeout base dur configure param
@@ -360,6 +362,7 @@ impl<S> Replica<S>
                                         &self.synchronizer,
                                         &self.timeouts,
                                         &self.node,
+                                        &self.log,
                                     );
                                 } else {
                                     self.phase = ReplicaPhase::NormalPhase;
@@ -370,6 +373,7 @@ impl<S> Replica<S>
                                     &self.synchronizer,
                                     &self.timeouts,
                                     &self.node,
+                                    &self.log,
                                 );
                             }
                             CstStatus::RequestState => {
@@ -377,6 +381,7 @@ impl<S> Replica<S>
                                     &self.synchronizer,
                                     &self.timeouts,
                                     &mut self.node,
+                                    &self.log,
                                 );
                             }
                             // should not happen...
@@ -621,7 +626,8 @@ impl<S> Replica<S>
 
                                 let (info, batch) = self.log.finalize_batch(seq, batch_digest, digests)?;
 
-                                let meta = (*self.log.batch_meta().lock()).clone();
+                                let new_meta = BatchMeta::new();
+                                let meta = std::mem::replace(&mut *self.log.batch_meta().lock(), new_meta);
 
                                 //Send the finalized batch to the rq finalizer
                                 //So everything can be removed from the correct logs and
@@ -710,6 +716,7 @@ impl<S> Replica<S>
                             &self.synchronizer,
                             &self.timeouts,
                             &self.node,
+                            &self.log
                         );
                         self.phase = ReplicaPhase::RetrievingState;
                     }
@@ -718,6 +725,7 @@ impl<S> Replica<S>
                             &self.synchronizer,
                             &self.timeouts,
                             &self.node,
+                            &self.log
                         );
                         self.phase = ReplicaPhase::RetrievingState;
                     }

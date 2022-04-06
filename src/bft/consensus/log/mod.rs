@@ -498,7 +498,7 @@ pub struct Log<S, O, P> {
     decided: RefCell<Vec<O>>,
     checkpoint: RefCell<CheckpointState<S>>,
     //Some stuff for statistics.
-    meta: Mutex<BatchMeta>,
+    meta: Arc<Mutex<BatchMeta>>,
     _marker: PhantomData<P>,
 }
 
@@ -530,7 +530,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
             requests: collections::concurrent_hash_map_with_capacity(PERIOD as usize),
             request_batches: collections::concurrent_hash_map(),
             checkpoint: RefCell::new(CheckpointState::None),
-            meta: Mutex::new(BatchMeta::new()),
+            meta: Arc::new(Mutex::new(BatchMeta::new())),
             _marker: PhantomData,
         })
     }
@@ -539,7 +539,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
         &self.latest_op
     }
 
-    pub fn batch_meta(&self) -> &Mutex<BatchMeta> {
+    pub fn batch_meta(&self) -> &Arc<Mutex<BatchMeta>> {
         &self.meta
     }
 
