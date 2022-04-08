@@ -100,8 +100,8 @@ async-channel = { version = "1", optional = true }
 twox-hash = { version = "1", optional = true }
 serde_bytes = { version = "0.11", optional = true }
 fxhash = { version = "0.2", optional = true }
-#dsrust = { version = "0.1.7", git = "https://github.com/nuno1212s/DSRust" }
-dsrust = { path = "/home/nunogneto/Documents/Development/Rust/dsrust" }
+dsrust = { version = "0.1.8", git = "https://github.com/nuno1212s/DSRust" }
+#dsrust = { path = "/home/nunogneto/Documents/Development/Rust/dsrust" }
 crossbeam-channel = "0.5.2"
 
 log = "0.4.14"
