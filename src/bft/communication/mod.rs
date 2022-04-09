@@ -417,14 +417,25 @@ impl<D> Node<D>
         // tx side (connect to replica)
         let mut rng = prng::State::new();
 
-        node.clone().tx_side_connect_sync(
-            cfg.n as u32,
-            cfg.first_cli,
-            id,
-            replica_connector,
-            &node.peer_addrs,
-            &mut rng,
-        );
+        if id < cfg.first_cli {
+            //If we are a replica
+            node.clone().tx_side_connect_sync(
+                cfg.n as u32,
+                cfg.first_cli,
+                id,
+                replica_connector,
+                &node.peer_addrs,
+                &mut rng,
+            );
+        } else {
+            node.clone().tx_side_connect(
+                cfg.n as u32,
+                cfg.first_cli,
+                id,
+                connector,
+                &node.peer_addrs,
+                &mut rng,)
+        }
 
         let mut rogue = Vec::new();
 
@@ -1054,6 +1065,46 @@ impl<D> Node<D>
 
                 arc.tx_side_connect_task_sync(my_id, first_cli, peer_id,
                                               nonce, connector, peer_addr);
+            //});
+        }
+    }
+
+    ///Connect to all other replicas in the cluster
+    #[inline]
+    async fn tx_side_connect(
+        self: Arc<Self>,
+        n: u32,
+        first_cli: NodeId,
+        my_id: NodeId,
+        connector: TlsConnector,
+        addrs: &IntMap<PeerAddr>,
+        rng: &mut prng::State,
+    ) {
+        for peer_id in NodeId::targets_u32(0..n).filter(|&id| id != my_id) {
+            debug!("{:?} // Connecting to the node {:?}",my_id, peer_id);
+
+            // FIXME: this line can crash the program if the user
+            // provides an invalid HashMap, maybe return a Result<()>
+            // from this function
+            let addr = addrs.get(peer_id.id() as u64).unwrap().clone();
+            let connector = connector.clone();
+            let nonce = rng.next_state();
+
+            let peer_addr = if my_id >= first_cli {
+                addr.client_addr.clone()
+            } else {
+                addr.replica_addr.as_ref().unwrap().clone()
+            };
+
+            //println!("Attempting to connect to peer {:?} with address {:?} from node {:?}", peer_id, addr, my_id);
+
+            let arc = self.clone();
+
+            //threadpool::execute(move || {
+            debug!("{:?} // Starting connection to node {:?}",my_id, peer_id);
+
+            arc.tx_side_connect_task(my_id, first_cli, peer_id,
+                                          nonce, connector, peer_addr).await;
             //});
         }
     }
