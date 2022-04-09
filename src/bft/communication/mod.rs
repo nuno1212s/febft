@@ -415,10 +415,11 @@ impl<D> Node<D>
         rt::spawn(rx_node_clone.rx_side_accept(cfg.first_cli, id, listener, acceptor));
 
         // tx side (connect to replica)
-        let mut rng = prng::State::new();
 
         if id < cfg.first_cli {
             //If we are a replica
+            let mut rng = prng::State::new();
+
             node.clone().tx_side_connect_sync(
                 cfg.n as u32,
                 cfg.first_cli,
@@ -428,13 +429,22 @@ impl<D> Node<D>
                 &mut rng,
             );
         } else {
-            node.clone().tx_side_connect(
-                cfg.n as u32,
-                cfg.first_cli,
-                id,
-                connector,
-                &node.peer_addrs,
-                &mut rng,);
+            let node_cpy = node.clone();
+
+            let n = cfg.n as u32;
+            let first_cli = cfg.first_cli;
+
+            rt::spawn(async move {
+                let mut rng = prng::State::new();
+
+                node_cpy.clone().tx_side_connect(
+                    n,
+                    first_cli,
+                    id,
+                    connector,
+                    &node_cpy.peer_addrs,
+                    &mut rng, ).await;
+            });
         }
 
         let mut rogue = Vec::new();
@@ -1061,10 +1071,10 @@ impl<D> Node<D>
             let arc = self.clone();
 
             //threadpool::execute(move || {
-                debug!("{:?} // Starting connection to node {:?}",my_id, peer_id);
+            debug!("{:?} // Starting connection to node {:?}",my_id, peer_id);
 
-                arc.tx_side_connect_task_sync(my_id, first_cli, peer_id,
-                                              nonce, connector, peer_addr);
+            arc.tx_side_connect_task_sync(my_id, first_cli, peer_id,
+                                          nonce, connector, peer_addr);
             //});
         }
     }
@@ -1100,12 +1110,12 @@ impl<D> Node<D>
 
             let arc = self.clone();
 
-            //threadpool::execute(move || {
-            debug!("{:?} // Starting connection to node {:?}",my_id, peer_id);
+            rt::spawn(async move {
+                debug!("{:?} // Starting connection to node {:?}",my_id, peer_id);
 
-            arc.tx_side_connect_task(my_id, first_cli, peer_id,
-                                          nonce, connector, peer_addr).await;
-            //});
+                arc.tx_side_connect_task(my_id, first_cli, peer_id,
+                                         nonce, connector, peer_addr).await;
+            });
         }
     }
 
@@ -1372,9 +1382,8 @@ impl<D> Node<D>
         my_id: NodeId,
         acceptor: TlsAcceptor,
         mut sock: Socket,
-        rand: u32
+        rand: u32,
     ) {
-
         let mut buf_header = [0; Header::LENGTH];
 
         debug!("{:?} // Started handling connection from node {}", my_id, rand);
