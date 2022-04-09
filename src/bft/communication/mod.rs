@@ -434,7 +434,7 @@ impl<D> Node<D>
                 id,
                 connector,
                 &node.peer_addrs,
-                &mut rng,)
+                &mut rng,);
         }
 
         let mut rogue = Vec::new();
