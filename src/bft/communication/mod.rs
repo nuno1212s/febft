@@ -1252,7 +1252,7 @@ impl<D> Node<D>
 
                 let acceptor = acceptor.clone();
 
-                rt::spawn(self.clone().rx_side_establish_conn_task(first_cli, my_id, acceptor, sock, rank));
+                rt::spawn(self.clone().rx_side_establish_conn_task(first_cli, my_id, acceptor, sock, rand));
             }
         }
     }
