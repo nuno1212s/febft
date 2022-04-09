@@ -72,10 +72,11 @@ impl<S: Service> RqProcessor<S> {
     ///Start this work
     pub fn start(self: Arc<Self>) -> JoinHandle<()> {
         std::thread::Builder::new().name(format!("Client RQ Handling {:?}", self.node_ref.id())).spawn(move || {
-            //TODO: Handle overflow
-
+            //Handle the overflowed requests that were meant to go in the previous batch but they overflowed
+            //The batch's capacity
             let mut overflowed = Vec::with_capacity(self.node_ref.batch_size());
 
+            //The currently accumulated requests, accumulated while we wait for the next batch to propose
             let mut currently_accumulated = Vec::with_capacity(self.node_ref.batch_size());
 
             let mut last_seq = Option::None;
@@ -161,8 +162,11 @@ impl<S: Service> RqProcessor<S> {
                     match final_batch {
                         None => {}
                         Some(mut rqs) => {
+                            //If we would have overflowed by adding the requests
                             if currently_accumulated.len() + rqs.len() > self.node_ref.batch_size() {
-                                for _ in 0..self.node_ref.batch_size() - currently_accumulated.len() {
+                                let rqs_to_fill_batch = std::cmp::min(self.node_ref.batch_size() - currently_accumulated.len(), rqs.len());
+
+                                for _ in 0..rqs_to_fill_batch {
                                     currently_accumulated.push(rqs.pop().unwrap());
                                 }
 
@@ -177,7 +181,6 @@ impl<S: Service> RqProcessor<S> {
                     //To wait for that?
                     self.requests_received(DateTime::from(SystemTime::now()), to_log);
                 }
-
 
                 if is_leader && !currently_accumulated.is_empty() {
                     //Attempt to propose new batch
@@ -206,12 +209,14 @@ impl<S: Service> RqProcessor<S> {
                                 ConsensusMessageKind::PrePrepare(currently_accumulated),
                             ));
 
-                            let mut new_overflow = Vec::with_capacity(self.node_ref.batch_size());
+                            let mut new_overflow =
+                                Vec::with_capacity(self.node_ref.batch_size());
 
-                            if overflowed.len() > self.node_ref.batch_size() {
-                                let mut vec = overflowed[self.node_ref.batch_size()..].to_vec();
+                            while overflowed.len() > self.node_ref.batch_size() {
+                                let overflowed_msg =
+                                    overflowed.pop().unwrap();
 
-                                new_overflow.append(&mut vec);
+                                new_overflow.push(overflowed_msg);
                             }
 
                             currently_accumulated = overflowed;
@@ -221,7 +226,7 @@ impl<S: Service> RqProcessor<S> {
                             let targets = NodeId::targets(0..view.params().n());
 
                             self.node_ref.broadcast(message, targets, Arc::clone(self.log.batch_meta()));
-                        },
+                        }
                         Err(_) => {}
                     }
                 }

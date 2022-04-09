@@ -200,10 +200,11 @@ impl<T> NodePeers<T> where T: Send {
         };
     }
 
-    pub fn try_receive_from_clients(&self) -> Result<Option<Vec<T>>>{
+    pub fn try_receive_from_clients(&self) -> Result<Option<Vec<T>>> {
         return match &self.client_rx {
             None => {
-                Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive from clients as there are no clients connected"))}
+                Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive from clients as there are no clients connected"))
+            }
             Some(rx) => {
                 match rx.try_recv() {
                     Ok(msgs) => {
@@ -583,7 +584,17 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                 continue;
             }
 
-            let rqs_dumped = client.dump_n_requests(next_client_requests, &mut batch);
+            let rqs_dumped = match client.dump_n_requests(next_client_requests, &mut batch) {
+                Ok(rqs) => { rqs }
+                Err(_) => {
+                    dced.push(client.client_id().clone());
+
+                    //Assign the remaining slots to the next client
+                    next_client_requests += requests_per_client;
+
+                    continue;
+                }
+            };
 
             //Leave the requests that were not used open for the following clients, in a greedy fashion
             next_client_requests -= rqs_dumped;
@@ -654,15 +665,22 @@ impl<T> ConnectedPeer<T> where T: Send {
 
     ///Dump n requests into the provided vector
     ///Returns the amount of requests that were dumped into the array
-    pub fn dump_n_requests(&self, rq_bound: usize, dump_vec: &mut Vec<T>) -> usize {
-        match self {
+    pub fn dump_n_requests(&self, rq_bound: usize, dump_vec: &mut Vec<T>) -> Result<usize> {
+        return match self {
             Self::PoolConnection { receiver, .. } => {
-                receiver.try_recv_mult(dump_vec, rq_bound).unwrap()
+                return match receiver.try_recv_mult(dump_vec, rq_bound) {
+                    Ok(rqs) => {
+                        Ok(rqs)
+                    }
+                    Err(err) => {
+                        Err(Error::simple_with_msg(ErrorKind::Communication, "Client has already disconnected."))
+                    }
+                };
             }
             Self::UnpooledConnection { .. } => {
-                0
+                Ok(0)
             }
-        }
+        };
     }
 
     pub fn push_request_sync(&self, msg: T) {

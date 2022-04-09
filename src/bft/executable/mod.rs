@@ -278,10 +278,8 @@ impl<S> Executor<S>
 
         let mut system_tx = self.send_node.loopback_channel().clone();
 
-        rt::spawn(async move {
-            let m = Message::ExecutionFinishedWithAppstate(cloned_state);
-            system_tx.push_request(m).await;
-        });
+        let m = Message::ExecutionFinishedWithAppstate(cloned_state);
+        system_tx.push_request_sync(m);
     }
 
     fn execution_finished(&mut self, batch: UpdateBatchReplies<Reply<S>>) {

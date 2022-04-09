@@ -24,6 +24,7 @@ use futures::io::{
 };
 use futures_timer::Delay;
 use intmap::IntMap;
+use log::{debug, error};
 use parking_lot::{Mutex, RwLock};
 use rustls::{ClientConfig, ServerConfig, Stream};
 #[cfg(feature = "serialize_serde")]
@@ -339,9 +340,9 @@ impl<D> Node<D>
         let listener = socket::bind(tokio_server_addr).await
             .wrapped_msg(ErrorKind::Communication, format!("Failed to bind to address {:?}", tokio_server_addr).as_str())?;
 
-        ///Initialize the replica facing server
+        ///Initialize the replica<->replica facing server
         let replica_listener = if id >= cfg.first_cli {
-            //Clients don't have a replica facing server
+            //Clients don't have a replica<->replica facing server
             None
         } else {
             let server_addr = peer_addr.replica_addr.as_ref().unwrap().0.clone();
@@ -395,21 +396,23 @@ impl<D> Node<D>
 
         let rx_node_clone = node.clone();
 
-        // rx side (accept conns from clients)
-        rt::spawn(rx_node_clone.clone().rx_side_accept(cfg.first_cli, id, listener, acceptor));
-
         //Rx side accept for client servers
         match replica_listener {
             None => {}
             Some(replica_listener) => {
                 let first_cli = cfg.first_cli;
 
+                let rx_clone_clone = rx_node_clone.clone();
+
                 std::thread::Builder::new().name(format!("Replica connection acceptor"))
                     .spawn(move || {
-                        rx_node_clone.rx_side_accept_sync(first_cli, id, replica_listener, replica_acceptor);
+                        rx_clone_clone.rx_side_accept_sync(first_cli, id, replica_listener, replica_acceptor);
                     });
             }
         }
+
+        // rx side (accept conns from clients)
+        rt::spawn(rx_node_clone.rx_side_accept(cfg.first_cli, id, listener, acceptor));
 
         // tx side (connect to replica)
         let mut rng = prng::State::new();
@@ -445,7 +448,7 @@ impl<D> Node<D>
 
     fn resolve_client_rx_connection(&self, node_id: NodeId) -> Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
         self.node_handling.resolve_peer_conn(node_id)
-            .expect(&*format!("Failed to resolve peer connection for {:?}", node_id))
+            .expect(&*format!("{:?} // Failed to resolve peer connection for {:?}", self.id, node_id))
     }
 
     // clone the shared data and pass it to a new object
@@ -1011,7 +1014,7 @@ impl<D> Node<D>
 
     /// Registers the newly created transmission socket to the peer
     pub fn handle_connected_tx(&self, peer_id: NodeId, sock: SecureSocketSend) {
-        //debug!("Connected TX to peer {:?} from peer {:?}", peer_id, self.id);
+        debug!("{:?} // Connected TX to peer {:?}", self.id, peer_id);
         self.peer_tx.add_peer(peer_id.id() as u64, sock);
     }
 
@@ -1027,7 +1030,7 @@ impl<D> Node<D>
         rng: &mut prng::State,
     ) {
         for peer_id in NodeId::targets_u32(0..n).filter(|&id| id != my_id) {
-            println!("Connecting to the node {:?}", peer_id);
+            debug!("{:?} // Connecting to the node {:?}",my_id, peer_id);
 
             // FIXME: this line can crash the program if the user
             // provides an invalid HashMap, maybe return a Result<()>
@@ -1047,6 +1050,8 @@ impl<D> Node<D>
             let arc = self.clone();
 
             threadpool::execute(move || {
+                debug!("{:?} // Starting connection to node {:?}",my_id, peer_id);
+
                 arc.tx_side_connect_task_sync(my_id, first_cli, peer_id,
                                               nonce, connector, peer_addr)
             });
@@ -1185,7 +1190,7 @@ impl<D> Node<D>
                 } else {
                     match connector.connect(hostname, sock).await {
                         Ok(s) => SecureSocketSendClient::Tls(s),
-                        Err(_) => break,
+                        Err(_) => { break; }
                     }
                 };
 
@@ -1195,7 +1200,6 @@ impl<D> Node<D>
                 // success
                 self.handle_connected_tx(peer_id, final_sock);
 
-                //println!("Ended connection attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
                 return;
             }
 
@@ -1240,6 +1244,7 @@ impl<D> Node<D>
         loop {
             if let Ok(sock) = listener.accept().await {
                 let acceptor = acceptor.clone();
+
                 rt::spawn(self.clone().rx_side_establish_conn_task(first_cli, my_id, acceptor, sock));
             }
         }
@@ -1310,11 +1315,16 @@ impl<D> Node<D>
         acceptor: TlsAcceptor,
         mut sock: Socket,
     ) {
+        let rand = fastrand::u32(0..);
+
         let mut buf_header = [0; Header::LENGTH];
+
+        debug!("{:?} // Started handling connection from node {}", my_id, rand);
 
         // this loop is just a trick;
         // the `break` instructions act as a `goto` statement
         loop {
+
             // read the peer's header
             if let Err(_) = sock.read_exact(&mut buf_header[..]).await {
                 // errors reading -> faulty connection;
@@ -1322,7 +1332,7 @@ impl<D> Node<D>
                 break;
             }
 
-            //println!("Node {:?} received connection from node", my_id);
+            debug!("{:?} // Received header from node {}", my_id, rand);
 
             // we are passing the correct length, safe to use unwrap()
             let header = Header::deserialize_from(&buf_header[..]).unwrap();
@@ -1339,7 +1349,7 @@ impl<D> Node<D>
                 Err(_) => break,
             };
 
-            //println!("Node {:?} received connection from node {:?}", my_id, peer_id);
+            debug!("{:?} // Received connection from node {:?}, {}", my_id, peer_id, rand);
 
             // TLS handshake; drop connection if it fails
             let sock = if peer_id >= first_cli || my_id >= first_cli {
@@ -1347,18 +1357,20 @@ impl<D> Node<D>
             } else {
                 match acceptor.accept(sock).await {
                     Ok(s) => SecureSocketRecvClient::Tls(s),
-                    Err(_) => break,
+                    Err(_) => {
+                        error!("{:?} // Failed to setup tls connection to node {:?}", my_id, peer_id);
+
+                        break;
+                    }
                 }
             };
 
             self.handle_connected_rx(peer_id, sock).await;
-            //tx.send(Message::ConnectedRx(peer_id, sock)).await.unwrap_or(());
 
             return;
         }
 
         // announce we have failed to connect to the peer node
-        //tx.send(Message::DisconnectedRx(None)).await.unwrap_or(());
     }
 
     /// Handles client connections
@@ -1372,7 +1384,10 @@ impl<D> Node<D>
                 //
                 // FIXME: this line can crash the program if the user
                 // provides an invalid HashMap
-                let addr = self.peer_addrs.get(peer_id.into()).unwrap().clone();
+                let addr = self.peer_addrs.get(peer_id.id() as u64).unwrap().clone();
+
+                debug!("{:?} // Received connection from client {:?}, establish TX connection on port {}", self.id, peer_id,
+                    addr.client_addr.0.port());
 
                 // connect
                 let nonce = self.rng.next_state();
@@ -1390,9 +1405,8 @@ impl<D> Node<D>
         }
 
         //Init the per client queue and start putting the received messages into it
-        //debug!("Handling connection of peer {:?} in peer {:?}", peer_id, self.id);
+        debug!("{:?} // Handling connection of peer {:?}", self.id, peer_id);
 
-        //TODO: Change how replicas are handled because of latency
         let client = self.node_handling.init_peer_conn(peer_id.clone());
 
         let mut buf = SmallVec::<[u8; 16384]>::new();
@@ -1445,14 +1459,10 @@ impl<D> Node<D>
             let msg = Message::System(header, message);
 
             client.push_request_(msg, &self.id()).await;
-
-            //tx.send(Message::System(header, message)).await.unwrap_or(());
         }
 
         // announce we have disconnected
         client.disconnect();
-
-        //tx.send(Message::DisconnectedRx(Some(peer_id))).await.unwrap_or(());
     }
 
     /// Handles replica connections, reading from stream and pushing message into the correct queue
