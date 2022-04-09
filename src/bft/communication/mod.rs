@@ -1178,6 +1178,7 @@ impl<D> Node<D>
                     // drop this socket
                     break;
                 }
+
                 if let Err(_) = sock.flush().await {
                     // errors flushing -> faulty connection;
                     // drop this socket
@@ -1186,6 +1187,8 @@ impl<D> Node<D>
 
                 // TLS handshake; drop connection if it fails
                 let sock = if peer_id >= first_cli || my_id >= first_cli {
+                    debug!("{:?} // Connecting with plain text to node {:?}", my_id, peer_id);
+
                     SecureSocketSendClient::Plain(BufWriter::new(sock))
                 } else {
                     match connector.connect(hostname, sock).await {
@@ -1243,9 +1246,13 @@ impl<D> Node<D>
     ) {
         loop {
             if let Ok(sock) = listener.accept().await {
+                let rand = fastrand::u32(0..);
+
+                debug!("{:?} // Accepting connection with rand {}", my_id, rand);
+
                 let acceptor = acceptor.clone();
 
-                rt::spawn(self.clone().rx_side_establish_conn_task(first_cli, my_id, acceptor, sock));
+                rt::spawn(self.clone().rx_side_establish_conn_task(first_cli, my_id, acceptor, sock, rank));
             }
         }
     }
@@ -1314,8 +1321,8 @@ impl<D> Node<D>
         my_id: NodeId,
         acceptor: TlsAcceptor,
         mut sock: Socket,
+        rand: u32
     ) {
-        let rand = fastrand::u32(0..);
 
         let mut buf_header = [0; Header::LENGTH];
 
@@ -1386,8 +1393,8 @@ impl<D> Node<D>
                 // provides an invalid HashMap
                 let addr = self.peer_addrs.get(peer_id.id() as u64).unwrap().clone();
 
-                debug!("{:?} // Received connection from client {:?}, establish TX connection on port {}", self.id, peer_id,
-                    addr.client_addr.0.port());
+                debug!("{:?} // Received connection from client {:?}, establish TX connection on port {:?}", self.id, peer_id,
+                    addr.client_addr.0);
 
                 // connect
                 let nonce = self.rng.next_state();
