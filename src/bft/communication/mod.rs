@@ -1049,12 +1049,12 @@ impl<D> Node<D>
 
             let arc = self.clone();
 
-            threadpool::execute(move || {
+            //threadpool::execute(move || {
                 debug!("{:?} // Starting connection to node {:?}",my_id, peer_id);
 
                 arc.tx_side_connect_task_sync(my_id, first_cli, peer_id,
-                                              nonce, connector, peer_addr)
-            });
+                                              nonce, connector, peer_addr);
+            //});
         }
     }
 
