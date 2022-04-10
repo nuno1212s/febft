@@ -106,6 +106,8 @@ crossbeam-channel = "0.5.2"
 
 log = "0.4.14"
 env_logger = "0.8"
+tracing = "0.1.32"
+tracing-subscriber = { version = "0.3.11", features = ["fmt"] }
 
 # https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.release]

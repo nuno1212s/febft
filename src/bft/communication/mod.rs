@@ -24,7 +24,7 @@ use futures::io::{
 };
 use futures_timer::Delay;
 use intmap::IntMap;
-use log::{debug, error};
+use tracing::{debug, instrument, error};
 use parking_lot::{Mutex, RwLock};
 use rustls::{ClientConfig, ServerConfig, Stream};
 #[cfg(feature = "serialize_serde")]
@@ -429,6 +429,7 @@ impl<D> Node<D>
                 &mut rng,
             );
         } else {
+            //If we are a client, use the tokio library
             let node_cpy = node.clone();
 
             let n = cfg.n as u32;
@@ -1070,17 +1071,18 @@ impl<D> Node<D>
 
             let arc = self.clone();
 
-            //threadpool::execute(move || {
-            debug!("{:?} // Starting connection to node {:?}",my_id, peer_id);
+            threadpool::execute(move || {
+                debug!("{:?} // Starting connection to node {:?}",my_id, peer_id);
 
-            arc.tx_side_connect_task_sync(my_id, first_cli, peer_id,
-                                          nonce, connector, peer_addr);
-            //});
+                arc.tx_side_connect_task_sync(my_id, first_cli, peer_id,
+                                              nonce, connector, peer_addr);
+            });
         }
     }
 
     ///Connect to all other replicas in the cluster
     #[inline]
+    #[instrument(skip(self, addrs, rng, first_cli, connector))]
     async fn tx_side_connect(
         self: Arc<Self>,
         n: u32,
@@ -1195,6 +1197,7 @@ impl<D> Node<D>
         }
     }
 
+    #[instrument(skip(self, first_cli, nonce, connector))]
     async fn tx_side_connect_task(
         self: Arc<Self>,
         my_id: NodeId,
@@ -1298,6 +1301,7 @@ impl<D> Node<D>
     }
 
     // TODO: check if we have terminated the node, and exit
+    #[instrument(skip(self, first_cli, listener, acceptor))]
     async fn rx_side_accept(
         self: Arc<Self>,
         first_cli: NodeId,
@@ -1306,14 +1310,21 @@ impl<D> Node<D>
         acceptor: TlsAcceptor,
     ) {
         loop {
-            if let Ok(sock) = listener.accept().await {
-                let rand = fastrand::u32(0..);
+            debug!("{:?} // Awaiting for new connections", my_id);
 
-                debug!("{:?} // Accepting connection with rand {}", my_id, rand);
+            match listener.accept().await {
+                Ok(sock) => {
+                    let rand = fastrand::u32(0..);
 
-                let acceptor = acceptor.clone();
+                    debug!("{:?} // Accepting connection with rand {}", my_id, rand);
 
-                rt::spawn(self.clone().rx_side_establish_conn_task(first_cli, my_id, acceptor, sock, rand));
+                    let acceptor = acceptor.clone();
+
+                    rt::spawn(self.clone().rx_side_establish_conn_task(first_cli, my_id, acceptor, sock, rand));
+                }
+                Err(err) => {
+                    error!("{:?} // Failed to accept connection {:?}", my_id, err);
+                }
             }
         }
     }
@@ -1376,6 +1387,7 @@ impl<D> Node<D>
     // performs a cryptographic handshake with a peer node;
     // header doesn't need to be signed, since we won't be
     // storing this message in the log
+    #[instrument(skip(self, first_cli, acceptor, sock, rand))]
     async fn rx_side_establish_conn_task(
         self: Arc<Self>,
         first_cli: NodeId,
@@ -1441,6 +1453,7 @@ impl<D> Node<D>
     }
 
     /// Handles client connections
+    #[instrument(skip(self, sock))]
     pub async fn handle_connected_rx(self: Arc<Self>, peer_id: NodeId, mut sock: SecureSocketRecvClient) {
         // we are a server node
         if let PeerTx::Server { .. } = &self.peer_tx {
