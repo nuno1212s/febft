@@ -173,20 +173,19 @@ impl BenchmarkHelper {
     }
 
     pub fn average(&mut self, percent: bool, sorted: bool) -> f64 {
-        let mut values = &mut self.values;
-        let limit = if percent { values.len() / 10 } else { 0 };
+        let limit = if percent { self.values.len() / 10 } else { 0 };
 
         if !sorted {
-            values.sort_unstable();
+            self.values.sort_unstable();
         }
 
-        let count = (&values[limit..(values.len() - limit)])
+        let count = (&self.values[limit..(self.values.len() - limit)])
             .iter()
             .copied()
             .reduce(|x, y| x.wrapping_add(y))
             .unwrap_or(0);
 
-        (count as f64) / ((values.len() - 2 * limit) as f64)
+        (count as f64) / ((self.values.len() - 2 * limit) as f64)
     }
 
     pub fn standard_deviation(&mut self, percent: bool, sorted: bool) -> f64 {
@@ -194,21 +193,22 @@ impl BenchmarkHelper {
             return 0.0;
         }
 
-        let mut values = &mut self.values;
-
         if !sorted {
-            values.sort_unstable();
+            self.values.sort_unstable();
         }
 
-        let limit = if percent { values.len() / 10 } else { 0 };
-        let num = (values.len() - (limit << 1)) as f64;
+        let limit = if percent { self.values.len() / 10 } else { 0 };
+        let num = (self.values.len() - (limit << 1)) as f64;
+
         let med = self.average(percent, true);
-        let quad = (&values[limit..(values.len() - limit)])
+
+        let quad = (&self.values[limit..(self.values.len() - limit)])
             .iter()
             .copied()
             .map(|x| x.wrapping_mul(x))
             .reduce(|x, y| x.wrapping_add(y))
             .unwrap_or(0);
+
         let quad = quad as f64;
         let var = (quad - (num * (med * med))) / (num - 1.0);
 
