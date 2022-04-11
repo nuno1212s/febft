@@ -172,11 +172,13 @@ impl BenchmarkHelper {
             .unwrap_or(0)
     }
 
-    pub fn average(&self, percent: bool) -> f64 {
-        let mut values = self.values.clone();
+    pub fn average(&mut self, percent: bool, sorted: bool) -> f64 {
+        let mut values = &mut self.values;
         let limit = if percent { values.len() / 10 } else { 0 };
 
-        values.sort_unstable();
+        if !sorted {
+            values.sort_unstable();
+        }
 
         let count = (&values[limit..(values.len() - limit)])
             .iter()
@@ -187,17 +189,21 @@ impl BenchmarkHelper {
         (count as f64) / ((values.len() - 2 * limit) as f64)
     }
 
-    pub fn standard_deviation(&mut self, percent: bool) -> f64 {
+    pub fn standard_deviation(&mut self, percent: bool, sorted: bool) -> f64 {
         if self.values.len() <= 1 {
             return 0.0;
         }
 
-        self.values.sort_unstable();
+        let mut values = &mut self.values;
 
-        let limit = if percent { self.values.len() / 10 } else { 0 };
-        let num = (self.values.len() - (limit << 1)) as f64;
-        let med = self.average(percent);
-        let quad = (&self.values[limit..(self.values.len() - limit)])
+        if !sorted {
+            values.sort_unstable();
+        }
+
+        let limit = if percent { values.len() / 10 } else { 0 };
+        let num = (values.len() - (limit << 1)) as f64;
+        let med = self.average(percent, true);
+        let quad = (&values[limit..(values.len() - limit)])
             .iter()
             .copied()
             .map(|x| x.wrapping_mul(x))
@@ -210,30 +216,37 @@ impl BenchmarkHelper {
     }
 
     #[inline(always)]
-    pub fn log_latency(&mut self, name: &str) {
+    ///Returns the average and the standard deviation
+    pub fn log_latency(&mut self, name: &str) -> (f64, f64) {
         let id = self.node.clone();
+
+        let average = self.average(false, false) / 1000.0;
+        let std_dev = self.standard_deviation(false, true) / 1000.0;
 
         println!("{:?} // {} latency = {} (+/- {}) us",
                  id,
                  name,
-                 self.average(false) / 1000.0,
-                 self.standard_deviation(false) / 1000.0,
+                 average,
+                 std_dev,
         );
 
-        self.reset();
+        (average, std_dev)
     }
 
     #[inline(always)]
-    pub fn log_batch(&mut self) {
+    pub fn log_batch(&mut self) -> (f64, f64){
         let id = self.node.clone();
+
+        let avg = self.average(false, false);
+        let std_dev = self.standard_deviation(false, true);
 
         println!("{:?} // Batch average size = {} (+/- {}) requests",
                  id,
-                 self.average(false),
-                 self.standard_deviation(false),
+                 avg,
+                 std_dev,
         );
 
-        self.reset();
+        (avg, std_dev)
     }
 }
 
