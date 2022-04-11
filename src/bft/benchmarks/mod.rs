@@ -52,7 +52,7 @@ impl Measurements {
             message_sending_time_taken: BenchmarkHelper::new(id, CAP),
             message_sending_time_taken_own: BenchmarkHelper::new(id, CAP),
             message_signing_time_taken: BenchmarkHelper::new(id, CAP),
-            message_send_to_create: BenchmarkHelper::new(id, CAP)
+            message_send_to_create: BenchmarkHelper::new(id, CAP),
         }
     }
 }
@@ -128,7 +128,7 @@ impl BatchMeta {
                 Some(cap) => { Vec::with_capacity(cap) }
             },
             message_send_to_create: match cap {
-                None => {Vec::new()}
+                None => { Vec::new() }
                 Some(cap) => { Vec::with_capacity(cap) }
             },
         }
@@ -223,8 +223,9 @@ impl BenchmarkHelper {
         let average = self.average(false, false) / 1000.0;
         let std_dev = self.standard_deviation(false, true) / 1000.0;
 
-        println!("{:?} // {} latency = {} (+/- {}) us",
+        println!("{:?} // {:?} // {} latency = {} (+/- {}) us",
                  id,
+                 Utc::now().timestamp_millis(),
                  name,
                  average,
                  std_dev,
@@ -234,14 +235,15 @@ impl BenchmarkHelper {
     }
 
     #[inline(always)]
-    pub fn log_batch(&mut self) -> (f64, f64){
+    pub fn log_batch(&mut self) -> (f64, f64) {
         let id = self.node.clone();
 
         let avg = self.average(false, false);
         let std_dev = self.standard_deviation(false, true);
 
-        println!("{:?} // Batch average size = {} (+/- {}) requests",
+        println!("{:?} // {:?} // Batch average size = {} (+/- {}) requests",
                  id,
+                 Utc::now().timestamp_millis(),
                  avg,
                  std_dev,
         );
