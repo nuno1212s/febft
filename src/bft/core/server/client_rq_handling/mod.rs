@@ -136,12 +136,12 @@ impl<S: Service> RqProcessor<S> {
                                         match &mut final_batch {
                                             None => {}
                                             Some(batch) => {
-                                                batch.push(StoredMessage::new(header, req.clone()));
+                                                batch.push(StoredMessage::new(header, req));
                                             }
                                         }
 
                                         //Store the message in the log in this thread.
-                                        to_log.push(StoredMessage::new(header, req));
+                                        //to_log.push(StoredMessage::new(header, req));
                                     }
                                     SystemMessage::Reply(rep) => {
                                         panic!("Received system reply msg")
@@ -209,6 +209,10 @@ impl<S: Service> RqProcessor<S> {
                                 ConsensusMessageKind::PrePrepare(currently_accumulated),
                             ));
 
+                            let targets = NodeId::targets(0..view.params().n());
+
+                            self.node_ref.broadcast(message, targets, Arc::clone(self.log.batch_meta()));
+
                             let mut new_overflow =
                                 Vec::with_capacity(self.node_ref.batch_size());
 
@@ -223,9 +227,6 @@ impl<S: Service> RqProcessor<S> {
 
                             overflowed = new_overflow;
 
-                            let targets = NodeId::targets(0..view.params().n());
-
-                            self.node_ref.broadcast(message, targets, Arc::clone(self.log.batch_meta()));
                         }
                         Err(_) => {}
                     }
