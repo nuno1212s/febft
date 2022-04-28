@@ -276,11 +276,11 @@ pub fn create_send_thread<D>(num_workers: u32, capacity: usize) -> SendHandle<D>
 
     let handle = SendHandle { sender: tx };
 
-    for _ in 0..num_workers {
+    /* for _ in 0..num_workers {
         let worker = SendWorker { receiver: rx.clone() };
 
         worker.start();
-    }
+    }*/
 
     handle
 }

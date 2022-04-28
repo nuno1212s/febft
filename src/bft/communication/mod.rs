@@ -536,7 +536,7 @@ impl<D> Node<D>
         let my_id = self.id;
         let nonce = self.rng.next_state();
 
-        self.sender_handle.send(MessageSendRq::Send(
+        /*self.sender_handle.send(MessageSendRq::Send(
             send_thread::Send::new(
                 message,
                 send_to,
@@ -545,9 +545,9 @@ impl<D> Node<D>
                 nonce,
                 (batch_meta, start_instant),
             )
-        ));
+        ));*/
 
-        //Self::send_impl(message, send_to, my_id, target, nonce, (batch_meta, start_instant))
+        Self::send_impl(message, send_to, my_id, target, nonce, (batch_meta, start_instant))
     }
 
     /// Send a `SystemMessage` to a single destination.
@@ -577,7 +577,7 @@ impl<D> Node<D>
 
         let nonce = self.rng.next_state();
 
-        self.sender_handle.send(MessageSendRq::Send(
+        /*self.sender_handle.send(MessageSendRq::Send(
             send_thread::Send::new(
                 message,
                 send_to,
@@ -586,9 +586,9 @@ impl<D> Node<D>
                 nonce,
                 (batch_meta, time_sent),
             )
-        ));
+        ));*/
 
-        //Self::send_impl(message, send_to, my_id, target, nonce, (batch_meta, time_sent))
+        Self::send_impl(message, send_to, my_id, target, nonce, (batch_meta, time_sent))
     }
 
     #[inline]
@@ -796,8 +796,9 @@ impl<D> Node<D>
                         });
                     }
                     SecureSocketSend::Replica(_) => {
-                        //TODO: move this into another threadpool execute
-                        send_to.value_sync(header, message);
+                        threadpool::execute(|| {
+                            send_to.value_sync(header, message);
+                        });
                     }
                 }
             }
@@ -861,8 +862,9 @@ impl<D> Node<D>
                         });
                     }
                     SecureSocketSend::Replica(_) => {
-                        //TODO: move this into another threadpool execute
-                        send_to.value_sync(Left((nonce, digest, buf)));
+                        threadpool::execute(|| {
+                            send_to.value_sync(Left((nonce, digest, buf)));
+                        });
                     }
                 }
             }
@@ -1049,7 +1051,7 @@ impl<D> Node<D>
         n: u32,
         first_cli: NodeId,
         my_id: NodeId,
-        connector: Arc<rustls::ClientConfig>,
+        connector: Arc<ClientConfig>,
         addrs: &IntMap<PeerAddr>,
         rng: &mut prng::State,
     ) {
