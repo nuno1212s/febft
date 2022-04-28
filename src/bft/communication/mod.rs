@@ -1838,7 +1838,7 @@ impl<D> SendTo<D>
                         sock
                     }
                 };
-zNn3QSLEuyUAmmM&cw5LL2332GT%9vBu
+
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Left((n, d, b)) = m {
                     Self::peers_sync(flush, my_id, peer_id, n, d, b, key, sock, tx);
