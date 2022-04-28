@@ -22,6 +22,7 @@ use crate::bft::communication::serialize::{
     //ReplicaDurability,
     SharedData,
 };
+use crate::bft::consensus::log::Log;
 use crate::bft::core::server::client_replier::ReplyHandle;
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
@@ -158,6 +159,7 @@ pub struct Executor<S: Service + 'static> {
     service: S,
     state: State<S>,
     e_rx: crossbeam_channel::Receiver<ExecutionRequest<State<S>, Request<S>>>,
+    log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
     reply_worker: ReplyHandle<S>,
     send_node: SendNode<S::Data>,
 }
@@ -216,6 +218,7 @@ impl<S> Executor<S>
     /// Spawns a new service executor into the async runtime.
     pub fn new(
         reply_worker: ReplyHandle<S>,
+        log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
         mut service: S,
         send_node: SendNode<S::Data>,
     ) -> Result<ExecutorHandle<S>> {
@@ -230,6 +233,7 @@ impl<S> Executor<S>
             service,
             state,
             reply_worker,
+            log,
             send_node,
         };
 
@@ -283,6 +287,7 @@ impl<S> Executor<S>
     }
 
     fn execution_finished(&mut self, batch: UpdateBatchReplies<Reply<S>>) {
+        let batch_meta = Arc::clone(self.log.batch_meta());
 
         crate::bft::threadpool::execute(move || {
 
@@ -304,7 +309,7 @@ impl<S> Executor<S>
                 if let Some((message, last_peer_id)) = curr_send.take() {
 
                     let flush = peer_id != last_peer_id;
-                    self.send_node.send(message, last_peer_id, flush, Arc::clone(self.log.batch_meta()));
+                    self.send_node.send(message, last_peer_id, flush, batch_meta.clone());
                 }
 
                 // store previous reply message and peer id,
@@ -320,7 +325,7 @@ impl<S> Executor<S>
 
             // deliver last reply
             if let Some((message, last_peer_id)) = curr_send {
-                self.send_node.send(message, last_peer_id, true, Arc::clone(self.log.batch_meta()));
+                self.send_node.send(message, last_peer_id, true, batch_meta);
             } else {
                 // slightly optimize code path;
                 // the previous if branch will always execute
