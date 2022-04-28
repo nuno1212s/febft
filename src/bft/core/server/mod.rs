@@ -205,6 +205,7 @@ impl<S> Replica<S>
         // start executor
         let executor = Executor::new(
             reply_handle,
+            log.clone(),
             service,
             node.send_node(),
         )?;
