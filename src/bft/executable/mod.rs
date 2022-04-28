@@ -289,6 +289,8 @@ impl<S> Executor<S>
     fn execution_finished(&mut self, batch: UpdateBatchReplies<Reply<S>>) {
         let batch_meta = Arc::clone(self.log.batch_meta());
 
+        let mut send_node = self.send_node.clone();
+
         crate::bft::threadpool::execute(move || {
 
             let mut batch = batch.into_inner();
@@ -309,7 +311,7 @@ impl<S> Executor<S>
                 if let Some((message, last_peer_id)) = curr_send.take() {
 
                     let flush = peer_id != last_peer_id;
-                    self.send_node.send(message, last_peer_id, flush, batch_meta.clone());
+                    send_node.send(message, last_peer_id, flush, batch_meta.clone());
                 }
 
                 // store previous reply message and peer id,
@@ -325,7 +327,7 @@ impl<S> Executor<S>
 
             // deliver last reply
             if let Some((message, last_peer_id)) = curr_send {
-                self.send_node.send(message, last_peer_id, true, batch_meta);
+                send_node.send(message, last_peer_id, true, batch_meta);
             } else {
                 // slightly optimize code path;
                 // the previous if branch will always execute

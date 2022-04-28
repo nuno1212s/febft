@@ -36,6 +36,9 @@ type ReplicaQueueType<T> = LFBQueue<T>;
 
 type ClientQueueType<T> = MQueue<T>;
 
+type ClientSender<T> = crossbeam_channel::Sender<T>;
+type ClientReceiver<T> = crossbeam_channel::Receiver<T>;
+
 fn channel_init<T>(capacity: usize) -> (Sender<Vec<T>, QueueType<T>>, Receiver<Vec<T>, QueueType<T>>) {
     dsrust::channels::queue_channel::bounded_lf_queue(capacity)
 }
@@ -59,8 +62,8 @@ pub struct NodePeers<T: Send + 'static> {
     peer_loopback: Arc<ConnectedPeer<T>>,
     replica_handling: Arc<ReplicaHandling<T>>,
     client_handling: Option<Arc<ConnectedPeersGroup<T>>>,
-    client_tx: Option<crossbeam_channel::Sender<Vec<T>>>,
-    client_rx: Option<crossbeam_channel::Receiver<Vec<T>>>,
+    client_tx: Option<ClientSender<Vec<T>>>,
+    client_rx: Option<ClientReceiver<Vec<T>>>,
 }
 
 const DEFAULT_CLIENT_QUEUE: usize = 1024;
@@ -341,7 +344,7 @@ pub struct ConnectedPeersGroup<T: Send + 'static> {
     connected_clients: AtomicUsize,
     per_client_cache: usize,
     batch_size: usize,
-    batch_transmission: crossbeam_channel::Sender<Vec<T>>,
+    batch_transmission: ClientSender<Vec<T>>,
 }
 
 pub struct ConnectedPeersPool<T: Send + 'static> {
@@ -350,7 +353,7 @@ pub struct ConnectedPeersPool<T: Send + 'static> {
     //That's producing the batches and the threads of clients connecting and disconnecting
     connected_clients: Mutex<Vec<Arc<ConnectedPeer<T>>>>,
     batch_size: usize,
-    batch_transmission: crossbeam_channel::Sender<Vec<T>>,
+    batch_transmission: ClientSender<Vec<T>>,
     finish_execution: AtomicBool,
     owner: Arc<ConnectedPeersGroup<T>>,
 }
