@@ -283,7 +283,54 @@ impl<S> Executor<S>
     }
 
     fn execution_finished(&mut self, batch: UpdateBatchReplies<Reply<S>>) {
-        self.reply_worker.send(batch).unwrap();
+
+        crate::bft::threadpool::execute(move || {
+
+            let mut batch = batch.into_inner();
+
+            batch.sort_unstable_by_key(|update_reply| update_reply.to());
+
+            // keep track of the last message and node id
+            // we iterated over
+            let mut curr_send = None;
+
+            for update_reply in batch {
+                let (peer_id, session_id, operation_id, payload) = update_reply.into_inner();
+
+                // NOTE: the technique used here to peek the next reply is a
+                // hack... when we port this fix over to the production
+                // branch, perhaps we can come up with a better approach,
+                // but for now this will do
+                if let Some((message, last_peer_id)) = curr_send.take() {
+
+                    let flush = peer_id != last_peer_id;
+                    self.send_node.send(message, last_peer_id, flush, Arc::clone(self.log.batch_meta()));
+                }
+
+                // store previous reply message and peer id,
+                // for the next iteration
+                let message = SystemMessage::Reply(ReplyMessage::new(
+                    session_id,
+                    operation_id,
+                    payload,
+                ));
+
+                curr_send = Some((message, peer_id));
+            }
+
+            // deliver last reply
+            if let Some((message, last_peer_id)) = curr_send {
+                self.send_node.send(message, last_peer_id, true, Arc::clone(self.log.batch_meta()));
+            } else {
+                // slightly optimize code path;
+                // the previous if branch will always execute
+                // (there is always at least one request in the batch)
+                unreachable!();
+            }
+
+        });
+
+        //self.reply_worker.send(batch).unwrap();
     }
 }
 

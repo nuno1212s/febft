@@ -600,53 +600,53 @@ impl<D> Node<D>
         nonce: u64,
         time_info: (Arc<Mutex<BatchMeta>>, Instant),
     ) {
-        //threadpool::execute(move || {
-        // serialize
-        let start_serialization = Instant::now();
+        threadpool::execute(move || {
+            // serialize
+            let start_serialization = Instant::now();
 
-        let mut buf: Buf = Buf::new();
-        let digest = <D as DigestData>::serialize_digest(
-            &message,
-            &mut buf,
-        ).unwrap();
+            let mut buf: Buf = Buf::new();
+            let digest = <D as DigestData>::serialize_digest(
+                &message,
+                &mut buf,
+            ).unwrap();
 
-        let time_taken = Instant::now().duration_since(start_serialization).as_nanos();
+            let time_taken = Instant::now().duration_since(start_serialization).as_nanos();
 
-        time_info.0.lock().message_signing_latencies.push(time_taken);
+            time_info.0.lock().message_signing_latencies.push(time_taken);
 
-        // send
-        if my_id == target {
-            // Right -> our turn
+            // send
+            if my_id == target {
+                // Right -> our turn
 
-            //Measuring time taken to get to the point of sending the message
-            //We don't actually want to measure how long it takes to send the message
-            let dur_since = Instant::now().duration_since(time_info.1).as_nanos();
+                //Measuring time taken to get to the point of sending the message
+                //We don't actually want to measure how long it takes to send the message
+                let dur_since = Instant::now().duration_since(time_info.1).as_nanos();
 
-            //Send to myself, always synchronous since only replicas send to themselves
-            send_to.value_sync(Right((message, nonce, digest, buf)));
+                //Send to myself, always synchronous since only replicas send to themselves
+                send_to.value_sync(Right((message, nonce, digest, buf)));
 
-            time_info.0.lock().message_passing_latencies.push(dur_since);
-        } else {
+                time_info.0.lock().message_passing_latencies.push(dur_since);
+            } else {
 
-            // Left -> peer turn
-            match send_to.socket_type().unwrap() {
-                SecureSocketSend::Client(_) => {
-                    rt::spawn(async move {
-                        send_to.value(Left((nonce, digest, buf))).await;
-                    });
-                }
-                SecureSocketSend::Replica(_) => {
-                    //Measuring time taken to get to the point of sending the message
-                    //We don't actually want to measure how long it takes to send the message
-                    let dur_sinc = Instant::now().duration_since(time_info.1).as_nanos();
+                // Left -> peer turn
+                match send_to.socket_type().unwrap() {
+                    SecureSocketSend::Client(_) => {
+                        rt::spawn(async move {
+                            send_to.value(Left((nonce, digest, buf))).await;
+                        });
+                    }
+                    SecureSocketSend::Replica(_) => {
+                        //Measuring time taken to get to the point of sending the message
+                        //We don't actually want to measure how long it takes to send the message
+                        let dur_sinc = Instant::now().duration_since(time_info.1).as_nanos();
 
-                    send_to.value_sync(Left((nonce, digest, buf)));
+                        send_to.value_sync(Left((nonce, digest, buf)));
 
-                    time_info.0.lock().message_passing_latencies.push(dur_sinc);
+                        time_info.0.lock().message_passing_latencies.push(dur_sinc);
+                    }
                 }
             }
-        }
-        //});
+        });
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -671,15 +671,15 @@ impl<D> Node<D>
 
         meta.lock().message_send_to_create.push(dur_send_tos);
 
-        self.sender_handle.send(MessageSendRq::Broadcast(BroadcastMsg::new(
+        /*self.sender_handle.send(MessageSendRq::Broadcast(BroadcastMsg::new(
             message,
             mine,
             others,
             nonce,
             (meta, start_time),
-        )));
+        )));*/
 
-        //Self::broadcast_impl(message, mine, others, nonce, (meta, start_time))
+        Self::broadcast_impl(message, mine, others, nonce, (meta, start_time))
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -706,15 +706,15 @@ impl<D> Node<D>
 
         meta.lock().message_send_to_create.push(time_to_create);
 
-        self.sender_handle.send(MessageSendRq::Broadcast(BroadcastMsg::new(
+        /*self.sender_handle.send(MessageSendRq::Broadcast(BroadcastMsg::new(
             message,
             mine,
             others,
             nonce,
             (meta, start_time),
-        )));
+        )));*/
 
-        //Self::broadcast_impl(message, mine, others, nonce, (meta, start_time))
+        Self::broadcast_impl(message, mine, others, nonce, (meta, start_time))
     }
 
     pub fn broadcast_serialized(
@@ -733,16 +733,16 @@ impl<D> Node<D>
             headers,
         );
 
-        self.sender_handle.send(MessageSendRq::BroadcastSerialized(
+        /*self.sender_handle.send(MessageSendRq::BroadcastSerialized(
             BroadcastSerialized::new(
                 messages,
                 mine,
                 others,
                 (meta, start_time),
             )
-        ));
+        ));*/
 
-        //Self::broadcast_serialized_impl(messages, mine, others, (meta, start_time));
+        Self::broadcast_serialized_impl(messages, mine, others, (meta, start_time));
     }
 
     #[inline]
@@ -796,6 +796,7 @@ impl<D> Node<D>
                         });
                     }
                     SecureSocketSend::Replica(_) => {
+                        //TODO: move this into another threadpool execute
                         send_to.value_sync(header, message);
                     }
                 }
@@ -860,6 +861,7 @@ impl<D> Node<D>
                         });
                     }
                     SecureSocketSend::Replica(_) => {
+                        //TODO: move this into another threadpool execute
                         send_to.value_sync(Left((nonce, digest, buf)));
                     }
                 }
@@ -1276,7 +1278,6 @@ impl<D> Node<D>
 
         // announce we have failed to connect to the peer node
         //if we fail to connect, then just ignore
-        //tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
     }
 
     fn rx_side_accept_sync(

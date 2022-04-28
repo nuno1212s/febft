@@ -226,7 +226,6 @@ impl<S: Service> RqProcessor<S> {
                             currently_accumulated = overflowed;
 
                             overflowed = new_overflow;
-
                         }
                         Err(_) => {}
                     }
