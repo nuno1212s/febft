@@ -605,9 +605,11 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                 continue;
             }
 
-            let rqs_dumped = match client.dump_n_requests(next_client_requests, &mut batch) {
+            let to_collect = std::cmp::min(next_client_requests, batch_size);
+
+            let rqs_dumped = match client.dump_n_requests(to_collect, &mut batch) {
                 Ok(rqs) => { rqs }
-                Err(_) => {
+                Err(err) => {
                     dced.push(client.client_id().clone());
 
                     //Assign the remaining slots to the next client
@@ -640,7 +642,6 @@ impl<T> ConnectedPeersPool<T> where T: Send {
 
             owner.del_cached_clients(dced);
         }
-
 
         batch
     }
@@ -694,7 +695,7 @@ impl<T> ConnectedPeer<T> where T: Send {
                         Ok(rqs)
                     }
                     Err(err) => {
-                        Err(Error::simple_with_msg(ErrorKind::Communication, "Client has already disconnected."))
+                        Err(Error::simple_with_msg(ErrorKind::Communication, format!("Client has already disconnected. {:?}", err).as_str()))
                     }
                 };
             }
