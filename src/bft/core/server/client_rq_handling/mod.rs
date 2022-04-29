@@ -111,7 +111,7 @@ impl<S: Service> RqProcessor<S> {
                 //    self.node_ref.id(), messages.len(), is_leader);
 
                 if let Some(messages) = opt_msgs {
-                    collected_per_batch_total += messages.len();
+                    collected_per_batch_total += messages.len() as u64;
                     collections += 1;
 
                     let mut final_batch = if is_leader {
@@ -237,7 +237,7 @@ impl<S: Service> RqProcessor<S> {
 
                             overflowed = new_overflow;
 
-                            if batches_made % 10000 {
+                            if batches_made % 10000 == 0 {
                                 let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
 
                                 info!("{:?} // {:?} // {}: batches made {}: message collections {}: total requests collected.",

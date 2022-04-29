@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{RecvError, SendError};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel::{RecvTimeoutError, TryRecvError};
 use dsrust::channels::async_ch::ReceiverMultFut;
@@ -16,7 +16,7 @@ use dsrust::utils::backoff::BackoffN;
 use futures::select;
 use futures_timer::Delay;
 use intmap::IntMap;
-use log::debug;
+use log::{debug, info};
 use parking_lot::{Mutex, RawMutex, RwLock};
 use parking_lot::lock_api::MutexGuard;
 
@@ -88,7 +88,8 @@ impl<T> NodePeers<T> where T: Send {
 
             client_handling = Some(ConnectedPeersGroup::new(DEFAULT_CLIENT_QUEUE,
                                                             batch_size,
-                                                            client_tx.clone()));
+                                                            client_tx.clone(),
+                                                            id));
             client_channel = Some((client_tx, client_rx));
         } else {
             client_handling = None;
@@ -345,6 +346,7 @@ pub struct ConnectedPeersGroup<T: Send + 'static> {
     per_client_cache: usize,
     batch_size: usize,
     batch_transmission: ClientSender<Vec<T>>,
+    own_id: NodeId,
 }
 
 pub struct ConnectedPeersPool<T: Send + 'static> {
@@ -359,7 +361,8 @@ pub struct ConnectedPeersPool<T: Send + 'static> {
 }
 
 impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
-    pub fn new(per_client_bound: usize, batch_size: usize, batch_transmission: crossbeam_channel::Sender<Vec<T>>) -> Arc<Self> {
+    pub fn new(per_client_bound: usize, batch_size: usize, batch_transmission: crossbeam_channel::Sender<Vec<T>>,
+               own_id: NodeId) -> Arc<Self> {
         Arc::new(Self {
             client_pools: parking_lot::Mutex::new(Vec::new()),
             client_connections_cache: RwLock::new(IntMap::new()),
@@ -367,6 +370,7 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
             connected_clients: AtomicUsize::new(0),
             batch_size,
             batch_transmission,
+            own_id,
         })
     }
 
@@ -510,7 +514,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                     let backoff = BackoffN::new();
 
                     let mut total_rqs_collected: u128 = 0;
-                    let mut collections : u64 = 0;
+                    let mut collections: u64 = 0;
 
                     loop {
                         if self.finish_execution.load(Ordering::Relaxed) {
@@ -526,8 +530,14 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                             self.batch_transmission.send(vec);
                         }
 
-                        if collections % 100000000 {
+                        if collections % 100000 == 0 {
+                            let current_time_millis = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
 
+                            info!("{:?} // {:?} // {} rqs collected in {} collections", self.owner.own_id, current_time_millis,
+                                total_rqs_collected, collections);
+
+                            total_rqs_collected = 0;
+                            collections = 0;
                         }
 
                         // backoff.spin();
