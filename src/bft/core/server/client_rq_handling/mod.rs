@@ -240,7 +240,7 @@ impl<S: Service> RqProcessor<S> {
                             if batches_made % 10000 == 0 {
                                 let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
 
-                                info!("{:?} // {:?} // {}: batches made {}: message collections {}: total requests collected.",
+                                println!("{:?} // {:?} // {}: batches made {}: message collections {}: total requests collected.",
                                     self.node_ref.id(), duration, batches_made, collections, collected_per_batch_total);
 
                                 batches_made = 0;
