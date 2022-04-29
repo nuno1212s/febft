@@ -605,7 +605,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                 continue;
             }
 
-            let to_collect = std::cmp::min(next_client_requests, batch_size);
+            let to_collect = std::cmp::min(next_client_requests, batch_size - batch.len());
 
             let rqs_dumped = match client.dump_n_requests(to_collect, &mut batch) {
                 Ok(rqs) => { rqs }
@@ -618,6 +618,10 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                     continue;
                 }
             };
+
+            if batch.len() == batch_size {
+                break
+            }
 
             //Leave the requests that were not used open for the following clients, in a greedy fashion
             next_client_requests -= rqs_dumped;

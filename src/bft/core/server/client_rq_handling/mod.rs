@@ -83,7 +83,7 @@ impl<S: Service> RqProcessor<S> {
 
             let mut collected_per_batch_total: u64 = 0;
             let mut collections: u32 = 0;
-            let mut batches_made : u32 = 0;
+            let mut batches_made: u32 = 0;
 
             loop {
                 if self.cancelled.load(Ordering::Relaxed) {
@@ -114,15 +114,9 @@ impl<S: Service> RqProcessor<S> {
                     collected_per_batch_total += messages.len() as u64;
                     collections += 1;
 
-                    let mut final_batch = if is_leader {
-                        Some(Vec::with_capacity(messages.len()))
-                    } else {
-                        None
-                    };
-
                     let mut to_log = Vec::with_capacity(messages.len());
 
-                    let lock_guard = self.log.latest_op().lock();
+                    //let lock_guard = self.log.latest_op().lock();
 
                     for message in messages {
                         match message {
@@ -131,19 +125,20 @@ impl<S: Service> RqProcessor<S> {
                                     SystemMessage::Request(req) => {
                                         let key = logg::operation_key(&header, &req);
 
-                                        let current_seq_for_client = lock_guard.get(key)
+                                        /*let current_seq_for_client = lock_guard.get(key)
                                             .copied()
                                             .unwrap_or(SeqNo::ZERO);
 
                                         if req.sequence_number() < current_seq_for_client {
                                             //Avoid repeating requests for clients
                                             continue;
-                                        }
+                                        }*/
 
-                                        match &mut final_batch {
-                                            None => {}
-                                            Some(batch) => {
-                                                batch.push(StoredMessage::new(header, req));
+                                        if is_leader {
+                                            if currently_accumulated.len() >= self.node_ref.batch_size() {
+                                                overflowed.push(StoredMessage::new(header, req));
+                                            } else {
+                                                currently_accumulated.push(StoredMessage::new(header, req));
                                             }
                                         }
 
@@ -165,26 +160,6 @@ impl<S: Service> RqProcessor<S> {
                     }
 
                     drop(lock_guard);
-
-                    match final_batch {
-                        None => {}
-                        Some(mut rqs) => {
-                            //If we would have overflowed by adding the requests
-                            if currently_accumulated.len() + rqs.len() > self.node_ref.batch_size() {
-                                let rqs_to_fill_batch =
-                                    std::cmp::min(self.node_ref.batch_size() - currently_accumulated.len(),
-                                                  rqs.len());
-
-                                for _ in 0..rqs_to_fill_batch {
-                                    currently_accumulated.push(rqs.pop().unwrap());
-                                }
-
-                                overflowed.append(&mut rqs);
-                            } else {
-                                currently_accumulated.append(&mut rqs)
-                            }
-                        }
-                    }
 
                     //TODO: If we are the leader, preemptively hash the preprepare message so we don't have
                     //To wait for that?
@@ -241,7 +216,7 @@ impl<S: Service> RqProcessor<S> {
                                 let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
 
                                 println!("{:?} // {:?} // {}: batches made {}: message collections {}: total requests collected.",
-                                    self.node_ref.id(), duration, batches_made, collections, collected_per_batch_total);
+                                         self.node_ref.id(), duration, batches_made, collections, collected_per_batch_total);
 
                                 batches_made = 0;
                                 collections = 0;
