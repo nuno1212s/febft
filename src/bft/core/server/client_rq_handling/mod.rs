@@ -159,7 +159,7 @@ impl<S: Service> RqProcessor<S> {
                         }
                     }
 
-                    drop(lock_guard);
+                    //drop(lock_guard);
 
                     //TODO: If we are the leader, preemptively hash the preprepare message so we don't have
                     //To wait for that?
