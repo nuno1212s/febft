@@ -509,6 +509,9 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                 move || {
                     let backoff = BackoffN::new();
 
+                    let mut total_rqs_collected: u128 = 0;
+                    let mut collections : u64 = 0;
+
                     loop {
                         if self.finish_execution.load(Ordering::Relaxed) {
                             break;
@@ -516,8 +519,15 @@ impl<T> ConnectedPeersPool<T> where T: Send {
 
                         let vec = self.collect_requests(self.batch_size, &self.owner);
 
+                        total_rqs_collected += vec.len() as u128;
+                        collections += 1;
+
                         if !vec.is_empty() {
                             self.batch_transmission.send(vec);
+                        }
+
+                        if collections % 100000000 {
+
                         }
 
                         // backoff.spin();

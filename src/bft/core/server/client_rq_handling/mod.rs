@@ -2,11 +2,11 @@ use std::fmt::format;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use crossbeam_channel::{bounded, Receiver, Sender};
-use log::debug;
+use log::{debug, info, trace};
 use parking_lot::{Mutex, RawMutex};
 use parking_lot::lock_api::MutexGuard;
 
@@ -81,6 +81,10 @@ impl<S: Service> RqProcessor<S> {
 
             let mut last_seq = Option::None;
 
+            let mut collected_per_batch_total: u64 = 0;
+            let mut collections: u32 = 0;
+            let mut batches_made : u32 = 0;
+
             loop {
                 if self.cancelled.load(Ordering::Relaxed) {
                     break;
@@ -107,6 +111,9 @@ impl<S: Service> RqProcessor<S> {
                 //    self.node_ref.id(), messages.len(), is_leader);
 
                 if let Some(messages) = opt_msgs {
+                    collected_per_batch_total += messages.len();
+                    collections += 1;
+
                     let mut final_batch = if is_leader {
                         Some(Vec::with_capacity(messages.len()))
                     } else {
@@ -164,7 +171,9 @@ impl<S: Service> RqProcessor<S> {
                         Some(mut rqs) => {
                             //If we would have overflowed by adding the requests
                             if currently_accumulated.len() + rqs.len() > self.node_ref.batch_size() {
-                                let rqs_to_fill_batch = std::cmp::min(self.node_ref.batch_size() - currently_accumulated.len(), rqs.len());
+                                let rqs_to_fill_batch =
+                                    std::cmp::min(self.node_ref.batch_size() - currently_accumulated.len(),
+                                                  rqs.len());
 
                                 for _ in 0..rqs_to_fill_batch {
                                     currently_accumulated.push(rqs.pop().unwrap());
@@ -186,6 +195,7 @@ impl<S: Service> RqProcessor<S> {
                     //Attempt to propose new batch
                     match self.consensus_guard.compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed) {
                         Ok(_) => {
+                            batches_made += 1;
                             let guard = self.consensus_lock.lock();
 
                             let (seq, view) = *guard;
@@ -226,6 +236,17 @@ impl<S: Service> RqProcessor<S> {
                             currently_accumulated = overflowed;
 
                             overflowed = new_overflow;
+
+                            if batches_made % 10000 {
+                                let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+
+                                info!("{:?} // {:?} // {}: batches made {}: message collections {}: total requests collected.",
+                                    self.node_ref.id(), duration, batches_made, collections, collected_per_batch_total);
+
+                                batches_made = 0;
+                                collections = 0;
+                                collected_per_batch_total = 0;
+                            }
                         }
                         Err(_) => {}
                     }

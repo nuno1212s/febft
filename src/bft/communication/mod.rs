@@ -417,7 +417,8 @@ impl<D> Node<D>
         // tx side (connect to replica)
 
         if id < cfg.first_cli {
-            //If we are a replica
+            //If we are a replica, use the std regular sync library as it has better
+            //Latency and overall performance (since it does very little context switching)
             let mut rng = prng::State::new();
 
             node.clone().tx_side_connect_sync(
