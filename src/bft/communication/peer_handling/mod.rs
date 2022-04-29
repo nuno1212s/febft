@@ -532,7 +532,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                             self.batch_transmission.send(vec);
                         }
 
-                        if collections % 1000000 == 0 {
+                        if collections % 10000000 == 0 {
                             let current_time_millis = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
 
                             println!("{:?} // {:?} // {} rqs collected in {} collections", self.owner.own_id, current_time_millis,
