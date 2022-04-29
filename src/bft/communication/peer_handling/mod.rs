@@ -355,6 +355,7 @@ pub struct ConnectedPeersPool<T: Send + 'static> {
     //That's producing the batches and the threads of clients connecting and disconnecting
     connected_clients: Mutex<Vec<Arc<ConnectedPeer<T>>>>,
     batch_size: usize,
+    client_limit: usize,
     batch_transmission: ClientSender<Vec<T>>,
     finish_execution: AtomicBool,
     owner: Arc<ConnectedPeersGroup<T>>,
@@ -489,12 +490,13 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
 impl<T> ConnectedPeersPool<T> where T: Send {
     //We mark the owner as static since if the pool is active then
     //The owner also has to be active
-    pub fn new(client_count: usize, batch_transmission: crossbeam_channel::Sender<Vec<T>>,
+    pub fn new(batch_size: usize, batch_transmission: crossbeam_channel::Sender<Vec<T>>,
                owner: Arc<ConnectedPeersGroup<T>>) -> Arc<Self> {
         let result = Self {
             connected_clients: parking_lot::Mutex::new(Vec::new()),
-            batch_size: client_count,
+            batch_size,
             batch_transmission,
+            client_limit: batch_size * 10,
             finish_execution: AtomicBool::new(false),
             owner,
         };
@@ -534,7 +536,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                             let current_time_millis = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
 
                             println!("{:?} // {:?} // {} rqs collected in {} collections", self.owner.own_id, current_time_millis,
-                                total_rqs_collected, collections);
+                                     total_rqs_collected, collections);
 
                             total_rqs_collected = 0;
                             collections = 0;
@@ -548,7 +550,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
     pub fn attempt_to_add(&self, client: Arc<ConnectedPeer<T>>) -> std::result::Result<(), Arc<ConnectedPeer<T>>> {
         let mut guard = self.connected_clients.lock();
 
-        if guard.len() < self.batch_size {
+        if guard.len() < self.client_limit {
             guard.push(client);
 
             return Ok(());
@@ -579,15 +581,11 @@ impl<T> ConnectedPeersPool<T> where T: Send {
 
         let mut dced = Vec::new();
 
-        //We can do this because our pooling system prevents the number of clients
-        //In each pool to be larger than the batch size, so the requests_per_client is always
-        //> 1, leading to no starvation
-
         if guard.len() == 0 {
             return vec![];
         }
 
-        let requests_per_client = batch_size / guard.len();
+        let requests_per_client = std::cmp::max(batch_size / guard.len(), 1);
         let requests_remainder = batch_size % guard.len();
 
         let start_point = fastrand::usize(0..guard.len());
