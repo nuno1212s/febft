@@ -347,6 +347,7 @@ pub struct ConnectedPeersGroup<T: Send + 'static> {
     batch_size: usize,
     batch_transmission: ClientSender<Vec<T>>,
     own_id: NodeId,
+    fill_batch: bool,
 }
 
 pub struct ConnectedPeersPool<T: Send + 'static> {
@@ -359,11 +360,12 @@ pub struct ConnectedPeersPool<T: Send + 'static> {
     batch_transmission: ClientSender<Vec<T>>,
     finish_execution: AtomicBool,
     owner: Arc<ConnectedPeersGroup<T>>,
+    fill_batch: bool,
 }
 
 impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
     pub fn new(per_client_bound: usize, batch_size: usize, batch_transmission: crossbeam_channel::Sender<Vec<T>>,
-               own_id: NodeId) -> Arc<Self> {
+               own_id: NodeId, fill_batch: bool) -> Arc<Self> {
         Arc::new(Self {
             client_pools: parking_lot::Mutex::new(Vec::new()),
             client_connections_cache: RwLock::new(IntMap::new()),
@@ -372,6 +374,7 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
             batch_size,
             batch_transmission,
             own_id,
+            fill_batch,
         })
     }
 
@@ -491,7 +494,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
     //We mark the owner as static since if the pool is active then
     //The owner also has to be active
     pub fn new(batch_size: usize, batch_transmission: crossbeam_channel::Sender<Vec<T>>,
-               owner: Arc<ConnectedPeersGroup<T>>) -> Arc<Self> {
+               owner: Arc<ConnectedPeersGroup<T>>, fill_batch: bool) -> Arc<Self> {
         let result = Self {
             connected_clients: parking_lot::Mutex::new(Vec::new()),
             batch_size,
@@ -499,6 +502,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
             client_limit: batch_size * 10,
             finish_execution: AtomicBool::new(false),
             owner,
+            fill_batch,
         };
 
         let pool = Arc::new(result);
@@ -593,7 +597,19 @@ impl<T> ConnectedPeersPool<T> where T: Send {
         //We don't want to leave any slot in the batch unfilled...
         let mut next_client_requests = requests_per_client + requests_remainder;
 
-        for index in 0..guard.len() {
+        //We're going to use a counter to check something outt
+        //Technically this should need a set to verify if the client in question has
+        //already been marked empty or not, but since it's possible for a given client to
+        //be empty and then have a request in queue, we're going to use a counter.
+        let mut empty_client_count = 0;
+
+        let ind_limit = if self.fill_batch {
+            usize::MAX
+        } else {
+            guard.len()
+        };
+
+        for index in 0..ind_limit {
             let client = &guard[(start_point + index) % guard.len()];
 
             if client.is_dc() {
@@ -619,8 +635,14 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                 }
             };
 
+            if self.fill_batch && rqs_dumped == 0 {
+                empty_client_count += 1;
+            }
+
             if batch.len() == batch_size {
-                break
+                break;
+            } else if self.fill_batch && empty_client_count >= guard.len() {
+                break;
             }
 
             //Leave the requests that were not used open for the following clients, in a greedy fashion

@@ -123,9 +123,9 @@ impl<S: Service> RqProcessor<S> {
                             Message::System(header, sysmsg) => {
                                 match sysmsg {
                                     SystemMessage::Request(req) => {
-                                        let key = logg::operation_key(&header, &req);
+                                        /*let key = logg::operation_key(&header, &req);
 
-                                        /*let current_seq_for_client = lock_guard.get(key)
+                                        let current_seq_for_client = lock_guard.get(key)
                                             .copied()
                                             .unwrap_or(SeqNo::ZERO);
 
