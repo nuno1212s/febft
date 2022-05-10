@@ -25,7 +25,7 @@ use crate::bft::communication::message::{
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
-use crate::bft::ordering::SeqNo;
+use crate::bft::ordering::{SeqNo, ThreadSafeSeqNo};
 
 use super::SystemParams;
 
@@ -43,7 +43,7 @@ struct ClientData<P> {
 // TODO: maybe make the clone impl more efficient
 pub struct Client<D: SharedData + 'static> {
     session_id: SeqNo,
-    operation_counter: SeqNo,
+    operation_counter: ThreadSafeSeqNo,
     data: Arc<ClientData<D::Reply>>,
     params: SystemParams,
     node: SendNode<D>,
@@ -62,7 +62,7 @@ impl<D: SharedData> Clone for Client<D> {
             params: self.params,
             node: self.node.clone(),
             data: Arc::clone(&self.data),
-            operation_counter: SeqNo::ZERO,
+            operation_counter: ThreadSafeSeqNo::ZERO,
             dummy_meta: Arc::new(Mutex::new(BatchMeta::new()))
         }
     }
@@ -169,7 +169,7 @@ impl<D> Client<D>
             params,
             session_id,
             node: send_node,
-            operation_counter: SeqNo::ZERO,
+            operation_counter: ThreadSafeSeqNo::ZERO,
             dummy_meta: Arc::new(Mutex::new(BatchMeta::new()))
         })
     }
@@ -183,7 +183,7 @@ impl<D> Client<D>
     /// on top of `febft`.
     //
     // TODO: request timeout
-    pub async fn update(&mut self, operation: D::Request) -> D::Reply {
+    pub async fn update(&self, operation: D::Request) -> D::Reply {
         let session_id = self.session_id;
         let operation_id = self.next_operation_id();
         let message = SystemMessage::Request(RequestMessage::new(
@@ -195,7 +195,7 @@ impl<D> Client<D>
 
         // broadcast our request to the node group
         let targets = NodeId::targets(0..self.params.n());
-        self.node.broadcast(message, targets, self.dummy_meta.clone());
+        self.node.clone().broadcast(message, targets, self.dummy_meta.clone());
 
         // await response
         let request_key = get_request_key(session_id, operation_id);
@@ -204,9 +204,9 @@ impl<D> Client<D>
         ClientRequestFut { request_key, ready }.await
     }
 
-    fn next_operation_id(&mut self) -> SeqNo {
-        let id = self.operation_counter;
-        self.operation_counter = self.operation_counter.next();
+    fn next_operation_id(&self) -> SeqNo {
+        let id = self.operation_counter.next();
+
         id
     }
 

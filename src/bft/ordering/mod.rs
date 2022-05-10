@@ -6,6 +6,7 @@ use std::cmp::{
     Ordering,
 };
 use std::collections::VecDeque;
+use std::sync::atomic::AtomicI32;
 
 use either::{
     Left,
@@ -25,6 +26,10 @@ use serde::{Serialize, Deserialize};
 #[derive(Debug, Copy, Clone, Ord, Eq, PartialEq, Hash)]
 pub struct SeqNo(i32);
 
+///Represents a seq number for clients to safely use when working with concurrent requests
+///Can be translated
+pub struct ThreadSafeSeqNo(AtomicI32);
+
 pub(crate) enum InvalidSeqNo {
     Small,
     Big,
@@ -35,6 +40,13 @@ impl From<u32> for SeqNo {
     fn from(sequence_number: u32) -> SeqNo {
         const MAX: u32 = i32::MAX as u32;
         SeqNo((sequence_number % MAX) as i32)
+    }
+}
+
+impl From<ThreadSafeSeqNo> for SeqNo {
+    #[inline]
+    fn from(seq_num: ThreadSafeSeqNo) -> SeqNo {
+        seq_num.to_seq_no()
     }
 }
 
@@ -67,6 +79,22 @@ impl PartialOrd for SeqNo {
              _ => Ordering::Greater,
         })
     }
+}
+
+impl ThreadSafeSeqNo {
+
+    pub const ZERO: Self = ThreadSafeSeqNo(AtomicI32::new(0));
+
+    /// Increments the SeqNo
+    #[inline]
+    pub(crate) fn next(&self) -> SeqNo {
+        SeqNo(self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+
+    pub fn to_seq_no(&self) -> SeqNo {
+        SeqNo(self.0.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
 }
 
 impl SeqNo {
