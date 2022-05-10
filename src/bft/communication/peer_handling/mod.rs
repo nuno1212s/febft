@@ -77,7 +77,7 @@ unsafe impl<T> Sync for NodePeers<T> where T: Send {}
 unsafe impl<T> Send for NodePeers<T> where T: Send {}
 
 impl<T> NodePeers<T> where T: Send {
-    pub fn new(id: NodeId, first_cli: NodeId, batch_size: usize) -> NodePeers<T> {
+    pub fn new(id: NodeId, first_cli: NodeId, batch_size: usize, fill_batch: bool) -> NodePeers<T> {
         //We only want to setup client handling if we are a replica
         let client_handling;
 
@@ -89,7 +89,8 @@ impl<T> NodePeers<T> where T: Send {
             client_handling = Some(ConnectedPeersGroup::new(DEFAULT_CLIENT_QUEUE,
                                                             batch_size,
                                                             client_tx.clone(),
-                                                            id));
+                                                            id,
+                                                            fill_batch));
             client_channel = Some((client_tx, client_rx));
         } else {
             client_handling = None;
@@ -413,7 +414,8 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
         //In the case all the pools are already full, allocate a new pool
         let pool = ConnectedPeersPool::new(self.batch_size,
                                            self.batch_transmission.clone(),
-                                           Arc::clone(self));
+                                           Arc::clone(self),
+                                           self.fill_batch);
 
         match pool.attempt_to_add(clone_queue) {
             Ok(_) => {}

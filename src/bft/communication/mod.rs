@@ -293,6 +293,8 @@ pub struct NodeConfig {
     pub replica_server_config: rustls::ServerConfig,
     ///The TLS configuration used to connect to replica nodes (from replica nodes)
     pub replica_client_config: rustls::ClientConfig,
+    //Should the leader replica attempt to fill out batches (might lead to increased pre consensus latency)
+    pub fill_batch: bool,
 }
 
 // max no. of messages allowed in the channel
@@ -376,7 +378,8 @@ impl<D> Node<D>
         });
 
         //Setup all the peer message reception handling.
-        let peers = NodePeers::new(cfg.id, cfg.first_cli, cfg.batch_size);
+        let peers = NodePeers::new(cfg.id, cfg.first_cli, cfg.batch_size,
+                                   cfg.fill_batch);
 
         let rng = ThreadSafePrng::new();
 
