@@ -62,7 +62,7 @@ impl<D: SharedData> Clone for Client<D> {
             params: self.params,
             node: self.node.clone(),
             data: Arc::clone(&self.data),
-            operation_counter: ThreadSafeSeqNo::ZERO,
+            operation_counter: SeqNo::ZERO,
             dummy_meta: Arc::new(Mutex::new(BatchMeta::new()))
         }
     }
@@ -169,7 +169,7 @@ impl<D> Client<D>
             params,
             session_id,
             node: send_node,
-            operation_counter: ThreadSafeSeqNo::ZERO,
+            operation_counter: SeqNo::ZERO,
             dummy_meta: Arc::new(Mutex::new(BatchMeta::new()))
         })
     }
