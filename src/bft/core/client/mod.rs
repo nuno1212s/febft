@@ -43,7 +43,7 @@ struct ClientData<P> {
 // TODO: maybe make the clone impl more efficient
 pub struct Client<D: SharedData + 'static> {
     session_id: SeqNo,
-    operation_counter: ThreadSafeSeqNo,
+    operation_counter: SeqNo,
     data: Arc<ClientData<D::Reply>>,
     params: SystemParams,
     node: SendNode<D>,
@@ -183,7 +183,7 @@ impl<D> Client<D>
     /// on top of `febft`.
     //
     // TODO: request timeout
-    pub async fn update(&self, operation: D::Request) -> D::Reply {
+    pub async fn update(&mut self, operation: D::Request) -> D::Reply {
         let session_id = self.session_id;
         let operation_id = self.next_operation_id();
         let message = SystemMessage::Request(RequestMessage::new(
@@ -195,7 +195,7 @@ impl<D> Client<D>
 
         // broadcast our request to the node group
         let targets = NodeId::targets(0..self.params.n());
-        self.node.clone().broadcast(message, targets, self.dummy_meta.clone());
+        self.node.broadcast(message, targets, self.dummy_meta.clone());
 
         // await response
         let request_key = get_request_key(session_id, operation_id);
@@ -204,8 +204,10 @@ impl<D> Client<D>
         ClientRequestFut { request_key, ready }.await
     }
 
-    fn next_operation_id(&self) -> SeqNo {
-        let id = self.operation_counter.next();
+    fn next_operation_id(&mut self) -> SeqNo {
+        let id = self.operation_counter;
+
+        self.operation_counter = self.operation_counter.next();
 
         id
     }
