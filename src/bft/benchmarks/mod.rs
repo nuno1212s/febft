@@ -231,6 +231,8 @@ impl BenchmarkHelper {
                  std_dev,
         );
 
+        self.reset();
+
         (average, std_dev)
     }
 
@@ -247,6 +249,8 @@ impl BenchmarkHelper {
                  avg,
                  std_dev,
         );
+
+        self.reset();
 
         (avg, std_dev)
     }
