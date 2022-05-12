@@ -686,7 +686,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
 
 const RQ_AMOUNT: usize = 999;
 static RQ_COUNT: AtomicUsize = AtomicUsize::new(0);
-const FIRST_RQ_TIME: RefCell<Option<Instant>> = RefCell::new(None);
+static FIRST_RQ_TIME: RefCell<Option<Instant>> = RefCell::new(None);
 
 impl<T> ConnectedPeer<T> where T: Send {
     pub fn client_id(&self) -> &NodeId {
@@ -787,17 +787,22 @@ impl<T> ConnectedPeer<T> where T: Send {
             Self::PoolConnection { sender, .. } => {
                 let sender_guard = sender.lock().as_ref().unwrap().clone();
 
-                println!("Adding request.");
-
                 let rqs = RQ_COUNT.fetch_add(1, Ordering::SeqCst);
+                println!("Adding request. {}", rqs);
 
                 if rqs == 0 {
                     //First request
                     FIRST_RQ_TIME.replace(Some(Instant::now()));
                 } else if rqs >= RQ_AMOUNT - 1 {
-                    let duration = Instant::now().duration_since((*FIRST_RQ_TIME.borrow()).unwrap());
+                    let init_time = FIRST_RQ_TIME.replace(None);
+                    if init_time.is_some() {
+                        let duration = Instant::now()
+                            .duration_since(init_time.unwrap());
 
-                    println!("RECEIVED {} REQUESTS IN {:?}", RQ_AMOUNT, duration);
+                        println!("RECEIVED {} REQUESTS IN {:?}", RQ_AMOUNT, duration);
+                    } else {
+                        println!("FAILED TO READ TIME AMOUNT");
+                    }
                 } else if rqs % 100 == 0 {
                     println!("Received {} requests", rqs);
                 }
