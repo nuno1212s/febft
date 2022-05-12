@@ -809,7 +809,7 @@ impl<T> ConnectedPeer<T> where T: Send {
                     }
                 };
 
-                println!("Added request.");
+                println!("Added request. {}", rqs);
             }
             Self::UnpooledConnection { sender, .. } => {
                 let mut send_clone;
