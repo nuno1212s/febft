@@ -684,10 +684,6 @@ impl<T> ConnectedPeersPool<T> where T: Send {
     }
 }
 
-const RQ_AMOUNT: usize = 999;
-static RQ_COUNT: AtomicUsize = AtomicUsize::new(0);
-static FIRST_RQ_TIME: RefCell<Option<Instant>> = RefCell::new(None);
-
 impl<T> ConnectedPeer<T> where T: Send {
     pub fn client_id(&self) -> &NodeId {
         match self {
@@ -787,39 +783,15 @@ impl<T> ConnectedPeer<T> where T: Send {
             Self::PoolConnection { sender, .. } => {
                 let sender_guard = sender.lock().as_ref().unwrap().clone();
 
-                let rqs = RQ_COUNT.fetch_add(1, Ordering::SeqCst);
-                println!("Adding request. {}", rqs);
-
-                if rqs == 0 {
-                    //First request
-                    FIRST_RQ_TIME.replace(Some(Instant::now()));
-                } else if rqs >= RQ_AMOUNT - 1 {
-                    let init_time = FIRST_RQ_TIME.replace(None);
-                    if init_time.is_some() {
-                        let duration = Instant::now()
-                            .duration_since(init_time.unwrap());
-
-                        println!("RECEIVED {} REQUESTS IN {:?}", RQ_AMOUNT, duration);
-                    } else {
-                        println!("FAILED TO READ TIME AMOUNT");
-                    }
-                } else if rqs % 100 == 0 {
-                    println!("Received {} requests", rqs);
-                }
-
                 match sender_guard.send_async(msg).await {
                     Ok(_) => {}
                     Err(err) => {
                         panic!("Failed to send because {:?}", err);
                     }
                 };
-
-                println!("Added request. {}", rqs);
             }
             Self::UnpooledConnection { sender, .. } => {
                 let mut send_clone;
-
-                println!("Received requests in unpooled connection");
                 {
                     let send_lock = sender.lock();
                     let mut sender_guard = send_lock.as_ref();
@@ -841,8 +813,6 @@ impl<T> ConnectedPeer<T> where T: Send {
                         panic!("Failed to receive data from {:?} because {:?}", self.client_id(), err);
                     }
                 }
-
-                println!("Done receiving");
             }
         }
     }

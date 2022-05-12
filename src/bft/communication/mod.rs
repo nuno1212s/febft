@@ -5,6 +5,7 @@ use std::cmp::min;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use async_tls::{
@@ -233,6 +234,9 @@ pub struct Node<D: SharedData + 'static> {
     connector: TlsConnector,
     peer_addrs: IntMap<PeerAddr>,
     sender_handle: SendHandle<D>,
+
+    rq_count: AtomicUsize,
+    rq_time: Mutex<Option<Instant>>
 }
 
 ///Represents the server addresses of a peer
@@ -401,6 +405,8 @@ impl<D> Node<D>
             peer_addrs: cfg.addrs,
             first_cli: cfg.first_cli,
             sender_handle: send_handle,
+            rq_count: AtomicUsize::new(0),
+            rq_time: Mutex::new(None),
         });
 
         let rx_node_clone = node.clone();
@@ -1465,6 +1471,8 @@ impl<D> Node<D>
         // announce we have failed to connect to the peer node
     }
 
+    const RQ_AMOUNT: usize = 999;
+
     /// Handles client connections
     #[instrument(skip(self, sock))]
     pub async fn handle_connected_rx(self: Arc<Self>, peer_id: NodeId, mut sock: SecureSocketRecvClient) {
@@ -1552,6 +1560,32 @@ impl<D> Node<D>
             let msg = Message::System(header, message);
 
             println!("{:?} // Received request", peer_id);
+
+            let rqs = self.rq_count.fetch_add(1, Ordering::SeqCst);
+            println!("Adding request. {}", rqs);
+
+            if rqs == 0 {
+                //First request
+                let mut guard = self.rq_time.lock();
+
+                std::mem::replace(&mut *guard, Some(Instant::now()));
+
+            } else if rqs >= Self::RQ_AMOUNT - 1 {
+                let mut guard = self.rq_time.lock();
+
+                let init_time = std::mem::replace(&mut *guard, None);
+
+                if init_time.is_some() {
+                    let duration = Instant::now()
+                        .duration_since(init_time.unwrap());
+
+                    println!("RECEIVED {} REQUESTS IN {:?}", Self::RQ_AMOUNT, duration);
+                } else {
+                    println!("FAILED TO READ TIME AMOUNT");
+                }
+            } else if rqs % 100 == 0 {
+                println!("Received {} requests", rqs);
+            }
 
             client.push_request(msg).await;
         }
