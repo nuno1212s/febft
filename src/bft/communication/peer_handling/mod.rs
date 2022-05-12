@@ -77,7 +77,7 @@ unsafe impl<T> Sync for NodePeers<T> where T: Send {}
 unsafe impl<T> Send for NodePeers<T> where T: Send {}
 
 impl<T> NodePeers<T> where T: Send {
-    pub fn new(id: NodeId, first_cli: NodeId, batch_size: usize, fill_batch: bool) -> NodePeers<T> {
+    pub fn new(id: NodeId, first_cli: NodeId, batch_size: usize, fill_batch: bool, clients_per_pool: usize) -> NodePeers<T> {
         //We only want to setup client handling if we are a replica
         let client_handling;
 
@@ -90,7 +90,8 @@ impl<T> NodePeers<T> where T: Send {
                                                             batch_size,
                                                             client_tx.clone(),
                                                             id,
-                                                            fill_batch));
+                                                            fill_batch,
+                                                            clients_per_pool));
             client_channel = Some((client_tx, client_rx));
         } else {
             client_handling = None;
@@ -349,6 +350,7 @@ pub struct ConnectedPeersGroup<T: Send + 'static> {
     batch_transmission: ClientSender<Vec<T>>,
     own_id: NodeId,
     fill_batch: bool,
+    clients_per_pool: usize,
 }
 
 pub struct ConnectedPeersPool<T: Send + 'static> {
@@ -366,7 +368,7 @@ pub struct ConnectedPeersPool<T: Send + 'static> {
 
 impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
     pub fn new(per_client_bound: usize, batch_size: usize, batch_transmission: crossbeam_channel::Sender<Vec<T>>,
-               own_id: NodeId, fill_batch: bool) -> Arc<Self> {
+               own_id: NodeId, fill_batch: bool, clients_per_pool: usize) -> Arc<Self> {
         Arc::new(Self {
             client_pools: parking_lot::Mutex::new(Vec::new()),
             client_connections_cache: RwLock::new(IntMap::new()),
@@ -376,6 +378,7 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
             batch_transmission,
             own_id,
             fill_batch,
+            clients_per_pool: clients_per_pool,
         })
     }
 
@@ -415,7 +418,8 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
         let pool = ConnectedPeersPool::new(self.batch_size,
                                            self.batch_transmission.clone(),
                                            Arc::clone(self),
-                                           self.fill_batch);
+                                           self.fill_batch,
+                                           self.clients_per_pool);
 
         match pool.attempt_to_add(clone_queue) {
             Ok(_) => {}
@@ -496,12 +500,12 @@ impl<T> ConnectedPeersPool<T> where T: Send {
     //We mark the owner as static since if the pool is active then
     //The owner also has to be active
     pub fn new(batch_size: usize, batch_transmission: crossbeam_channel::Sender<Vec<T>>,
-               owner: Arc<ConnectedPeersGroup<T>>, fill_batch: bool) -> Arc<Self> {
+               owner: Arc<ConnectedPeersGroup<T>>, fill_batch: bool, client_per_pool: usize) -> Arc<Self> {
         let result = Self {
             connected_clients: parking_lot::Mutex::new(Vec::new()),
             batch_size,
             batch_transmission,
-            client_limit: batch_size * 10,
+            client_limit: client_per_pool,
             finish_execution: AtomicBool::new(false),
             owner,
             fill_batch,
