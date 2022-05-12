@@ -37,9 +37,9 @@ use crate::bft::consensus::log::{
     Info,
     Log,
 };
-use crate::bft::core::server::client_replier::Replier;
-use crate::bft::core::server::client_rq_handling::RqProcessor;
-use crate::bft::core::server::rq_finalizer::{RqFinalizer, RqFinalizerHandle};
+use crate::bft::communication::client_replier::Replier;
+use crate::bft::communication::client_rq_handling::RqProcessor;
+use crate::bft::communication::rq_finalizer::{RqFinalizer, RqFinalizerHandle};
 use crate::bft::cst::{
     CollabStateTransfer,
     CstProgress,
@@ -71,10 +71,6 @@ use crate::bft::timeouts::{
 };
 
 use super::SystemParams;
-
-pub mod client_rq_handling;
-pub mod rq_finalizer;
-pub mod client_replier;
 
 enum ReplicaPhase {
     // the replica is retrieving state from

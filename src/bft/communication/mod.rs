@@ -58,6 +58,9 @@ pub mod message;
 pub mod channel;
 pub mod peer_handling;
 pub mod send_thread;
+pub mod client_rq_handling;
+pub mod rq_finalizer;
+pub mod client_replier;
 
 //pub trait HijackMessage {
 //    fn hijack_message(&self, stored: ) -> Either<M
@@ -1548,7 +1551,7 @@ impl<D> Node<D>
 
             let msg = Message::System(header, message);
 
-            client.push_request_(msg, &self.id()).await;
+            client.push_request(msg).await;
         }
 
         // announce we have disconnected
@@ -1941,7 +1944,7 @@ impl<D> SendTo<D>
         ).into_inner();
 
         // send
-        cli.push_request_(Message::System(h, m), cli.client_id()).await;
+        cli.push_request(Message::System(h, m)).await;
     }
 
     async fn peers(
@@ -2114,7 +2117,7 @@ impl<D> SerializedSendTo<D>
         let (original, _) = m.into_inner();
 
         // send to ourselves
-        cli.push_request_(Message::System(h, original), &cli.client_id()).await;
+        cli.push_request(Message::System(h, original)).await;
     }
 
     fn peers_sync(

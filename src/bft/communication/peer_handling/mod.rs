@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{RecvError, SendError};
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel::{RecvTimeoutError, TryRecvError};
 use dsrust::channels::async_ch::ReceiverMultFut;
@@ -66,7 +66,7 @@ pub struct NodePeers<T: Send + 'static> {
     client_rx: Option<ClientReceiver<Vec<T>>>,
 }
 
-const DEFAULT_CLIENT_QUEUE: usize = 1024;
+const DEFAULT_CLIENT_QUEUE: usize = 256;
 const DEFAULT_REPLICA_QUEUE: usize = 1024;
 
 ///We make this class Sync and send since the clients are going to be handled by a single class
@@ -265,12 +265,12 @@ pub enum ConnectedPeer<T> where T: Send {
     },
 }
 
-///Handling replicas is different from handling clients
-///We want to handle the requests differently as in communication between replicas
-///Latency is extremely important and we have to minimize it to the least amount possible
-/// So in this implementation, we will just use a single channel with dumping capabilities (Able to remove capacity items in a couple CAS operations,
-/// making it much more efficient than just removing 1 at a time and also minimizing concurrency)
-/// for all messages
+///Handling replicas is different from handling clients.
+///We want to handle the requests differently as in communication between replicas.
+///Latency is extremely important and we have to minimize it to the least amount possible.
+/// So in this implementation, we will just use a single, fast channel with the ability
+/// to be utilized by actual OS threads, not just tokio tasks. (We chose crossbeams channels as 
+/// they seemed like the best in terms of performance)
 ///
 /// FIXME: See if having a multiple channel approach with something like a select is
 /// worth the overhead of having to pool multiple channels. We may also get problems with fairness.
@@ -436,7 +436,8 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
 
         drop(guard);
 
-        pool_clone.start(id as u32);
+        //We just want to see how long it takes for the first 1000 requests to arrive
+        //pool_clone.start(id as u32);
 
         connected_client
     }
@@ -683,6 +684,10 @@ impl<T> ConnectedPeersPool<T> where T: Send {
     }
 }
 
+const RQ_AMOUNT: usize = 999;
+const RQ_COUNT: AtomicUsize = AtomicUsize::new(0);
+const FIRST_RQ_TIME: RefCell<Instant> = RefCell::new(Instant::now());
+
 impl<T> ConnectedPeer<T> where T: Send {
     pub fn client_id(&self) -> &NodeId {
         match self {
@@ -777,56 +782,21 @@ impl<T> ConnectedPeer<T> where T: Send {
         }
     }
 
-    pub async fn push_request_(&self, msg: T, own_id: &NodeId) where T: Debug {
-        match self {
-            Self::PoolConnection { sender, .. } => {
-                // debug!("{:?} // Pushing request {:?} into queue, from {:?}",
-                //     own_id, msg, self.client_id());
-
-                let sender_guard = sender.lock().as_ref().unwrap().clone();
-
-                match sender_guard.send_async(msg).await {
-                    Ok(_) => {}
-                    Err(err) => {
-                        panic!("Failed to send because {:?}", err);
-                    }
-                };
-            }
-            Self::UnpooledConnection { sender, .. } => {
-                //debug!("{:?} // Pushing request {:?} into queue, from {:?}",
-                //    own_id, msg, self.client_id());
-
-                let mut send_clone;
-
-                {
-                    let send_lock = sender.lock();
-                    let mut sender_guard = send_lock.as_ref();
-
-                    match sender_guard {
-                        None => {
-                            //debug!("{:?} // Failed to receive because there is no sender.", self.client_id());
-                            return;
-                        }
-                        Some(send) => {
-                            send_clone = send.clone();
-                        }
-                    }
-                }
-
-                match send_clone.send(msg).await {
-                    Ok(_) => {}
-                    Err(err) => {
-                        panic!("Failed to receive data from {:?} because {:?}", self.client_id(), err);
-                    }
-                }
-            }
-        }
-    }
-
     pub async fn push_request(&self, msg: T) {
         match self {
             Self::PoolConnection { sender, .. } => {
                 let sender_guard = sender.lock().as_ref().unwrap().clone();
+
+                let rqs = RQ_COUNT.fetch_add(1, Ordering::Relaxed);
+
+                if rqs == 0 {
+                    //First request
+                    FIRST_RQ_TIME.replace(Instant::now());
+                } else if rqs >= RQ_AMOUNT - 1 {
+                    let duration = Instant::now().duration_since(*FIRST_RQ_TIME.borrow());
+
+                    println!("RECEIVED {} REQUESTS IN {:?}", RQ_AMOUNT, duration);
+                }
 
                 match sender_guard.send_async(msg).await {
                     Ok(_) => {}
