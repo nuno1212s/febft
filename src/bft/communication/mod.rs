@@ -1559,10 +1559,7 @@ impl<D> Node<D>
 
             let msg = Message::System(header, message);
 
-            println!("{:?} // Received request", peer_id);
-
             let rqs = self.rq_count.fetch_add(1, Ordering::SeqCst);
-            println!("Adding request. {}", rqs);
 
             if rqs == 0 {
                 //First request
