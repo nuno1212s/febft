@@ -685,7 +685,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
 }
 
 const RQ_AMOUNT: usize = 999;
-const RQ_COUNT: AtomicUsize = AtomicUsize::new(0);
+static RQ_COUNT: AtomicUsize = AtomicUsize::new(0);
 const FIRST_RQ_TIME: RefCell<Option<Instant>> = RefCell::new(None);
 
 impl<T> ConnectedPeer<T> where T: Send {
