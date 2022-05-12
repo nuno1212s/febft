@@ -686,7 +686,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
 
 const RQ_AMOUNT: usize = 999;
 const RQ_COUNT: AtomicUsize = AtomicUsize::new(0);
-const FIRST_RQ_TIME: RefCell<Instant> = RefCell::new(Instant::now());
+const FIRST_RQ_TIME: RefCell<Option<Instant>> = RefCell::new(None);
 
 impl<T> ConnectedPeer<T> where T: Send {
     pub fn client_id(&self) -> &NodeId {
@@ -791,9 +791,9 @@ impl<T> ConnectedPeer<T> where T: Send {
 
                 if rqs == 0 {
                     //First request
-                    FIRST_RQ_TIME.replace(Instant::now());
+                    FIRST_RQ_TIME.replace(Some(Instant::now()));
                 } else if rqs >= RQ_AMOUNT - 1 {
-                    let duration = Instant::now().duration_since(*FIRST_RQ_TIME.borrow());
+                    let duration = Instant::now().duration_since((*FIRST_RQ_TIME.borrow()).unwrap());
 
                     println!("RECEIVED {} REQUESTS IN {:?}", RQ_AMOUNT, duration);
                 }

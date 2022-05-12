@@ -13,6 +13,7 @@ use crate::bft::communication::{
     NodeId,
     SendNode,
 };
+use crate::bft::communication::client_replier::ReplyHandle;
 use crate::bft::communication::message::{
     Message,
     ReplyMessage,
@@ -23,7 +24,6 @@ use crate::bft::communication::serialize::{
     SharedData,
 };
 use crate::bft::consensus::log::Log;
-use crate::bft::core::server::client_replier::ReplyHandle;
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
 
