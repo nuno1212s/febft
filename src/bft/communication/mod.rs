@@ -236,7 +236,7 @@ pub struct Node<D: SharedData + 'static> {
     sender_handle: SendHandle<D>,
 
     rq_count: AtomicUsize,
-    rq_time: Mutex<Option<Instant>>
+    rq_time: Mutex<Option<Instant>>,
 }
 
 ///Represents the server addresses of a peer
@@ -1566,7 +1566,6 @@ impl<D> Node<D>
                 let mut guard = self.rq_time.lock();
 
                 std::mem::replace(&mut *guard, Some(Instant::now()));
-
             } else if rqs >= Self::RQ_AMOUNT - 1 {
                 let mut guard = self.rq_time.lock();
 
@@ -1581,7 +1580,12 @@ impl<D> Node<D>
                     println!("FAILED TO READ TIME AMOUNT");
                 }
             } else if rqs % 100 == 0 {
-                println!("Received {} requests", rqs);
+                let instant = (*self.rq_time.lock()).clone().unwrap();
+
+                let duration = Instant::now()
+                    .duration_since(instant);
+
+                println!("Received {} requests in {:?}", rqs, duration);
             }
 
             client.push_request(msg).await;
