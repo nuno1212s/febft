@@ -1549,6 +1549,8 @@ impl<D> Node<D>
                 }
             };
 
+            println!("{:?} // Received request", peer_id);
+
             let msg = Message::System(header, message);
 
             client.push_request(msg).await;
