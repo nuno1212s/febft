@@ -787,6 +787,8 @@ impl<T> ConnectedPeer<T> where T: Send {
             Self::PoolConnection { sender, .. } => {
                 let sender_guard = sender.lock().as_ref().unwrap().clone();
 
+                println!("Adding request.");
+
                 let rqs = RQ_COUNT.fetch_add(1, Ordering::Relaxed);
 
                 if rqs == 0 {
@@ -806,10 +808,13 @@ impl<T> ConnectedPeer<T> where T: Send {
                         panic!("Failed to send because {:?}", err);
                     }
                 };
+
+                println!("Added request.");
             }
             Self::UnpooledConnection { sender, .. } => {
                 let mut send_clone;
 
+                println!("Received requests in unpooled connection");
                 {
                     let send_lock = sender.lock();
                     let mut sender_guard = send_lock.as_ref();
@@ -831,6 +836,8 @@ impl<T> ConnectedPeer<T> where T: Send {
                         panic!("Failed to receive data from {:?} because {:?}", self.client_id(), err);
                     }
                 }
+
+                println!("Done receiving");
             }
         }
     }
