@@ -796,6 +796,8 @@ impl<T> ConnectedPeer<T> where T: Send {
                     let duration = Instant::now().duration_since((*FIRST_RQ_TIME.borrow()).unwrap());
 
                     println!("RECEIVED {} REQUESTS IN {:?}", RQ_AMOUNT, duration);
+                } else if rqs % 100 == 0 {
+                    println!("Received {} requests", rqs);
                 }
 
                 match sender_guard.send_async(msg).await {
