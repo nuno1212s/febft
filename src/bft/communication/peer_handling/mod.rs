@@ -789,7 +789,7 @@ impl<T> ConnectedPeer<T> where T: Send {
 
                 println!("Adding request.");
 
-                let rqs = RQ_COUNT.fetch_add(1, Ordering::Relaxed);
+                let rqs = RQ_COUNT.fetch_add(1, Ordering::SeqCst);
 
                 if rqs == 0 {
                     //First request
