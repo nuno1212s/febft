@@ -1575,7 +1575,7 @@ impl<D> Node<D>
                 println!("Received {} requests in {:?}", rqs, duration);
             }
 
-            client.push_request(msg).await;
+            //client.push_request(msg).await;
         }
 
         // announce we have disconnected
