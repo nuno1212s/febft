@@ -66,7 +66,7 @@ pub struct NodePeers<T: Send + 'static> {
     client_rx: Option<ClientReceiver<Vec<T>>>,
 }
 
-const DEFAULT_CLIENT_QUEUE: usize = 256;
+const DEFAULT_CLIENT_QUEUE: usize = 16048;
 const DEFAULT_REPLICA_QUEUE: usize = 1024;
 
 ///We make this class Sync and send since the clients are going to be handled by a single class
