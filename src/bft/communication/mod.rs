@@ -1566,20 +1566,7 @@ impl<D> Node<D>
                 let mut guard = self.rq_time.lock();
 
                 std::mem::replace(&mut *guard, Some(Instant::now()));
-            } else if rqs >= Self::RQ_AMOUNT - 1 {
-                let mut guard = self.rq_time.lock();
-
-                let init_time = std::mem::replace(&mut *guard, None);
-
-                if init_time.is_some() {
-                    let duration = Instant::now()
-                        .duration_since(init_time.unwrap());
-
-                    println!("RECEIVED {} REQUESTS IN {:?}", Self::RQ_AMOUNT, duration);
-                } else {
-                    println!("FAILED TO READ TIME AMOUNT");
-                }
-            } else if rqs % 100 == 0 {
+            } else if rqs % 100 == 0 || rqs == Self::RQ_AMOUNT - 1 {
                 let instant = (*self.rq_time.lock()).clone().unwrap();
 
                 let duration = Instant::now()
