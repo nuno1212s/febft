@@ -188,7 +188,7 @@ impl<D> Client<D>
     /// can be awaited for the request reply, instead of always forcing the wait
     //
     // TODO: request timeout
-    pub async fn send(&mut self, operation: D::Request) -> ClientRequestFut<'static, D::Reply> {
+    pub async fn send<'a>(&'a mut self, operation: D::Request) -> ClientRequestFut<'a, D::Reply> {
         let session_id = self.session_id;
         let operation_id = self.next_operation_id();
         let message = SystemMessage::Request(RequestMessage::new(

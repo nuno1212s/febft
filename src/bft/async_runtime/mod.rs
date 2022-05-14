@@ -58,40 +58,32 @@ pub struct BarrierWaitResult {
 }
 
 impl Barrier {
-    pub fn new(n: usize) -> Barrier {
+    pub fn new(n: usize) -> Self {
         #[cfg(feature = "async_runtime_tokio")]
         {
-            tokio::Barrier::new(n)
+            return Barrier {inner: tokio::Barrier::new(n)};
         }
 
         #[cfg(feature = "async_runtime_async_std")]
         {
-            async_std::Barrier::new(n)
+            return Barrier {inner: async_std::Barrier::new(n)};
         }
     }
 
-    pub fn wait(&self) -> BarrierWaitResult {
+    pub async fn wait(&self) -> BarrierWaitResult {
         BarrierWaitResult {
-            inner: self.inner.wait()
+            #[cfg(feature = "async_runtime_tokio")]
+            inner: self.inner.wait().await,
+
+            #[cfg(feature = "async_runtime_async_std")]
+            inner: self.inner.wait().await,
         }
     }
 }
 
 impl BarrierWaitResult {
-
     pub fn is_leader(&self) -> bool {
         self.inner.is_leader()
-    }
-
-}
-
-impl<T> Future for BarrierWaitResult {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.inner)
-            .poll(cx)
-            .map(|result| result.wrapped_msg(ErrorKind::AsyncRuntime, "Failed to join handle"))
     }
 }
 
