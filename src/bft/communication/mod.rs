@@ -5,7 +5,7 @@ use std::cmp::min;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use async_tls::{
@@ -234,9 +234,10 @@ pub struct Node<D: SharedData + 'static> {
     connector: TlsConnector,
     peer_addrs: IntMap<PeerAddr>,
     sender_handle: SendHandle<D>,
-
+    //temp benchmark data
     rq_count: AtomicUsize,
     rq_time: Mutex<Option<Instant>>,
+    zone_time: Vec<AtomicU64>,
 }
 
 ///Represents the server addresses of a peer
@@ -395,6 +396,14 @@ impl<D> Node<D>
 
         let send_handle = send_thread::create_send_thread(1, 1024);
 
+        let zones = 4;
+
+        let mut zone_time = Vec::with_capacity(4);
+
+        for _ in 0..zones {
+            zone_time.push(AtomicU64::new(0));
+        }
+
         let mut node = Arc::new(Node {
             id,
             rng,
@@ -405,8 +414,10 @@ impl<D> Node<D>
             peer_addrs: cfg.addrs,
             first_cli: cfg.first_cli,
             sender_handle: send_handle,
+            //benchmarks
             rq_count: AtomicUsize::new(0),
             rq_time: Mutex::new(None),
+            zone_time,
         });
 
         let rx_node_clone = node.clone();
@@ -1527,6 +1538,8 @@ impl<D> Node<D>
                 break;
             }
 
+            let start_rq_handling = Instant::now();
+
             // we are passing the correct length, safe to use unwrap()
             let header = Header::deserialize_from(&buf[..Header::LENGTH]).unwrap();
 
@@ -1540,12 +1553,16 @@ impl<D> Node<D>
             buf.reserve(header.payload_length());
             buf.resize(header.payload_length(), 0);
 
+            let zone_1 = Instant::now();
+
             // read the peer's payload
             if let Err(_) = sock.read_exact(&mut buf[..header.payload_length()]).await {
                 // errors reading -> faulty connection;
                 // drop this socket
                 break;
             }
+
+            let zone_2 = Instant::now();
 
             // deserialize payload
             let message = match D::deserialize_message(&buf[..header.payload_length()]) {
@@ -1557,7 +1574,17 @@ impl<D> Node<D>
                 }
             };
 
+            let zone_3 = Instant::now();
+
             let msg = Message::System(header, message);
+
+            let zone_1_time = zone_1.duration_since(start_rq_handling).as_micros() as u64;
+            let zone_2_time = zone_2.duration_since(zone_1).as_micros() as u64;
+            let zone_3_time = zone_3.duration_since(zone_2).as_micros() as u64;
+
+            self.zone_time[0].fetch_add(zone_1_time, Ordering::Relaxed);
+            self.zone_time[1].fetch_add(zone_2_time, Ordering::Relaxed);
+            self.zone_time[2].fetch_add(zone_3_time, Ordering::Relaxed);
 
             let rqs = self.rq_count.fetch_add(1, Ordering::SeqCst);
 
@@ -1571,6 +1598,13 @@ impl<D> Node<D>
 
                 let duration = Instant::now()
                     .duration_since(instant);
+
+                for index in 0..self.zone_time.len() {
+                    let avg_time = self.zone_time[index].load(Ordering::SeqCst) / rqs as u64;
+
+                    println!("Avg time {} micros ({} micros total) for zone {}", avg_time,
+                           self.zone_time[index].load(Ordering::SeqCst), index);
+                }
 
                 println!("Received {} requests in {:?}", rqs, duration);
 
