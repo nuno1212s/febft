@@ -1578,13 +1578,13 @@ impl<D> Node<D>
 
             let msg = Message::System(header, message);
 
-            let zone_1_time = zone_1.duration_since(start_rq_handling).as_micros() as u64;
-            let zone_2_time = zone_2.duration_since(zone_1).as_micros() as u64;
-            let zone_3_time = zone_3.duration_since(zone_2).as_micros() as u64;
+            let zone_0_time = zone_1.duration_since(start_rq_handling).as_nanos() as u64;
+            let zone_1_time = zone_2.duration_since(zone_1).as_nanos() as u64;
+            let zone_2_time = zone_3.duration_since(zone_2).as_nanos() as u64;
 
-            self.zone_time[0].fetch_add(zone_1_time, Ordering::Relaxed);
-            self.zone_time[1].fetch_add(zone_2_time, Ordering::Relaxed);
-            self.zone_time[2].fetch_add(zone_3_time, Ordering::Relaxed);
+            self.zone_time[0].fetch_add(zone_0_time, Ordering::Relaxed);
+            self.zone_time[1].fetch_add(zone_1_time, Ordering::Relaxed);
+            self.zone_time[2].fetch_add(zone_2_time, Ordering::Relaxed);
 
             let rqs = self.rq_count.fetch_add(1, Ordering::SeqCst);
 
@@ -1600,10 +1600,11 @@ impl<D> Node<D>
                     .duration_since(instant);
 
                 for index in 0..self.zone_time.len() {
-                    let avg_time = self.zone_time[index].load(Ordering::SeqCst) / rqs as u64;
+                    let time_spent_in_zone = self.zone_time[index].load(Ordering::SeqCst);
+                    let avg_time = time_spent_in_zone / rqs as u64;
 
                     println!("Avg time {} micros ({} micros total) for zone {}", avg_time,
-                           self.zone_time[index].load(Ordering::SeqCst), index);
+                             time_spent_in_zone, index);
                 }
 
                 println!("Received {} requests in {:?}", rqs, duration);
