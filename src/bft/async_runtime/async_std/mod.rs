@@ -10,6 +10,10 @@ pub struct JoinHandle<T> {
 
 pub struct Runtime;
 
+pub type Barrier = async_std::sync::Barrier;
+
+pub type BarrierWaitResult = async_std::sync::BarrierWaitResult;
+
 pub fn init(num_threads: usize) -> Result<Runtime> {
     std::env::set_var("ASYNC_STD_THREAD_COUNT", format!("{}", num_threads));
     Ok(Runtime)

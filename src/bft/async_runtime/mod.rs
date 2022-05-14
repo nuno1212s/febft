@@ -41,6 +41,60 @@ pub struct JoinHandle<T> {
     inner: async_std::JoinHandle<T>,
 }
 
+pub struct Barrier {
+    #[cfg(feature = "async_runtime_tokio")]
+    inner: tokio::Barrier,
+
+    #[cfg(feature = "async_runtime_async_std")]
+    inner: async_std::Barrier,
+}
+
+pub struct BarrierWaitResult {
+    #[cfg(feature = "async_runtime_tokio")]
+    inner: tokio::BarrierWaitResult,
+
+    #[cfg(feature = "async_runtime_async_std")]
+    inner: async_std::BarrierWaitResult,
+}
+
+impl Barrier {
+    pub fn new(n: usize) -> Barrier {
+        #[cfg(feature = "async_runtime_tokio")]
+        {
+            tokio::Barrier::new(n)
+        }
+
+        #[cfg(feature = "async_runtime_async_std")]
+        {
+            async_std::Barrier::new(n)
+        }
+    }
+
+    pub fn wait(&self) -> BarrierWaitResult {
+        BarrierWaitResult {
+            inner: self.inner.wait()
+        }
+    }
+}
+
+impl BarrierWaitResult {
+
+    pub fn is_leader(&self) -> bool {
+        self.inner.is_leader()
+    }
+
+}
+
+impl<T> Future for BarrierWaitResult {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.inner)
+            .poll(cx)
+            .map(|result| result.wrapped_msg(ErrorKind::AsyncRuntime, "Failed to join handle"))
+    }
+}
+
 /// This function initializes the async runtime.
 ///
 /// It should be called once before the core protocol starts executing.
@@ -66,9 +120,9 @@ pub unsafe fn drop() -> Result<()> {
 /// A handle to the future `JoinHandle` is returned, which can be
 /// awaited on, to resolve the value returned by `F`.
 pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
-where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
 {
     let inner = runtime!().spawn(future);
     JoinHandle { inner }

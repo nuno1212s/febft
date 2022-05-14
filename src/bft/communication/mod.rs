@@ -1573,9 +1573,13 @@ impl<D> Node<D>
                     .duration_since(instant);
 
                 println!("Received {} requests in {:?}", rqs, duration);
+
+                if rqs == Self::RQ_AMOUNT - 1 {
+                    self.rq_count.store(0, Ordering::Relaxed);
+                }
             }
 
-            //client.push_request(msg).await;
+            client.push_request(msg).await;
         }
 
         // announce we have disconnected

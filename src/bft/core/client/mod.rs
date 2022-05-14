@@ -184,6 +184,31 @@ impl<D> Client<D>
     pub fn session(&self) -> SeqNo { self.session_id }
 
     /// Updates the replicated state of the application running
+    /// on top of `febft`, similarly to update. However, it only returns the future that
+    /// can be awaited for the request reply, instead of always forcing the wait
+    //
+    // TODO: request timeout
+    pub async fn send(&mut self, operation: D::Request) -> ClientRequestFut<'static, D::Reply> {
+        let session_id = self.session_id;
+        let operation_id = self.next_operation_id();
+        let message = SystemMessage::Request(RequestMessage::new(
+            session_id,
+            operation_id,
+            operation,
+        ));
+
+        // broadcast our request to the node group
+        let targets = NodeId::targets(0..self.params.n());
+        self.node.broadcast(message, targets, self.dummy_meta.clone());
+
+        // await response
+        let request_key = get_request_key(session_id, operation_id);
+        let ready = get_ready::<D>(session_id, &*self.data);
+
+        ClientRequestFut { request_key, ready }
+    }
+
+    /// Updates the replicated state of the application running
     /// on top of `febft`.
     //
     // TODO: request timeout

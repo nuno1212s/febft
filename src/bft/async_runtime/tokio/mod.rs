@@ -7,6 +7,10 @@ pub type JoinHandle<T> = ::tokio::task::JoinHandle<T>;
 // runtime type
 pub type Runtime = ::tokio::runtime::Runtime;
 
+pub type Barrier = ::tokio::sync::Barrier;
+
+pub type BarrierWaitResult = ::tokio::sync::BarrierWaitResult;
+
 pub fn init(num_threads: usize) -> Result<Runtime> {
     ::tokio::runtime::Builder::new_multi_thread()
         .worker_threads(num_threads)
