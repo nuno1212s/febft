@@ -68,7 +68,7 @@ impl<D: SharedData> Clone for Client<D> {
     }
 }
 
-struct ClientRequestFut<'a, P> {
+pub struct ClientRequestFut<'a, P> {
     request_key: u64,
     ready: &'a Mutex<IntMap<Ready<P>>>,
 }
