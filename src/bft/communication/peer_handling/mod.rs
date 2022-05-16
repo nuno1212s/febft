@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{RecvError, SendError};
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel::{RecvTimeoutError, TryRecvError};
 use dsrust::channels::async_ch::ReceiverMultFut;
@@ -77,7 +77,8 @@ unsafe impl<T> Sync for NodePeers<T> where T: Send {}
 unsafe impl<T> Send for NodePeers<T> where T: Send {}
 
 impl<T> NodePeers<T> where T: Send {
-    pub fn new(id: NodeId, first_cli: NodeId, batch_size: usize, fill_batch: bool, clients_per_pool: usize) -> NodePeers<T> {
+    pub fn new(id: NodeId, first_cli: NodeId, batch_size: usize, fill_batch: bool, clients_per_pool: usize,
+               batch_timeout_micros: u64, batch_sleep_micros: u64) -> NodePeers<T> {
         //We only want to setup client handling if we are a replica
         let client_handling;
 
@@ -91,7 +92,9 @@ impl<T> NodePeers<T> where T: Send {
                                                             client_tx.clone(),
                                                             id,
                                                             fill_batch,
-                                                            clients_per_pool));
+                                                            clients_per_pool,
+                                                            batch_timeout_micros,
+                                                            batch_sleep_micros));
             client_channel = Some((client_tx, client_rx));
         } else {
             client_handling = None;
@@ -345,10 +348,16 @@ pub struct ConnectedPeersGroup<T: Send + 'static> {
     client_pools: Mutex<Vec<Arc<ConnectedPeersPool<T>>>>,
     client_connections_cache: RwLock<IntMap<Arc<ConnectedPeer<T>>>>,
     connected_clients: AtomicUsize,
-    per_client_cache: usize,
-    batch_size: usize,
     batch_transmission: ClientSender<Vec<T>>,
     own_id: NodeId,
+    per_client_cache: usize,
+    //What batch size should we target for each batch (there is no set limit on requests,
+    //Just a hint on when it should move on)
+    batch_target_size: usize,
+    //How much time can be spent gathering batches
+    batch_timeout_micros: u64,
+    //How much time should the thread sleep in between batch collection
+    batch_sleep_micros: u64,
     fill_batch: bool,
     clients_per_pool: usize,
 }
@@ -358,27 +367,32 @@ pub struct ConnectedPeersPool<T: Send + 'static> {
     //And since each client has his own reference to push data to, this only needs to be accessed by the thread
     //That's producing the batches and the threads of clients connecting and disconnecting
     connected_clients: Mutex<Vec<Arc<ConnectedPeer<T>>>>,
-    batch_size: usize,
-    client_limit: usize,
     batch_transmission: ClientSender<Vec<T>>,
     finish_execution: AtomicBool,
     owner: Arc<ConnectedPeersGroup<T>>,
+    batch_size: usize,
+    client_limit: usize,
+    batch_timeout_micros: u64,
+    batch_sleep_micros: u64,
     fill_batch: bool,
 }
 
 impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
     pub fn new(per_client_bound: usize, batch_size: usize, batch_transmission: crossbeam_channel::Sender<Vec<T>>,
-               own_id: NodeId, fill_batch: bool, clients_per_pool: usize) -> Arc<Self> {
+               own_id: NodeId, fill_batch: bool, clients_per_pool: usize, batch_timeout_micros: u64,
+               batch_sleep_micros: u64) -> Arc<Self> {
         Arc::new(Self {
             client_pools: parking_lot::Mutex::new(Vec::new()),
             client_connections_cache: RwLock::new(IntMap::new()),
             per_client_cache: per_client_bound,
             connected_clients: AtomicUsize::new(0),
-            batch_size,
+            batch_timeout_micros,
+            batch_sleep_micros,
+            batch_target_size: batch_size,
             batch_transmission,
             own_id,
             fill_batch,
-            clients_per_pool: clients_per_pool,
+            clients_per_pool,
         })
     }
 
@@ -415,11 +429,13 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
         }
 
         //In the case all the pools are already full, allocate a new pool
-        let pool = ConnectedPeersPool::new(self.batch_size,
+        let pool = ConnectedPeersPool::new(self.batch_target_size,
                                            self.batch_transmission.clone(),
                                            Arc::clone(self),
                                            self.fill_batch,
-                                           self.clients_per_pool);
+                                           self.clients_per_pool,
+                                           self.batch_timeout_micros,
+                                           self.batch_sleep_micros);
 
         match pool.attempt_to_add(clone_queue) {
             Ok(_) => {}
@@ -500,11 +516,14 @@ impl<T> ConnectedPeersPool<T> where T: Send {
     //We mark the owner as static since if the pool is active then
     //The owner also has to be active
     pub fn new(batch_size: usize, batch_transmission: crossbeam_channel::Sender<Vec<T>>,
-               owner: Arc<ConnectedPeersGroup<T>>, fill_batch: bool, client_per_pool: usize) -> Arc<Self> {
+               owner: Arc<ConnectedPeersGroup<T>>, fill_batch: bool, client_per_pool: usize,
+               batch_timeout_micros: u64, batch_sleep_micros: u64) -> Arc<Self> {
         let result = Self {
             connected_clients: parking_lot::Mutex::new(Vec::new()),
             batch_size,
             batch_transmission,
+            batch_timeout_micros,
+            batch_sleep_micros,
             client_limit: client_per_pool,
             finish_execution: AtomicBool::new(false),
             owner,
@@ -523,8 +542,6 @@ impl<T> ConnectedPeersPool<T> where T: Send {
         std::thread::Builder::new().name(format!("Peer pool collector thread #{}", pool_id))
             .spawn(
                 move || {
-                    let backoff = BackoffN::new();
-
                     let mut total_rqs_collected: u128 = 0;
                     let mut collections: u64 = 0;
 
@@ -540,6 +557,13 @@ impl<T> ConnectedPeersPool<T> where T: Send {
 
                         if !vec.is_empty() {
                             self.batch_transmission.send(vec);
+                            // Sleep for a determined amount of time to allow clients to send requests
+                            let three_quarters_sleep = (self.batch_sleep_micros / 4) * 3;
+                            let five_quarters_sleep = (self.batch_sleep_micros / 4) * 5;
+
+                            let sleep_micros = fastrand::u64(three_quarters_sleep..=five_quarters_sleep);
+
+                            std::thread::sleep(Duration::from_micros(sleep_micros));
                         }
 
                         if collections % 10000000 == 0 {
@@ -584,8 +608,10 @@ impl<T> ConnectedPeersPool<T> where T: Send {
         };
     }
 
-    pub fn collect_requests(&self, batch_size: usize, owner: &Arc<ConnectedPeersGroup<T>>) -> Vec<T> {
-        let mut batch = Vec::with_capacity(batch_size);
+    pub fn collect_requests(&self, batch_target_size: usize, owner: &Arc<ConnectedPeersGroup<T>>) -> Vec<T> {
+        let vec_size = std::cmp::max(batch_target_size, self.owner.per_client_cache);
+
+        let mut batch = Vec::with_capacity(vec_size);
 
         let mut guard = self.connected_clients.lock();
 
@@ -595,25 +621,15 @@ impl<T> ConnectedPeersPool<T> where T: Send {
             return vec![];
         }
 
-        let requests_per_client = std::cmp::max(batch_size / guard.len(), 1);
-        let requests_remainder = batch_size % guard.len();
-
         let start_point = fastrand::usize(0..guard.len());
-
-        //We don't want to leave any slot in the batch unfilled...
-        let mut next_client_requests = requests_per_client + requests_remainder;
-
-        //We're going to use a counter to check something outt
-        //Technically this should need a set to verify if the client in question has
-        //already been marked empty or not, but since it's possible for a given client to
-        //be empty and then have a request in queue, we're going to use a counter.
-        let mut empty_client_count = 0;
 
         let ind_limit = if self.fill_batch {
             usize::MAX
         } else {
             guard.len()
         };
+
+        let start_time = Instant::now();
 
         for index in 0..ind_limit {
             let client = &guard[(start_point + index) % guard.len()];
@@ -622,39 +638,37 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                 dced.push(client.client_id().clone());
 
                 //Assign the remaining slots to the next client
-                next_client_requests += requests_per_client;
-
                 continue;
             }
 
-            let to_collect = std::cmp::min(next_client_requests, batch_size - batch.len());
-
-            let rqs_dumped = match client.dump_n_requests(to_collect, &mut batch) {
+            //Collect all possible requests from each client
+            let rqs_dumped = match client.dump_n_requests(self.owner.per_client_cache, &mut batch) {
                 Ok(rqs) => { rqs }
                 Err(err) => {
                     dced.push(client.client_id().clone());
-
-                    //Assign the remaining slots to the next client
-                    next_client_requests += requests_per_client;
-
                     continue;
                 }
             };
 
-            if self.fill_batch && rqs_dumped == 0 {
-                empty_client_count += 1;
-            }
+            if index % guard.len() == 0 {
+                //We have done a full circle on the requests
 
-            if batch.len() == batch_size {
-                break;
-            } else if self.fill_batch && empty_client_count >= guard.len() {
-                break;
-            }
+                if batch.len() >= batch_target_size {
+                    //We only check on each complete revolution since if we didn't do that
+                    //We could have a situation where a single client's requests were
+                    //Enough to fill an entire batch, so the rest of the clients
+                    //Wouldn't even be checked
+                    break
+                } else {
+                    let current_time = Instant::now();
 
-            //Leave the requests that were not used open for the following clients, in a greedy fashion
-            next_client_requests -= rqs_dumped;
-            //Add the requests for the upcoming requests
-            next_client_requests += requests_per_client;
+                    if current_time.duration_since(start_time).as_micros() >= self.batch_timeout_micros as u128 {
+                        //Check if a given amount of time limit has passed, to prevent us getting
+                        //Stuck while checking for requests
+                        break
+                    }
+                }
+            }
         }
 
 
@@ -720,6 +734,12 @@ impl<T> ConnectedPeer<T> where T: Send {
     ///Dump n requests into the provided vector
     ///Returns the amount of requests that were dumped into the array
     pub fn dump_n_requests(&self, rq_bound: usize, dump_vec: &mut Vec<T>) -> Result<usize> {
+
+        if dump_vec.capacity() < rq_bound {
+            //Reserve the required space in the vector
+            dump_vec.reserve(rq_bound - dump_vec.capacity());
+        }
+
         return match self {
             Self::PoolConnection { receiver, .. } => {
                 return match receiver.try_recv_mult(dump_vec, rq_bound) {
@@ -768,52 +788,6 @@ impl<T> ConnectedPeer<T> where T: Send {
                 }
 
                 match send_clone.send_sync(msg) {
-                    Ok(_) => {}
-                    Err(err) => {
-                        panic!("Failed to receive data from {:?} because {:?}", self.client_id(), err);
-                    }
-                }
-            }
-        }
-    }
-
-    pub async fn push_request_(&self, msg: T, own_id: &NodeId) where T: Debug {
-        match self {
-            Self::PoolConnection { sender, .. } => {
-                // debug!("{:?} // Pushing request {:?} into queue, from {:?}",
-                //     own_id, msg, self.client_id());
-
-                let sender_guard = sender.lock().as_ref().unwrap().clone();
-
-                match sender_guard.send_async(msg).await {
-                    Ok(_) => {}
-                    Err(err) => {
-                        panic!("Failed to send because {:?}", err);
-                    }
-                };
-            }
-            Self::UnpooledConnection { sender, .. } => {
-                //debug!("{:?} // Pushing request {:?} into queue, from {:?}",
-                //    own_id, msg, self.client_id());
-
-                let mut send_clone;
-
-                {
-                    let send_lock = sender.lock();
-                    let mut sender_guard = send_lock.as_ref();
-
-                    match sender_guard {
-                        None => {
-                            //debug!("{:?} // Failed to receive because there is no sender.", self.client_id());
-                            return;
-                        }
-                        Some(send) => {
-                            send_clone = send.clone();
-                        }
-                    }
-                }
-
-                match send_clone.send(msg).await {
                     Ok(_) => {}
                     Err(err) => {
                         panic!("Failed to receive data from {:?} because {:?}", self.client_id(), err);

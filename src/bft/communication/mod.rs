@@ -297,6 +297,12 @@ pub struct NodeConfig {
     pub fill_batch: bool,
     ///How many clients should be placed in a single collecting pool (seen in peer_handling)
     pub clients_per_pool: usize,
+    ///The timeout for batch collection in each client pool.
+    /// (The first to reach between batch size and timeout)
+    pub batch_timeout_micros: u64,
+    ///How long should a client pool sleep for before attempting to collect requests again
+    /// (It actually will sleep between 3/4 and 5/4 of this value, to make sure they don't all sleep / wake up at the same time)
+    pub batch_sleep_micros: u64,
 }
 
 // max no. of messages allowed in the channel
@@ -382,7 +388,9 @@ impl<D> Node<D>
         //Setup all the peer message reception handling.
         let peers = NodePeers::new(cfg.id, cfg.first_cli, cfg.batch_size,
                                    cfg.fill_batch,
-                                   cfg.clients_per_pool);
+                                   cfg.clients_per_pool,
+                                   cfg.batch_timeout_micros,
+                                   cfg.batch_sleep_micros);
 
         let rng = ThreadSafePrng::new();
 
@@ -1548,7 +1556,7 @@ impl<D> Node<D>
 
             let msg = Message::System(header, message);
 
-            client.push_request_(msg, &self.id()).await;
+            client.push_request(msg).await;
         }
 
         // announce we have disconnected
@@ -1941,7 +1949,7 @@ impl<D> SendTo<D>
         ).into_inner();
 
         // send
-        cli.push_request_(Message::System(h, m), cli.client_id()).await;
+        cli.push_request(Message::System(h, m)).await;
     }
 
     async fn peers(
@@ -2114,7 +2122,7 @@ impl<D> SerializedSendTo<D>
         let (original, _) = m.into_inner();
 
         // send to ourselves
-        cli.push_request_(Message::System(h, original), &cli.client_id()).await;
+        cli.push_request(Message::System(h, original)).await;
     }
 
     fn peers_sync(
