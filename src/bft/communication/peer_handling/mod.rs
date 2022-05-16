@@ -679,14 +679,25 @@ impl<T> ConnectedPeersPool<T> where T: Send {
         //This might cause some lag since it has to access the intmap, but
         //Should be fine as it will only happen on client dcs
         if !dced.is_empty() {
+            let mut guard = self.connected_clients.lock();
+
             for node in &dced {
                 //This is O(n*c) but there isn't really a much better way to do it I guess
                 let option = guard.iter().position(|x| {
                     x.client_id().0 == node.0
-                }).unwrap();
+                });
 
-                guard.swap_remove(option);
+                match option {
+                    None => {
+                        //The client was already removed from the guard
+                    }
+                    Some(option) => {
+                        guard.swap_remove(option);
+                    }
+                }
             }
+
+            drop(guard);
 
             owner.del_cached_clients(dced);
         }
