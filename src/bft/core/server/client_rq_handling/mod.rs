@@ -72,12 +72,9 @@ impl<S: Service> RqProcessor<S> {
     ///Start this work
     pub fn start(self: Arc<Self>) -> JoinHandle<()> {
         std::thread::Builder::new().name(format!("Client RQ Handling {:?}", self.node_ref.id())).spawn(move || {
-            //Handle the overflowed requests that were meant to go in the previous batch but they overflowed
-            //The batch's capacity
-            let mut overflowed = Vec::with_capacity(self.node_ref.batch_size());
 
             //The currently accumulated requests, accumulated while we wait for the next batch to propose
-            let mut currently_accumulated = Vec::with_capacity(self.node_ref.batch_size());
+            let mut currently_accumulated = Vec::with_capacity(self.node_ref.batch_size() * 2);
 
             let mut last_seq = Option::None;
 
@@ -135,11 +132,7 @@ impl<S: Service> RqProcessor<S> {
                                         }*/
 
                                         if is_leader {
-                                            if currently_accumulated.len() >= self.node_ref.batch_size() {
-                                                overflowed.push(StoredMessage::new(header, req));
-                                            } else {
-                                                currently_accumulated.push(StoredMessage::new(header, req));
-                                            }
+                                            currently_accumulated.push(StoredMessage::new(header, req));
                                         }
 
                                         //Store the message in the log in this thread.
@@ -198,19 +191,7 @@ impl<S: Service> RqProcessor<S> {
 
                             self.node_ref.broadcast(message, targets, Arc::clone(self.log.batch_meta()));
 
-                            let mut new_overflow =
-                                Vec::with_capacity(self.node_ref.batch_size());
-
-                            while overflowed.len() > self.node_ref.batch_size() {
-                                let overflowed_msg =
-                                    overflowed.pop().unwrap();
-
-                                new_overflow.push(overflowed_msg);
-                            }
-
-                            currently_accumulated = overflowed;
-
-                            overflowed = new_overflow;
+                            currently_accumulated = Vec::with_capacity(self.node_ref.batch_size() * 2);
 
                             if batches_made % 10000 == 0 {
                                 let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
