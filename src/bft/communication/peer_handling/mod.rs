@@ -623,11 +623,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
 
         let start_point = fastrand::usize(0..guard.len());
 
-        let ind_limit = if self.fill_batch {
-            usize::MAX
-        } else {
-            guard.len()
-        };
+        let ind_limit = usize::MAX;
 
         let start_time = Instant::now();
 
@@ -658,14 +654,14 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                     //We could have a situation where a single client's requests were
                     //Enough to fill an entire batch, so the rest of the clients
                     //Wouldn't even be checked
-                    break
+                    break;
                 } else {
                     let current_time = Instant::now();
 
                     if current_time.duration_since(start_time).as_micros() >= self.batch_timeout_micros as u128 {
                         //Check if a given amount of time limit has passed, to prevent us getting
                         //Stuck while checking for requests
-                        break
+                        break;
                     }
                 }
             }
@@ -734,7 +730,6 @@ impl<T> ConnectedPeer<T> where T: Send {
     ///Dump n requests into the provided vector
     ///Returns the amount of requests that were dumped into the array
     pub fn dump_n_requests(&self, rq_bound: usize, dump_vec: &mut Vec<T>) -> Result<usize> {
-
         if dump_vec.capacity() < rq_bound {
             //Reserve the required space in the vector
             dump_vec.reserve(rq_bound - dump_vec.capacity());
