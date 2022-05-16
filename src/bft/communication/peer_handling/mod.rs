@@ -617,18 +617,26 @@ impl<T> ConnectedPeersPool<T> where T: Send {
 
         let mut dced = Vec::new();
 
+        let mut connected_peers = Vec::with_capacity(guard.len());
+
         if guard.len() == 0 {
             return vec![];
         }
 
-        let start_point = fastrand::usize(0..guard.len());
+        for connected_peer in &*guard {
+            connected_peers.push(Arc::clone(connected_peer));
+        }
+
+        drop(guard);
+
+        let start_point = fastrand::usize(0..connected_peers.len());
 
         let ind_limit = usize::MAX;
 
         let start_time = Instant::now();
 
         for index in 0..ind_limit {
-            let client = &guard[(start_point + index) % guard.len()];
+            let client = &connected_peers[(start_point + index) % connected_peers.len()];
 
             if client.is_dc() {
                 dced.push(client.client_id().clone());
@@ -646,7 +654,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                 }
             };
 
-            if index % guard.len() == 0 {
+            if index % connected_peers.len() == 0 {
                 //We have done a full circle on the requests
 
                 if batch.len() >= batch_target_size {
@@ -679,8 +687,6 @@ impl<T> ConnectedPeersPool<T> where T: Send {
 
                 guard.swap_remove(option);
             }
-
-            drop(guard);
 
             owner.del_cached_clients(dced);
         }
