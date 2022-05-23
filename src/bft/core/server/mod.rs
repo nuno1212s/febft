@@ -233,6 +233,7 @@ impl<S> Replica<S>
 
         let consensus_guard = Arc::new(AtomicBool::new(false));
 
+        //Initialize replica data with the initialized variables from above
         let mut replica = Replica {
             cst: CollabStateTransfer::new(CST_BASE_DUR),
             synchronizer: synchronizer.clone(),
