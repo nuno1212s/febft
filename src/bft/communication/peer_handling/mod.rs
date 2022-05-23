@@ -330,7 +330,6 @@ impl<T> ReplicaHandling<T> where T: Send {
     }
 }
 
-///
 ///Client pool design, where each pool contains a number of clients (Maximum of BATCH_SIZE clients
 /// per pool). This is to prevent starvation for each client, as when we are performing
 /// the fair collection of requests from the clients, if there are more clients than batch size
