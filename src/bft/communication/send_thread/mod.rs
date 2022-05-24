@@ -118,12 +118,12 @@ impl<D> SendWorker<D> where D: SharedData + 'static{
 
             // Left -> peer turn
             match send_struct.send_to.socket_type().unwrap() {
-                SecureSocketSend::Client(_) => {
+                SecureSocketSend::Async(_) => {
                     rt::spawn(async move {
                         send_struct.send_to.value(Left((nonce, digest, buf))).await;
                     });
                 }
-                SecureSocketSend::Replica(_) => {
+                SecureSocketSend::Sync(_) => {
                     //Measuring time taken to get to the point of sending the message
                     //We don't actually want to measure how long it takes to send the message
                     let dur_sinc = Instant::now().duration_since(send_struct.time_info.1).as_nanos();
@@ -177,13 +177,13 @@ impl<D> SendWorker<D> where D: SharedData + 'static{
             let buf = buf.clone();
 
             match send_to.socket_type().unwrap() {
-                SecureSocketSend::Client(_) => {
+                SecureSocketSend::Async(_) => {
                     rt::spawn(async move {
                         // Left -> peer turn
                         send_to.value(Left((nonce, digest, buf))).await;
                     });
                 }
-                SecureSocketSend::Replica(_) => {
+                SecureSocketSend::Sync(_) => {
                     send_to.value_sync(Left((nonce, digest, buf)));
                 }
             }
@@ -231,12 +231,12 @@ impl<D> SendWorker<D> where D: SharedData + 'static{
                 .unwrap();
 
             match send_to.socket_type().unwrap() {
-                SecureSocketSend::Client(_) => {
+                SecureSocketSend::Async(_) => {
                     rt::spawn(async move {
                         send_to.value(header, message).await;
                     });
                 }
-                SecureSocketSend::Replica(_) => {
+                SecureSocketSend::Sync(_) => {
                     send_to.value_sync(header, message);
                 }
             }

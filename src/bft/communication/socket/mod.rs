@@ -185,7 +185,7 @@ pub enum SecureSocketRecvClient {
     Tls(TlsStreamSrv<Socket>),
 }
 
-pub enum SecureSocketSendClient {
+pub enum SecureSocketSendAsync {
     Plain(BufWriter<Socket>),
     Tls(TlsStreamCli<Socket>),
 }
@@ -195,7 +195,7 @@ pub enum SecureSocketRecvReplica {
     Tls(StreamOwned<rustls::ServerSession, ReplicaSocket>),
 }
 
-pub enum SecureSocketSendReplica {
+pub enum SecureSocketSendSync {
     Plain(ReplicaSocket),
     Tls(StreamOwned<rustls::ClientSession, ReplicaSocket>),
 }
@@ -206,9 +206,9 @@ impl SecureSocketRecvReplica {
     }
 }
 
-impl SecureSocketSendReplica {
+impl SecureSocketSendSync {
     pub fn new_tls(session: rustls::ClientSession, socket: ReplicaSocket) -> Self {
-        SecureSocketSendReplica::Tls(StreamOwned::new(session, socket))
+        SecureSocketSendSync::Tls(StreamOwned::new(session, socket))
     }
 }
 
@@ -216,13 +216,13 @@ impl SecureSocketSendReplica {
 ///Client stores asynchronous socket references (Client->replica, replica -> client)
 ///Replicas stores synchronous socket references (Replica -> Replica)
 pub enum SecureSocketSend {
-    Client(Arc<futures::lock::Mutex<SecureSocketSendClient>>),
-    Replica(Arc<parking_lot::Mutex<SecureSocketSendReplica>>),
+    Async(Arc<futures::lock::Mutex<SecureSocketSendAsync>>),
+    Sync(Arc<parking_lot::Mutex<SecureSocketSendSync>>),
 }
 
 pub enum SecureSocketRecv {
-    Client(SecureSocketRecvClient),
-    Replica(SecureSocketRecvReplica),
+    Async(SecureSocketRecvClient),
+    Sync(SecureSocketRecvReplica),
 }
 
 impl Write for ReplicaSocket {
@@ -245,13 +245,13 @@ impl Read for ReplicaSocket {
     }
 }
 
-impl Write for SecureSocketSendReplica {
+impl Write for SecureSocketSendSync {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self {
-            SecureSocketSendReplica::Plain(socket) => {
+            SecureSocketSendSync::Plain(socket) => {
                 socket.write(buf)
             }
-            SecureSocketSendReplica::Tls(stream) => {
+            SecureSocketSendSync::Tls(stream) => {
                 stream.write(buf)
             }
         }
@@ -259,10 +259,10 @@ impl Write for SecureSocketSendReplica {
 
     fn flush(&mut self) -> io::Result<()> {
         match self {
-            SecureSocketSendReplica::Plain(socket) => {
+            SecureSocketSendSync::Plain(socket) => {
                 socket.flush()
             }
-            SecureSocketSendReplica::Tls(stream) => {
+            SecureSocketSendSync::Tls(stream) => {
                 stream.flush()
             }
         }
@@ -300,7 +300,7 @@ impl AsyncRead for SecureSocketRecvClient {
     }
 }
 
-impl AsyncWrite for SecureSocketSendClient {
+impl AsyncWrite for SecureSocketSendAsync {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -308,10 +308,10 @@ impl AsyncWrite for SecureSocketSendClient {
     ) -> Poll<io::Result<usize>>
     {
         match &mut *self {
-            SecureSocketSendClient::Plain(inner) => {
+            SecureSocketSendAsync::Plain(inner) => {
                 Pin::new(inner).poll_write(cx, buf)
             }
-            SecureSocketSendClient::Tls(inner) => {
+            SecureSocketSendAsync::Tls(inner) => {
                 Pin::new(inner).poll_write(cx, buf)
             }
         }
@@ -323,10 +323,10 @@ impl AsyncWrite for SecureSocketSendClient {
     ) -> Poll<io::Result<()>>
     {
         match &mut *self {
-            SecureSocketSendClient::Plain(inner) => {
+            SecureSocketSendAsync::Plain(inner) => {
                 Pin::new(inner).poll_flush(cx)
             }
-            SecureSocketSendClient::Tls(inner) => {
+            SecureSocketSendAsync::Tls(inner) => {
                 Pin::new(inner).poll_flush(cx)
             }
         }
@@ -338,10 +338,10 @@ impl AsyncWrite for SecureSocketSendClient {
     ) -> Poll<io::Result<()>>
     {
         match &mut *self {
-            SecureSocketSendClient::Plain(inner) => {
+            SecureSocketSendAsync::Plain(inner) => {
                 Pin::new(inner).poll_close(cx)
             }
-            SecureSocketSendClient::Tls(inner) => {
+            SecureSocketSendAsync::Tls(inner) => {
                 Pin::new(inner).poll_close(cx)
             }
         }

@@ -41,7 +41,7 @@ use crate::bft::communication::serialize::{
     DigestData,
     SharedData,
 };
-use crate::bft::communication::socket::{Listener, ReplicaListener, ReplicaSocket, SecureSocketRecvClient, SecureSocketRecvReplica, SecureSocketSend, SecureSocketSendClient, SecureSocketSendReplica, Socket};
+use crate::bft::communication::socket::{Listener, ReplicaListener, ReplicaSocket, SecureSocketRecvClient, SecureSocketRecvReplica, SecureSocketSend, SecureSocketSendAsync, SecureSocketSendSync, Socket};
 use crate::bft::crypto::hash::Digest;
 use crate::bft::crypto::signature::{
     KeyPair,
@@ -228,6 +228,7 @@ pub struct Node<D: SharedData + 'static> {
     shared: Arc<NodeShared>,
     peer_tx: PeerTx,
     connector: TlsConnector,
+    sync_connector: Arc<ClientConfig>,
     peer_addrs: IntMap<PeerAddr>,
     sender_handle: SendHandle<D>,
 }
@@ -289,9 +290,9 @@ pub struct NodeConfig {
     pub client_config: ClientConfig,
     /// The TLS configuration used to accept connections from client nodes.
     pub server_config: ServerConfig,
-    ///The TLS configuration used to accept connections from replica nodes
+    ///The TLS configuration used to accept connections from replica nodes (Synchronously)
     pub replica_server_config: rustls::ServerConfig,
-    ///The TLS configuration used to connect to replica nodes (from replica nodes)
+    ///The TLS configuration used to connect to replica nodes (from replica nodes) (Synchronousy)
     pub replica_client_config: rustls::ClientConfig,
     ///Should the leader replica attempt to fill out batches (might lead to increased pre consensus latency)
     pub fill_batch: bool,
@@ -347,7 +348,7 @@ impl<D> Node<D>
         let tokio_server_addr = peer_addr.client_addr.0.clone();
 
         ///Initialize the client facing server
-        let listener = socket::bind(tokio_server_addr).await
+        let listener = socket::bind_replica_server(tokio_server_addr)
             .wrapped_msg(ErrorKind::Communication, format!("Failed to bind to address {:?}", tokio_server_addr).as_str())?;
 
         ///Initialize the replica<->replica facing server
@@ -403,6 +404,7 @@ impl<D> Node<D>
             peer_tx,
             node_handling: peers,
             connector: connector.clone(),
+            sync_connector: replica_connector.clone(),
             peer_addrs: cfg.addrs,
             first_cli: cfg.first_cli,
             sender_handle: send_handle,
@@ -417,6 +419,7 @@ impl<D> Node<D>
                 let first_cli = cfg.first_cli;
 
                 let rx_clone_clone = rx_node_clone.clone();
+                let replica_acceptor = replica_acceptor.clone();
 
                 std::thread::Builder::new().name(format!("Replica connection acceptor"))
                     .spawn(move || {
@@ -425,11 +428,17 @@ impl<D> Node<D>
             }
         }
 
-        // rx side (accept conns from clients)
-        rt::spawn(rx_node_clone.rx_side_accept(cfg.first_cli, id, listener, acceptor));
+        {
+            let first_cli = cfg.first_cli;
+
+            // rx side (accept conns from clients)
+            std::thread::Builder::new().name(format!("Client conn acceptor")).spawn(move || {
+                rx_node_clone.rx_side_accept_sync(first_cli, id, listener, replica_acceptor)
+            });
+        }
+
 
         // tx side (connect to replica)
-
         if id < cfg.first_cli {
             //If we are a replica, use the std regular sync library as it has better
             //Latency and overall performance (since it does very little context switching)
@@ -444,22 +453,22 @@ impl<D> Node<D>
                 &mut rng,
             );
         } else {
-            //If we are a client, use the tokio library
             let node_cpy = node.clone();
 
             let n = cfg.n as u32;
             let first_cli = cfg.first_cli;
 
-            rt::spawn(async move {
+            //Connect to all replicas
+            threadpool::execute(move || {
                 let mut rng = prng::State::new();
 
-                node_cpy.clone().tx_side_connect(
+                node_cpy.clone().tx_side_connect_sync(
                     n,
                     first_cli,
                     id,
-                    connector,
+                    replica_connector,
                     &node_cpy.peer_addrs,
-                    &mut rng, ).await;
+                    &mut rng, );
             });
         }
 
@@ -645,12 +654,12 @@ impl<D> Node<D>
 
                 // Left -> peer turn
                 match send_to.socket_type().unwrap() {
-                    SecureSocketSend::Client(_) => {
+                    SecureSocketSend::Async(_) => {
                         rt::spawn(async move {
                             send_to.value(Left((nonce, digest, buf))).await;
                         });
                     }
-                    SecureSocketSend::Replica(_) => {
+                    SecureSocketSend::Sync(_) => {
                         //Measuring time taken to get to the point of sending the message
                         //We don't actually want to measure how long it takes to send the message
                         let dur_sinc = Instant::now().duration_since(time_info.1).as_nanos();
@@ -805,12 +814,12 @@ impl<D> Node<D>
                     .unwrap();
 
                 match send_to.socket_type().unwrap() {
-                    SecureSocketSend::Client(_) => {
+                    SecureSocketSend::Async(_) => {
                         rt::spawn(async move {
                             send_to.value(header, message).await;
                         });
                     }
-                    SecureSocketSend::Replica(_) => {
+                    SecureSocketSend::Sync(_) => {
                         threadpool::execute(move || {
                             send_to.value_sync(header, message);
                         });
@@ -870,13 +879,13 @@ impl<D> Node<D>
                 let buf = buf.clone();
 
                 match send_to.socket_type().unwrap() {
-                    SecureSocketSend::Client(_) => {
+                    SecureSocketSend::Async(_) => {
                         rt::spawn(async move {
                             // Left -> peer turn
                             send_to.value(Left((nonce, digest, buf))).await;
                         });
                     }
-                    SecureSocketSend::Replica(_) => {
+                    SecureSocketSend::Sync(_) => {
                         threadpool::execute(move || {
                             send_to.value_sync(Left((nonce, digest, buf)));
                         });
@@ -1141,6 +1150,8 @@ impl<D> Node<D>
     }
 
     ///Connect to a particular replica
+    /// Should be called from a threadpool as initializing a thread just for this
+    /// Would be kind of overkill
     fn tx_side_connect_task_sync(
         self: Arc<Self>,
         my_id: NodeId,
@@ -1193,16 +1204,16 @@ impl<D> Node<D>
 
                 // TLS handshake; drop connection if it fails
                 let sock = if peer_id >= first_cli || my_id >= first_cli {
-                    SecureSocketSendReplica::Plain(sock)
+                    SecureSocketSendSync::Plain(sock)
                 } else {
                     let dns_ref = webpki::DNSNameRef::try_from_ascii_str(hostname.as_str()).expect("Failed to parse DNS hostname");
 
                     let mut session = rustls::ClientSession::new(&connector, dns_ref);
 
-                    SecureSocketSendReplica::new_tls(session, sock)
+                    SecureSocketSendSync::new_tls(session, sock)
                 };
 
-                let final_sock = SecureSocketSend::Replica(Arc::new(parking_lot::Mutex::new(sock)));
+                let final_sock = SecureSocketSend::Sync(Arc::new(parking_lot::Mutex::new(sock)));
 
                 // success
                 self.handle_connected_tx(peer_id, final_sock);
@@ -1272,15 +1283,15 @@ impl<D> Node<D>
                 let sock = if peer_id >= first_cli || my_id >= first_cli {
                     debug!("{:?} // Connecting with plain text to node {:?}", my_id, peer_id);
 
-                    SecureSocketSendClient::Plain(BufWriter::new(sock))
+                    SecureSocketSendAsync::Plain(BufWriter::new(sock))
                 } else {
                     match connector.connect(hostname, sock).await {
-                        Ok(s) => SecureSocketSendClient::Tls(s),
+                        Ok(s) => SecureSocketSendAsync::Tls(s),
                         Err(_) => { break; }
                     }
                 };
 
-                let final_sock = SecureSocketSend::Client(
+                let final_sock = SecureSocketSend::Async(
                     Arc::new(futures::lock::Mutex::new(sock)));
 
                 // success
@@ -1297,6 +1308,7 @@ impl<D> Node<D>
         //if we fail to connect, then just ignore
     }
 
+    ///Accept synchronous connections
     fn rx_side_accept_sync(
         self: Arc<Self>,
         first_cli: NodeId,
@@ -1310,7 +1322,7 @@ impl<D> Node<D>
 
                 let rx_ref = self.clone();
 
-                std::thread::Builder::new().name(format!("Replica Receiver Thread"))
+                std::thread::Builder::new().name(format!("Request Receiver Thread"))
                     .spawn(move || {
                         rx_ref.rx_side_establish_conn_task_sync(first_cli, my_id, replica_acceptor, sock);
                     });
@@ -1565,6 +1577,44 @@ impl<D> Node<D>
 
     /// Handles replica connections, reading from stream and pushing message into the correct queue
     pub fn handle_connected_rx_sync(self: Arc<Self>, peer_id: NodeId, mut sock: SecureSocketRecvReplica) {
+
+        if let PeerTx::Server {..} = &self.peer_tx {
+            if peer_id >= self.first_cli {
+                //If we are the server and the other connection is a client
+                //We want to automatically establish a tx connection as well as a
+                //rx connection
+
+                // fetch client address
+                //
+                // FIXME: this line can crash the program if the user
+                // provides an invalid HashMap
+                let addr = self.peer_addrs.get(peer_id.id() as u64).unwrap().client_addr.clone();
+
+                debug!("{:?} // Received connection from client {:?}, establish TX connection on port {:?}", self.id, peer_id,
+                    addr.0);
+
+                // connect
+                let nonce = self.rng.next_state();
+
+                let self_cpy = self.clone();
+
+                threadpool::execute(move || {
+                    let id = self_cpy.id;
+                    let first_cli = self_cpy.first_cli;
+                    let sync_conn = self_cpy.sync_connector.clone();
+
+                    Self::tx_side_connect_task_sync(
+                        self_cpy,
+                        id,
+                        first_cli,
+                        peer_id,
+                        nonce,
+                        sync_conn,
+                        addr
+                    );
+                });
+            }
+        }
 
         //We don't need to reply to the connection as that will automatically be done by the connect tasks
         //(To the replicas)
@@ -1846,10 +1896,10 @@ impl<D> SendTo<D>
 
                 //Unwrap the socket that must be a async socket
                 let sock = match sock {
-                    SecureSocketSend::Client(_) => {
+                    SecureSocketSend::Async(_) => {
                         panic!("Attempted to send synchronously through asynchronous channel")
                     }
-                    SecureSocketSend::Replica(sock) => {
+                    SecureSocketSend::Sync(sock) => {
                         sock
                     }
                 };
@@ -1887,10 +1937,10 @@ impl<D> SendTo<D>
 
                 //Unwrap the socket that must be a async socket
                 let sock = match sock {
-                    SecureSocketSend::Client(sock) => {
+                    SecureSocketSend::Async(sock) => {
                         sock
                     }
-                    SecureSocketSend::Replica(_) => {
+                    SecureSocketSend::Sync(_) => {
                         panic!("Attempted to send asynchronously to a synchronous socket");
                     }
                 };
@@ -1960,7 +2010,7 @@ impl<D> SendTo<D>
         d: Digest,
         b: Buf,
         sk: Option<&KeyPair>,
-        lock: Arc<futures::lock::Mutex<SecureSocketSendClient>>,
+        lock: Arc<futures::lock::Mutex<SecureSocketSendAsync>>,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
 
@@ -1999,7 +2049,7 @@ impl<D> SendTo<D>
         d: Digest,
         b: Buf,
         sk: Option<&KeyPair>,
-        lock: Arc<parking_lot::Mutex<SecureSocketSendReplica>>,
+        lock: Arc<parking_lot::Mutex<SecureSocketSendSync>>,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>, ) {
 
         //let print = format!("DONE SENDING MESSAGE {:?}", d);
@@ -2058,10 +2108,10 @@ impl<D> SerializedSendTo<D>
             }
             SerializedSendTo::Peers { id, our_id, sock, tx } => {
                 let sock = match sock {
-                    SecureSocketSend::Client(_) => {
+                    SecureSocketSend::Async(_) => {
                         panic!("Attempted to send messages asynchronously through a sync channel")
                     }
-                    SecureSocketSend::Replica(sock) => {
+                    SecureSocketSend::Sync(sock) => {
                         sock
                     }
                 };
@@ -2091,10 +2141,10 @@ impl<D> SerializedSendTo<D>
                 //debug!("{:?} // Sending SERIALIZED message {} to other peer {:?} ",our_id,  msg, id);
 
                 let sock = match sock {
-                    SecureSocketSend::Client(sock) => {
+                    SecureSocketSend::Async(sock) => {
                         sock
                     }
-                    SecureSocketSend::Replica(_) => {
+                    SecureSocketSend::Sync(_) => {
                         panic!("Attempted to send messages asynchronously through a sync channel")
                     }
                 };
@@ -2129,7 +2179,7 @@ impl<D> SerializedSendTo<D>
         peer_id: NodeId,
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        lock: Arc<parking_lot::Mutex<SecureSocketSendReplica>>,
+        lock: Arc<parking_lot::Mutex<SecureSocketSendSync>>,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
         // create wire msg
@@ -2156,7 +2206,7 @@ impl<D> SerializedSendTo<D>
         peer_id: NodeId,
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        lock: Arc<futures::lock::Mutex<SecureSocketSendClient>>,
+        lock: Arc<futures::lock::Mutex<SecureSocketSendAsync>>,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
 
