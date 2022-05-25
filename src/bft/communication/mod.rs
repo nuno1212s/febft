@@ -338,6 +338,7 @@ impl<D> Node<D>
             return Err("Invalid number of replicas")
                 .wrapped(ErrorKind::Communication);
         }
+
         if id >= NodeId::from(cfg.n) && id < cfg.first_cli {
             return Err("Invalid node ID")
                 .wrapped(ErrorKind::Communication);
@@ -644,12 +645,19 @@ impl<D> Node<D>
 
                 //Measuring time taken to get to the point of sending the message
                 //We don't actually want to measure how long it takes to send the message
-                let dur_since = Instant::now().duration_since(time_info.1).as_nanos();
+                let before_sending = Instant::now();
+
+                let dur_since = before_sending.duration_since(time_info.1).as_nanos();
 
                 //Send to myself, always synchronous since only replicas send to themselves
                 send_to.value_sync(Right((message, nonce, digest, buf)));
 
-                time_info.0.lock().message_passing_latencies.push(dur_since);
+                let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
+
+                let batch_guard = time_info.0.lock();
+
+                batch_guard.message_passing_latencies_own.push(dur_since);
+                batch_guard.message_sending_latencies_own.push(dur_sending);
             } else {
 
                 // Left -> peer turn
@@ -662,11 +670,17 @@ impl<D> Node<D>
                     SecureSocketSend::Sync(_) => {
                         //Measuring time taken to get to the point of sending the message
                         //We don't actually want to measure how long it takes to send the message
-                        let dur_sinc = Instant::now().duration_since(time_info.1).as_nanos();
+                        let before_sending = Instant::now();
+
+                        let dur_sinc = before_sending.duration_since(time_info.1).as_nanos();
 
                         send_to.value_sync(Left((nonce, digest, buf)));
 
-                        time_info.0.lock().message_passing_latencies.push(dur_sinc);
+                        let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
+
+                        let batch_guard = time_info.0.lock();
+                        batch_guard.message_passing_latencies.push(dur_sinc);
+                        batch_guard.message_sending_latencies.push(dur_sending);
                     }
                 }
             }
@@ -791,16 +805,20 @@ impl<D> Node<D>
 
                 //Measuring time taken to get to the point of sending the message
                 //We don't actually want to measure how long it takes to send the message
-                let dur_since = Instant::now().duration_since(time_info.1).as_nanos();
+                let current_instant = Instant::now();
+
+                let dur_since = current_instant.duration_since(time_info.1).as_nanos();
 
                 send_to.value_sync(header, message);
 
-                time_info.0.lock().message_passing_latencies_own.push(dur_since);
-            }
+                let dur_sending = Instant::now().duration_since(current_instant).as_nanos();
 
-            //Measuring time taken to get to the point of sending the message
-            //We don't actually want to measure how long it takes to send the message
-            let dur_since = Instant::now().duration_since(time_info.1).as_nanos();
+                let batch_guard = time_info.0.lock();
+
+                batch_guard.message_passing_latencies_own.push(dur_since);
+
+                batch_guard.message_sending_latencies_own.push(dur_sending);
+            }
 
             // send to others
             for mut send_to in other_send_tos {
@@ -821,13 +839,26 @@ impl<D> Node<D>
                     }
                     SecureSocketSend::Sync(_) => {
                         threadpool::execute(move || {
+                            //Measuring time taken to get to the point of sending the message
+                            //We don't actually want to measure how long it takes to send the message
+                            let current_instant = Instant::now();
+
+                            let dur_since = current_instant.duration_since(time_info.1).as_nanos();
+
                             send_to.value_sync(header, message);
+
+                            let dur_sending = Instant::now().duration_since(current_instant).as_nanos();
+
+                            let batch_guard = time_info.0.lock();
+
+                            batch_guard.message_passing_latencies.push(dur_since);
+
+                            batch_guard.message_sending_latencies.push(dur_sending);
                         });
                     }
                 }
             }
 
-            time_info.0.lock().message_passing_latencies.push(dur_since);
         });
     }
 
@@ -858,22 +889,24 @@ impl<D> Node<D>
             if let Some(mut send_to) = my_send_to {
                 let buf = buf.clone();
 
-
                 //Measuring time taken to get to the point of sending the message
                 //We don't actually want to measure how long it takes to send the message
-                let dur_since = Instant::now().duration_since(time_info.1).as_nanos();
+                let before_send_time = Instant::now();
+                let dur_since = before_send_time.duration_since(time_info.1).as_nanos();
 
                 // Right -> our turn
                 send_to.value_sync(Right((message, nonce, digest, buf)));
 
-                time_info.0.lock().message_passing_latencies_own.push(dur_since);
+                let dur_sending = Instant::now().duration_since(before_send_time).as_nanos();
+
+                let batch_guard = time_info.0.lock();
+
+                batch_guard.message_passing_latencies_own.push(dur_since);
+
+                batch_guard.message_sending_latencies.push(dur_sending)
             }
 
             // send to others
-
-            //Measuring time taken to get to the point of sending the message
-            //We don't actually want to measure how long it takes to send the message
-            let dur_since = Instant::now().duration_since(time_info.1).as_nanos();
 
             for mut send_to in other_send_tos {
                 let buf = buf.clone();
@@ -887,13 +920,25 @@ impl<D> Node<D>
                     }
                     SecureSocketSend::Sync(_) => {
                         threadpool::execute(move || {
+                            //Measuring time taken to get to the point of sending the message
+                            //We don't actually want to measure how long it takes to send the message
+                            let before_send_time = Instant::now();
+                            let dur_since = before_send_time.duration_since(time_info.1).as_nanos();
+
                             send_to.value_sync(Left((nonce, digest, buf)));
+
+                            let dur_sending = Instant::now().duration_since(before_send_time).as_nanos();
+
+                            let batch_guard = time_info.0.lock();
+
+                            batch_guard.message_passing_latencies.push(dur_since);
+
+                            batch_guard.message_sending_latencies.push(dur_sending);
                         });
                     }
                 }
             }
 
-            time_info.0.lock().message_passing_latencies.push(dur_since);
 
             // NOTE: an either enum is used, which allows
             // rustc to prove only one task gets ownership

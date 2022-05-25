@@ -22,8 +22,12 @@ pub struct Measurements {
     //Time taken since the first commit message was received until the consensus is finished
     pub commit_time_taken: BenchmarkHelper,
     //Time since instructed to send the request and the actual sending of the request
-    pub message_sending_time_taken: BenchmarkHelper,
+    pub message_passing_time_taken: BenchmarkHelper,
     //Time since instructed to send the request and the actual sending of the request
+    pub message_passing_time_taken_own: BenchmarkHelper,
+    //Time taken to send the message
+    pub message_sending_time_taken: BenchmarkHelper,
+    //Time taken to send the message to ourselves
     pub message_sending_time_taken_own: BenchmarkHelper,
     //Time taken to sign the requests
     pub message_signing_time_taken: BenchmarkHelper,
@@ -49,6 +53,8 @@ impl Measurements {
             message_recv_latency: BenchmarkHelper::new(id, CAP),
             prepare_time_taken: BenchmarkHelper::new(id, CAP),
             commit_time_taken: BenchmarkHelper::new(id, CAP),
+            message_passing_time_taken: BenchmarkHelper::new(id, CAP),
+            message_passing_time_taken_own: BenchmarkHelper::new(id, CAP),
             message_sending_time_taken: BenchmarkHelper::new(id, CAP),
             message_sending_time_taken_own: BenchmarkHelper::new(id, CAP),
             message_signing_time_taken: BenchmarkHelper::new(id, CAP),
@@ -89,6 +95,10 @@ pub struct BatchMeta {
     pub message_passing_latencies: Vec<u128>,
     //Stores times taken signing the request
     pub message_signing_latencies: Vec<u128>,
+    //Stores time taken to actually send the message to our own
+    pub message_sending_latencies_own: Vec<u128>,
+    //Stores time taken to actually send the message to others
+    pub message_sending_latencies: Vec<u128>,
     //Stores the times taken to create the send tos objects
     pub message_send_to_create: Vec<u128>,
 }
@@ -128,6 +138,14 @@ impl BatchMeta {
                 Some(cap) => { Vec::with_capacity(cap) }
             },
             message_send_to_create: match cap {
+                None => { Vec::new() }
+                Some(cap) => { Vec::with_capacity(cap) }
+            },
+            message_sending_latencies: match cap {
+                None => { Vec::new() }
+                Some(cap) => { Vec::with_capacity(cap) }
+            },
+            message_sending_latencies_own: match cap {
                 None => { Vec::new() }
                 Some(cap) => { Vec::with_capacity(cap) }
             },
