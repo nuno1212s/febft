@@ -831,6 +831,8 @@ impl<D> Node<D>
                     .map(|stored| stored.into_inner())
                     .unwrap();
 
+                let time_info = (time_info.0.clone(), time_info.1.clone());
+
                 match send_to.socket_type().unwrap() {
                     SecureSocketSend::Async(_) => {
                         rt::spawn(async move {
@@ -910,6 +912,7 @@ impl<D> Node<D>
 
             for mut send_to in other_send_tos {
                 let buf = buf.clone();
+                let time_info = (time_info.0.clone(), time_info.1.clone());
 
                 match send_to.socket_type().unwrap() {
                     SecureSocketSend::Async(_) => {
