@@ -654,7 +654,7 @@ impl<D> Node<D>
 
                 let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
 
-                let batch_guard = time_info.0.lock();
+                let mut batch_guard = time_info.0.lock();
 
                 batch_guard.message_passing_latencies_own.push(dur_since);
                 batch_guard.message_sending_latencies_own.push(dur_sending);
@@ -678,7 +678,7 @@ impl<D> Node<D>
 
                         let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
 
-                        let batch_guard = time_info.0.lock();
+                        let mut batch_guard = time_info.0.lock();
                         batch_guard.message_passing_latencies.push(dur_sinc);
                         batch_guard.message_sending_latencies.push(dur_sending);
                     }
@@ -813,7 +813,7 @@ impl<D> Node<D>
 
                 let dur_sending = Instant::now().duration_since(current_instant).as_nanos();
 
-                let batch_guard = time_info.0.lock();
+                let mut batch_guard = time_info.0.lock();
 
                 batch_guard.message_passing_latencies_own.push(dur_since);
 
@@ -849,7 +849,7 @@ impl<D> Node<D>
 
                             let dur_sending = Instant::now().duration_since(current_instant).as_nanos();
 
-                            let batch_guard = time_info.0.lock();
+                            let mut batch_guard = time_info.0.lock();
 
                             batch_guard.message_passing_latencies.push(dur_since);
 
@@ -899,7 +899,7 @@ impl<D> Node<D>
 
                 let dur_sending = Instant::now().duration_since(before_send_time).as_nanos();
 
-                let batch_guard = time_info.0.lock();
+                let mut batch_guard = time_info.0.lock();
 
                 batch_guard.message_passing_latencies_own.push(dur_since);
 
@@ -929,7 +929,7 @@ impl<D> Node<D>
 
                             let dur_sending = Instant::now().duration_since(before_send_time).as_nanos();
 
-                            let batch_guard = time_info.0.lock();
+                            let mut batch_guard = time_info.0.lock();
 
                             batch_guard.message_passing_latencies.push(dur_since);
 
