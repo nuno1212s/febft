@@ -493,9 +493,8 @@ impl<D> Node<D>
         self.node_handling.batch_size()
     }
 
-    fn resolve_client_rx_connection(&self, node_id: NodeId) -> Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
+    fn resolve_client_rx_connection(&self, node_id: NodeId) -> Option<Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>> {
         self.node_handling.resolve_peer_conn(node_id)
-            .expect(&*format!("{:?} // Failed to resolve peer connection for {:?}", self.id, node_id))
     }
 
     // clone the shared data and pass it to a new object
@@ -531,7 +530,7 @@ impl<D> Node<D>
         }
     }
 
-    /// Returns a handle to the loopback channel of this `Node`.
+    /// Returns a handle to the loopback channel of this `Node`. (Sending messages to ourselves)
     pub fn loopback_channel(&self) -> &Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
         self.node_handling.peer_loopback()
     }
@@ -549,30 +548,26 @@ impl<D> Node<D>
     ) {
         let start_instant = Instant::now();
 
-        let send_to = Self::send_to(
-            flush,
-            self.id,
-            target,
-            None,
-            self.resolve_client_rx_connection(target),
-            &self.peer_tx,
-        );
+        match self.resolve_client_rx_connection(target) {
+            None => {
+                error!("Failed to send message to client {:?} as the connection to it was not found!", target);
+            }
+            Some(conn) => {
+                let send_to = Self::send_to(
+                    flush,
+                    self.id,
+                    target,
+                    None,
+                    conn,
+                    &self.peer_tx,
+                );
 
-        let my_id = self.id;
-        let nonce = self.rng.next_state();
+                let my_id = self.id;
+                let nonce = self.rng.next_state();
 
-        /*self.sender_handle.send(MessageSendRq::Send(
-            send_thread::Send::new(
-                message,
-                send_to,
-                my_id,
-                target,
-                nonce,
-                (batch_meta, start_instant),
-            )
-        ));*/
-
-        Self::send_impl(message, send_to, my_id, target, nonce, (batch_meta, start_instant))
+                Self::send_impl(message, send_to, my_id, target, nonce, (batch_meta, start_instant))
+            }
+        };
     }
 
     /// Send a `SystemMessage` to a single destination.
@@ -589,18 +584,28 @@ impl<D> Node<D>
     ) {
         let time_sent = Instant::now();
 
-        let send_to = Self::send_to(
-            true,
-            self.id,
-            target,
-            Some(&self.shared),
-            self.resolve_client_rx_connection(target),
-            &self.peer_tx,
-        );
+        match self.resolve_client_rx_connection(target) {
+            None => {
+                error!("Failed to send message to client {:?} as the connection to it was not found!", target);
+            }
+            Some(conn) => {
+                let send_to = Self::send_to(
+                    true,
+                    self.id,
+                    target,
+                    Some(&self.shared),
+                    conn,
+                    &self.peer_tx,
+                );
 
-        let my_id = self.id;
+                let my_id = self.id;
 
-        let nonce = self.rng.next_state();
+                let nonce = self.rng.next_state();
+
+
+                Self::send_impl(message, send_to, my_id, target, nonce, (batch_meta, time_sent))
+            }
+        };
 
         /*self.sender_handle.send(MessageSendRq::Send(
             send_thread::Send::new(
@@ -612,8 +617,6 @@ impl<D> Node<D>
                 (batch_meta, time_sent),
             )
         ));*/
-
-        Self::send_impl(message, send_to, my_id, target, nonce, (batch_meta, time_sent))
     }
 
     #[inline]
@@ -860,7 +863,6 @@ impl<D> Node<D>
                     }
                 }
             }
-
         });
     }
 
@@ -1005,18 +1007,43 @@ impl<D> Node<D>
                 let s = SerializedSendTo::Me {
                     id,
                     //get our own channel to send to ourselves
-                    tx: self.resolve_client_rx_connection(id),
+                    tx: self.loopback_channel().clone(),
                 };
                 *mine = Some(s);
             } else {
-                let sock = peer_tx.find_peer(id.id() as u64).unwrap();
+                let rx = self.resolve_client_rx_connection(id);
+
+                let (sock, tx) = match (peer_tx.find_peer(id.id() as u64), rx) {
+                    (None, None) => {
+                        error!("Could not find socket nor rx for peer {:?}", id.id());
+
+                        continue;
+                    }
+                    (None, Some(tx)) => {
+                        error!("Cound not find socket but found rx, closing it {:?}", id.id());
+
+                        tx.disconnect();
+
+                        continue;
+                    }
+                    (Some(sock), None) => {
+                        error!("Found socket but didn't find rx? Closing {:?}", id.id());
+
+                        continue;
+                    }
+                    (Some(socket), Some(tx)) => {
+                        (socket, tx)
+                    }
+                };
+
+                //Get the RX channel for the corresponding peer to mark as disconnected if the sending fails
 
                 let s = SerializedSendTo::Peers {
                     id,
                     our_id: my_id,
                     sock,
                     //Get the RX channel for the peer to mark as DCed if it fails
-                    tx: self.resolve_client_rx_connection(id),
+                    tx,
                 };
 
                 others.push(s);
@@ -1039,12 +1066,37 @@ impl<D> Node<D>
                 let s = SendTo::Me {
                     my_id,
                     //get our own channel to send to ourselves
-                    tx: self.resolve_client_rx_connection(id),
+                    tx: self.loopback_channel().clone(),
                     shared: shared.map(|sh| Arc::clone(sh)),
                 };
                 *mine = Some(s);
             } else {
-                let sock = tx_peers.find_peer(id.id() as u64).unwrap();
+                let sock = tx_peers.find_peer(id.id() as u64);
+
+                let rx_conn = self.resolve_client_rx_connection(id);
+
+                let (sock, rx_conn) = match (sock, rx_conn) {
+                    (None, None) => {
+                        error!("Could not find socket nor rx for peer {:?}", id.id());
+
+                        continue;
+                    }
+                    (None, Some(tx)) => {
+                        error!("Cound not find socket but found rx, closing it {:?}", id.id());
+
+                        tx.disconnect();
+
+                        continue;
+                    }
+                    (Some(sock), None) => {
+                        error!("Found socket but didn't find rx? Closing {:?}", id.id());
+
+                        continue;
+                    }
+                    (Some(socket), Some(tx)) => {
+                        (socket, tx)
+                    }
+                };
 
                 let s = SendTo::Peers {
                     sock,
@@ -1052,7 +1104,7 @@ impl<D> Node<D>
                     peer_id: id,
                     flush: true,
                     //Get the RX channel for the peer to mark as DCed if it fails
-                    tx: self.resolve_client_rx_connection(id),
+                    tx: rx_conn,
                     shared: shared.map(|sh| Arc::clone(sh)),
                 };
 
@@ -1462,9 +1514,9 @@ impl<D> Node<D>
         }
     }
 
-    // performs a cryptographic handshake with a peer node;
-    // header doesn't need to be signed, since we won't be
-    // storing this message in the log
+    /// performs a cryptographic handshake with a peer node;
+    /// header doesn't need to be signed, since we won't be
+    /// storing this message in the log
     #[instrument(skip(self, first_cli, acceptor, sock, rand))]
     async fn rx_side_establish_conn_task(
         self: Arc<Self>,
@@ -1530,7 +1582,8 @@ impl<D> Node<D>
         // announce we have failed to connect to the peer node
     }
 
-    /// Handles client connections
+    /// Handles client connections, attempts to connect to the client that connected to us
+    /// If we are a replica and the other client is a node
     #[instrument(skip(self, sock))]
     pub async fn handle_connected_rx(self: Arc<Self>, peer_id: NodeId, mut sock: SecureSocketRecvClient) {
         // we are a server node
@@ -1625,8 +1678,7 @@ impl<D> Node<D>
 
     /// Handles replica connections, reading from stream and pushing message into the correct queue
     pub fn handle_connected_rx_sync(self: Arc<Self>, peer_id: NodeId, mut sock: SecureSocketRecvReplica) {
-
-        if let PeerTx::Server {..} = &self.peer_tx {
+        if let PeerTx::Server { .. } = &self.peer_tx {
             if peer_id >= self.first_cli {
                 //If we are the server and the other connection is a client
                 //We want to automatically establish a tx connection as well as a
@@ -1658,14 +1710,12 @@ impl<D> Node<D>
                         peer_id,
                         nonce,
                         sync_conn,
-                        addr
+                        addr,
                     );
                 });
             }
         }
 
-        //We don't need to reply to the connection as that will automatically be done by the connect tasks
-        //(To the replicas)
         let client = self.node_handling.init_peer_conn(peer_id.clone());
 
         let mut buf = SmallVec::<[u8; 16384]>::new();
@@ -1775,19 +1825,26 @@ impl<D> SendNode<D>
     ) {
         let start_time = Instant::now();
 
-        let send_to = <Node<D>>::send_to(
-            flush,
-            self.id,
-            target,
-            None,
-            self.parent_node.resolve_client_rx_connection(target),
-            &self.peer_tx,
-        );
+        match self.parent_node.resolve_client_rx_connection(target) {
+            None => {
+                error!("Failed to send message to client {:?} as the connection to it was not found!", target);
+            }
+            Some(conn) => {
+                let send_to = <Node<D>>::send_to(
+                    flush,
+                    self.id,
+                    target,
+                    None,
+                    conn,
+                    &self.peer_tx,
+                );
 
-        let my_id = self.id;
-        let nonce = self.rng.next_state();
+                let my_id = self.id;
+                let nonce = self.rng.next_state();
 
-        <Node<D>>::send_impl(message, send_to, my_id, target, nonce, (meta, start_time))
+                <Node<D>>::send_impl(message, send_to, my_id, target, nonce, (meta, start_time))
+            }
+        }
     }
 
     /// Check the `send_signed()` documentation for `Node`.
@@ -1799,18 +1856,26 @@ impl<D> SendNode<D>
     ) {
         let start_time = Instant::now();
 
-        let send_to = <Node<D>>::send_to(
-            true,
-            self.id,
-            target,
-            Some(&self.shared),
-            self.parent_node.resolve_client_rx_connection(target),
-            &self.peer_tx,
-        );
-        let my_id = self.id;
-        let nonce = self.rng.next_state();
 
-        <Node<D>>::send_impl(message, send_to, my_id, target, nonce, (meta, start_time))
+        match self.parent_node.resolve_client_rx_connection(target) {
+            None => {
+                error!("Failed to send message to client {:?} as the connection to it was not found!", target);
+            }
+            Some(conn) => {
+                let send_to = <Node<D>>::send_to(
+                    true,
+                    self.id,
+                    target,
+                    Some(&self.shared),
+                    conn,
+                    &self.peer_tx,
+                );
+                let my_id = self.id;
+                let nonce = self.rng.next_state();
+
+                <Node<D>>::send_impl(message, send_to, my_id, target, nonce, (meta, start_time))
+            }
+        }
     }
 
     /// Check the `broadcast()` documentation for `Node`.
