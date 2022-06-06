@@ -5,7 +5,6 @@ use std::task::{Context, Poll};
 use dsrust::channels::async_ch::{ReceiverFut, ReceiverMultFut};
 use dsrust::channels::queue_channel::{Receiver, ReceiverMult, Sender};
 use dsrust::queues::lf_array_queue::LFBQueue;
-use dsrust::queues::rooms_array_queue::LFBRArrayQueue;
 use futures::future::FusedFuture;
 
 use crate::bft::error::*;

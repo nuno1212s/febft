@@ -41,7 +41,7 @@ use crate::bft::communication::serialize::{
     DigestData,
     SharedData,
 };
-use crate::bft::communication::socket::{Listener, ReplicaListener, ReplicaSocket, SecureSocketRecvClient, SecureSocketRecvReplica, SecureSocketSend, SecureSocketSendAsync, SecureSocketSendSync, Socket};
+use crate::bft::communication::socket::{Listener, SyncListener, SyncSocket, SecureSocketRecvAsync, SecureSocketRecvSync, SecureSocketSend, SecureSocketSendAsync, SecureSocketSendSync, Socket};
 use crate::bft::crypto::hash::Digest;
 use crate::bft::crypto::signature::{
     KeyPair,
@@ -1182,10 +1182,15 @@ impl<D> Node<D>
         for peer_id in NodeId::targets_u32(0..n).filter(|&id| id != my_id) {
             debug!("{:?} // Connecting to the node {:?}",my_id, peer_id);
 
-            // FIXME: this line can crash the program if the user
-            // provides an invalid HashMap, maybe return a Result<()>
-            // from this function
-            let addr = addrs.get(peer_id.id() as u64).unwrap().clone();
+            let addr = match addrs.get(peer_id.id() as u64) {
+                None => {
+                    error!("{:?} // Failed to find peer address for peer {:?}", my_id, peer_id);
+
+                    continue;
+                }
+                Some(addr) => { addr }
+            }.clone();
+
             let connector = connector.clone();
             let nonce = rng.next_state();
 
@@ -1208,7 +1213,8 @@ impl<D> Node<D>
         }
     }
 
-    ///Connect to all other replicas in the cluster
+    ///Connect to all other replicas in the cluster, but without using tokio (utilizing regular
+    /// synchronous APIs)
     #[inline]
     #[instrument(skip(self, addrs, rng, first_cli, connector))]
     async fn tx_side_connect(
@@ -1226,7 +1232,15 @@ impl<D> Node<D>
             // FIXME: this line can crash the program if the user
             // provides an invalid HashMap, maybe return a Result<()>
             // from this function
-            let addr = addrs.get(peer_id.id() as u64).unwrap().clone();
+            let addr = match addrs.get(peer_id.id() as u64) {
+                None => {
+                    error!("{:?} // Failed to find peer address for peer {:?}", my_id, peer_id);
+
+                    continue;
+                }
+                Some(addr) => { addr }
+            };
+
             let connector = connector.clone();
             let nonce = rng.next_state();
 
@@ -1413,7 +1427,7 @@ impl<D> Node<D>
         self: Arc<Self>,
         first_cli: NodeId,
         my_id: NodeId,
-        listener: ReplicaListener,
+        listener: SyncListener,
         acceptor: Arc<ServerConfig>,
     ) {
         loop {
@@ -1430,7 +1444,7 @@ impl<D> Node<D>
         }
     }
 
-    // TODO: check if we have terminated the node, and exit
+    ///Accept connections from other nodes. Utilizes the async environment
     #[instrument(skip(self, first_cli, listener, acceptor))]
     async fn rx_side_accept(
         self: Arc<Self>,
@@ -1467,7 +1481,7 @@ impl<D> Node<D>
                                         first_cli: NodeId,
                                         my_id: NodeId,
                                         acceptor: Arc<ServerConfig>,
-                                        mut sock: ReplicaSocket) {
+                                        mut sock: SyncSocket) {
         let mut buf_header = [0; Header::LENGTH];
 
         // this loop is just a trick;
@@ -1501,11 +1515,11 @@ impl<D> Node<D>
 
             // TLS handshake; drop connection if it fails
             let sock = if peer_id >= first_cli || my_id >= first_cli {
-                SecureSocketRecvReplica::Plain(sock)
+                SecureSocketRecvSync::Plain(sock)
             } else {
                 let mut tls_session = rustls::ServerSession::new(&acceptor);
 
-                SecureSocketRecvReplica::new_tls(tls_session, sock)
+                SecureSocketRecvSync::new_tls(tls_session, sock)
             };
 
             self.handle_connected_rx_sync(peer_id, sock);
@@ -1562,10 +1576,10 @@ impl<D> Node<D>
 
             // TLS handshake; drop connection if it fails
             let sock = if peer_id >= first_cli || my_id >= first_cli {
-                SecureSocketRecvClient::Plain(BufReader::new(sock))
+                SecureSocketRecvAsync::Plain(BufReader::new(sock))
             } else {
                 match acceptor.accept(sock).await {
-                    Ok(s) => SecureSocketRecvClient::Tls(s),
+                    Ok(s) => SecureSocketRecvAsync::Tls(s),
                     Err(_) => {
                         error!("{:?} // Failed to setup tls connection to node {:?}", my_id, peer_id);
 
@@ -1585,7 +1599,7 @@ impl<D> Node<D>
     /// Handles client connections, attempts to connect to the client that connected to us
     /// If we are a replica and the other client is a node
     #[instrument(skip(self, sock))]
-    pub async fn handle_connected_rx(self: Arc<Self>, peer_id: NodeId, mut sock: SecureSocketRecvClient) {
+    pub async fn handle_connected_rx(self: Arc<Self>, peer_id: NodeId, mut sock: SecureSocketRecvAsync) {
         // we are a server node
         if let PeerTx::Server { .. } = &self.peer_tx {
             // the node whose conn we accepted is a client
@@ -1593,25 +1607,30 @@ impl<D> Node<D>
             if peer_id >= self.first_cli {
                 // fetch client address
                 //
-                // FIXME: this line can crash the program if the user
-                // provides an invalid HashMap
-                let addr = self.peer_addrs.get(peer_id.id() as u64).unwrap().clone();
+                match self.peer_addrs.get(peer_id.id() as u64) {
+                    None => {
+                        //TODO: Maybe change this so it only requires
+                        error!("{:?} // Failed to find peer address for tx connection for peer {:?}", self.id(), peer_id);
+                    }
+                    Some(addr) => {
 
-                debug!("{:?} // Received connection from client {:?}, establish TX connection on port {:?}", self.id, peer_id,
-                    addr.client_addr.0);
+                        debug!("{:?} // Received connection from client {:?}, establish TX connection on port {:?}", self.id, peer_id,
+                            addr.client_addr.0);
 
-                // connect
-                let nonce = self.rng.next_state();
+                        // connect
+                        let nonce = self.rng.next_state();
 
-                rt::spawn(Self::tx_side_connect_task(
-                    self.clone(),
-                    self.id,
-                    self.first_cli,
-                    peer_id,
-                    nonce,
-                    self.connector.clone(),
-                    addr.client_addr.clone(),
-                ));
+                        rt::spawn(Self::tx_side_connect_task(
+                            self.clone(),
+                            self.id,
+                            self.first_cli,
+                            peer_id,
+                            nonce,
+                            self.connector.clone(),
+                            addr.client_addr.clone(),
+                        ));
+                    }
+                };
             }
         }
 
@@ -1677,7 +1696,7 @@ impl<D> Node<D>
     }
 
     /// Handles replica connections, reading from stream and pushing message into the correct queue
-    pub fn handle_connected_rx_sync(self: Arc<Self>, peer_id: NodeId, mut sock: SecureSocketRecvReplica) {
+    pub fn handle_connected_rx_sync(self: Arc<Self>, peer_id: NodeId, mut sock: SecureSocketRecvSync) {
         if let PeerTx::Server { .. } = &self.peer_tx {
             if peer_id >= self.first_cli {
                 //If we are the server and the other connection is a client

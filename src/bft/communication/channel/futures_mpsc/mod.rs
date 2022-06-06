@@ -14,7 +14,7 @@ use futures::future::{
 
 use crate::bft::error::*;
 
-pub struct ChannelTx<T> {
+pub struct ChannelAsyncTx<T> {
     inner: mpsc::Sender<T>,
 }
 
@@ -26,21 +26,22 @@ pub struct ChannelRxFut<'a, T> {
     inner: &'a mut mpsc::Receiver<T>,
 }
 
-impl<T> Clone for ChannelTx<T> {
+impl<T> Clone for ChannelAsyncTx<T> {
     fn clone(&self) -> Self {
         let inner = self.inner.clone();
         Self { inner }
     }
 }
 
-pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
+pub fn new_bounded<T>(bound: usize) -> (ChannelAsyncTx<T>, ChannelRx<T>) {
     let (tx, rx) = mpsc::channel(bound);
-    let tx = ChannelTx { inner: tx };
+    let tx = ChannelAsyncTx { inner: tx };
     let rx = ChannelRx { inner: rx };
     (tx, rx)
 }
 
-impl<T> ChannelTx<T> {
+impl<T> ChannelAsyncTx<T> {
+
     #[inline]
     pub async fn send(&mut self, message: T) -> Result<()> {
         self.ready().await?;

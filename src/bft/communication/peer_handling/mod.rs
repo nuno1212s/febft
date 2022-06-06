@@ -2,40 +2,25 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, format, Formatter};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
-use std::sync::mpsc::{RecvError, SendError};
-use std::thread::JoinHandle;
+use std::sync::atomic::{AtomicBool,  AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crossbeam_channel::{RecvTimeoutError, TryRecvError};
-use dsrust::channels::async_ch::ReceiverMultFut;
 use dsrust::channels::queue_channel::{bounded_lf_queue, make_mult_recv_from, make_mult_recv_partial_from, Receiver, ReceiverMult, ReceiverPartialMult, RecvMultError, Sender};
 use dsrust::queues::lf_array_queue::LFBQueue;
 use dsrust::queues::mqueue::MQueue;
-use dsrust::queues::queues::{BQueue, PartiallyDumpable, Queue, SizableQueue};
-use dsrust::utils::backoff::BackoffN;
-use futures::select;
-use futures_timer::Delay;
+use dsrust::queues::queues::{ Queue, SizableQueue};
 use intmap::IntMap;
-use log::{debug, info};
 use parking_lot::{Mutex, RwLock};
-use parking_lot::lock_api::MutexGuard;
 
-use crate::bft::async_runtime as rt;
-use crate::bft::communication::{NODE_CHAN_BOUND, NodeConfig, NodeId};
-use crate::bft::communication::channel::{ChannelRx, ChannelTx, new_bounded};
-use crate::bft::communication::message::Message;
+use crate::bft::communication::{channel, NODE_CHAN_BOUND, NodeConfig, NodeId};
+use crate::bft::communication::channel::{ChannelAsyncRx, ChannelAsyncTx, ChannelSyncRx, ChannelSyncTx, new_bounded_async};
 use crate::bft::error::*;
-use crate::bft::threadpool;
 
 type QueueType<T> = LFBQueue<Vec<T>>;
 
 type ReplicaQueueType<T> = LFBQueue<T>;
 
 type ClientQueueType<T> = MQueue<T>;
-
-type ClientSender<T> = crossbeam_channel::Sender<T>;
-type ClientReceiver<T> = crossbeam_channel::Receiver<T>;
 
 fn channel_init<T>(capacity: usize) -> (Sender<Vec<T>, QueueType<T>>, Receiver<Vec<T>, QueueType<T>>) {
     dsrust::channels::queue_channel::bounded_lf_queue(capacity)
@@ -67,8 +52,8 @@ pub struct NodePeers<T: Send + 'static> {
     replica_handling: Arc<ReplicaHandling<T>>,
     //Client request collection handling (Pooled), is only available on the replicas
     client_handling: Option<Arc<ConnectedPeersGroup<T>>>,
-    client_tx: Option<ClientSender<Vec<T>>>,
-    client_rx: Option<ClientReceiver<Vec<T>>>,
+    client_tx: Option<ChannelSyncTx<Vec<T>>>,
+    client_rx: Option<ChannelSyncRx<Vec<T>>>,
 }
 
 const DEFAULT_CLIENT_QUEUE: usize = 1024;
@@ -90,7 +75,7 @@ impl<T> NodePeers<T> where T: Send {
         let client_channel;
 
         if id < first_cli {
-            let (client_tx, client_rx) = crossbeam_channel::bounded(NODE_CHAN_BOUND);
+            let (client_tx, client_rx) = channel::new_bounded_sync(NODE_CHAN_BOUND);
 
             client_handling = Some(ConnectedPeersGroup::new(DEFAULT_CLIENT_QUEUE,
                                                             batch_size,
@@ -277,7 +262,7 @@ pub enum ConnectedPeer<T> where T: Send {
     },
     UnpooledConnection {
         client_id: NodeId,
-        sender: Mutex<Option<ChannelTx<T>>>,
+        sender: Mutex<Option<ChannelAsyncTx<T>>>,
     },
 }
 
@@ -293,15 +278,15 @@ pub enum ConnectedPeer<T> where T: Send {
 /// Probably not worth it
 pub struct ReplicaHandling<T> where T: Send {
     capacity: usize,
-    channel_tx_replica: ChannelTx<T>,
-    channel_rx_replica: ChannelRx<T>,
+    channel_tx_replica: ChannelAsyncTx<T>,
+    channel_rx_replica: ChannelAsyncRx<T>,
     connected_clients: RwLock<IntMap<Arc<ConnectedPeer<T>>>>,
     connected_client_count: AtomicUsize,
 }
 
 impl<T> ReplicaHandling<T> where T: Send {
     pub fn new(capacity: usize) -> Arc<Self> {
-        let (sender, receiver) = new_bounded(capacity);
+        let (sender, receiver) = new_bounded_async(capacity);
 
         Arc::new(
             Self {
@@ -381,7 +366,7 @@ pub struct ConnectedPeersPool<T: Send + 'static> {
     //And since each client has his own reference to push data to, this only needs to be accessed by the thread
     //That's producing the batches and the threads of clients connecting and disconnecting
     connected_clients: Mutex<Vec<Arc<ConnectedPeer<T>>>>,
-    batch_transmission: ClientSender<Vec<T>>,
+    batch_transmission: ChannelSyncTx<Vec<T>>,
     finish_execution: AtomicBool,
     owner: Arc<ConnectedPeersGroup<T>>,
     batch_size: usize,
@@ -392,7 +377,7 @@ pub struct ConnectedPeersPool<T: Send + 'static> {
 }
 
 impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
-    pub fn new(per_client_bound: usize, batch_size: usize, batch_transmission: crossbeam_channel::Sender<Vec<T>>,
+    pub fn new(per_client_bound: usize, batch_size: usize, batch_transmission: ChannelSyncTx<Vec<T>>,
                own_id: NodeId, fill_batch: bool, clients_per_pool: usize, batch_timeout_micros: u64,
                batch_sleep_micros: u64) -> Arc<Self> {
         Arc::new(Self {
@@ -583,7 +568,7 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
 impl<T> ConnectedPeersPool<T> where T: Send {
     //We mark the owner as static since if the pool is active then
     //The owner also has to be active
-    pub fn new(pool_id: usize, batch_size: usize, batch_transmission: crossbeam_channel::Sender<Vec<T>>,
+    pub fn new(pool_id: usize, batch_size: usize, batch_transmission: ChannelSyncTx<Vec<T>>,
                owner: Arc<ConnectedPeersGroup<T>>, fill_batch: bool, client_per_pool: usize,
                batch_timeout_micros: u64, batch_sleep_micros: u64) -> Arc<Self> {
         let result = Self {
@@ -624,6 +609,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                             Err(err) => {
                                 match err.kind() {
                                     ErrorKind::Communication => {
+                                        //The pool is empty, so to save CPU, delete it
                                         self.owner.del_pool(self.pool_id);
 
                                         continue;
@@ -755,7 +741,6 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                 }
             }
         }
-
 
         //This might cause some lag since it has to access the intmap, but
         //Should be fine as it will only happen on client dcs

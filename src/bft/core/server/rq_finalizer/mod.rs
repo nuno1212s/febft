@@ -2,11 +2,10 @@ use std::collections::BTreeMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crossbeam_channel::{Receiver, Sender};
-use intmap::IntMap;
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::message::{RequestMessage, StoredMessage};
-use crate::bft::communication::NodeId;
+use crate::bft::communication::{channel, NodeId};
+use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
 
 use crate::bft::consensus::log::{Info, Log, operation_key};
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UpdateBatch};
@@ -20,28 +19,28 @@ pub struct RqFinalizer<S> where S: Service {
     node_id: NodeId,
     log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
     executor: ExecutorHandle<S>,
-    channel: Receiver<RequestToProcess<Request<S>>>,
+    channel: ChannelSyncRx<RequestToProcess<Request<S>>>,
 }
 
 pub struct RqFinalizerHandle<S> where S: Service + 'static
 {
-    channel: Sender<RequestToProcess<Request<S>>>,
+    channel: ChannelSyncTx<RequestToProcess<Request<S>>>,
 }
 
 impl<S> RqFinalizerHandle<S> where S: Service + 'static {
-    pub fn new(sender: Sender<RequestToProcess<Request<S>>>) -> Self {
+    pub fn new(sender: ChannelSyncTx<RequestToProcess<Request<S>>>) -> Self {
         Self {
             channel: sender
         }
     }
 
     pub fn queue_finalize(&self, info: Info, batch_meta: BatchMeta, rqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
-        self.channel.send((info, batch_meta, rqs)).unwrap()
+        self.channel.send((info, batch_meta, rqs)).expect("Failed to finalize")
     }
 }
 
 impl<S> Deref for RqFinalizerHandle<S> where S: Service + 'static {
-    type Target = Sender<RequestToProcess<Request<S>>>;
+    type Target = ChannelSyncTx<RequestToProcess<Request<S>>>;
 
     fn deref(&self) -> &Self::Target {
         &self.channel
@@ -61,7 +60,7 @@ impl<S> RqFinalizer<S> where S: Service + 'static {
                log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
                executor_handle: ExecutorHandle<S>) ->
                RqFinalizerHandle<S> {
-        let (ch_tx, ch_rx) = crossbeam_channel::bounded(REQ_BATCH_BUFF);
+        let (ch_tx, ch_rx) = channel::new_bounded_sync(REQ_BATCH_BUFF);
 
         let rq_finalizer =
             Self {

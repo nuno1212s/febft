@@ -2,17 +2,11 @@
 
 // XXX: maybe `Box<(BatchMeta, UpdateBatch<O>)>`
 
-use std::sync::{Arc, mpsc};
-use std::thread;
+use std::sync::{Arc};
 
-use parking_lot::Mutex;
-
-use crate::bft::async_runtime as rt;
 use crate::bft::benchmarks::BatchMeta;
-use crate::bft::communication::{
-    NodeId,
-    SendNode,
-};
+use crate::bft::communication::{channel, NodeId, SendNode};
+use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::{
     Message,
     ReplyMessage,
@@ -158,7 +152,7 @@ const EXECUTING_BUFFER: usize = 8096;
 pub struct Executor<S: Service + 'static> {
     service: S,
     state: State<S>,
-    e_rx: crossbeam_channel::Receiver<ExecutionRequest<State<S>, Request<S>>>,
+    e_rx: ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>,
     log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
     reply_worker: ReplyHandle<S>,
     send_node: SendNode<S::Data>,
@@ -166,7 +160,7 @@ pub struct Executor<S: Service + 'static> {
 
 /// Represents a handle to the client request executor.
 pub struct ExecutorHandle<S: Service> {
-    e_tx: crossbeam_channel::Sender<ExecutionRequest<State<S>, Request<S>>>,
+    e_tx: ChannelSyncTx<ExecutionRequest<State<S>, Request<S>>>,
 }
 
 impl<S: Service> ExecutorHandle<S>
@@ -222,7 +216,7 @@ impl<S> Executor<S>
         mut service: S,
         send_node: SendNode<S::Data>,
     ) -> Result<ExecutorHandle<S>> {
-        let (e_tx, e_rx) = crossbeam_channel::bounded(EXECUTING_BUFFER);
+        let (e_tx, e_rx) = channel::new_bounded_sync(EXECUTING_BUFFER);
 
         let state = service.initial_state()?;
 
@@ -272,7 +266,7 @@ impl<S> Executor<S>
                     }
                 }
             }
-        });
+        }).expect("Failed to start executor thread");
 
         Ok(ExecutorHandle { e_tx })
     }

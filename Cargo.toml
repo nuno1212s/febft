@@ -17,7 +17,10 @@ default = [
     "threadpool_rayon",
     "socket_tokio_tcp",
     "serialize_serde",
-    "channel_custom_dump",
+    "channel_flume_mpmc",
+    "channel_sync_crossbeam",
+    "channel_mixed_flume",
+    "channel_mult_custom_dump",
     "crypto_signature_ring_ed25519",
     "crypto_hash_blake3_blake3",
     "collections_randomstate_fxhash"
@@ -43,6 +46,14 @@ threadpool_rayon = ["rayon"]
 channel_futures_mpsc = []
 channel_flume_mpmc = ["flume"]
 channel_async_channel_mpmc = ["async-channel"]
+
+channel_sync_crossbeam = ["crossbeam-channel"]
+channel_sync_flume = ["flume"]
+
+channel_mixed_flume = ["flume"]
+
+channel_mult_custom_dump = ["dsrust"]
+
 channel_custom_dump = ["flume"]
 channel_custom_dump_lfb = ["flume"]
 
@@ -100,9 +111,9 @@ async-channel = { version = "1", optional = true }
 twox-hash = { version = "1", optional = true }
 serde_bytes = { version = "0.11", optional = true }
 fxhash = { version = "0.2", optional = true }
-dsrust = { version = "0.1.8", git = "https://github.com/nuno1212s/DSRust" }
+dsrust = { version = "0.1.8", git = "https://github.com/nuno1212s/DSRust", optional=true }
 #dsrust = { path = "/home/nunogneto/Documents/Development/Rust/dsrust" }
-crossbeam-channel = "0.5.2"
+crossbeam-channel = { version = "0.5.2", optional = true }
 
 log = "0.4.14"
 env_logger = "0.8"

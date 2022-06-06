@@ -2,7 +2,6 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crossbeam_channel::Sender;
 use either::{Left, Right};
 use intmap::IntMap;
 use parking_lot::Mutex;
@@ -13,7 +12,8 @@ use crate::bft::communication::{NodeId, SendTo, SendTos, SerializedSendTo, Seria
 use crate::bft::communication::message::{StoredSerializedSystemMessage, SystemMessage};
 use crate::bft::communication::serialize::{Buf, DigestData, SharedData};
 use crate::bft::communication::socket::SecureSocketSend;
-use crate::bft::executable::Service;
+use crate::bft::communication::channel;
+use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
 
 pub struct BroadcastMsg<D> where D: SharedData + 'static {
     message: SystemMessage<D::State, D::Request, D::Reply>,
@@ -30,7 +30,7 @@ pub struct BroadcastSerialized<D> where D: SharedData + 'static {
     time_info: (Arc<Mutex<BatchMeta>>, Instant),
 }
 
-pub struct Send<D> where D: SharedData + 'static{
+pub struct Send<D> where D: SharedData + 'static {
     message: SystemMessage<D::State, D::Request, D::Reply>,
     send_to: SendTo<D>,
     my_id: NodeId,
@@ -45,24 +45,30 @@ pub enum MessageSendRq<D> where D: SharedData + 'static {
     Send(Send<D>),
 }
 
+///A thread made for actually sending the messages
+/// This was developed in order to see if the overhead of using threadpools was affecting performacne
+/// Of the message sending. The conclusion was that thread pools indeed did not introduce enough latency to justify
+/// The addition of this thread. Actually using just 1 thread would be prejudicial to the normal functioning as
+/// If the ping was not negligible then using just a single worker would actually decrease performance
+/// As it would have to wait for the sending of previous messages to be able to send the next one.
 pub struct SendWorker<D> where D: SharedData + 'static {
-    receiver: crossbeam_channel::Receiver<MessageSendRq<D>>,
+    receiver: ChannelSyncRx<MessageSendRq<D>>,
 }
 
 #[derive(Clone)]
 pub struct SendHandle<D> where D: SharedData + 'static {
-    sender: crossbeam_channel::Sender<MessageSendRq<D>>,
+    sender: ChannelSyncTx<MessageSendRq<D>>,
 }
 
-impl<D> Deref for SendHandle<D> where D: SharedData + 'static{
-    type Target = Sender<MessageSendRq<D>>;
+impl<D> Deref for SendHandle<D> where D: SharedData + 'static {
+    type Target = ChannelSyncTx<MessageSendRq<D>>;
 
     fn deref(&self) -> &Self::Target {
         &self.sender
     }
 }
 
-impl<D> SendWorker<D> where D: SharedData + 'static{
+impl<D> SendWorker<D> where D: SharedData + 'static {
     pub fn start(self) {
         std::thread::Builder::new().name(String::from("Send message worker thread"))
             .spawn(move || {
@@ -246,7 +252,7 @@ impl<D> SendWorker<D> where D: SharedData + 'static{
     }
 }
 
-impl<D> BroadcastSerialized<D> where D: SharedData + 'static{
+impl<D> BroadcastSerialized<D> where D: SharedData + 'static {
     pub fn new(messages: IntMap<StoredSerializedSystemMessage<D>>,
                my_send_to: Option<SerializedSendTo<D>>,
                other_send_tos: SerializedSendTos<D>,
@@ -262,7 +268,7 @@ impl<D> BroadcastMsg<D> where D: SharedData + 'static {
     }
 }
 
-impl<D> Send<D> where D: SharedData + 'static{
+impl<D> Send<D> where D: SharedData + 'static {
     pub fn new(message: SystemMessage<D::State, D::Request, D::Reply>,
                send_to: SendTo<D>, my_id: NodeId, target: NodeId,
                nonce: u64, time_info: (Arc<Mutex<BatchMeta>>, Instant)) -> Self {
@@ -272,7 +278,8 @@ impl<D> Send<D> where D: SharedData + 'static{
 
 pub fn create_send_thread<D>(num_workers: u32, capacity: usize) -> SendHandle<D>
     where D: SharedData {
-    let (tx, rx) = crossbeam_channel::bounded(capacity);
+
+    let (tx, rx) = channel::new_bounded_sync(capacity);
 
     let handle = SendHandle { sender: tx };
 

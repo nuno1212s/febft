@@ -14,11 +14,11 @@ use futures::future::FusedFuture;
 
 use crate::bft::error::*;
 
-pub struct ChannelTx<T> {
+pub struct ChannelAsyncTx<T> {
     inner: Sender<T>,
 }
 
-pub struct ChannelRx<T> {
+pub struct ChannelAsyncRx<T> {
     inner: Receiver<T>,
 }
 
@@ -26,28 +26,28 @@ pub struct ChannelRxFut<'a, T> {
     inner: &'a mut Receiver<T>,
 }
 
-impl<T> Clone for ChannelTx<T> {
+impl<T> Clone for ChannelAsyncTx<T> {
     fn clone(&self) -> Self {
         let inner = self.inner.clone();
         Self { inner }
     }
 }
 
-impl<T> Clone for ChannelRx<T> {
+impl<T> Clone for ChannelAsyncRx<T> {
     fn clone(&self) -> Self {
         let inner = self.inner.clone();
         Self { inner }
     }
 }
 
-pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
+pub fn new_bounded<T>(bound: usize) -> (ChannelAsyncTx<T>, ChannelAsyncRx<T>) {
     let (tx, rx) = async_channel::bounded(bound);
-    let tx = ChannelTx { inner: tx };
-    let rx = ChannelRx { inner: rx };
+    let tx = ChannelAsyncTx { inner: tx };
+    let rx = ChannelAsyncRx { inner: rx };
     (tx, rx)
 }
 
-impl<T> ChannelTx<T> {
+impl<T> ChannelAsyncTx<T> {
     #[inline]
     pub async fn send(&mut self, message: T) -> Result<()> {
         self.inner
@@ -57,7 +57,7 @@ impl<T> ChannelTx<T> {
     }
 }
 
-impl<T> ChannelRx<T> {
+impl<T> ChannelAsyncRx<T> {
     #[inline]
     pub fn recv<'a>(&'a mut self) -> ChannelRxFut<'a, T> {
         let inner = &mut self.inner;

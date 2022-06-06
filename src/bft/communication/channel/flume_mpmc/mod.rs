@@ -1,61 +1,84 @@
 use std::pin::Pin;
 use std::future::Future;
+use std::ops::Deref;
 use std::task::{Poll, Context};
-use flume::RecvError;
+use std::time::Duration;
 
 use futures::future::FusedFuture;
+use crate::bft::communication::channel::SendError;
 
 use crate::bft::error::*;
 
-pub struct ChannelTx<T> {
-    inner: ::flume::Sender<T>,
+/**
+Mixed channels
+ */
+pub struct ChannelMixedRx<T> {
+    inner: flume::Receiver<T>,
 }
 
-pub struct ChannelRx<T> {
-    inner: ::flume::Receiver<T>,
+pub struct ChannelMixedTx<T> {
+    inner: ::flume::Sender<T>,
 }
 
 pub struct ChannelRxFut<'a, T> {
     inner: ::flume::r#async::RecvFut<'a, T>,
 }
 
-impl<T> Clone for ChannelTx<T> {
+impl<T> Clone for ChannelMixedTx<T> {
     fn clone(&self) -> Self {
-        let inner = self.inner.clone();
-        Self { inner }
+        ChannelMixedTx {
+            inner: self.inner.clone()
+        }
     }
 }
 
-impl<T> Clone for ChannelRx<T> {
+impl<T> Clone for ChannelMixedRx<T> {
     fn clone(&self) -> Self {
-        let inner = self.inner.clone();
-        Self { inner }
+        ChannelMixedRx {
+            inner: self.inner.clone()
+        }
     }
 }
 
-pub fn new_bounded<T>(bound: usize) -> (ChannelTx<T>, ChannelRx<T>) {
-    let (tx, rx) = ::flume::bounded(bound);
-    let tx = ChannelTx { inner: tx };
-    let rx = ChannelRx { inner: rx };
-    (tx, rx)
-}
-
-impl<T> ChannelTx<T> {
+impl<T> ChannelMixedTx<T> {
     #[inline]
-    pub async fn send(&self, message: T) -> Result<()> {
-        self.inner.send_async(message).await
-            .simple(ErrorKind::CommunicationChannelFlumeMpmc)
+    pub async fn send(&self, message: T) -> std::result::Result<(), SendError<T>> {
+        match self.inner.send_async(message).await {
+            Ok(_) => {
+                Ok(())
+            }
+            Err(err) => {
+                Err(SendError::ChannelDc(err.into_inner()))
+            }
+        }
     }
 
     #[inline]
-    pub fn send_sync(&self, message: T) -> Result<()> {
-        self.inner.send(message)
-            .simple(ErrorKind::CommunicationChannelFlumeMpmc)
+    pub fn send_sync(&self, message: T) ->std::result::Result<(), SendError<T>> {
+        match self.inner.send(message) {
+            Ok(_) => {
+                Ok(())
+            }
+            Err(err) => {
+                Err(SendError::ChannelDc(err.into_inner()))
+            }
+        }
     }
 
+    #[inline]
+    pub fn send_timeout(&self, message: T, timeout: Duration) -> std::result::Result<(), SendError<T>> {
+        match self.inner.send_timeout(message, timeout){
+            Ok(_) => {
+                Ok(())
+            }
+            Err(err) => {
+                Err(SendError::ChannelDc(err.into_inner()))
+            }
+        }
+    }
 }
 
-impl<T> ChannelRx<T> {
+impl<T> ChannelMixedRx<T> {
     #[inline]
     pub fn recv<'a>(&'a mut self) -> ChannelRxFut<'a, T> {
         let inner = self.inner.recv_async();
@@ -65,6 +88,19 @@ impl<T> ChannelRx<T> {
     #[inline]
     pub fn recv_sync(&self) -> Result<T> {
         match self.inner.recv() {
+            Ok(elem) => {
+                Ok(elem)
+            }
+            Err(err) => {
+                Err(Error::simple_with_msg(ErrorKind::CommunicationChannelFlumeMpmc,
+                                           format!("{:?}", err).as_str()))
+            }
+        }
+    }
+
+    #[inline]
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<T> {
+        match self.inner.recv_timeout(timeout) {
             Ok(elem) => {
                 Ok(elem)
             }
@@ -92,4 +128,10 @@ impl<'a, T> FusedFuture for ChannelRxFut<'a, T> {
     fn is_terminated(&self) -> bool {
         self.inner.is_terminated()
     }
+}
+
+pub fn new_bounded<T>(bound: usize) -> (ChannelMixedTx<T>, ChannelMixedRx<T>) {
+    let (tx, rx) = flume::bounded(bound);
+
+    (ChannelMixedTx { inner: tx }, ChannelMixedRx { inner: rx })
 }

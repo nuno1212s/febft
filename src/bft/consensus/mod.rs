@@ -551,6 +551,8 @@ impl<S> Consensus<S>
                 // or in the same seq as the message
                 let view = synchronizer.view();
 
+                let pre_prepare_received_time;
+
                 match message.kind() {
                     ConsensusMessageKind::PrePrepare(_) if message.view() != view.sequence_number() => {
                         // drop proposed value in a different view (from different leader)
@@ -571,7 +573,7 @@ impl<S> Consensus<S>
                         //Acquire the consensus lock as we have officially started the consensus
                         self.consensus_guard.store(true, Ordering::Relaxed);
 
-                        log.batch_meta().lock().pre_prepare_received_time = Utc::now();
+                        pre_prepare_received_time = Utc::now();
 
                         let mut digests = request_batch_received(
                             header.digest().clone(),
@@ -668,7 +670,12 @@ impl<S> Consensus<S>
                     node.broadcast(message, targets, Arc::clone(log.batch_meta()));
                 }
 
-                log.batch_meta().lock().prepare_sent_time = Utc::now();
+                {
+                    //Update batch meta
+                    let meta_guard = log.batch_meta().lock();
+                    meta_guard.prepare_sent_time = Utc::now();
+                    meta_guard.pre_prepare_received_time = pre_prepare_received_time;
+                }
 
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
@@ -753,6 +760,7 @@ impl<S> Consensus<S>
                 log.insert(header, SystemMessage::Consensus(message));
 
                 if i == 2 {
+                    //Log the time of the first received prepare message
                     log.batch_meta().lock().first_prepare_received = Utc::now();
                 }
 
@@ -845,6 +853,7 @@ impl<S> Consensus<S>
                 log.insert(header, SystemMessage::Consensus(message));
 
                 if i == 1 {
+                    //Log the first received commit message
                     log.batch_meta().lock().first_commit_received = Utc::now();
                 }
 

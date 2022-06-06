@@ -5,7 +5,6 @@ use std::fmt::{Debug, Formatter};
 use std::io;
 use std::io::Write;
 use std::mem::MaybeUninit;
-use std::ptr::write;
 
 use chrono::DateTime;
 use chrono::offset::Utc;

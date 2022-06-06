@@ -1,25 +1,17 @@
-use std::fmt::format;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
-use crossbeam_channel::{bounded, Receiver, Sender};
-use log::{debug, info, trace};
-use parking_lot::{Mutex, RawMutex};
-use parking_lot::lock_api::MutexGuard;
-
-use crate::bft::async_runtime as rt;
-use crate::bft::communication::{Node, NodeId};
-use crate::bft::communication::channel::{ChannelRx, ChannelTx, new_bounded};
-use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, Message, RequestMessage, StoredMessage, SystemMessage};
+use parking_lot::{Mutex};
+use crate::bft::communication::{channel, Node, NodeId};
+use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
+use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, RequestMessage, StoredMessage, SystemMessage};
 use crate::bft::communication::message::Message::System;
-use crate::bft::communication::peer_handling::NodePeers;
-use crate::bft::communication::serialize::SharedData;
-use crate::bft::consensus::log as logg;
+
 use crate::bft::consensus::log::Log;
-use crate::bft::core::server::{Replica, ViewInfo};
+use crate::bft::core::server::{ViewInfo};
 use crate::bft::executable::{Reply, Request, Service, State};
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::sync::Synchronizer;
@@ -29,8 +21,8 @@ use crate::bft::timeouts::TimeoutsHandle;
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
 pub struct RqProcessor<S: Service + 'static> {
-    batch_channel: (Sender<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
-                    Receiver<Vec<StoredMessage<RequestMessage<Request<S>>>>>),
+    batch_channel: (ChannelSyncTx<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
+                    ChannelSyncRx<Vec<StoredMessage<RequestMessage<Request<S>>>>>),
     node_ref: Arc<Node<S::Data>>,
     synchronizer: Arc<Synchronizer<S>>,
     timeouts: Arc<TimeoutsHandle<S>>,
@@ -51,7 +43,7 @@ impl<S: Service> RqProcessor<S> {
                timeouts: Arc<TimeoutsHandle<S>>,
                consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
                consensus_guard: Arc<AtomicBool>) -> Arc<Self> {
-        let (channel_tx, channel_rx) = crossbeam_channel::bounded(BATCH_CHANNEL_SIZE);
+        let (channel_tx, channel_rx) = channel::new_bounded_sync(BATCH_CHANNEL_SIZE);
 
         Arc::new(Self {
             batch_channel: (channel_tx, channel_rx),
@@ -65,7 +57,7 @@ impl<S: Service> RqProcessor<S> {
         })
     }
 
-    pub fn receiver_channel(&self) -> &Receiver<Vec<StoredMessage<RequestMessage<Request<S>>>>> {
+    pub fn receiver_channel(&self) -> &ChannelSyncRx<Vec<StoredMessage<RequestMessage<Request<S>>>>> {
         &self.batch_channel.1
     }
 
@@ -117,7 +109,7 @@ impl<S: Service> RqProcessor<S> {
 
                     for message in messages {
                         match message {
-                            Message::System(header, sysmsg) => {
+                            System(header, sysmsg) => {
                                 match sysmsg {
                                     SystemMessage::Request(req) => {
                                         /*let key = logg::operation_key(&header, &req);

@@ -52,8 +52,6 @@ pub struct Client<D: SharedData + 'static> {
 
 impl<D: SharedData> Clone for Client<D> {
     fn clone(&self) -> Self {
-        //FIXME: This definetly leads to repeated session ids, just unsure on how they can
-        //Affect the client
         let session_id = self.data
             .session_counter
             .fetch_add(1, Ordering::Relaxed)

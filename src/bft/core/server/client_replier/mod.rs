@@ -1,7 +1,7 @@
 use std::ops::Deref;
 use std::sync::Arc;
-use crossbeam_channel::{Receiver, Sender};
-use crate::bft::communication::{NodeId, SendNode};
+use crate::bft::communication::{channel, NodeId, SendNode};
+use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::{ReplyMessage, SystemMessage};
 use crate::bft::consensus::log::Log;
 use crate::bft::executable::{Reply, Request, Service, State, UpdateBatchReplies};
@@ -10,20 +10,20 @@ type RepliesType<S> = UpdateBatchReplies<S>;
 
 pub struct Replier<S> where S: Service + 'static {
     node_id: NodeId,
-    channel:  Receiver<RepliesType<Reply<S>>>,
+    channel:  ChannelSyncRx<RepliesType<Reply<S>>>,
     send_node: SendNode<S::Data>,
     log: Arc<Log<State<S>, Request<S>, Reply<S>>>
 }
 
 pub struct ReplyHandle<S> where S: Service {
-    inner: Sender<RepliesType<Reply<S>>>
+    inner: ChannelSyncTx<RepliesType<Reply<S>>>
 }
 
 const REPLY_CHANNEL_SIZE : usize = 1024;
 
 impl<S> ReplyHandle<S> where S:Service {
 
-    pub fn new(replier: Sender<RepliesType<Reply<S>>>) -> Self {
+    pub fn new(replier: ChannelSyncTx<RepliesType<Reply<S>>>) -> Self {
         Self {
             inner: replier
         }
@@ -32,7 +32,7 @@ impl<S> ReplyHandle<S> where S:Service {
 }
 
 impl<S> Deref for ReplyHandle<S> where S:Service {
-    type Target = Sender<RepliesType<Reply<S>>>;
+    type Target = ChannelSyncTx<RepliesType<Reply<S>>>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
@@ -51,7 +51,7 @@ impl<S> Replier<S> where S: Service + 'static{
 
     pub fn new(node_id: NodeId, send_node: SendNode<S::Data>,
                log: Arc<Log<State<S>, Request<S>, Reply<S>>>) -> ReplyHandle<S> {
-        let (ch_tx, ch_rx) = crossbeam_channel::bounded(REPLY_CHANNEL_SIZE);
+        let (ch_tx, ch_rx) = channel::new_bounded_sync(REPLY_CHANNEL_SIZE);
 
         let reply_task = Self {
             node_id,
@@ -118,7 +118,7 @@ impl<S> Replier<S> where S: Service + 'static{
 
 
                 }
-            });
+            }).expect("Failed to launch thread for client replier!");
 
     }
 
