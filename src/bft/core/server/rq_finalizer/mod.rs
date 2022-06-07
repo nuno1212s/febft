@@ -140,6 +140,6 @@ impl<S> RqFinalizer<S> where S: Service + 'static {
                         }
                     }
                 }
-            });
+            }).expect("Failed to start rq finalizer thread");
     }
 }

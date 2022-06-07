@@ -672,7 +672,8 @@ impl<S> Consensus<S>
 
                 {
                     //Update batch meta
-                    let meta_guard = log.batch_meta().lock();
+                    let mut meta_guard = log.batch_meta().lock();
+
                     meta_guard.prepare_sent_time = Utc::now();
                     meta_guard.pre_prepare_received_time = pre_prepare_received_time;
                 }
@@ -922,6 +923,8 @@ fn request_batch_received<S>(
     batch_guard.batch_size = requests.len();
     batch_guard.reception_time = Utc::now();
 
+    //Tell the synchronizer to watch this request batch
+    //The synchronizer will also add the batch into the log of requests
     synchronizer.watch_request_batch(
         batch_digest,
         requests,

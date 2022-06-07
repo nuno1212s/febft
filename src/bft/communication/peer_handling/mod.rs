@@ -1,41 +1,25 @@
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, format, Formatter};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool,  AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use dsrust::channels::queue_channel::{bounded_lf_queue, make_mult_recv_from, make_mult_recv_partial_from, Receiver, ReceiverMult, ReceiverPartialMult, RecvMultError, Sender};
-use dsrust::queues::lf_array_queue::LFBQueue;
-use dsrust::queues::mqueue::MQueue;
-use dsrust::queues::queues::{ Queue, SizableQueue};
 use intmap::IntMap;
+use log::error;
 use parking_lot::{Mutex, RwLock};
 
-use crate::bft::communication::{channel, NODE_CHAN_BOUND, NodeConfig, NodeId};
-use crate::bft::communication::channel::{ChannelAsyncRx, ChannelAsyncTx, ChannelSyncRx, ChannelSyncTx, new_bounded_async};
+use crate::bft::communication::{channel, NODE_CHAN_BOUND, NodeId};
+use crate::bft::communication::channel::{ChannelMultRx, ChannelMultTx, ChannelSyncTx, TryRecvError};
+use crate::bft::communication::channel::ChannelSyncRx;
+use crate::bft::communication::channel::new_bounded_sync;
 use crate::bft::error::*;
 
-type QueueType<T> = LFBQueue<Vec<T>>;
-
-type ReplicaQueueType<T> = LFBQueue<T>;
-
-type ClientQueueType<T> = MQueue<T>;
-
-fn channel_init<T>(capacity: usize) -> (Sender<Vec<T>, QueueType<T>>, Receiver<Vec<T>, QueueType<T>>) {
-    dsrust::channels::queue_channel::bounded_lf_queue(capacity)
+fn channel_init<T>(capacity: usize) -> (ChannelMultTx<T>, ChannelMultRx<T>) {
+    channel::new_bounded_mult(capacity)
 }
 
-fn replica_channel_init<T>(capacity: usize) -> (Sender<T, ReplicaQueueType<T>>, Receiver<T, ReplicaQueueType<T>>) {
-    let (tx, rx) = bounded_lf_queue(capacity);
-
-    (tx, rx)
-}
-
-fn client_channel_init<T>(capacity: usize) -> (Sender<T, ClientQueueType<T>>, ReceiverPartialMult<T, ClientQueueType<T>>) {
-    let (tx, rx) = dsrust::channels::queue_channel::bounded_mutex_backoff_queue(capacity);
-
-    (tx, make_mult_recv_partial_from(rx))
+fn client_channel_init<T>(capacity: usize) -> (ChannelMultTx<T>, ChannelMultRx<T>) {
+    channel::new_bounded_mult(capacity)
 }
 
 ///Handles the communication between two peers (replica - replica, replica - client)
@@ -188,10 +172,13 @@ impl<T> NodePeers<T> where T: Send {
                             }
                             Err(err) => {
                                 match err {
-                                    RecvTimeoutError::Timeout => {
+                                    TryRecvError::Timeout => {
                                         Ok(vec![])
                                     }
-                                    RecvTimeoutError::Disconnected => {
+                                    TryRecvError::ChannelDc => {
+                                        Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive"))
+                                    }
+                                    TryRecvError::ChannelEmpty => {
                                         Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive"))
                                     }
                                 }
@@ -215,10 +202,13 @@ impl<T> NodePeers<T> where T: Send {
                     }
                     Err(err) => {
                         match err {
-                            TryRecvError::Empty => {
+                            TryRecvError::ChannelEmpty => {
                                 Ok(None)
                             }
-                            TryRecvError::Disconnected => {
+                            TryRecvError::ChannelDc => {
+                                Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive from clients as there are no clients connected"))
+                            }
+                            TryRecvError::Timeout => {
                                 Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive from clients as there are no clients connected"))
                             }
                         }
@@ -257,12 +247,12 @@ impl<T> NodePeers<T> where T: Send {
 pub enum ConnectedPeer<T> where T: Send {
     PoolConnection {
         client_id: NodeId,
-        sender: Mutex<Option<Sender<T, ClientQueueType<T>>>>,
-        receiver: ReceiverPartialMult<T, ClientQueueType<T>>,
+        sender: Mutex<Option<ChannelMultTx<T>>>,
+        receiver: ChannelMultRx<T>,
     },
     UnpooledConnection {
         client_id: NodeId,
-        sender: Mutex<Option<ChannelAsyncTx<T>>>,
+        sender: Mutex<Option<ChannelSyncTx<T>>>,
     },
 }
 
@@ -278,15 +268,15 @@ pub enum ConnectedPeer<T> where T: Send {
 /// Probably not worth it
 pub struct ReplicaHandling<T> where T: Send {
     capacity: usize,
-    channel_tx_replica: ChannelAsyncTx<T>,
-    channel_rx_replica: ChannelAsyncRx<T>,
+    channel_tx_replica: ChannelSyncTx<T>,
+    channel_rx_replica: ChannelSyncRx<T>,
     connected_clients: RwLock<IntMap<Arc<ConnectedPeer<T>>>>,
     connected_client_count: AtomicUsize,
 }
 
 impl<T> ReplicaHandling<T> where T: Send {
     pub fn new(capacity: usize) -> Arc<Self> {
-        let (sender, receiver) = new_bounded_async(capacity);
+        let (sender, receiver) = new_bounded_sync(capacity);
 
         Arc::new(
             Self {
@@ -324,7 +314,7 @@ impl<T> ReplicaHandling<T> where T: Send {
     }
 
     pub fn receive_from_replicas(&self) -> T {
-        self.channel_rx_replica.recv_sync().unwrap()
+        self.channel_rx_replica.recv().unwrap()
     }
 }
 
@@ -345,7 +335,7 @@ pub struct ConnectedPeersGroup<T: Send + 'static> {
     client_pools: Mutex<BTreeMap<usize, Arc<ConnectedPeersPool<T>>>>,
     client_connections_cache: RwLock<IntMap<Arc<ConnectedPeer<T>>>>,
     connected_clients: AtomicUsize,
-    batch_transmission: ClientSender<Vec<T>>,
+    batch_transmission: ChannelSyncTx<Vec<T>>,
     own_id: NodeId,
     per_client_cache: usize,
     //What batch size should we target for each batch (there is no set limit on requests,
@@ -844,38 +834,45 @@ impl<T> ConnectedPeer<T> where T: Send {
 
     pub fn push_request_sync(&self, msg: T) {
         match self {
-            Self::PoolConnection { sender, .. } => {
-                let sender_guard = sender.lock().as_ref().unwrap().clone();
+            Self::PoolConnection { sender, client_id, .. } => {
+                let sender_guard = sender.lock();
 
-                match sender_guard.send(msg) {
-                    Ok(_) => {}
-                    Err(err) => {
-                        panic!("Failed to send because {:?}", err);
+                match &*sender_guard {
+                    None => {
+                        error!("Failed to send to client {:?} as he was already disconnected", client_id);
                     }
-                };
-            }
-            Self::UnpooledConnection { sender, .. } => {
-                let mut send_clone;
-
-                {
-                    let send_lock = sender.lock();
-                    let mut sender_guard = send_lock.as_ref();
-
-                    match sender_guard {
-                        None => {
-                            //debug!("{:?} // Failed to receive because there is no sender.", self.client_id());
-                            return;
-                        }
-                        Some(send) => {
-                            send_clone = send.clone();
-                        }
+                    Some(sender) => {
+                        //We don't clone and ditch the lock since each replica
+                        //has a thread dedicated to receiving his requests, but only the single thread
+                        //So, no more than one thread will be trying to acquire this lock at the same time
+                        match sender.send(msg) {
+                            Ok(_) => {}
+                            Err(err) => {
+                                panic!("Failed to send because {:?}", err);
+                            }
+                        };
                     }
                 }
+            }
+            Self::UnpooledConnection { sender, .. } => {
+                let send_lock = sender.lock();
+                let mut sender_guard = send_lock.as_ref();
 
-                match send_clone.send_sync(msg) {
-                    Ok(_) => {}
-                    Err(err) => {
-                        panic!("Failed to receive data from {:?} because {:?}", self.client_id(), err);
+                match sender_guard {
+                    None => {
+                        //debug!("{:?} // Failed to receive because there is no sender.", self.client_id());
+                        return;
+                    }
+                    Some(send) => {
+                        //We don't clone and ditch the lock since each client
+                        //has a thread dedicated to receiving his requests, but only the single thread
+                        //So, no more than one thread will be trying to acquire this lock at the same time
+                        match send.send(msg) {
+                            Ok(_) => {}
+                            Err(err) => {
+                                panic!("Failed to receive data from {:?} because {:?}", self.client_id(), err);
+                            }
+                        }
                     }
                 }
             }
@@ -884,40 +881,45 @@ impl<T> ConnectedPeer<T> where T: Send {
 
     pub async fn push_request(&self, msg: T) {
         match self {
-            Self::PoolConnection { sender, .. } => {
-                let sender_guard = sender.lock().as_ref().unwrap().clone();
+            Self::PoolConnection { sender, client_id, .. } => {
+                let send = {
+                    let sender_guard = sender.lock();
 
-                match sender_guard.send_async(msg).await {
+                    match &*sender_guard {
+                        Some(guard) => { guard.clone() }
+                        None => {
+                            error!("Failed to send to client {:?} as he was already disconnected", client_id);
+                            return;
+                        }
+                    }
+                };
+
+                match send.send_async(msg).await {
                     Ok(_) => {}
                     Err(err) => {
                         panic!("Failed to send because {:?}", err);
                     }
                 };
             }
-            Self::UnpooledConnection { sender, .. } => {
-                let mut send_clone;
+            Self::UnpooledConnection { sender, client_id, .. } => {
+                let mut send = {
+                    let sender_guard = sender.lock();
 
-                {
-                    let send_lock = sender.lock();
-                    let mut sender_guard = send_lock.as_ref();
-
-                    match sender_guard {
+                    match &*sender_guard {
+                        Some(send) => {
+                            match send.send(msg) {
+                                Ok(_) => {}
+                                Err(err) => {
+                                    panic!("Failed to receive data from {:?} because {:?}", self.client_id(), err);
+                                }
+                            }
+                        }
                         None => {
-                            //debug!("{:?} // Failed to receive because there is no sender.", self.client_id());
+                            error!("Failed to send to client {:?} as he was already disconnected", client_id);
                             return;
                         }
-                        Some(send) => {
-                            send_clone = send.clone();
-                        }
                     }
-                }
-
-                match send_clone.send(msg).await {
-                    Ok(_) => {}
-                    Err(err) => {
-                        panic!("Failed to receive data from {:?} because {:?}", self.client_id(), err);
-                    }
-                }
+                };
             }
         }
     }

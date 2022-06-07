@@ -43,19 +43,26 @@ threadpool_crossbeam = ["threadpool-crossbeam-channel"]
 threadpool_cthpool = ["cthpool"]
 threadpool_rayon = ["rayon"]
 
+#Async channel alternatives
 channel_futures_mpsc = []
 channel_flume_mpmc = ["flume"]
 channel_async_channel_mpmc = ["async-channel"]
 
+#Sync channel alternatives
 channel_sync_crossbeam = ["crossbeam-channel"]
 channel_sync_flume = ["flume"]
 
+#Mixed channel alternatives
 channel_mixed_flume = ["flume"]
 
+#Mutiple dumping channel alternatives
 channel_mult_custom_dump = ["dsrust"]
 
-channel_custom_dump = ["flume"]
-channel_custom_dump_lfb = ["flume"]
+#Alternatives for the multiple dumping channel (You can leave these out,
+#defaults to mqueue channel type)
+channel_custom_dump = ["dsrust"]
+channel_custom_dump_lfb = ["dsrust"]
+channel_custom_dump_mqueue = ["dsrust"]
 
 collections_randomstate_std = []
 collections_randomstate_fxhash = ["fxhash"]

@@ -89,7 +89,7 @@ impl<D> SendWorker<D> where D: SharedData + 'static {
                         }
                     }
                 }
-            });
+            }).expect("Failed to start send thread.");
     }
 
     fn send_impl(send_struct: Send<D>) {

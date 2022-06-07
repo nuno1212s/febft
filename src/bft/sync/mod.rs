@@ -425,6 +425,7 @@ impl<S> Synchronizer<S>
         }
     }
 
+    ///Watch a batch of requests received from a Pre prepare message sent by the leader
     pub fn watch_request_batch(
         &self,
         batch_digest: Digest,
@@ -441,6 +442,10 @@ impl<S> Synchronizer<S>
         for x in requests {
             let header = x.header();
             let digest = header.unique_digest();
+
+            // FIXME: Why are we watching requests that have already passed through the
+            // Pre-prepare phase? We know that we won't need a leader change since the pre prepare was
+            // Already sent
             self.watch_request_impl(phase, digest, timeouts);
 
             digests.push(digest);

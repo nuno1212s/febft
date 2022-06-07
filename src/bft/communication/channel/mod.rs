@@ -1,6 +1,6 @@
 //! FIFO channels used to send messages between async tasks.
 
-use std::fmt::{Debug, Display, Formatter, write};
+use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -8,12 +8,6 @@ use std::time::Duration;
 
 use futures::future::FusedFuture;
 
-use crate::bft::error::*;
-
-///TODO: This has to be reworked in order to incorporate
-/// The fact that most of these channels do not support
-/// sync operation. We want to add maybe a mix of these?
-/// idk
 #[cfg(feature = "channel_futures_mpsc")]
 ///TODO: Remove this
 mod futures_mpsc;
@@ -25,7 +19,7 @@ mod flume_mpmc;
 ///TODO: Remove this
 mod async_channel_mpmc;
 
-#[cfg(feature = "channel_custom_dump")]
+#[cfg(feature = "channel_mult_custom_dump")]
 mod custom_dump;
 
 #[cfg(feature = "channel_sync_crossbeam")]
@@ -45,8 +39,6 @@ pub struct ChannelAsyncTx<T> {
     #[cfg(feature = "channel_async_channel_mpmc")]
     inner: async_channel_mpmc::ChannelAsyncTx<T>,
 }
-
-unsafe impl<T> Send for ChannelAsyncTx<T> {}
 
 /// General purpose channel's receiving half.
 pub struct ChannelAsyncRx<T> {
@@ -94,17 +86,9 @@ impl<T> ChannelAsyncTx<T> {
 
     //Asynchronously send message through channel
     #[inline]
-    pub async fn send(&mut self, message: T) -> Result<()> {
-        match self.inner.send(message).await {
-            Ok(_) => {
-                Ok(())
-            }
-            Err(_) => {
-                Err(Error::simple(ErrorKind::CommunicationChannelAsyncChannelMpmc))
-            }
-        }
+    pub async fn send(&mut self, message: T) -> Result<(), SendError<T>> {
+        self.inner.send(message).await
     }
-
 }
 
 impl<T> ChannelAsyncRx<T> {
@@ -117,10 +101,10 @@ impl<T> ChannelAsyncRx<T> {
 }
 
 impl<'a, T> Future for ChannelRxFut<'a, T> {
-    type Output = Result<T>;
+    type Output = Result<T, RecvError>;
 
     #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<T>> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<T, RecvError>> {
         Pin::new(&mut self.inner).poll(cx)
     }
 }
@@ -170,78 +154,41 @@ pub struct ChannelSyncTx<T> {
 }
 
 impl<T> ChannelSyncRx<T> {
-
     #[inline]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
     #[inline]
-    pub fn try_recv(&self) -> std::result::Result<T, ()> {
-        match self.inner.try_recv() {
-            Ok(res) => {
-                Ok(res)
-            }
-            Err(_err) => {
-                Err(())
-            }
-        }
+    pub fn try_recv(&self) -> Result<T, TryRecvError> {
+        self.inner.try_recv()
     }
 
     #[inline]
-    pub fn recv(&self) -> std::result::Result<T, ()> {
-        match self.inner.recv() {
-            Ok(res) => {
-                Ok(res)
-            }
-            Err(_err) => {
-                Err(())
-            }
-        }
+    pub fn recv(&self) -> Result<T, RecvError> {
+        self.inner.recv()
     }
 
     #[inline]
-    pub fn recv_timeout(&self, timeout: Duration) -> std::result::Result<T, ()> {
-        match self.inner.recv_timeout(timeout) {
-            Ok(result) => {
-                Ok(result)
-            }
-            Err(_) => {
-                Err(())
-            }
-        }
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<T, TryRecvError> {
+        self.inner.recv_timeout(timeout)
     }
 }
 
 impl<T> ChannelSyncTx<T> {
-
     #[inline]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
     #[inline]
-    pub fn send(&self, value: T) -> std::result::Result<(), SendError<T>> {
-        match self.inner.send(value) {
-            Ok(_) => {
-                Ok(())
-            }
-            Err(err) => {
-                Err(SendError::ChannelDc(err.into_inner()))
-            }
-        }
+    pub fn send(&self, value: T) -> Result<(), SendError<T>> {
+        self.inner.send(value)
     }
 
     #[inline]
-    pub fn send_timeout(&self, value: T, timeout: Duration) -> std::result::Result<(), SendError<T>> {
-        match self.inner.send_timeout(value, timeout) {
-            Ok(_) => {
-                Ok(())
-            }
-            Err(err) => {
-                Err(SendError::ChannelDc(err.into_inner()))
-            }
-        }
+    pub fn send_timeout(&self, value: T, timeout: Duration) -> Result<(), TrySendError<T>> {
+        self.inner.send_timeout(value, timeout)
     }
 }
 
@@ -292,13 +239,12 @@ pub struct ChannelMixedTx<T> {
 }
 
 impl<T> ChannelMixedRx<T> {
-
     #[inline]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
-    pub fn recv(&self) -> std::result::Result<T, RecvError> {
+    pub fn recv(&self) -> Result<T, RecvError> {
         match self.inner.recv_sync() {
             Ok(res) => {
                 Ok(res)
@@ -309,7 +255,7 @@ impl<T> ChannelMixedRx<T> {
         }
     }
 
-    pub fn recv_timeout(&self, timeout: Duration) -> std::result::Result<T, RecvError> {
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvError> {
         match self.inner.recv_timeout(timeout) {
             Ok(result) => {
                 Ok(result)
@@ -320,7 +266,7 @@ impl<T> ChannelMixedRx<T> {
         }
     }
 
-    pub async fn recv_async(&mut self) -> std::result::Result<T,RecvError> {
+    pub async fn recv_async(&mut self) -> std::result::Result<T, RecvError> {
         match self.inner.recv().await {
             Ok(val) => {
                 Ok(val)
@@ -333,24 +279,23 @@ impl<T> ChannelMixedRx<T> {
 }
 
 impl<T> ChannelMixedTx<T> {
-
     #[inline]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
     #[inline]
-    pub async fn send_async(&self, value: T) -> std::result::Result<(), SendError<T>> {
+    pub async fn send_async(&self, value: T) -> Result<(), SendError<T>> {
         self.inner.send(value).await
     }
 
     #[inline]
-    pub fn send(&self, value: T) -> std::result::Result<(), SendError<T>> {
+    pub fn send(&self, value: T) -> Result<(), SendError<T>> {
         self.inner.send_sync(value)
     }
 
     #[inline]
-    pub fn send_timeout(&self, value: T, timeout: Duration) -> std::result::Result<(), SendError<T>> {
+    pub fn send_timeout(&self, value: T, timeout: Duration) -> Result<(), SendError<T>> {
         self.inner.send_timeout(value, timeout)
     }
 }
@@ -388,31 +333,129 @@ Channel with capability of dumping multiple members in a couple of CAS operation
  */
 
 pub struct ChannelMultTx<T> {
-
     #[cfg(feature = "channel_mult_custom_dump")]
-    inner: custom_dump::ChannelTx<T>
-
+    inner: custom_dump::ChannelTx<T>,
 }
 
 pub struct ChannelMultRx<T> {
     #[cfg(feature = "channel_mult_custom_dump")]
-    inner: custom_dump::ChannelRxMult<T>
+    inner: custom_dump::ChannelRxMult<T>,
 }
 
-#[cfg(feature = "channel_custom_dump")]
-#[inline]
-pub fn new_bounded_mult<T>(bound: usize) -> (custom_dump::ChannelTx<T>, custom_dump::ChannelRxMult<T>) {
-    custom_dump::bounded_mult_channel(bound)
+impl<T> ChannelMultTx<T> {
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub fn is_dc(&self) -> bool {
+        self.inner.is_dc()
+    }
+
+    #[inline]
+    pub async fn send_async(&self, value: T) -> Result<(), SendError<T>> {
+        self.inner.send(value).await
+    }
+
+    #[inline]
+    pub fn send(&self, value: T) -> Result<(), SendError<T>> {
+        self.inner.send_blk(value)
+    }
 }
+
+impl<T> ChannelMultRx<T> {
+
+    pub fn is_dc(&self) -> bool {
+        self.inner.is_dc()
+    }
+
+    pub async fn recv_mult(&mut self) -> Result<Vec<T>, RecvMultError> {
+        self.inner.recv().await
+    }
+
+    pub fn recv_mult_sync(&self, dest: &mut Vec<T>) -> Result<usize, RecvMultError> {
+        self.inner.recv_sync(dest)
+    }
+
+    pub fn try_recv_mult(&self, dest: &mut Vec<T>, rq_bound: usize) -> Result<usize, RecvMultError> {
+        self.inner.try_recv_mult(dest, rq_bound)
+    }
+}
+
+impl<T> Clone for ChannelMultRx<T> {
+    fn clone(&self) -> Self {
+        ChannelMultRx {
+            inner: self.inner.clone()
+        }
+    }
+}
+
+impl<T> Clone for ChannelMultTx<T> {
+    fn clone(&self) -> Self {
+        ChannelMultTx {
+            inner: self.inner.clone()
+        }
+    }
+}
+
+#[inline]
+pub fn new_bounded_mult<T>(bound: usize) -> (ChannelMultTx<T>, ChannelMultRx<T>) {
+    let (tx, rx) = custom_dump::bounded_mult_channel(bound);
+
+    (ChannelMultTx { inner: tx }, ChannelMultRx { inner: rx })
+}
+
+/**
+Errors
+ **/
+
+pub enum RecvMultError {
+    ChannelDc,
+    MalformedInputVec,
+    Unsupported,
+}
+
+impl Debug for RecvMultError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Failed to recv message")
+    }
+}
+
+impl Display for RecvMultError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for RecvMultError {}
+
+pub enum TryRecvError {
+    ChannelDc,
+    ChannelEmpty,
+    Timeout,
+}
+
+impl Debug for TryRecvError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Failed to recv message")
+    }
+}
+
+impl Display for TryRecvError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for TryRecvError {}
 
 pub enum RecvError {
     ChannelDc,
-    ChannelEmpty
 }
 
 impl Debug for RecvError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Failed to recv message")
+        write!(f, "Failed to recv message, channel disconnected")
     }
 }
 
@@ -422,14 +465,9 @@ impl Display for RecvError {
     }
 }
 
-impl std::error::Error for RecvError {
+impl std::error::Error for RecvError {}
 
-}
-
-pub enum SendError<T> {
-    ChannelDc(T),
-
-}
+pub struct SendError<T>(T);
 
 impl<T> Debug for SendError<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -443,6 +481,24 @@ impl<T> Display for SendError<T> {
     }
 }
 
-impl<T> std::error::Error for SendError<T> {
+impl<T> std::error::Error for SendError<T> {}
 
+
+pub enum TrySendError<T> {
+    Disconnected(T),
+    Timeout(T),
 }
+
+impl<T> Debug for TrySendError<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Failed to send message")
+    }
+}
+
+impl<T> Display for TrySendError<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Debug::fmt(self, f)
+    }
+}
+
+impl<T> std::error::Error for TrySendError<T> {}
