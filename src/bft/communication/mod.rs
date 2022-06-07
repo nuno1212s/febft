@@ -346,11 +346,11 @@ impl<D> Node<D>
 
         let peer_addr = cfg.addrs.get(id.into()).unwrap();
 
-        let tokio_server_addr = peer_addr.client_addr.0.clone();
+        let client_server_addr = peer_addr.client_addr.0.clone();
 
         ///Initialize the client facing server
-        let listener = socket::bind_replica_server(tokio_server_addr)
-            .wrapped_msg(ErrorKind::Communication, format!("Failed to bind to address {:?}", tokio_server_addr).as_str())?;
+        let listener = socket::bind_replica_server(client_server_addr)
+            .wrapped_msg(ErrorKind::Communication, format!("Failed to bind to address {:?}", client_server_addr).as_str())?;
 
         ///Initialize the replica<->replica facing server
         let replica_listener = if id >= cfg.first_cli {
