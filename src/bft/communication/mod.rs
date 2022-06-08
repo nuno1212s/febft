@@ -807,6 +807,8 @@ impl<D> Node<D>
                     .map(|stored| stored.into_inner())
                     .unwrap();
 
+                let time_info = (time_info.0.clone(), time_info.1.clone());
+
                 threadpool::execute(move || {
 
                     //Measuring time taken to get to the point of sending the message
@@ -896,6 +898,9 @@ impl<D> Node<D>
             // send to ourselves
             if let Some(mut send_to) = my_send_to {
                 let buf = buf.clone();
+
+                let time_info = (time_info.0.clone(), time_info.1.clone());
+
                 threadpool::execute(move || {
                     //Measuring time taken to get to the point of sending the message
                     //We don't actually want to measure how long it takes to send the message
