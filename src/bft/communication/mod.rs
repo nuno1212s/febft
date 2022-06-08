@@ -682,6 +682,7 @@ impl<D> Node<D>
                         let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
 
                         let mut batch_guard = time_info.0.lock();
+
                         batch_guard.message_passing_latencies.push(dur_sinc);
                         batch_guard.message_sending_latencies.push(dur_sending);
                     }
@@ -806,21 +807,24 @@ impl<D> Node<D>
                     .map(|stored| stored.into_inner())
                     .unwrap();
 
-                //Measuring time taken to get to the point of sending the message
-                //We don't actually want to measure how long it takes to send the message
-                let current_instant = Instant::now();
+                threadpool::execute(move || {
 
-                let dur_since = current_instant.duration_since(time_info.1).as_nanos();
+                    //Measuring time taken to get to the point of sending the message
+                    //We don't actually want to measure how long it takes to send the message
+                    let current_instant = Instant::now();
 
-                send_to.value_sync(header, message);
+                    let dur_since = current_instant.duration_since(time_info.1).as_nanos();
 
-                let dur_sending = Instant::now().duration_since(current_instant).as_nanos();
+                    send_to.value_sync(header, message);
 
-                let mut batch_guard = time_info.0.lock();
+                    let dur_sending = Instant::now().duration_since(current_instant).as_nanos();
 
-                batch_guard.message_passing_latencies_own.push(dur_since);
+                    let mut batch_guard = time_info.0.lock();
 
-                batch_guard.message_sending_latencies_own.push(dur_sending);
+                    batch_guard.message_passing_latencies_own.push(dur_since);
+
+                    batch_guard.message_sending_latencies_own.push(dur_sending);
+                });
             }
 
             // send to others
@@ -892,22 +896,23 @@ impl<D> Node<D>
             // send to ourselves
             if let Some(mut send_to) = my_send_to {
                 let buf = buf.clone();
+                threadpool::execute(move || {
+                    //Measuring time taken to get to the point of sending the message
+                    //We don't actually want to measure how long it takes to send the message
+                    let before_send_time = Instant::now();
+                    let dur_since = before_send_time.duration_since(time_info.1).as_nanos();
 
-                //Measuring time taken to get to the point of sending the message
-                //We don't actually want to measure how long it takes to send the message
-                let before_send_time = Instant::now();
-                let dur_since = before_send_time.duration_since(time_info.1).as_nanos();
+                    // Right -> our turn
+                    send_to.value_sync(Right((message, nonce, digest, buf)));
 
-                // Right -> our turn
-                send_to.value_sync(Right((message, nonce, digest, buf)));
+                    let dur_sending = Instant::now().duration_since(before_send_time).as_nanos();
 
-                let dur_sending = Instant::now().duration_since(before_send_time).as_nanos();
+                    let mut batch_guard = time_info.0.lock();
 
-                let mut batch_guard = time_info.0.lock();
+                    batch_guard.message_passing_latencies_own.push(dur_since);
 
-                batch_guard.message_passing_latencies_own.push(dur_since);
-
-                batch_guard.message_sending_latencies.push(dur_sending)
+                    batch_guard.message_sending_latencies_own.push(dur_sending);
+                });
             }
 
             // send to others
@@ -1613,7 +1618,6 @@ impl<D> Node<D>
                         error!("{:?} // Failed to find peer address for tx connection for peer {:?}", self.id(), peer_id);
                     }
                     Some(addr) => {
-
                         debug!("{:?} // Received connection from client {:?}, establish TX connection on port {:?}", self.id, peer_id,
                             addr.client_addr.0);
 
