@@ -113,7 +113,7 @@ impl<S: Service> RqProcessor<S> {
                     collected_per_batch_total += messages.len() as u64;
                     collections += 1;
 
-                    let mut to_log = Vec::with_capacity(messages.len());
+                    //let mut to_log: Vec<T> = Vec::with_capacity(messages.len());
 
                     //let lock_guard = self.log.latest_op().lock();
 
