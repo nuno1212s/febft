@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use parking_lot::{Mutex};
@@ -30,6 +30,10 @@ pub struct RqProcessor<S: Service + 'static> {
     consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
     consensus_guard: Arc<AtomicBool>,
     cancelled: AtomicBool,
+    //The target
+    target_global_batch_size: usize,
+    //Time limit for generating a batch with target_global_batch_size size
+    global_batch_time_limit: u128,
 }
 
 const TIMEOUT: Duration = Duration::from_micros(10);
@@ -42,7 +46,9 @@ impl<S: Service> RqProcessor<S> {
                log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
                timeouts: Arc<TimeoutsHandle<S>>,
                consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
-               consensus_guard: Arc<AtomicBool>) -> Arc<Self> {
+               consensus_guard: Arc<AtomicBool>,
+               target_global_batch_size: usize,
+               global_batch_time_limit: u128) -> Arc<Self> {
         let (channel_tx, channel_rx) = channel::new_bounded_sync(BATCH_CHANNEL_SIZE);
 
         Arc::new(Self {
@@ -54,6 +60,8 @@ impl<S: Service> RqProcessor<S> {
             cancelled: AtomicBool::new(false),
             consensus_lock,
             consensus_guard,
+            target_global_batch_size,
+            global_batch_time_limit
         })
     }
 
@@ -66,13 +74,15 @@ impl<S: Service> RqProcessor<S> {
         std::thread::Builder::new().name(format!("Client RQ Handling {:?}", self.node_ref.id())).spawn(move || {
 
             //The currently accumulated requests, accumulated while we wait for the next batch to propose
-            let mut currently_accumulated = Vec::with_capacity(self.node_ref.batch_size() * 2);
+            let mut currently_accumulated = Vec::with_capacity(self.node_ref.batch_size() * 10);
 
             let mut last_seq = Option::None;
 
             let mut collected_per_batch_total: u64 = 0;
             let mut collections: u32 = 0;
             let mut batches_made: u32 = 0;
+
+            let mut last_proposed_batch = Instant::now();
 
             loop {
                 if self.cancelled.load(Ordering::Relaxed) {
@@ -146,15 +156,27 @@ impl<S: Service> RqProcessor<S> {
 
                     //drop(lock_guard);
 
-                    //TODO: If we are the leader, preemptively hash the preprepare message so we don't have
-                    //To wait for that?
-                    self.requests_received(DateTime::from(SystemTime::now()), to_log);
+                    //self.requests_received(DateTime::from(SystemTime::now()), to_log);
                 }
 
                 if is_leader && !currently_accumulated.is_empty() {
+
+                    let current_batch_size = currently_accumulated.len();
+
+                    if current_batch_size < self.target_global_batch_size {
+                        let micros_since_last_batch = Instant::now().duration_since(last_proposed_batch).as_micros();
+
+                        if micros_since_last_batch <= self.global_batch_time_limit {
+                            //Batch isn't large enough and time hasn't passed, don't even attempt to propose
+                            continue
+                        }
+                    }
+
                     //Attempt to propose new batch
                     match self.consensus_guard.compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed) {
                         Ok(_) => {
+                            last_proposed_batch = Instant::now();
+
                             batches_made += 1;
                             let guard = self.consensus_lock.lock();
 

@@ -9,14 +9,12 @@ use std::time::Duration;
 use futures::future::FusedFuture;
 
 #[cfg(feature = "channel_futures_mpsc")]
-///TODO: Remove this
 mod futures_mpsc;
 
 #[cfg(feature = "channel_flume_mpmc")]
 mod flume_mpmc;
 
 #[cfg(feature = "channel_async_channel_mpmc")]
-///TODO: Remove this
 mod async_channel_mpmc;
 
 #[cfg(feature = "channel_mult_custom_dump")]
@@ -266,7 +264,7 @@ impl<T> ChannelMixedRx<T> {
         }
     }
 
-    pub async fn recv_async(&mut self) -> std::result::Result<T, RecvError> {
+    pub async fn recv_async(&mut self) -> Result<T, RecvError> {
         match self.inner.recv().await {
             Ok(val) => {
                 Ok(val)
@@ -482,7 +480,6 @@ impl<T> Display for SendError<T> {
 }
 
 impl<T> std::error::Error for SendError<T> {}
-
 
 pub enum TrySendError<T> {
     Disconnected(T),

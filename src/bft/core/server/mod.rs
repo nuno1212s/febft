@@ -166,6 +166,10 @@ pub struct ReplicaConfig<S> {
     /// The maximum number of client requests to queue
     /// before executing the consensus algorithm.
     pub batch_size: usize,
+    ///The targetted global batch size
+    pub global_batch_size: usize,
+    ///The time limit for creating that batch, in micro seconds
+    pub batch_timeout: u128,
     /// Check out the docs on `NodeConfig`.
     pub node: NodeConfig,
 }
@@ -181,6 +185,8 @@ impl<S> Replica<S>
     pub async fn bootstrap(cfg: ReplicaConfig<S>) -> Result<Self> {
         let ReplicaConfig {
             next_consensus_seq,
+            global_batch_size,
+            batch_timeout,
             node: node_config,
             batch_size,
             service,
@@ -246,7 +252,7 @@ impl<S> Replica<S>
             node,
             log: log.clone(),
             client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts, consensus_info.clone(),
-                                         consensus_guard.clone()),
+                                         consensus_guard.clone(), global_batch_size, batch_timeout),
             rq_finalizer,
             consensus_lock: consensus_info,
         };

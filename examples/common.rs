@@ -3,6 +3,7 @@
 use std::fs::File;
 use std::net::SocketAddr;
 use std::io::{BufReader, Read, Write};
+use std::time::Duration;
 
 use rustls::{
     internal::pemfile,
@@ -140,9 +141,11 @@ pub async fn setup_replica(
     let conf = ReplicaConfig {
         node,
         batch_size: 1024,
+        global_batch_size: 1024,
         next_consensus_seq: SeqNo::ZERO,
         view: SeqNo::ZERO,
         service: CalcService(id, 0),
+        batch_timeout: Duration::from_millis(10).as_micros()
     };
     Replica::bootstrap(conf).await
 }
