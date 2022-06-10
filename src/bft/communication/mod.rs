@@ -956,8 +956,8 @@ impl<D> Node<D>
 
             for mut send_to in other_send_tos {
                 let id = match &send_to {
-                    SendTo::Me { my_id, .. } => *my_id,
-                    _ => unreachable!(),
+                    SendTo::Peers { peer_id, .. } => *peer_id,
+                    _ => unreachable!()
                 };
 
                 let buf = buf.clone();
