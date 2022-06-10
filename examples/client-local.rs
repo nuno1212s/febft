@@ -19,7 +19,7 @@ use febft::bft::crypto::signature::{
 fn main() {
     let conf = InitConfig {
         async_threads: num_cpus::get(),
-        pool_threads: num_cpus::get(),
+        replica_threads: num_cpus::get(),
     };
     let _guard = unsafe { init(conf).unwrap() };
     rt::block_on(async_main());

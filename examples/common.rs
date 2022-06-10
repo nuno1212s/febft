@@ -166,7 +166,7 @@ pub async fn setup_node(
 
 async fn get_server_config(id: NodeId) -> ServerConfig {
     let (tx, rx) = oneshot::channel();
-    threadpool::execute(move || {
+    threadpool::execute_replicas(move || {
         let id = usize::from(id);
         let mut root_store = RootCertStore::empty();
 
@@ -210,7 +210,7 @@ async fn get_server_config(id: NodeId) -> ServerConfig {
 
 async fn get_client_config(id: NodeId) -> ClientConfig {
     let (tx, rx) = oneshot::channel();
-    threadpool::execute(move || {
+    threadpool::execute_replicas(move || {
         let id = usize::from(id);
         let mut cfg = ClientConfig::new();
 

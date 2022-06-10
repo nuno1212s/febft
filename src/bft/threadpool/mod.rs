@@ -89,13 +89,24 @@ impl ThreadPool {
     }
 }
 
-static mut POOL: Global<ThreadPool> = Global::new();
+static mut REPLICA_POOL: Global<ThreadPool> = Global::new();
 
-macro_rules! pool {
+static mut CLIENT_POOL: Global<ThreadPool> = Global::new();
+
+macro_rules! replica_pool {
     () => {
-        match unsafe { POOL.get() } {
+        match unsafe { REPLICA_POOL.get() } {
 	        Some(ref pool) => pool,
-            None => panic!("Global thread pool wasn't initialized"),
+            None => panic!("Replica thread pool wasn't initialized"),
+        }
+    }
+}
+
+macro_rules! client_pool {
+    () => {
+        match unsafe { CLIENT_POOL.get() } {
+	        Some(ref pool) => pool,
+            None => panic!("Client thread pool wasn't initialized"),
         }
     }
 }
@@ -103,11 +114,17 @@ macro_rules! pool {
 /// This function initializes the global thread pool.
 ///
 /// It should be called once before the core protocol starts executing.
-pub unsafe fn init(num_threads: usize) -> Result<()> {
-    let pool = Builder::new()
-        .num_threads(num_threads)
+pub unsafe fn init(replica_num_thread: usize, client_num_thread: usize) -> Result<()> {
+    let replica_pool = Builder::new()
+        .num_threads(replica_num_thread)
         .build();
-    POOL.set(pool);
+    
+    let client_pool = Builder::new()
+        .num_threads(client_num_thread)
+        .build();
+    
+    REPLICA_POOL.set(replica_pool);
+    CLIENT_POOL.set(client_pool);
     Ok(())
 }
 
@@ -116,20 +133,30 @@ pub unsafe fn init(num_threads: usize) -> Result<()> {
 /// It shouldn't be needed to be called manually called, as the
 /// `InitGuard` should take care of calling this.
 pub unsafe fn drop() -> Result<()> {
-    POOL.drop();
+    REPLICA_POOL.drop();
+    CLIENT_POOL.drop();
     Ok(())
 }
 
 /// Spawns a new job into the global thread pool.
-pub fn execute<F>(job: F)
+pub fn execute_replicas<F>(job: F)
 where
     F: FnOnce() + Send + 'static,
 {
-    pool!().execute(job)
+    replica_pool!().execute(job)
+}
+
+/// Spawns a new job into the global thread pool.
+pub fn execute_clients<F>(job: F)
+    where
+        F: FnOnce() + Send + 'static,
+{
+    client_pool!().execute(job)
 }
 
 /// Synchronously waits for all the jobs queued in the
 /// global thread pool to complete.
 pub fn join() {
-    pool!().join()
+    replica_pool!().join();
+    client_pool!().join()
 }

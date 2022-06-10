@@ -285,7 +285,7 @@ impl<S> Executor<S>
 
         let mut send_node = self.send_node.clone();
 
-        crate::bft::threadpool::execute(move || {
+        crate::bft::threadpool::execute_replicas(move || {
 
             let mut batch = batch.into_inner();
 

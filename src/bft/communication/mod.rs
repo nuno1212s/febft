@@ -460,7 +460,7 @@ impl<D> Node<D>
             let first_cli = cfg.first_cli;
 
             //Connect to all replicas
-            threadpool::execute(move || {
+            threadpool::execute_replicas(move || {
                 let mut rng = prng::State::new();
 
                 node_cpy.clone().tx_side_connect_sync(
@@ -522,6 +522,7 @@ impl<D> Node<D>
     pub fn send_node(self: &Arc<Self>) -> SendNode<D> {
         SendNode {
             id: self.id,
+            first_cli: self.first_cli,
             rng: prng::State::new(),
             shared: Arc::clone(&self.shared),
             peer_tx: self.peer_tx.clone(),
@@ -565,7 +566,7 @@ impl<D> Node<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                Self::send_impl(message, send_to, my_id, target, nonce, (batch_meta, start_instant))
+                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce, (batch_meta, start_instant))
             }
         };
     }
@@ -603,7 +604,7 @@ impl<D> Node<D>
                 let nonce = self.rng.next_state();
 
 
-                Self::send_impl(message, send_to, my_id, target, nonce, (batch_meta, time_sent))
+                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce, (batch_meta, time_sent))
             }
         };
 
@@ -625,10 +626,11 @@ impl<D> Node<D>
         mut send_to: SendTo<D>,
         my_id: NodeId,
         target: NodeId,
+        first_cli: NodeId,
         nonce: u64,
         time_info: (Arc<Mutex<BatchMeta>>, Instant),
     ) {
-        threadpool::execute(move || {
+        let send_task = move || {
             // serialize
             let start_serialization = Instant::now();
 
@@ -688,7 +690,13 @@ impl<D> Node<D>
                     }
                 }
             }
-        });
+        };
+
+        if target < first_cli {
+            threadpool::execute_replicas(send_task);
+        } else {
+            threadpool::execute_clients(send_task);
+        }
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -721,7 +729,7 @@ impl<D> Node<D>
             (meta, start_time),
         )));*/
 
-        Self::broadcast_impl(message, mine, others, nonce, (meta, start_time))
+        Self::broadcast_impl(message, mine, others, self.first_cli, nonce, (meta, start_time))
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -756,7 +764,7 @@ impl<D> Node<D>
             (meta, start_time),
         )));*/
 
-        Self::broadcast_impl(message, mine, others, nonce, (meta, start_time))
+        Self::broadcast_impl(message, mine, others, self.first_cli, nonce, (meta, start_time))
     }
 
     pub fn broadcast_serialized(
@@ -784,7 +792,7 @@ impl<D> Node<D>
             )
         ));*/
 
-        Self::broadcast_serialized_impl(messages, mine, others, (meta, start_time));
+        Self::broadcast_serialized_impl(messages, mine, others, self.first_client_id(), (meta, start_time));
     }
 
     #[inline]
@@ -792,9 +800,10 @@ impl<D> Node<D>
         mut messages: IntMap<StoredSerializedSystemMessage<D>>,
         my_send_to: Option<SerializedSendTo<D>>,
         other_send_tos: SerializedSendTos<D>,
+        first_client: NodeId,
         time_info: (Arc<Mutex<BatchMeta>>, Instant),
     ) {
-        threadpool::execute(move || {
+        threadpool::execute_replicas(move || {
             // send to ourselves
             if let Some(mut send_to) = my_send_to {
                 let id = match &send_to {
@@ -809,8 +818,7 @@ impl<D> Node<D>
 
                 let time_info = (time_info.0.clone(), time_info.1.clone());
 
-                threadpool::execute(move || {
-
+                let send_myself_task = move || {
                     //Measuring time taken to get to the point of sending the message
                     //We don't actually want to measure how long it takes to send the message
                     let current_instant = Instant::now();
@@ -826,7 +834,13 @@ impl<D> Node<D>
                     batch_guard.message_passing_latencies_own.push(dur_since);
 
                     batch_guard.message_sending_latencies_own.push(dur_sending);
-                });
+                };
+
+                if id < first_client {
+                    threadpool::execute_replicas(send_myself_task);
+                } else {
+                    threadpool::execute_clients(send_myself_task);
+                }
             }
 
             // send to others
@@ -849,7 +863,7 @@ impl<D> Node<D>
                         });
                     }
                     SecureSocketSend::Sync(_) => {
-                        threadpool::execute(move || {
+                        let send_task = move || {
                             //Measuring time taken to get to the point of sending the message
                             //We don't actually want to measure how long it takes to send the message
                             let current_instant = Instant::now();
@@ -865,7 +879,13 @@ impl<D> Node<D>
                             batch_guard.message_passing_latencies.push(dur_since);
 
                             batch_guard.message_sending_latencies.push(dur_sending);
-                        });
+                        };
+
+                        if id < first_client {
+                            threadpool::execute_replicas(send_task);
+                        } else {
+                            threadpool::execute_clients(send_task);
+                        }
                     }
                 }
             }
@@ -877,10 +897,11 @@ impl<D> Node<D>
         message: SystemMessage<D::State, D::Request, D::Reply>,
         my_send_to: Option<SendTo<D>>,
         other_send_tos: SendTos<D>,
+        first_cli: NodeId,
         nonce: u64,
         time_info: (Arc<Mutex<BatchMeta>>, Instant),
     ) {
-        threadpool::execute(move || {
+        threadpool::execute_replicas(move || {
             let start_serialization = Instant::now();
 
             // serialize
@@ -897,11 +918,16 @@ impl<D> Node<D>
 
             // send to ourselves
             if let Some(mut send_to) = my_send_to {
+                let id = match &send_to {
+                    SendTo::Me { my_id, .. } => *my_id,
+                    _ => unreachable!(),
+                };
+
                 let buf = buf.clone();
 
                 let time_info = (time_info.0.clone(), time_info.1.clone());
 
-                threadpool::execute(move || {
+                let send_task = move || {
                     //Measuring time taken to get to the point of sending the message
                     //We don't actually want to measure how long it takes to send the message
                     let before_send_time = Instant::now();
@@ -917,12 +943,23 @@ impl<D> Node<D>
                     batch_guard.message_passing_latencies_own.push(dur_since);
 
                     batch_guard.message_sending_latencies_own.push(dur_sending);
-                });
+                };
+
+                if id < first_cli {
+                    threadpool::execute_replicas(send_task);
+                } else {
+                    threadpool::execute_clients(send_task);
+                }
             }
 
             // send to others
 
             for mut send_to in other_send_tos {
+                let id = match &send_to {
+                    SendTo::Me { my_id, .. } => *my_id,
+                    _ => unreachable!(),
+                };
+
                 let buf = buf.clone();
                 let time_info = (time_info.0.clone(), time_info.1.clone());
 
@@ -934,7 +971,7 @@ impl<D> Node<D>
                         });
                     }
                     SecureSocketSend::Sync(_) => {
-                        threadpool::execute(move || {
+                        let send_task = move || {
                             //Measuring time taken to get to the point of sending the message
                             //We don't actually want to measure how long it takes to send the message
                             let before_send_time = Instant::now();
@@ -949,7 +986,13 @@ impl<D> Node<D>
                             batch_guard.message_passing_latencies.push(dur_since);
 
                             batch_guard.message_sending_latencies.push(dur_sending);
-                        });
+                        };
+
+                        if id < first_cli {
+                            threadpool::execute_replicas(send_task);
+                        } else {
+                            threadpool::execute_clients(send_task);
+                        }
                     }
                 }
             }
@@ -1214,7 +1257,7 @@ impl<D> Node<D>
 
             let arc = self.clone();
 
-            threadpool::execute(move || {
+            threadpool::execute_replicas(move || {
                 debug!("{:?} // Starting connection to node {:?}",my_id, peer_id);
 
                 arc.tx_side_connect_task_sync(my_id, first_cli, peer_id,
@@ -1449,7 +1492,7 @@ impl<D> Node<D>
                 std::thread::Builder::new().name(format!("Request Receiver Thread"))
                     .spawn(move || {
                         rx_ref.rx_side_establish_conn_task_sync(first_cli, my_id, replica_acceptor, sock);
-                    });
+                    }).expect("Failed to start RX accept");
             }
         }
     }
@@ -1726,7 +1769,7 @@ impl<D> Node<D>
 
                 let self_cpy = self.clone();
 
-                threadpool::execute(move || {
+                threadpool::execute_replicas(move || {
                     let id = self_cpy.id;
                     let first_cli = self_cpy.first_cli;
                     let sync_conn = self_cpy.sync_connector.clone();
@@ -1806,6 +1849,7 @@ impl<D> Node<D>
 /// Represents a node with sending capabilities only.
 pub struct SendNode<D: SharedData + 'static> {
     id: NodeId,
+    first_cli: NodeId,
     shared: Arc<NodeShared>,
     rng: prng::State,
     peer_tx: PeerTx,
@@ -1817,6 +1861,7 @@ impl<D: SharedData> Clone for SendNode<D> {
     fn clone(&self) -> Self {
         Self {
             id: self.id,
+            first_cli: self.first_cli,
             rng: prng::State::new(),
             shared: Arc::clone(&self.shared),
             peer_tx: self.peer_tx.clone(),
@@ -1870,7 +1915,7 @@ impl<D> SendNode<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                <Node<D>>::send_impl(message, send_to, my_id, target, nonce, (meta, start_time))
+                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce, (meta, start_time))
             }
         }
     }
@@ -1901,7 +1946,7 @@ impl<D> SendNode<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                <Node<D>>::send_impl(message, send_to, my_id, target, nonce, (meta, start_time))
+                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce, (meta, start_time))
             }
         }
     }
@@ -1923,7 +1968,7 @@ impl<D> SendNode<D>
         );
 
         let nonce = self.rng.next_state();
-        <Node<D>>::broadcast_impl(message, mine, others, nonce, (meta, start_time))
+        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce, (meta, start_time))
     }
 
     /// Check the `broadcast_signed()` documentation for `Node`.
@@ -1944,7 +1989,7 @@ impl<D> SendNode<D>
 
         let nonce = self.rng.next_state();
 
-        <Node<D>>::broadcast_impl(message, mine, others, nonce, (meta, start_time))
+        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce, (meta, start_time))
     }
 }
 

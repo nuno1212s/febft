@@ -498,10 +498,13 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
     }
 
     fn del_pool(&self, pool_id: usize) -> bool {
+        println!("{:?} // DELETING POOL {}", self.own_id, pool_id);
+
         match self.client_pools.lock().remove(&pool_id) {
             None => { false }
             Some(pool) => {
                 pool.shutdown();
+                println!("{:?} // DELETED POOL {}", self.own_id, pool_id);
 
                 true
             }
@@ -602,7 +605,9 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                                         //The pool is empty, so to save CPU, delete it
                                         self.owner.del_pool(self.pool_id);
 
-                                        continue;
+                                        self.finish_execution.store(true, Ordering::SeqCst);
+
+                                        break;
                                     }
                                     _ => { break; }
                                 }
