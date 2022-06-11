@@ -285,7 +285,7 @@ impl<S> Executor<S>
 
         let mut send_node = self.send_node.clone();
 
-        crate::bft::threadpool::execute_replicas(move || {
+        crate::bft::threadpool::execute_clients(move || {
 
             let mut batch = batch.into_inner();
 
@@ -305,7 +305,7 @@ impl<S> Executor<S>
                 if let Some((message, last_peer_id)) = curr_send.take() {
 
                     let flush = peer_id != last_peer_id;
-                    send_node.send(message, last_peer_id, flush, batch_meta.clone());
+                    send_node.send(message, last_peer_id, flush, Some(batch_meta.clone()));
                 }
 
                 // store previous reply message and peer id,
@@ -321,7 +321,7 @@ impl<S> Executor<S>
 
             // deliver last reply
             if let Some((message, last_peer_id)) = curr_send {
-                send_node.send(message, last_peer_id, true, batch_meta);
+                send_node.send(message, last_peer_id, true, Some(batch_meta));
             } else {
                 // slightly optimize code path;
                 // the previous if branch will always execute
