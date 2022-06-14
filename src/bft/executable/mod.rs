@@ -305,7 +305,7 @@ impl<S> Executor<S>
                 if let Some((message, last_peer_id)) = curr_send.take() {
 
                     let flush = peer_id != last_peer_id;
-                    send_node.send(message, last_peer_id, flush, Some(batch_meta.clone()));
+                    send_node.send(message, last_peer_id, flush, None);
                 }
 
                 // store previous reply message and peer id,
@@ -321,7 +321,7 @@ impl<S> Executor<S>
 
             // deliver last reply
             if let Some((message, last_peer_id)) = curr_send {
-                send_node.send(message, last_peer_id, true, Some(batch_meta));
+                send_node.send(message, last_peer_id, true, None);
             } else {
                 // slightly optimize code path;
                 // the previous if branch will always execute
