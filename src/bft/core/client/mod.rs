@@ -2,10 +2,13 @@
 
 use std::fs::read;
 use std::future::Future;
+use std::io::Read;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::task::{Context, Poll, Waker};
+use futures::StreamExt;
 
 use intmap::IntMap;
 use parking_lot::Mutex;
@@ -43,9 +46,22 @@ struct Ready<P> {
     payload: Option<P>,
 }
 
+struct Callback<P> {
+    to_call: Box<dyn FnOnce(P) + Send>,
+}
+
+impl<P> Deref for Callback<P> {
+    type Target = Box<dyn FnOnce(P) + Send>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.to_call
+    }
+}
+
 struct ClientData<P> {
     session_counter: AtomicU32,
     ready: Vec<Mutex<IntMap<Ready<P>>>>,
+    callback_ready: Vec<Mutex<IntMap<Callback<P>>>>,
 }
 
 /// Represents a client node in `febft`.
@@ -154,6 +170,9 @@ impl<D> Client<D>
             ready: std::iter::repeat_with(|| Mutex::new(IntMap::new()))
                 .take(num_cpus::get())
                 .collect(),
+            callback_ready: std::iter::repeat_with(|| Mutex::new(IntMap::new()))
+                .take(num_cpus::get())
+                .collect(),
         });
 
         let task_data = Arc::clone(&data);
@@ -213,6 +232,46 @@ impl<D> Client<D>
         let ready = get_ready::<D>(session_id, &*self.data);
 
         ClientRequestFut { request_key, ready }.await
+    }
+
+    ///Update the SMR state with the given operation
+    /// The callback should be a function to execute when we receive the response to the request.
+    ///
+    /// FIXME: This callback is going to be executed in an important thread for client performance,
+    /// So in the callback, we should not perform any heavy computations / blocking operations as that
+    /// will hurt the performance of the client. If you wish to perform heavy operations, move them
+    /// to other threads to prevent slowdowns
+    pub fn update_callback(&mut self, operation: D::Request, callback: Box<dyn FnOnce(D::Reply) + Send>) {
+        let session_id = self.session_id;
+
+        let operation_id = self.next_operation_id();
+
+        let message = SystemMessage::Request(RequestMessage::new(
+            session_id,
+            operation_id,
+            operation
+        ));
+
+        // await response
+        let request_key = get_request_key(session_id, operation_id);
+        let ready = get_ready_callback::<D>(session_id, &*self.data);
+
+        let callback = Callback {
+            to_call: callback
+        };
+
+        //Scope the mutex operations to reduce the lifetime of the guard
+        {
+            let mut ready_callback_guard = ready.lock();
+
+            ready_callback_guard.insert(request_key, callback);
+        }
+
+        //We only send the message after storing the callback to prevent us receiving the result without having
+        //The callback registered, therefore losing the response
+        let targets = NodeId::targets(0..self.params.n());
+
+        self.node.broadcast(message, targets, None);
     }
 
     fn next_operation_id(&mut self) -> SeqNo {
@@ -278,6 +337,24 @@ impl<D> Client<D>
                                 replica_votes.remove(request_key);
                                 last_operation_ids.insert(session_id.into(), operation_id);
 
+                                {
+                                    let ready_callback = get_ready_callback::<D>(session_id, &*data);
+
+                                    let mut ready_callback_lock = ready_callback.lock();
+
+                                    if ready_callback_lock.contains_key(request_key) {
+                                        let callback = ready_callback_lock.remove(request_key).unwrap();
+
+                                        //FIXME: If this callback executes heavy or blocking operations,
+                                        //This will block the receiving thread, meaning request processing
+                                        //Can be hampered.
+                                        //So to fix this, move this to a threadpool or just to another thread.
+                                        (callback.to_call)(payload);
+
+                                        continue;
+                                    }
+                                }
+
                                 let mut ready = get_ready::<D>(session_id, &*data).lock();
                                 let request = IntMapEntry::get(request_key, &mut *ready)
                                     .or_insert_with(|| Ready { payload: None, waker: None });
@@ -314,6 +391,13 @@ fn get_ready<D: SharedData>(session_id: SeqNo, data: &ClientData<D::Reply>) -> &
     let session_id: usize = session_id.into();
     let index = session_id % data.ready.len();
     &data.ready[index]
+}
+
+#[inline]
+fn get_ready_callback<D: SharedData>(session_id: SeqNo, data: &ClientData<D::Reply>) -> &Mutex<IntMap<Callback<D::Reply>>> {
+    let session_id: usize = session_id.into();
+    let index = session_id % data.ready.len();
+    &data.callback_ready[index]
 }
 
 struct IntMapEntry<'a, T> {
