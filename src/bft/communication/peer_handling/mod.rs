@@ -40,7 +40,7 @@ pub struct NodePeers<T: Send + 'static> {
     client_rx: Option<ChannelSyncRx<Vec<T>>>,
 }
 
-const DEFAULT_CLIENT_QUEUE: usize = 1024;
+const DEFAULT_CLIENT_QUEUE: usize = 128;
 const DEFAULT_REPLICA_QUEUE: usize = 1024;
 
 ///We make this class Sync and send since the clients are going to be handled by a single class
@@ -247,8 +247,8 @@ impl<T> NodePeers<T> where T: Send {
 pub enum ConnectedPeer<T> where T: Send {
     PoolConnection {
         client_id: NodeId,
-        sender: Mutex<Option<ChannelMultTx<T>>>,
-        receiver: ChannelMultRx<T>,
+        queue: Mutex<Option<Vec<T>>>,
+        disconnected: AtomicBool,
     },
     UnpooledConnection {
         client_id: NodeId,
@@ -409,12 +409,10 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
     }
 
     pub fn init_client(self: &Arc<Self>, peer_id: NodeId) -> Arc<ConnectedPeer<T>> {
-        let (sender, receiver) = client_channel_init(self.per_client_cache);
-
         let connected_client = Arc::new(ConnectedPeer::PoolConnection {
             client_id: peer_id,
-            sender: Mutex::new(Option::Some(sender)),
-            receiver,
+            disconnected: AtomicBool::new(false),
+            queue: Mutex::new(Some(Vec::with_capacity(self.per_client_cache))),
         });
 
         let mut cached_clients = self.client_connections_cache.write();
@@ -697,6 +695,8 @@ impl<T> ConnectedPeersPool<T> where T: Send {
 
         let start_time = Instant::now();
 
+        let mut replacement_vec = Vec::with_capacity(self.owner.per_client_cache);
+
         for index in 0..ind_limit {
             let client = &connected_peers[(start_point + index) % connected_peers.len()];
 
@@ -708,13 +708,21 @@ impl<T> ConnectedPeersPool<T> where T: Send {
             }
 
             //Collect all possible requests from each client
-            let rqs_dumped = match client.dump_n_requests(self.owner.per_client_cache, &mut batch) {
+
+            let mut rqs_dumped = match client.dump_requests(replacement_vec) {
                 Ok(rqs) => { rqs }
-                Err(err) => {
+                Err(vec) => {
                     dced.push(client.client_id().clone());
+
+                    replacement_vec = vec;
                     continue;
                 }
             };
+
+            batch.append(&mut rqs_dumped);
+
+            //The previous vec is now the new vec of the next node
+            replacement_vec = rqs_dumped;
 
             if index % connected_peers.len() == 0 {
                 //We have done a full circle on the requests
@@ -792,8 +800,8 @@ impl<T> ConnectedPeer<T> where T: Send {
 
     pub fn is_dc(&self) -> bool {
         match self {
-            Self::PoolConnection { receiver, .. } => {
-                receiver.is_dc()
+            Self::PoolConnection { disconnected, .. } => {
+                disconnected.load(Ordering::Relaxed)
             }
             Self::UnpooledConnection { sender, .. } => {
                 sender.lock().is_none()
@@ -803,8 +811,8 @@ impl<T> ConnectedPeer<T> where T: Send {
 
     pub fn disconnect(&self) {
         match self {
-            Self::PoolConnection { sender, .. } => {
-                sender.lock().take();
+            Self::PoolConnection { disconnected, .. } => {
+                disconnected.store(false, Ordering::Relaxed)
             }
             Self::UnpooledConnection { sender, .. } => {
                 sender.lock().take();
@@ -814,35 +822,32 @@ impl<T> ConnectedPeer<T> where T: Send {
 
     ///Dump n requests into the provided vector
     ///Returns the amount of requests that were dumped into the array
-    pub fn dump_n_requests(&self, rq_bound: usize, dump_vec: &mut Vec<T>) -> Result<usize> {
-        if dump_vec.capacity() < rq_bound {
-            //Reserve the required space in the vector
-            dump_vec.reserve(rq_bound - dump_vec.capacity());
-        }
-
+    pub fn dump_requests(&self, replacement_vec: Vec<T>) -> std::result::Result<Vec<T>, Vec<T>> {
         return match self {
-            Self::PoolConnection { receiver, .. } => {
-                return match receiver.try_recv_mult(dump_vec, rq_bound) {
-                    Ok(rqs) => {
-                        Ok(rqs)
+            Self::PoolConnection { queue, .. } => {
+                let mut guard = queue.lock();
+
+                match &mut *guard {
+                    None => {
+                        Err(replacement_vec)
                     }
-                    Err(err) => {
-                        Err(Error::simple_with_msg(ErrorKind::Communication, format!("Client has already disconnected. {:?}", err).as_str()))
+                    Some(rqs) => {
+                        Ok(std::mem::replace(rqs, replacement_vec))
                     }
-                };
+                }
             }
             Self::UnpooledConnection { .. } => {
-                Ok(0)
+                Ok(vec![])
             }
         };
     }
 
     pub fn push_request_sync(&self, msg: T) {
         match self {
-            Self::PoolConnection { sender, client_id, .. } => {
-                let sender_guard = sender.lock();
+            Self::PoolConnection { queue, client_id, .. } => {
+                let mut sender_guard = queue.lock();
 
-                match &*sender_guard {
+                match &mut *sender_guard {
                     None => {
                         error!("Failed to send to client {:?} as he was already disconnected", client_id);
                     }
@@ -850,12 +855,7 @@ impl<T> ConnectedPeer<T> where T: Send {
                         //We don't clone and ditch the lock since each replica
                         //has a thread dedicated to receiving his requests, but only the single thread
                         //So, no more than one thread will be trying to acquire this lock at the same time
-                        match sender.send(msg) {
-                            Ok(_) => {}
-                            Err(err) => {
-                                panic!("Failed to send because {:?}", err);
-                            }
-                        };
+                        sender.push(msg);
                     }
                 }
             }
@@ -886,25 +886,18 @@ impl<T> ConnectedPeer<T> where T: Send {
 
     pub async fn push_request(&self, msg: T) {
         match self {
-            Self::PoolConnection { sender, client_id, .. } => {
-                let send = {
-                    let sender_guard = sender.lock();
+            Self::PoolConnection { queue, client_id, .. } => {
+                let mut sender_guard = queue.lock();
 
-                    match &*sender_guard {
-                        Some(guard) => { guard.clone() }
-                        None => {
-                            error!("Failed to send to client {:?} as he was already disconnected", client_id);
-                            return;
-                        }
+                match &mut *sender_guard {
+                    Some(guard) => {
+                        guard.push(msg);
                     }
-                };
-
-                match send.send_async(msg).await {
-                    Ok(_) => {}
-                    Err(err) => {
-                        panic!("Failed to send because {:?}", err);
+                    None => {
+                        error!("Failed to send to client {:?} as he was already disconnected", client_id);
+                        return;
                     }
-                };
+                }
             }
             Self::UnpooledConnection { sender, client_id, .. } => {
                 let mut send = {
