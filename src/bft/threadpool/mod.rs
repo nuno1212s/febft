@@ -89,6 +89,12 @@ impl ThreadPool {
     }
 }
 
+///We use two separate thread pools because these are mostly used to respond/send messages.
+///Therefore, if we used the same threadpool for sending messages to replicas and to clients,
+///We could get a situation where client responding would flood the threadpool and cause much larger latency
+/// On the requests that are meant for the other replicas, leading to possibly much worse performance
+/// By splitting these up we are assuring that does not happen as frequently at least
+
 static mut REPLICA_POOL: Global<ThreadPool> = Global::new();
 
 static mut CLIENT_POOL: Global<ThreadPool> = Global::new();
@@ -111,18 +117,18 @@ macro_rules! client_pool {
     }
 }
 
-/// This function initializes the global thread pool.
+/// This function initializes the thread pools.
 ///
 /// It should be called once before the core protocol starts executing.
 pub unsafe fn init(replica_num_thread: usize, client_num_thread: usize) -> Result<()> {
     let replica_pool = Builder::new()
         .num_threads(replica_num_thread)
         .build();
-    
+
     let client_pool = Builder::new()
         .num_threads(client_num_thread)
         .build();
-    
+
     REPLICA_POOL.set(replica_pool);
     CLIENT_POOL.set(client_pool);
     Ok(())

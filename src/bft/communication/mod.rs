@@ -425,7 +425,7 @@ impl<D> Node<D>
                 std::thread::Builder::new().name(format!("Replica connection acceptor"))
                     .spawn(move || {
                         rx_clone_clone.rx_side_accept_sync(first_cli, id, replica_listener, replica_acceptor);
-                    });
+                    }).expect("Failed to start replica's connection acceptor");
             }
         }
 
@@ -435,7 +435,7 @@ impl<D> Node<D>
             // rx side (accept conns from clients)
             std::thread::Builder::new().name(format!("Client conn acceptor")).spawn(move || {
                 rx_node_clone.rx_side_accept_sync(first_cli, id, listener, replica_acceptor)
-            });
+            }).expect("Failed to start client connection acceptor");
         }
 
 
@@ -545,7 +545,7 @@ impl<D> Node<D>
         message: SystemMessage<D::State, D::Request, D::Reply>,
         target: NodeId,
         flush: bool,
-        batch_meta: Arc<Mutex<BatchMeta>>,
+        batch_meta: Option<Arc<Mutex<BatchMeta>>>,
     ) {
         let start_instant = Instant::now();
 
@@ -566,7 +566,11 @@ impl<D> Node<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce, (batch_meta, start_instant))
+                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
+                                match batch_meta {
+                                    Some(meta) => Some((meta, start_instant)),
+                                    None => None
+                                });
             }
         };
     }
@@ -581,7 +585,7 @@ impl<D> Node<D>
         &self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         target: NodeId,
-        batch_meta: Arc<Mutex<BatchMeta>>,
+        batch_meta: Option<Arc<Mutex<BatchMeta>>>,
     ) {
         let time_sent = Instant::now();
 
@@ -604,7 +608,11 @@ impl<D> Node<D>
                 let nonce = self.rng.next_state();
 
 
-                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce, (batch_meta, time_sent))
+                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
+                                match batch_meta {
+                                    Some(meta) => Some((meta, time_sent)),
+                                    None => None
+                                });
             }
         };
 
@@ -628,7 +636,7 @@ impl<D> Node<D>
         target: NodeId,
         first_cli: NodeId,
         nonce: u64,
-        time_info: (Arc<Mutex<BatchMeta>>, Instant),
+        time_info: Option<(Arc<Mutex<BatchMeta>>, Instant)>,
     ) {
         let send_task = move || {
             // serialize
@@ -642,7 +650,9 @@ impl<D> Node<D>
 
             let time_taken = Instant::now().duration_since(start_serialization).as_nanos();
 
-            time_info.0.lock().message_signing_latencies.push(time_taken);
+            if let Some(time_info) = &time_info {
+                time_info.0.lock().message_signing_latencies.push(time_taken);
+            }
 
             // send
             if my_id == target {
@@ -652,17 +662,19 @@ impl<D> Node<D>
                 //We don't actually want to measure how long it takes to send the message
                 let before_sending = Instant::now();
 
-                let dur_since = before_sending.duration_since(time_info.1).as_nanos();
-
                 //Send to myself, always synchronous since only replicas send to themselves
                 send_to.value_sync(Right((message, nonce, digest, buf)));
 
                 let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
 
-                let mut batch_guard = time_info.0.lock();
+                if let Some(time_info) = &time_info {
+                    let dur_since = before_sending.duration_since(time_info.1).as_nanos();
 
-                batch_guard.message_passing_latencies_own.push(dur_since);
-                batch_guard.message_sending_latencies_own.push(dur_sending);
+                    let mut batch_guard = time_info.0.lock();
+
+                    batch_guard.message_passing_latencies_own.push(dur_since);
+                    batch_guard.message_sending_latencies_own.push(dur_sending);
+                }
             } else {
 
                 // Left -> peer turn
@@ -677,16 +689,18 @@ impl<D> Node<D>
                         //We don't actually want to measure how long it takes to send the message
                         let before_sending = Instant::now();
 
-                        let dur_sinc = before_sending.duration_since(time_info.1).as_nanos();
-
                         send_to.value_sync(Left((nonce, digest, buf)));
 
                         let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
 
-                        let mut batch_guard = time_info.0.lock();
+                        if let Some(time_info) = &time_info {
+                            let dur_sinc = before_sending.duration_since(time_info.1).as_nanos();
 
-                        batch_guard.message_passing_latencies.push(dur_sinc);
-                        batch_guard.message_sending_latencies.push(dur_sending);
+                            let mut batch_guard = time_info.0.lock();
+
+                            batch_guard.message_passing_latencies.push(dur_sinc);
+                            batch_guard.message_sending_latencies.push(dur_sending);
+                        }
                     }
                 }
             }
@@ -704,7 +718,7 @@ impl<D> Node<D>
         &self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item=NodeId>,
-        meta: Arc<Mutex<BatchMeta>>,
+        meta: Option<Arc<Mutex<BatchMeta>>>,
     ) {
         let start_time = Instant::now();
 
@@ -719,7 +733,9 @@ impl<D> Node<D>
 
         let dur_send_tos = Instant::now().duration_since(start_time).as_nanos();
 
-        meta.lock().message_send_to_create.push(dur_send_tos);
+        if let Some(meta) = &meta {
+            meta.lock().message_send_to_create.push(dur_send_tos);
+        }
 
         /*self.sender_handle.send(MessageSendRq::Broadcast(BroadcastMsg::new(
             message,
@@ -729,7 +745,11 @@ impl<D> Node<D>
             (meta, start_time),
         )));*/
 
-        Self::broadcast_impl(message, mine, others, self.first_cli, nonce, (meta, start_time))
+        Self::broadcast_impl(message, mine, others, self.first_cli, nonce,
+                             match meta {
+                                 Some(meta) => Some((meta, start_time)),
+                                 None => None
+                             });
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -739,7 +759,7 @@ impl<D> Node<D>
         &self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item=NodeId>,
-        meta: Arc<Mutex<BatchMeta>>,
+        meta: Option<Arc<Mutex<BatchMeta>>>,
     ) {
         let start_time = Instant::now();
 
@@ -754,7 +774,9 @@ impl<D> Node<D>
 
         let time_to_create = Instant::now().duration_since(start_time).as_nanos();
 
-        meta.lock().message_send_to_create.push(time_to_create);
+        if let Some(meta) = &meta {
+            meta.lock().message_send_to_create.push(time_to_create);
+        }
 
         /*self.sender_handle.send(MessageSendRq::Broadcast(BroadcastMsg::new(
             message,
@@ -764,13 +786,16 @@ impl<D> Node<D>
             (meta, start_time),
         )));*/
 
-        Self::broadcast_impl(message, mine, others, self.first_cli, nonce, (meta, start_time))
+        Self::broadcast_impl(message, mine, others, self.first_cli, nonce, match meta {
+            Some(meta) => Some((meta, start_time)),
+            None => None
+        });
     }
 
     pub fn broadcast_serialized(
         &self,
         messages: IntMap<StoredSerializedSystemMessage<D>>,
-        meta: Arc<Mutex<BatchMeta>>,
+        meta: Option<Arc<Mutex<BatchMeta>>>,
     ) {
         let start_time = Instant::now();
         let headers = messages
@@ -792,7 +817,11 @@ impl<D> Node<D>
             )
         ));*/
 
-        Self::broadcast_serialized_impl(messages, mine, others, self.first_client_id(), (meta, start_time));
+        Self::broadcast_serialized_impl(messages, mine, others, self.first_client_id(),
+                                        match meta {
+                                            Some(meta) => { Some((meta, start_time)) }
+                                            None => None
+                                        });
     }
 
     #[inline]
@@ -801,7 +830,7 @@ impl<D> Node<D>
         my_send_to: Option<SerializedSendTo<D>>,
         other_send_tos: SerializedSendTos<D>,
         first_client: NodeId,
-        time_info: (Arc<Mutex<BatchMeta>>, Instant),
+        time_info: Option<(Arc<Mutex<BatchMeta>>, Instant)>,
     ) {
         threadpool::execute_replicas(move || {
             // send to ourselves
@@ -816,24 +845,31 @@ impl<D> Node<D>
                     .map(|stored| stored.into_inner())
                     .unwrap();
 
-                let time_info = (time_info.0.clone(), time_info.1.clone());
+                let time_info = match &time_info {
+                    Some((mutex, instant)) => {
+                        Some((mutex.clone(), instant.clone()))
+                    }
+                    None => None
+                };
 
                 let send_myself_task = move || {
                     //Measuring time taken to get to the point of sending the message
                     //We don't actually want to measure how long it takes to send the message
                     let current_instant = Instant::now();
 
-                    let dur_since = current_instant.duration_since(time_info.1).as_nanos();
-
                     send_to.value_sync(header, message);
 
                     let dur_sending = Instant::now().duration_since(current_instant).as_nanos();
 
-                    let mut batch_guard = time_info.0.lock();
+                    if let Some(time_info) = time_info {
+                        let dur_since = current_instant.duration_since(time_info.1).as_nanos();
 
-                    batch_guard.message_passing_latencies_own.push(dur_since);
+                        let mut batch_guard = time_info.0.lock();
 
-                    batch_guard.message_sending_latencies_own.push(dur_sending);
+                        batch_guard.message_passing_latencies_own.push(dur_since);
+
+                        batch_guard.message_sending_latencies_own.push(dur_sending);
+                    }
                 };
 
                 if id < first_client {
@@ -854,7 +890,12 @@ impl<D> Node<D>
                     .map(|stored| stored.into_inner())
                     .unwrap();
 
-                let time_info = (time_info.0.clone(), time_info.1.clone());
+                let time_info = match &time_info {
+                    Some((mutex, instant)) => {
+                        Some((mutex.clone(), instant.clone()))
+                    }
+                    None => None
+                };
 
                 match send_to.socket_type().unwrap() {
                     SecureSocketSend::Async(_) => {
@@ -868,17 +909,19 @@ impl<D> Node<D>
                             //We don't actually want to measure how long it takes to send the message
                             let current_instant = Instant::now();
 
-                            let dur_since = current_instant.duration_since(time_info.1).as_nanos();
-
                             send_to.value_sync(header, message);
 
                             let dur_sending = Instant::now().duration_since(current_instant).as_nanos();
 
-                            let mut batch_guard = time_info.0.lock();
+                            if let Some(time_info) = time_info {
+                                let dur_since = current_instant.duration_since(time_info.1).as_nanos();
 
-                            batch_guard.message_passing_latencies.push(dur_since);
+                                let mut batch_guard = time_info.0.lock();
 
-                            batch_guard.message_sending_latencies.push(dur_sending);
+                                batch_guard.message_passing_latencies.push(dur_since);
+
+                                batch_guard.message_sending_latencies.push(dur_sending);
+                            }
                         };
 
                         if id < first_client {
@@ -899,7 +942,7 @@ impl<D> Node<D>
         other_send_tos: SendTos<D>,
         first_cli: NodeId,
         nonce: u64,
-        time_info: (Arc<Mutex<BatchMeta>>, Instant),
+        time_info: Option<(Arc<Mutex<BatchMeta>>, Instant)>,
     ) {
         threadpool::execute_replicas(move || {
             let start_serialization = Instant::now();
@@ -914,7 +957,9 @@ impl<D> Node<D>
 
             let time_serializing = Instant::now().duration_since(start_serialization);
 
-            time_info.0.lock().message_signing_latencies.push(time_serializing.as_nanos());
+            if let Some(time_info) = &time_info {
+                time_info.0.lock().message_signing_latencies.push(time_serializing.as_nanos());
+            }
 
             // send to ourselves
             if let Some(mut send_to) = my_send_to {
@@ -925,24 +970,32 @@ impl<D> Node<D>
 
                 let buf = buf.clone();
 
-                let time_info = (time_info.0.clone(), time_info.1.clone());
+                let time_info = match &time_info {
+                    Some((mutex, instant)) => {
+                        Some((mutex.clone(), instant.clone()))
+                    }
+                    None => None
+                };
 
                 let send_task = move || {
                     //Measuring time taken to get to the point of sending the message
                     //We don't actually want to measure how long it takes to send the message
                     let before_send_time = Instant::now();
-                    let dur_since = before_send_time.duration_since(time_info.1).as_nanos();
 
                     // Right -> our turn
                     send_to.value_sync(Right((message, nonce, digest, buf)));
 
                     let dur_sending = Instant::now().duration_since(before_send_time).as_nanos();
 
-                    let mut batch_guard = time_info.0.lock();
+                    if let Some(time_info) = &time_info {
+                        let dur_since = before_send_time.duration_since(time_info.1).as_nanos();
 
-                    batch_guard.message_passing_latencies_own.push(dur_since);
+                        let mut batch_guard = time_info.0.lock();
 
-                    batch_guard.message_sending_latencies_own.push(dur_sending);
+                        batch_guard.message_passing_latencies_own.push(dur_since);
+
+                        batch_guard.message_sending_latencies_own.push(dur_sending);
+                    }
                 };
 
                 if id < first_cli {
@@ -961,7 +1014,13 @@ impl<D> Node<D>
                 };
 
                 let buf = buf.clone();
-                let time_info = (time_info.0.clone(), time_info.1.clone());
+
+                let time_info = match &time_info {
+                    Some((mutex, instant)) => {
+                        Some((mutex.clone(), instant.clone()))
+                    }
+                    None => None
+                };
 
                 match send_to.socket_type().unwrap() {
                     SecureSocketSend::Async(_) => {
@@ -975,17 +1034,20 @@ impl<D> Node<D>
                             //Measuring time taken to get to the point of sending the message
                             //We don't actually want to measure how long it takes to send the message
                             let before_send_time = Instant::now();
-                            let dur_since = before_send_time.duration_since(time_info.1).as_nanos();
 
                             send_to.value_sync(Left((nonce, digest, buf)));
 
                             let dur_sending = Instant::now().duration_since(before_send_time).as_nanos();
 
-                            let mut batch_guard = time_info.0.lock();
+                            if let Some(time_info) = &time_info {
+                                let dur_since = before_send_time.duration_since(time_info.1).as_nanos();
 
-                            batch_guard.message_passing_latencies.push(dur_since);
+                                let mut batch_guard = time_info.0.lock();
 
-                            batch_guard.message_sending_latencies.push(dur_sending);
+                                batch_guard.message_passing_latencies.push(dur_since);
+
+                                batch_guard.message_sending_latencies.push(dur_sending);
+                            }
                         };
 
                         if id < first_cli {
@@ -1894,7 +1956,7 @@ impl<D> SendNode<D>
         message: SystemMessage<D::State, D::Request, D::Reply>,
         target: NodeId,
         flush: bool,
-        meta: Arc<Mutex<BatchMeta>>,
+        meta: Option<Arc<Mutex<BatchMeta>>>,
     ) {
         let start_time = Instant::now();
 
@@ -1915,7 +1977,11 @@ impl<D> SendNode<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce, (meta, start_time))
+                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
+                                     match meta {
+                                         Some(meta) => Some((meta, start_time)),
+                                         None => None
+                                     });
             }
         }
     }
@@ -1925,7 +1991,7 @@ impl<D> SendNode<D>
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         target: NodeId,
-        meta: Arc<Mutex<BatchMeta>>,
+        meta: Option<Arc<Mutex<BatchMeta>>>,
     ) {
         let start_time = Instant::now();
 
@@ -1946,7 +2012,11 @@ impl<D> SendNode<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce, (meta, start_time))
+                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
+                                     match meta {
+                                         Some(meta) => Some((meta, start_time)),
+                                         None => None
+                                     });
             }
         }
     }
@@ -1956,7 +2026,7 @@ impl<D> SendNode<D>
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item=NodeId>,
-        meta: Arc<Mutex<BatchMeta>>,
+        meta: Option<Arc<Mutex<BatchMeta>>>,
     ) {
         let start_time = Instant::now();
 
@@ -1968,7 +2038,11 @@ impl<D> SendNode<D>
         );
 
         let nonce = self.rng.next_state();
-        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce, (meta, start_time))
+        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce,
+                                  match meta {
+                                      Some(meta) => Some((meta, start_time)),
+                                      None => None
+                                  });
     }
 
     /// Check the `broadcast_signed()` documentation for `Node`.
@@ -1976,7 +2050,7 @@ impl<D> SendNode<D>
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item=NodeId>,
-        meta: Arc<Mutex<BatchMeta>>,
+        meta: Option<Arc<Mutex<BatchMeta>>>,
     ) {
         let start_time = Instant::now();
 
@@ -1989,7 +2063,11 @@ impl<D> SendNode<D>
 
         let nonce = self.rng.next_state();
 
-        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce, (meta, start_time))
+        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce,
+                                  match meta {
+                                      Some(meta) => Some((meta, start_time)),
+                                      None => None
+                                  });
     }
 }
 

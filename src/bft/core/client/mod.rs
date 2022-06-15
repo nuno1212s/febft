@@ -1,5 +1,6 @@
 //! Contains the client side core protocol logic of `febft`.
 
+use std::fs::read;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -9,7 +10,6 @@ use std::task::{Context, Poll, Waker};
 use intmap::IntMap;
 use parking_lot::Mutex;
 
-use crate::bft::async_runtime as rt;
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::{
     Node,
@@ -25,9 +25,18 @@ use crate::bft::communication::message::{
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
-use crate::bft::ordering::{SeqNo, ThreadSafeSeqNo};
+use crate::bft::ordering::{SeqNo};
 
 use super::SystemParams;
+
+macro_rules! certain {
+    ($some:expr) => {
+        match $some {
+            Some(x) => x,
+            None => unreachable!(),
+        }
+    }
+}
 
 struct Ready<P> {
     waker: Option<Waker>,
@@ -47,7 +56,7 @@ pub struct Client<D: SharedData + 'static> {
     data: Arc<ClientData<D::Reply>>,
     params: SystemParams,
     node: SendNode<D>,
-    dummy_meta: Arc<Mutex<BatchMeta>>
+    dummy_meta: Arc<Mutex<BatchMeta>>,
 }
 
 impl<D: SharedData> Clone for Client<D> {
@@ -63,7 +72,7 @@ impl<D: SharedData> Clone for Client<D> {
             node: self.node.clone(),
             data: Arc::clone(&self.data),
             operation_counter: SeqNo::ZERO,
-            dummy_meta: Arc::new(Mutex::new(BatchMeta::new()))
+            dummy_meta: Arc::new(Mutex::new(BatchMeta::new())),
         }
     }
 }
@@ -86,6 +95,7 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
                     .or_insert_with(|| Ready { payload: None, waker: None });
 
                 if let Some(payload) = request.payload.take() {
+                    //Response is ready, take it
                     ready.remove(self.request_key);
                     return Poll::Ready(payload);
                 }
@@ -97,6 +107,7 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
                 Poll::Pending
             })
             .unwrap_or_else(|| {
+                //Failed to get the lock, try again
                 cx.waker().wake_by_ref();
                 Poll::Pending
             })
@@ -170,7 +181,7 @@ impl<D> Client<D>
             session_id,
             node: send_node,
             operation_counter: SeqNo::ZERO,
-            dummy_meta: Arc::new(Mutex::new(BatchMeta::new()))
+            dummy_meta: Arc::new(Mutex::new(BatchMeta::new())),
         })
     }
 
@@ -195,7 +206,7 @@ impl<D> Client<D>
 
         // broadcast our request to the node group
         let targets = NodeId::targets(0..self.params.n());
-        self.node.broadcast(message, targets, self.dummy_meta.clone());
+        self.node.broadcast(message, targets, None);
 
         // await response
         let request_key = get_request_key(session_id, operation_id);
@@ -222,71 +233,71 @@ impl<D> Client<D>
         let mut replica_votes: IntMap<ReplicaVotes> = IntMap::new();
 
         while let Ok(message) = node.receive_from_replicas() {
-                match message {
-                    Message::System(header, message) => {
-                        match message {
-                            SystemMessage::Reply(message) => {
-                                let (session_id, operation_id, payload) = message.into_inner();
-                                let last_operation_id = last_operation_ids
-                                    .get(session_id.into())
-                                    .copied()
-                                    .unwrap_or(SeqNo::ZERO);
+            match message {
+                Message::System(header, message) => {
+                    match message {
+                        SystemMessage::Reply(message) => {
+                            let (session_id, operation_id, payload) = message.into_inner();
+                            let last_operation_id = last_operation_ids
+                                .get(session_id.into())
+                                .copied()
+                                .unwrap_or(SeqNo::ZERO);
 
-                                // reply already delivered to application
-                                if last_operation_id > operation_id {
-                                    continue;
-                                }
+                            // reply already delivered to application
+                            if last_operation_id > operation_id {
+                                continue;
+                            }
 
-                                let request_key = get_request_key(session_id, operation_id);
-                                let votes = IntMapEntry::get(request_key, &mut replica_votes)
-                                    // FIXME: cache every reply's digest, instead of just the first one
-                                    // we receive, because the first reply may be faulty, while the
-                                    // remaining ones may be correct, therefore we would not be able to
-                                    // count at least f+1 identical replies
-                                    //
-                                    // NOTE: the `digest()` call in the header returns the digest of
-                                    // the payload
-                                    .or_insert_with(|| {
-                                        ReplicaVotes {
-                                            count: 0,
-                                            digest: header.digest().clone(),
-                                        }
-                                    });
-
-                                // register new reply received
-                                if &votes.digest == header.digest() {
-                                    votes.count += 1;
-                                }
-
-                                // TODO: check if a replica hasn't voted
-                                // twice for the same digest
-
-                                // wait for at least f+1 identical replies
-                                if votes.count > params.f() {
-                                    // update intmap states
-                                    replica_votes.remove(request_key);
-                                    last_operation_ids.insert(session_id.into(), operation_id);
-
-                                    let mut ready = get_ready::<D>(session_id, &*data).lock();
-                                    let request = IntMapEntry::get(request_key, &mut *ready)
-                                        .or_insert_with(|| Ready { payload: None, waker: None });
-
-                                    // register response
-                                    request.payload = Some(payload);
-
-                                    // try to wake up a waiting task
-                                    if let Some(waker) = request.waker.take() {
-                                        waker.wake();
+                            let request_key = get_request_key(session_id, operation_id);
+                            let votes = IntMapEntry::get(request_key, &mut replica_votes)
+                                // FIXME: cache every reply's digest, instead of just the first one
+                                // we receive, because the first reply may be faulty, while the
+                                // remaining ones may be correct, therefore we would not be able to
+                                // count at least f+1 identical replies
+                                //
+                                // NOTE: the `digest()` call in the header returns the digest of
+                                // the payload
+                                .or_insert_with(|| {
+                                    ReplicaVotes {
+                                        count: 0,
+                                        digest: header.digest().clone(),
                                     }
+                                });
+
+                            // register new reply received
+                            if &votes.digest == header.digest() {
+                                votes.count += 1;
+                            }
+
+                            // TODO: check if a replica hasn't voted
+                            // twice for the same digest
+
+                            // wait for at least f+1 identical replies
+                            if votes.count > params.f() {
+                                // update intmap states
+                                replica_votes.remove(request_key);
+                                last_operation_ids.insert(session_id.into(), operation_id);
+
+                                let mut ready = get_ready::<D>(session_id, &*data).lock();
+                                let request = IntMapEntry::get(request_key, &mut *ready)
+                                    .or_insert_with(|| Ready { payload: None, waker: None });
+
+                                // register response
+                                request.payload = Some(payload);
+
+                                // try to wake up a waiting task
+                                if let Some(waker) = request.waker.take() {
+                                    waker.wake();
                                 }
                             }
-                            // FIXME: handle rogue messages on clients
-                            _ => panic!("rogue message detected"),
                         }
+                        // FIXME: handle rogue messages on clients
+                        _ => panic!("rogue message detected"),
                     }
-                    // we don't receive any other type of messages as a client node
-                    _ => (),
                 }
+                // we don't receive any other type of messages as a client node
+                _ => (),
+            }
         }
     }
 }
@@ -310,14 +321,6 @@ struct IntMapEntry<'a, T> {
     map: &'a mut IntMap<T>,
 }
 
-macro_rules! certain {
-    ($some:expr) => {
-        match $some {
-            Some(x) => x,
-            None => unreachable!(),
-        }
-    }
-}
 
 impl<'a, T> IntMapEntry<'a, T> {
     fn get(key: u64, map: &'a mut IntMap<T>) -> Self {

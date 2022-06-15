@@ -329,7 +329,7 @@ impl<S> Consensus<S>
 
         let targets = NodeId::targets(0..view.params().n());
 
-        node.broadcast(message, targets, Arc::clone(log.batch_meta()));
+        node.broadcast(message, targets, Some(Arc::clone(log.batch_meta())));
     }
 
     /// Returns true if there is a running consensus instance.
@@ -394,7 +394,7 @@ impl<S> Consensus<S>
             ));
 
             let targets = NodeId::targets(0..synchronizer.view().params().n());
-            node.broadcast(message, targets, Arc::clone(log.batch_meta()));
+            node.broadcast(message, targets, Some(Arc::clone(log.batch_meta())));
         }
     }
 
@@ -667,7 +667,7 @@ impl<S> Consensus<S>
 
                     let targets = NodeId::targets(0..view.params().n());
 
-                    node.broadcast(message, targets, Arc::clone(log.batch_meta()));
+                    node.broadcast(message, targets, Some(Arc::clone(log.batch_meta())));
                 }
 
                 {
@@ -777,7 +777,7 @@ impl<S> Consensus<S>
                             break;
                         }
 
-                        node.broadcast_serialized(speculative_commits, Arc::clone(log.batch_meta()));
+                        node.broadcast_serialized(speculative_commits, Some(Arc::clone(log.batch_meta())));
                     } else {
                         let message = SystemMessage::Consensus(ConsensusMessage::new(
                             self.sequence_number(),
@@ -789,7 +789,7 @@ impl<S> Consensus<S>
 
                         let targets = NodeId::targets(0..curr_view.params().n());
 
-                        node.broadcast_signed(message, targets, Arc::clone(log.batch_meta()));
+                        node.broadcast_signed(message, targets, Some(Arc::clone(log.batch_meta())));
                     }
 
                     log.batch_meta().lock().commit_sent_time = Utc::now();
