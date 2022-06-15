@@ -732,16 +732,16 @@ impl<D> Node<D>
 
         let nonce = self.rng.next_state();
 
-        let new_meta = match meta {
-            Some(meta) => Some((meta, start_time)),
-            None => None
-        };
-
         let dur_send_tos = Instant::now().duration_since(start_time).as_nanos();
 
         if let Some(meta) = &meta {
             meta.lock().message_send_to_create.push(dur_send_tos);
         }
+
+        let new_meta = match meta {
+            Some(meta) => Some((meta, start_time)),
+            None => None
+        };
 
         /*self.sender_handle.send(MessageSendRq::Broadcast(BroadcastMsg::new(
             message,
