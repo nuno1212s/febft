@@ -816,7 +816,7 @@ impl<D> Node<D>
         let meta = match meta {
             Some(meta) => { Some((meta, start_time)) }
             None => None
-        }
+        };
 
         /*self.sender_handle.send(MessageSendRq::BroadcastSerialized(
             BroadcastSerialized::new(
