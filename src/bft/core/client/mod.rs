@@ -222,10 +222,9 @@ impl<D> Client<D>
             operation,
         ));
 
-
         // broadcast our request to the node group
         let targets = NodeId::targets(0..self.params.n());
-        self.node.broadcast(message, targets, None);
+        self.node.broadcast(message, targets);
 
         // await response
         let request_key = get_request_key(session_id, operation_id);
