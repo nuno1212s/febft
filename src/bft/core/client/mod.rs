@@ -270,7 +270,7 @@ impl<D> Client<D>
         //The callback registered, therefore losing the response
         let targets = NodeId::targets(0..self.params.n());
 
-        self.node.broadcast(message, targets, None);
+        self.node.broadcast(message, targets);
     }
 
     fn next_operation_id(&mut self) -> SeqNo {
