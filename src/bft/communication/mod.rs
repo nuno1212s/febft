@@ -549,6 +549,11 @@ impl<D> Node<D>
     ) {
         let start_instant = Instant::now();
 
+        let meta = match batch_meta {
+            Some(meta) => Some((meta, start_instant)),
+            None => None
+        };
+
         match self.resolve_client_rx_connection(target) {
             None => {
                 error!("Failed to send message to client {:?} as the connection to it was not found!", target);
@@ -566,11 +571,7 @@ impl<D> Node<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
-                                match batch_meta {
-                                    Some(meta) => Some((meta, start_instant)),
-                                    None => None
-                                });
+                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce,meta);
             }
         };
     }
@@ -588,6 +589,11 @@ impl<D> Node<D>
         batch_meta: Option<Arc<Mutex<BatchMeta>>>,
     ) {
         let time_sent = Instant::now();
+
+        let meta = match batch_meta {
+            Some(meta) => Some((meta, time_sent)),
+            None => None
+        };
 
         match self.resolve_client_rx_connection(target) {
             None => {
@@ -607,12 +613,7 @@ impl<D> Node<D>
 
                 let nonce = self.rng.next_state();
 
-
-                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
-                                match batch_meta {
-                                    Some(meta) => Some((meta, time_sent)),
-                                    None => None
-                                });
+                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce, meta);
             }
         };
 
@@ -731,6 +732,11 @@ impl<D> Node<D>
 
         let nonce = self.rng.next_state();
 
+        let new_meta = match meta {
+            Some(meta) => Some((meta, start_time)),
+            None => None
+        };
+
         let dur_send_tos = Instant::now().duration_since(start_time).as_nanos();
 
         if let Some(meta) = &meta {
@@ -745,11 +751,8 @@ impl<D> Node<D>
             (meta, start_time),
         )));*/
 
-        Self::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                             match meta {
-                                 Some(meta) => Some((meta, start_time)),
-                                 None => None
-                             });
+
+        Self::broadcast_impl(message, mine, others, self.first_cli, nonce, new_meta);
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -778,6 +781,11 @@ impl<D> Node<D>
             meta.lock().message_send_to_create.push(time_to_create);
         }
 
+        let meta =  match meta {
+            Some(meta) => Some((meta, start_time)),
+            None => None
+        };
+
         /*self.sender_handle.send(MessageSendRq::Broadcast(BroadcastMsg::new(
             message,
             mine,
@@ -786,10 +794,7 @@ impl<D> Node<D>
             (meta, start_time),
         )));*/
 
-        Self::broadcast_impl(message, mine, others, self.first_cli, nonce, match meta {
-            Some(meta) => Some((meta, start_time)),
-            None => None
-        });
+        Self::broadcast_impl(message, mine, others, self.first_cli, nonce, meta);
     }
 
     pub fn broadcast_serialized(
@@ -808,6 +813,11 @@ impl<D> Node<D>
             headers,
         );
 
+        let meta = match meta {
+            Some(meta) => { Some((meta, start_time)) }
+            None => None
+        }
+
         /*self.sender_handle.send(MessageSendRq::BroadcastSerialized(
             BroadcastSerialized::new(
                 messages,
@@ -818,10 +828,7 @@ impl<D> Node<D>
         ));*/
 
         Self::broadcast_serialized_impl(messages, mine, others, self.first_client_id(),
-                                        match meta {
-                                            Some(meta) => { Some((meta, start_time)) }
-                                            None => None
-                                        });
+                                        meta);
     }
 
     #[inline]
@@ -1442,7 +1449,7 @@ impl<D> Node<D>
                     SecureSocketSendSync::new_tls(session, sock)
                 };
 
-                let final_sock = SecureSocketSend::Sync(Arc::new(parking_lot::Mutex::new(sock)));
+                let final_sock = SecureSocketSend::Sync(Arc::new(Mutex::new(sock)));
 
                 // success
                 self.handle_connected_tx(peer_id, final_sock);
