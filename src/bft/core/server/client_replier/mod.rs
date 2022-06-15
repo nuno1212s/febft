@@ -92,7 +92,7 @@ impl<S> Replier<S> where S: Service + 'static{
                         if let Some((message, last_peer_id)) = curr_send.take() {
 
                             let flush = peer_id != last_peer_id;
-                            self.send_node.send(message, last_peer_id, flush, Some(Arc::clone(self.log.batch_meta())));
+                            self.send_node.send(message, last_peer_id, flush);
                         }
 
                         // store previous reply message and peer id,
@@ -108,7 +108,7 @@ impl<S> Replier<S> where S: Service + 'static{
 
                     // deliver last reply
                     if let Some((message, last_peer_id)) = curr_send {
-                        self.send_node.send(message, last_peer_id, true, Some(Arc::clone(self.log.batch_meta())));
+                        self.send_node.send(message, last_peer_id, true);
                     } else {
                         // slightly optimize code path;
                         // the previous if branch will always execute

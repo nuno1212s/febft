@@ -203,7 +203,7 @@ impl<S: Service> RqProcessor<S> {
 
                             let targets = NodeId::targets(0..view.params().n());
 
-                            self.node_ref.broadcast(message, targets, Some(Arc::clone(self.log.batch_meta())));
+                            self.node_ref.broadcast(message, targets);
 
                             currently_accumulated = Vec::with_capacity(self.node_ref.batch_size() * 2);
 

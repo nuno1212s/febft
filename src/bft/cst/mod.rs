@@ -264,7 +264,7 @@ where
             message.sequence_number(),
             CstMessageKind::ReplyState(snapshot),
         ));
-        node.send(reply, header.from(), true, Some(Arc::clone(log.batch_meta())));
+        node.send(reply, header.from(), true);
     }
 
     /// Advances the state of the CST state machine.
@@ -293,7 +293,7 @@ where
                             message.sequence_number(),
                             kind,
                         ));
-                        node.send(reply, header.from(), true, Some(Arc::clone(log.batch_meta())));
+                        node.send(reply, header.from(), true);
                     },
                     CstMessageKind::RequestState => {
                         self.process_reply_state(header, message, synchronizer, log, node);
@@ -489,7 +489,7 @@ where
         ));
         let targets = NodeId::targets(0..synchronizer.view().params().n());
 
-        node.broadcast(message, targets, Some(Arc::clone(log.batch_meta())));
+        node.broadcast(message, targets);
     }
 
     /// Used by a recovering node to retrieve the latest state.
@@ -512,6 +512,6 @@ where
             CstMessageKind::RequestState,
         ));
         let targets = NodeId::targets(0..synchronizer.view().params().n());
-        node.broadcast(message, targets, Some(Arc::clone(log.batch_meta())));
+        node.broadcast(message, targets);
     }
 }

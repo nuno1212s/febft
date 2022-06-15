@@ -689,7 +689,7 @@ impl<S> Synchronizer<S>
                         ViewChangeMessageKind::StopData(collect),
                     ));
 
-                    node.send_signed(message, current_view.leader(), Some(Arc::clone(log.batch_meta())));
+                    node.send_signed(message, current_view.leader());
                 } else {
                     self.phase.replace(ProtoPhase::Stopping2(i));
                 }
@@ -792,7 +792,7 @@ impl<S> Synchronizer<S>
                 let targets = NodeId::targets(0..current_view.params().n())
                     .filter(move |&id| id != node_id);
 
-                node.broadcast(message, targets, Some(Arc::clone(log.batch_meta())));
+                node.broadcast(message, targets);
 
                 let state = FinalizeState {
                     curr_cid,
@@ -1027,7 +1027,7 @@ impl<S> Synchronizer<S>
 
         let targets = NodeId::targets(0..current_view.params().n());
 
-        node.broadcast(message, targets, Some(Arc::clone(log.batch_meta())));
+        node.broadcast(message, targets);
     }
 
     /// Forward the requests that timed out, `timed_out`, to all the nodes in the
@@ -1042,7 +1042,7 @@ impl<S> Synchronizer<S>
             timed_out,
         ));
         let targets = NodeId::targets(0..self.view().params().n());
-        node.broadcast(message, targets, Some(Arc::clone(log.batch_meta())));
+        node.broadcast(message, targets);
     }
 
     /// Returns some information regarding the current view, such as
