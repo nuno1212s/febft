@@ -549,12 +549,10 @@ impl<D> Node<D>
     ) {
         let start_instant = Instant::now();
 
-        // let meta = match batch_meta {
-        //     Some(meta) => Some((meta, start_instant)),
-        //     None => None
-        // };
-
-        let meta = None;
+        let meta = match batch_meta {
+            Some(meta) => Some((meta, start_instant)),
+            None => None
+        };
 
         match self.resolve_client_rx_connection(target) {
             None => {
@@ -592,12 +590,10 @@ impl<D> Node<D>
     ) {
         let time_sent = Instant::now();
 
-        // let meta = match batch_meta {
-        //     Some(meta) => Some((meta, time_sent)),
-        //     None => None
-        // };
-
-        let meta = None;
+        let meta = match batch_meta {
+            Some(meta) => Some((meta, time_sent)),
+            None => None
+        };
 
         match self.resolve_client_rx_connection(target) {
             None => {
@@ -620,17 +616,6 @@ impl<D> Node<D>
                 Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce, meta);
             }
         };
-
-        /*self.sender_handle.send(MessageSendRq::Send(
-            send_thread::Send::new(
-                message,
-                send_to,
-                my_id,
-                target,
-                nonce,
-                (batch_meta, time_sent),
-            )
-        ));*/
     }
 
     #[inline]
@@ -742,12 +727,10 @@ impl<D> Node<D>
             meta.lock().message_send_to_create.push(dur_send_tos);
         }
 
-        // let new_meta = match meta {
-        //     Some(meta) => Some((meta, start_time)),
-        //     None => None
-        // };
-
-        let new_meta = None;
+        let new_meta = match meta {
+            Some(meta) => Some((meta, start_time)),
+            None => None
+        };
 
         Self::broadcast_impl(message, mine, others, self.first_cli, nonce, new_meta);
     }
@@ -778,12 +761,10 @@ impl<D> Node<D>
             meta.lock().message_send_to_create.push(time_to_create);
         }
 
-        // let meta =  match meta {
-        //     Some(meta) => Some((meta, start_time)),
-        //     None => None
-        // };
-
-        let meta = None;
+        let meta =  match meta {
+            Some(meta) => Some((meta, start_time)),
+            None => None
+        };
 
         Self::broadcast_impl(message, mine, others, self.first_cli, nonce, meta);
     }
@@ -804,12 +785,10 @@ impl<D> Node<D>
             headers,
         );
 
-        /*let meta = match meta {
+        let meta = match meta {
             Some(meta) => { Some((meta, start_time)) }
             None => None
-        };*/
-
-        let meta = None;
+        };
 
         Self::broadcast_serialized_impl(messages, mine, others,
                                         self.first_client_id(), meta);
@@ -1951,12 +1930,10 @@ impl<D> SendNode<D>
     ) {
         let start_time = Instant::now();
 
-        // let meta = match meta {
-        //     Some(meta) => Some((meta, start_time)),
-        //     None => None
-        // };
-
-        let meta = None;
+        let meta = match meta {
+            Some(meta) => Some((meta, start_time)),
+            None => None
+        };
 
         match self.parent_node.resolve_client_rx_connection(target) {
             None => {
@@ -1989,12 +1966,10 @@ impl<D> SendNode<D>
     ) {
         let start_time = Instant::now();
 
-        // let meta = match meta {
-        //     Some(meta) => Some((meta, start_time)),
-        //     None => None
-        // };
-
-        let meta = None;
+        let meta = match meta {
+            Some(meta) => Some((meta, start_time)),
+            None => None
+        };
 
         match self.parent_node.resolve_client_rx_connection(target) {
             None => {
@@ -2035,12 +2010,10 @@ impl<D> SendNode<D>
 
         let nonce = self.rng.next_state();
 
-        // let meta = match meta {
-        //     Some(meta) => Some((meta, start_time)),
-        //     None => None
-        // };
-
-        let meta = None;
+        let meta = match meta {
+            Some(meta) => Some((meta, start_time)),
+            None => None
+        };
 
         <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce, meta);
     }
@@ -2063,12 +2036,10 @@ impl<D> SendNode<D>
 
         let nonce = self.rng.next_state();
 
-        // let meta = match meta {
-        //     Some(meta) => Some((meta, start_time)),
-        //     None => None
-        // };
-
-        let meta = None;
+        let meta = match meta {
+            Some(meta) => Some((meta, start_time)),
+            None => None
+        };
 
         <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce, meta);
     }
