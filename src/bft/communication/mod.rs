@@ -1387,7 +1387,7 @@ impl<D> Node<D>
         first_cli: NodeId,
         peer_id: NodeId,
         nonce: u64,
-        connector: Arc<rustls::ClientConfig>,
+        connector: Arc<ClientConfig>,
         (addr, hostname): (SocketAddr, String),
     ) {
         const SECS: u64 = 1;
@@ -1960,6 +1960,11 @@ impl<D> SendNode<D>
     ) {
         let start_time = Instant::now();
 
+        let meta = match meta {
+            Some(meta) => Some((meta, start_time)),
+            None => None
+        };
+
         match self.parent_node.resolve_client_rx_connection(target) {
             None => {
                 error!("Failed to send message to client {:?} as the connection to it was not found!", target);
@@ -1977,11 +1982,7 @@ impl<D> SendNode<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
-                                     match meta {
-                                         Some(meta) => Some((meta, start_time)),
-                                         None => None
-                                     });
+                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce, meta);
             }
         }
     }
@@ -1995,6 +1996,10 @@ impl<D> SendNode<D>
     ) {
         let start_time = Instant::now();
 
+        let meta = match meta {
+            Some(meta) => Some((meta, start_time)),
+            None => None
+        };
 
         match self.parent_node.resolve_client_rx_connection(target) {
             None => {
@@ -2012,11 +2017,7 @@ impl<D> SendNode<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
-                                     match meta {
-                                         Some(meta) => Some((meta, start_time)),
-                                         None => None
-                                     });
+                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce, meta);
             }
         }
     }
@@ -2037,12 +2038,13 @@ impl<D> SendNode<D>
             targets,
         );
 
+        let meta = match meta {
+            Some(meta) => Some((meta, start_time)),
+            None => None
+        };
+
         let nonce = self.rng.next_state();
-        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                                  match meta {
-                                      Some(meta) => Some((meta, start_time)),
-                                      None => None
-                                  });
+        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce, meta);
     }
 
     /// Check the `broadcast_signed()` documentation for `Node`.
@@ -2061,13 +2063,14 @@ impl<D> SendNode<D>
             targets,
         );
 
+        let meta = match meta {
+            Some(meta) => Some((meta, start_time)),
+            None => None
+        };
+
         let nonce = self.rng.next_state();
 
-        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                                  match meta {
-                                      Some(meta) => Some((meta, start_time)),
-                                      None => None
-                                  });
+        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce, meta);
     }
 }
 
