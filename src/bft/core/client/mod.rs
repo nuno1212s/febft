@@ -303,7 +303,8 @@ impl<D> Client<D>
 
                             // reply already delivered to application
                             if last_operation_id > operation_id {
-                                continue;
+                                //TODO: FIX THIS
+                                // continue;
                             }
 
                             let request_key = get_request_key(session_id, operation_id);
