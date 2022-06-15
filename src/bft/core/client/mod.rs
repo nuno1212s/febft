@@ -355,6 +355,8 @@ impl<D> Client<D>
                                     }
                                 }
 
+                                panic!("NO");
+
                                 let mut ready = get_ready::<D>(session_id, &*data).lock();
                                 let request = IntMapEntry::get(request_key, &mut *ready)
                                     .or_insert_with(|| Ready { payload: None, waker: None });
