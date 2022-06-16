@@ -302,6 +302,8 @@ impl<D> Client<D>
                                 .copied()
                                 .unwrap_or(SeqNo::ZERO);
 
+                            println!("Received reply for {:?} session {:?} op", session_id, operation_id);
+
                             // reply already delivered to application
                             if last_operation_id >= operation_id {
                                 continue;
