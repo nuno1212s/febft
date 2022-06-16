@@ -199,7 +199,8 @@ impl<D> Client<D>
             params,
             session_id,
             node: send_node,
-            operation_counter: SeqNo::ZERO,
+            //Start at one, since when receiving we check if received_op_id >= last_op_id, which is by default 0
+            operation_counter: SeqNo::ZERO.next(),
             dummy_meta: Arc::new(Mutex::new(BatchMeta::new())),
         })
     }
@@ -343,8 +344,6 @@ impl<D> Client<D>
 
                                     if ready_callback_lock.contains_key(request_key) {
                                         let callback = ready_callback_lock.remove(request_key).unwrap();
-
-                                        println!("Responding to {} ({:?}, {:?})", request_key, session_id, operation_id);
 
                                         //FIXME: If this callback executes heavy or blocking operations,
                                         //This will block the receiving thread, meaning request processing
