@@ -352,10 +352,17 @@ impl<D> Client<D>
                                         (callback.to_call)(payload);
 
                                         continue;
+                                    } else {
+                                        println!("Failed to find rq {} ({:?} session, {:?} seq). RQS: ",
+                                                 request_key, session_id, operation_id);
+
+                                        for (key, _) in ready_callback_lock.iter() {
+                                            println!("{}", key);
+                                        }
+
+                                        panic!("NO");
                                     }
                                 }
-
-                                panic!("NO");
 
                                 let mut ready = get_ready::<D>(session_id, &*data).lock();
                                 let request = IntMapEntry::get(request_key, &mut *ready)
@@ -398,7 +405,7 @@ fn get_ready<D: SharedData>(session_id: SeqNo, data: &ClientData<D::Reply>) -> &
 #[inline]
 fn get_ready_callback<D: SharedData>(session_id: SeqNo, data: &ClientData<D::Reply>) -> &Mutex<IntMap<Callback<D::Reply>>> {
     let session_id: usize = session_id.into();
-    let index = session_id % data.ready.len();
+    let index = session_id % data.callback_ready.len();
     &data.callback_ready[index]
 }
 
