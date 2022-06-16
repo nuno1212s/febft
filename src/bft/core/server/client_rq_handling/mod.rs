@@ -256,9 +256,3 @@ impl<S: Service> RqProcessor<S> {
         // self.log.insert(h, r);
     }
 }
-
-fn split_vector<T>(vec: Vec<T>, to_split_at: usize) -> (Vec<T>, Vec<T>) {
-
-
-
-}
