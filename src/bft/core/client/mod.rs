@@ -349,6 +349,7 @@ impl<D> Client<D>
                                     let mut ready_callback_lock = ready_callback.lock();
 
                                     if ready_callback_lock.contains_key(request_key) {
+                                        println!("TESTE");
                                         let callback = ready_callback_lock.remove(request_key).unwrap();
 
                                         //FIXME: If this callback executes heavy or blocking operations,
