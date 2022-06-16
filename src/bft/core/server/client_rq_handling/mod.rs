@@ -202,6 +202,7 @@ impl<S: Service> RqProcessor<S> {
 
 
                                 //This now contains target_global_size requests. We want this to be our next batch
+                                //Currently accumulated contains the remaining messages to be sent in the next batch
                                 let mut next_batch = currently_accumulated.split_off(currently_accumulated.len() - self.target_global_batch_size);
 
                                 //So we swap that memory with the other vector memory and we have it!

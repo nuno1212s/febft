@@ -711,13 +711,16 @@ impl<S, O: Clone, P> Log<S, O, P> {
             }
         }
 
-        let mut guard = self.decided.borrow_mut();
+        {
+            //Encase in a scope to limit the action of the borrow
+            let mut guard = self.decided.borrow_mut();
 
-        for request in &rqs {
-            guard.push(request.message().operation().clone());
+            for request in &rqs {
+                guard.push(request.message().operation().clone());
+            }
         }
 
-        let mut latest_op_guard = self.latest_op().lock();
+        // let mut latest_op_guard = self.latest_op().lock();
 
         let mut batch = UpdateBatch::new_with_cap(rqs.len());
 
@@ -726,13 +729,13 @@ impl<S, O: Clone, P> Log<S, O, P> {
 
             let key = operation_key::<O>(&header, &message);
 
-            let seq_no = latest_op_guard
-                .get(key)
-                .unwrap_or(&SeqNo::ZERO);
-
-            if message.sequence_number() > *seq_no {
-                latest_op_guard.insert(key, message.sequence_number());
-            }
+            // let seq_no = latest_op_guard
+            //     .get(key)
+            //     .unwrap_or(&SeqNo::ZERO);
+            //
+            // if message.sequence_number() > *seq_no {
+            //     latest_op_guard.insert(key, message.sequence_number());
+            // }
 
             batch.add(
                 header.from(),
