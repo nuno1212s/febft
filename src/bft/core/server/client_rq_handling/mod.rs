@@ -200,7 +200,14 @@ impl<S: Service> RqProcessor<S> {
                                 //Producing the replies takes some time.)
                                 //So we will split it up here
 
-                                Some(currently_accumulated.split_off(currently_accumulated.len() - (self.target_global_batch_size + 1)))
+
+                                //This now contains target_global_size requests. We want this to be our next batch
+                                let mut next_batch = currently_accumulated.split_off(currently_accumulated.len() - self.target_global_batch_size);
+
+                                //So we swap that memory with the other vector memory and we have it!
+                                std::mem::swap(&mut next_batch,&mut currently_accumulated);
+
+                                Some(next_batch)
                             } else {
                                 None
                             };
