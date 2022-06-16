@@ -255,8 +255,6 @@ impl<D> Client<D>
         let request_key = get_request_key(session_id, operation_id);
         let ready = get_ready_callback::<D>(session_id, &*self.data);
 
-        println!("Doing request {} with session id {:?} and op id {:?}", request_key, session_id, operation_id);
-
         let callback = Callback {
             to_call: callback
         };
@@ -266,10 +264,6 @@ impl<D> Client<D>
             let mut ready_callback_guard = ready.lock();
 
             ready_callback_guard.insert(request_key, callback);
-
-            for (key, _) in ready_callback_guard.iter() {
-                println!("{}", key);
-            }
         }
 
         //We only send the message after storing the callback to prevent us receiving the result without having
@@ -309,8 +303,7 @@ impl<D> Client<D>
 
                             // reply already delivered to application
                             if last_operation_id > operation_id {
-                                //TODO: FIX THIS
-                                // continue;
+                                continue;
                             }
 
                             let request_key = get_request_key(session_id, operation_id);
@@ -349,7 +342,6 @@ impl<D> Client<D>
                                     let mut ready_callback_lock = ready_callback.lock();
 
                                     if ready_callback_lock.contains_key(request_key) {
-                                        println!("TESTE");
                                         let callback = ready_callback_lock.remove(request_key).unwrap();
 
                                         //FIXME: If this callback executes heavy or blocking operations,
@@ -413,8 +405,6 @@ fn get_ready<D: SharedData>(session_id: SeqNo, data: &ClientData<D::Reply>) -> &
 fn get_ready_callback<D: SharedData>(session_id: SeqNo, data: &ClientData<D::Reply>) -> &Mutex<IntMap<Callback<D::Reply>>> {
     let session_id: usize = session_id.into();
     let index = session_id % data.callback_ready.len();
-
-    println!("Index for session {:?} is {}", session_id, index);
 
     &data.callback_ready[index]
 }
