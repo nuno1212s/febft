@@ -302,7 +302,7 @@ impl<D> Client<D>
                                 .unwrap_or(SeqNo::ZERO);
 
                             // reply already delivered to application
-                            if last_operation_id > operation_id {
+                            if last_operation_id >= operation_id {
                                 continue;
                             }
 
