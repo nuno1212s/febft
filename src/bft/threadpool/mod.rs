@@ -9,6 +9,9 @@ mod cthpool;
 #[cfg(feature = "threadpool_rayon")]
 mod rayon;
 
+use std::convert::TryInto;
+use std::sync::Barrier;
+use thread_priority::{ThreadPriority, ThreadPriorityValue};
 use crate::bft::globals::Global;
 use crate::bft::error::*;
 
@@ -40,6 +43,8 @@ pub struct Builder {
 
     #[cfg(feature = "threadpool_rayon")]
     inner: rayon::Builder,
+
+    priority: Option<ThreadPriority>
 }
 
 impl Builder {
@@ -55,19 +60,49 @@ impl Builder {
             #[cfg(feature = "threadpool_rayon")]
             { rayon::Builder::new() }
         };
-        Builder { inner }
+        Builder { inner, priority: None }
+    }
+
+    pub fn priority(mut self, priority: ThreadPriority) -> Self {
+        self.priority = Some(priority);
+
+        self
     }
 
     /// Returns the handle to a new thread pool.
     pub fn build(self) -> ThreadPool {
         let inner = self.inner.build();
-        ThreadPool { inner }
+
+        let thread_pool = ThreadPool { inner };
+
+        if let Some(priority) = self.priority {
+
+            let active = thread_pool.inner.active_count();
+            let barrier = Barrier::new(active);
+
+            for _ in 0..active {
+                //Set all the threads in the pool to the given priority
+                thread_pool.execute(|| {
+
+                    thread_priority::set_current_thread_priority(priority.clone()).expect("Failed to alter the priority of the thread");
+
+                    //Use the barrier to make sure all threads get put like this, and not just 1 thread doing the same thing
+                    //N times
+                    barrier.wait();
+
+                });
+            }
+
+        }
+
+        thread_pool
+
     }
 
     /// Configures the number of threads used by the thread pool.
     pub fn num_threads(self, num_threads: usize) -> Self {
         let inner = self.inner.num_threads(num_threads);
-        Builder { inner }
+        Builder { inner, priority: None }
     }
 
     // ...eventually add more options?
@@ -123,10 +158,12 @@ macro_rules! client_pool {
 pub unsafe fn init(replica_num_thread: usize, client_num_thread: usize) -> Result<()> {
     let replica_pool = Builder::new()
         .num_threads(replica_num_thread)
+        .priority(ThreadPriority::Crossplatform(50.try_into().unwrap()))
         .build();
 
     let client_pool = Builder::new()
         .num_threads(client_num_thread)
+        .priority(ThreadPriority::Min)
         .build();
 
     REPLICA_POOL.set(replica_pool);

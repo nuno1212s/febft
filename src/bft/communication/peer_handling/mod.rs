@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::convert::TryInto;
 use std::fmt::{Debug, format, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -7,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use intmap::IntMap;
 use log::error;
 use parking_lot::{Mutex, RwLock};
+use thread_priority::ThreadPriority;
 
 use crate::bft::communication::{channel, NODE_CHAN_BOUND, NodeId};
 use crate::bft::communication::channel::{ChannelMultRx, ChannelMultTx, ChannelSyncTx, TryRecvError};
@@ -584,7 +586,9 @@ impl<T> ConnectedPeersPool<T> where T: Send {
 
         //Spawn the thread that will collect client requests
         //and then send the batches to the channel.
-        std::thread::Builder::new().name(format!("Peer pool collector thread #{}", pool_id))
+        thread_priority::ThreadBuilder::default()
+            .name(format!("Peer pool collector thread #{}", pool_id))
+            .priority(ThreadPriority::Crossplatform(50.try_into().unwrap()))
             .spawn(
                 move || {
                     let mut total_rqs_collected: u128 = 0;

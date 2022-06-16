@@ -11,6 +11,7 @@ use log::debug;
 use parking_lot::Mutex;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+use thread_priority::ThreadPriority;
 
 use crate::bft::async_runtime as rt;
 use crate::bft::async_runtime::JoinHandle;
@@ -299,14 +300,22 @@ impl<S> Replica<S>
 
     /// The main loop of a replica.
     pub fn run(&mut self) -> Result<()> {
-        // TODO: exit condition?
-        loop {
-            match self.phase {
-                ReplicaPhase::RetrievingState => self.update_retrieving_state()?,
-                ReplicaPhase::NormalPhase => self.update_normal_phase()?,
-                ReplicaPhase::SyncPhase => self.update_sync_phase().map(|_| ())?,
-            }
-        }
+        
+        thread_priority::ThreadBuilder::default()
+            .name(format!("Main thread"))
+            .priority(ThreadPriority::Max)
+            .spawn(move || {
+                // TODO: exit condition?
+                loop {
+                    match self.phase {
+                        ReplicaPhase::RetrievingState => self.update_retrieving_state()?,
+                        ReplicaPhase::NormalPhase => self.update_normal_phase()?,
+                        ReplicaPhase::SyncPhase => self.update_sync_phase().map(|_| ())?,
+                    }
+                }
+            }).unwrap().join().unwrap()?;
+        
+        Ok(())
     }
 
     fn update_retrieving_state(&mut self) -> Result<()> {
