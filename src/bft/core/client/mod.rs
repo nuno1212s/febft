@@ -356,15 +356,6 @@ impl<D> Client<D>
                                         (callback.to_call)(payload);
 
                                         continue;
-                                    } else {
-                                        println!("Failed to find rq {} ({:?} session, {:?} seq). RQS: ",
-                                                 request_key, session_id, operation_id);
-
-                                        for (key, _) in ready_callback_lock.iter() {
-                                            println!("{}", key);
-                                        }
-
-                                        panic!("NO");
                                     }
                                 }
 
