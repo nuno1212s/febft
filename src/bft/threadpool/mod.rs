@@ -161,7 +161,7 @@ macro_rules! client_pool {
 pub unsafe fn init(replica_num_thread: usize, client_num_thread: usize) -> Result<()> {
     let replica_pool = Builder::new()
         .num_threads(replica_num_thread)
-        .priority(ThreadPriority::Crossplatform(50.try_into().unwrap()))
+        .priority(ThreadPriority::Max)
         .build();
 
     let client_pool = Builder::new()

@@ -1459,7 +1459,7 @@ impl<D> Node<D>
                 //Client threads have low priority
                 ThreadPriority::Min
             } else {
-                ThreadPriority::Crossplatform(50.try_into().unwrap())
+                ThreadPriority::Max
             };
 
             thread_priority::ThreadBuilder::default()

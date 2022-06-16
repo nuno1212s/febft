@@ -588,7 +588,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
         //and then send the batches to the channel.
         thread_priority::ThreadBuilder::default()
             .name(format!("Peer pool collector thread #{}", pool_id))
-            .priority(ThreadPriority::Crossplatform(50.try_into().unwrap()))
+            .priority(ThreadPriority::Max)
             .spawn(move |result| {
                     result.expect("Failed to set thread priority.");
 
