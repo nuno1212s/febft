@@ -2,6 +2,7 @@
 
 use std::cell::Cell;
 use std::cmp::min;
+use std::convert::TryInto;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -30,6 +31,7 @@ use rustls::{ClientConfig, ServerConfig, Stream};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+use thread_priority::ThreadPriority;
 
 use crate::bft::async_runtime as rt;
 use crate::bft::benchmarks::BatchMeta;
@@ -581,7 +583,6 @@ impl<D> Node<D>
         message: SystemMessage<D::State, D::Request, D::Reply>,
         target: NodeId,
     ) {
-
         match self.resolve_client_rx_connection(target) {
             None => {
                 error!("Failed to send message to client {:?} as the connection to it was not found!", target);
@@ -634,7 +635,6 @@ impl<D> Node<D>
 
                 //Send to myself, always synchronous since only replicas send to themselves
                 send_to.value_sync(Right((message, nonce, digest, buf)));
-
             } else {
 
                 // Left -> peer turn
@@ -1366,10 +1366,9 @@ impl<D> Node<D>
 
                 let rx_ref = self.clone();
 
-                std::thread::Builder::new().name(format!("Request Receiver Thread"))
-                    .spawn(move || {
-                        rx_ref.rx_side_establish_conn_task_sync(first_cli, my_id, replica_acceptor, sock);
-                    }).expect("Failed to start RX accept");
+                threadpool::execute_replicas(|| {
+                    rx_ref.rx_side_establish_conn_task_sync(first_cli, my_id, replica_acceptor, sock);
+                }).expect("Failed to start RX accept");
             }
         }
     }
@@ -1452,7 +1451,20 @@ impl<D> Node<D>
                 SecureSocketRecvSync::new_tls(tls_session, sock)
             };
 
-            self.handle_connected_rx_sync(peer_id, sock);
+            //Connection has been established, setup a thread for receiving all of the messages
+            let priority = if peer_id >= first_cli {
+                //Client threads have low priority
+                ThreadPriority::Min
+            } else {
+                ThreadPriority::Crossplatform(50.try_into().unwrap())
+            };
+
+            thread_priority::ThreadBuilder::default()
+                .priority(priority)
+                .name(format!("Peer {:?} message reception thread", peer_id))
+                .spawn(move || {
+                    self.handle_connected_rx_sync(peer_id, sock);
+                }).expect(format!("Failed to collect reception thread for peer {:?}", peer_id).as_str());
 
             return;
         }
@@ -1539,7 +1551,6 @@ impl<D> Node<D>
                 //
                 match self.peer_addrs.get(peer_id.id() as u64) {
                     None => {
-                        //TODO: Maybe change this so it only requires
                         error!("{:?} // Failed to find peer address for tx connection for peer {:?}", self.id(), peer_id);
                     }
                     Some(addr) => {
@@ -1851,7 +1862,6 @@ impl<D> SendNode<D>
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item=NodeId>,
     ) {
-
         let (mine, others) = self.parent_node.send_tos(
             self.id,
             &self.peer_tx,
