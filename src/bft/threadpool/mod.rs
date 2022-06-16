@@ -10,7 +10,7 @@ mod cthpool;
 mod rayon;
 
 use std::convert::TryInto;
-use std::sync::Barrier;
+use std::sync::{Arc, Barrier};
 use thread_priority::{ThreadPriority, ThreadPriorityValue};
 use crate::bft::globals::Global;
 use crate::bft::error::*;
@@ -78,13 +78,16 @@ impl Builder {
         if let Some(priority) = self.priority {
 
             let active = thread_pool.inner.active_count();
-            let barrier = Barrier::new(active);
+            let barrier = Arc::new(Barrier::new(active));
 
             for _ in 0..active {
-                //Set all the threads in the pool to the given priority
-                thread_pool.execute(|| {
+                let barrier = barrier.clone();
+                let priority = priority.clone();
 
-                    thread_priority::set_current_thread_priority(priority.clone()).expect("Failed to alter the priority of the thread");
+                //Set all the threads in the pool to the given priority
+                thread_pool.execute(move || {
+
+                    thread_priority::set_current_thread_priority(priority).expect("Failed to alter the priority of the thread");
 
                     //Use the barrier to make sure all threads get put like this, and not just 1 thread doing the same thing
                     //N times

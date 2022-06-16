@@ -301,21 +301,16 @@ impl<S> Replica<S>
     /// The main loop of a replica.
     pub fn run(&mut self) -> Result<()> {
         
-        thread_priority::ThreadBuilder::default()
-            .name(format!("Main thread"))
-            .priority(ThreadPriority::Max)
-            .spawn(move || {
-                // TODO: exit condition?
-                loop {
-                    match self.phase {
-                        ReplicaPhase::RetrievingState => self.update_retrieving_state()?,
-                        ReplicaPhase::NormalPhase => self.update_normal_phase()?,
-                        ReplicaPhase::SyncPhase => self.update_sync_phase().map(|_| ())?,
-                    }
-                }
-            }).unwrap().join().unwrap()?;
+        thread_priority::set_current_thread_priority(ThreadPriority::Max).expect("Failed to set thread priority");
         
-        Ok(())
+        // TODO: exit condition?
+        loop {
+            match self.phase {
+                ReplicaPhase::RetrievingState => self.update_retrieving_state()?,
+                ReplicaPhase::NormalPhase => self.update_normal_phase()?,
+                ReplicaPhase::SyncPhase => self.update_sync_phase().map(|_| ())?,
+            }
+        }
     }
 
     fn update_retrieving_state(&mut self) -> Result<()> {
@@ -733,7 +728,7 @@ impl<S> Replica<S>
                             &self.synchronizer,
                             &self.timeouts,
                             &self.node,
-                            &self.log
+                            &self.log,
                         );
                         self.phase = ReplicaPhase::RetrievingState;
                     }
@@ -742,7 +737,7 @@ impl<S> Replica<S>
                             &self.synchronizer,
                             &self.timeouts,
                             &self.node,
-                            &self.log
+                            &self.log,
                         );
                         self.phase = ReplicaPhase::RetrievingState;
                     }

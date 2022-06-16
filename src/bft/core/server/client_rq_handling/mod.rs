@@ -74,7 +74,9 @@ impl<S: Service> RqProcessor<S> {
     pub fn start(self: Arc<Self>) -> JoinHandle<()> {
         thread_priority::ThreadBuilder::default()
             .priority(ThreadPriority::Max)
-            .spawn(move || {
+            .spawn(move |result| {
+
+                result.expect("Failed to set thread priority");
 
                 //The currently accumulated requests, accumulated while we wait for the next batch to propose
                 let mut currently_accumulated = Vec::with_capacity(self.node_ref.batch_size() * 10);
@@ -126,11 +128,11 @@ impl<S: Service> RqProcessor<S> {
                                     match sysmsg {
                                         SystemMessage::Request(req) => {
                                             /*let key = logg::operation_key(&header, &req);
-    
+
                                             let current_seq_for_client = lock_guard.get(key)
                                                 .copied()
                                                 .unwrap_or(SeqNo::ZERO);
-    
+
                                             if req.sequence_number() < current_seq_for_client {
                                                 //Avoid repeating requests for clients
                                                 continue;

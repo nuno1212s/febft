@@ -1366,9 +1366,12 @@ impl<D> Node<D>
 
                 let rx_ref = self.clone();
 
-                threadpool::execute_replicas(|| {
+                let first_cli = first_cli.clone();
+                let my_id = my_id.clone();
+
+                threadpool::execute_replicas(move || {
                     rx_ref.rx_side_establish_conn_task_sync(first_cli, my_id, replica_acceptor, sock);
-                }).expect("Failed to start RX accept");
+                });
             }
         }
     }
@@ -1462,8 +1465,11 @@ impl<D> Node<D>
             thread_priority::ThreadBuilder::default()
                 .priority(priority)
                 .name(format!("Peer {:?} message reception thread", peer_id))
-                .spawn(move || {
+                .spawn(move |result| {
+                    result.expect("Failed to set thread priority");
+
                     self.handle_connected_rx_sync(peer_id, sock);
+
                 }).expect(format!("Failed to collect reception thread for peer {:?}", peer_id).as_str());
 
             return;

@@ -589,8 +589,9 @@ impl<T> ConnectedPeersPool<T> where T: Send {
         thread_priority::ThreadBuilder::default()
             .name(format!("Peer pool collector thread #{}", pool_id))
             .priority(ThreadPriority::Crossplatform(50.try_into().unwrap()))
-            .spawn(
-                move || {
+            .spawn(move |result| {
+                    result.expect("Failed to set thread priority.");
+
                     let mut total_rqs_collected: u128 = 0;
                     let mut collections: u64 = 0;
 

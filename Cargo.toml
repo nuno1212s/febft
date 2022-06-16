@@ -14,7 +14,7 @@ readme = "README.md"
 # Consult the crate documentation for more details on the features.
 default = [
     "async_runtime_async_std",
-    "threadpool_rayon",
+    "threadpool_crossbeam",
     "socket_tokio_tcp",
     "serialize_serde",
     "channel_flume_mpmc",

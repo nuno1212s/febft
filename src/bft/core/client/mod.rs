@@ -185,13 +185,15 @@ impl<D> Client<D>
         // spawn receiving task
         thread_priority::ThreadBuilder::default().name(format!("Client {:?} message processing thread", node.id()))
             .priority(ThreadPriority::Max)
-            .spawn(move || {
-            Self::message_recv_task(
-                params,
-                task_data,
-                node,
-            )
-        });
+            .spawn(move |result| {
+                result.expect("Failed to set thread priority");
+
+                Self::message_recv_task(
+                    params,
+                    task_data,
+                    node,
+                )
+            }).expect("Failed to launch message processing thread");
 
         let session_id = data
             .session_counter
@@ -253,7 +255,7 @@ impl<D> Client<D>
         let message = SystemMessage::Request(RequestMessage::new(
             session_id,
             operation_id,
-            operation
+            operation,
         ));
 
         // await response
