@@ -87,7 +87,8 @@ impl<D: SharedData> Clone for Client<D> {
             params: self.params,
             node: self.node.clone(),
             data: Arc::clone(&self.data),
-            operation_counter: SeqNo::ZERO,
+            //Start at one, since when receiving we check if received_op_id >= last_op_id, which is by default 0
+            operation_counter: SeqNo::ZERO.next(),
             dummy_meta: Arc::new(Mutex::new(BatchMeta::new())),
         }
     }
@@ -301,8 +302,6 @@ impl<D> Client<D>
                                 .get(session_id.into())
                                 .copied()
                                 .unwrap_or(SeqNo::ZERO);
-
-                            println!("Received reply for {:?} session {:?} op", session_id, operation_id);
 
                             // reply already delivered to application
                             if last_operation_id >= operation_id {
