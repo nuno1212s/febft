@@ -408,6 +408,9 @@ fn get_ready<D: SharedData>(session_id: SeqNo, data: &ClientData<D::Reply>) -> &
 fn get_ready_callback<D: SharedData>(session_id: SeqNo, data: &ClientData<D::Reply>) -> &Mutex<IntMap<Callback<D::Reply>>> {
     let session_id: usize = session_id.into();
     let index = session_id % data.callback_ready.len();
+
+    println!("Index for session {:?} is {}", session_id, index);
+
     &data.callback_ready[index]
 }
 
