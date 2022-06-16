@@ -402,6 +402,8 @@ impl<P> UpdateBatchReplies<P> {
         self.inner
     }
 
+
+
     /// Returns the length of the batch.
     pub fn len(&self) -> usize {
         self.inner.len()

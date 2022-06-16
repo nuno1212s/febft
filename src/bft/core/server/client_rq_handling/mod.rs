@@ -61,7 +61,7 @@ impl<S: Service> RqProcessor<S> {
             consensus_lock,
             consensus_guard,
             target_global_batch_size,
-            global_batch_time_limit
+            global_batch_time_limit,
         })
     }
 
@@ -160,7 +160,6 @@ impl<S: Service> RqProcessor<S> {
                 }
 
                 if is_leader && !currently_accumulated.is_empty() {
-
                     let current_batch_size = currently_accumulated.len();
 
                     if current_batch_size < self.target_global_batch_size {
@@ -168,10 +167,9 @@ impl<S: Service> RqProcessor<S> {
 
                         if micros_since_last_batch <= self.global_batch_time_limit {
                             //Batch isn't large enough and time hasn't passed, don't even attempt to propose
-                            continue
+                            continue;
                         }
                     }
-
                     //Attempt to propose new batch
                     match self.consensus_guard.compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed) {
                         Ok(_) => {
@@ -195,6 +193,19 @@ impl<S: Service> RqProcessor<S> {
 
                             last_seq = Some(seq);
 
+                            let next_batch = if currently_accumulated.len() > self.target_global_batch_size {
+
+                                //TODO: just make processing these batches faster
+                                //If the batch is too large (120k requests for example, we can get stuck on processing them as they all come at once and
+                                //Producing the replies takes some time.)
+                                //So we will split it up here
+
+                                Some(currently_accumulated.split_off(currently_accumulated.len() - (self.target_global_batch_size + 1)))
+                            } else {
+                                None
+                            };
+
+
                             let message = SystemMessage::Consensus(ConsensusMessage::new(
                                 seq,
                                 view.sequence_number(),
@@ -205,7 +216,7 @@ impl<S: Service> RqProcessor<S> {
 
                             self.node_ref.broadcast(message, targets);
 
-                            currently_accumulated = Vec::with_capacity(self.node_ref.batch_size() * 2);
+                            currently_accumulated = next_batch.unwrap_or(Vec::with_capacity(self.node_ref.batch_size() * 2));
 
                             if batches_made % 10000 == 0 {
                                 let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
@@ -244,4 +255,10 @@ impl<S: Service> RqProcessor<S> {
         // This was replaced with a batched log instead of a per message log to save hashing ops
         // self.log.insert(h, r);
     }
+}
+
+fn split_vector<T>(vec: Vec<T>, to_split_at: usize) -> (Vec<T>, Vec<T>) {
+
+
+
 }

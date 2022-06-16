@@ -628,14 +628,14 @@ impl<S> Replica<S>
                             // attributed by the consensus layer to each op,
                             // to execute in order
                             ConsensusStatus::Decided(batch_digest, digests) => {
-                                for digest in digests.iter() {
-                                    self.synchronizer.unwatch_request(digest);
-                                }
-
-                                let (info, batch) = self.log.finalize_batch(seq, batch_digest, digests)?;
+                                // for digest in digests.iter() {
+                                //     self.synchronizer.unwatch_request(digest);
+                                // }
 
                                 let new_meta = BatchMeta::new();
                                 let meta = std::mem::replace(&mut *self.log.batch_meta().lock(), new_meta);
+
+                                let (info, batch) = self.log.finalize_batch(seq, batch_digest, digests)?;
 
                                 //Send the finalized batch to the rq finalizer
                                 //So everything can be removed from the correct logs and

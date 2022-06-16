@@ -728,10 +728,9 @@ impl<S, O: Clone, P> Log<S, O, P> {
 
             let seq_no = latest_op_guard
                 .get(key)
-                .copied()
-                .unwrap_or(SeqNo::ZERO);
+                .unwrap_or(&SeqNo::ZERO);
 
-            if message.sequence_number() > seq_no {
+            if message.sequence_number() > *seq_no {
                 latest_op_guard.insert(key, message.sequence_number());
             }
 
