@@ -266,6 +266,10 @@ impl<D> Client<D>
             let mut ready_callback_guard = ready.lock();
 
             ready_callback_guard.insert(request_key, callback);
+
+            for (key, _) in ready_callback_guard.iter() {
+                println!("{}", key);
+            }
         }
 
         //We only send the message after storing the callback to prevent us receiving the result without having
