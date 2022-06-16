@@ -285,7 +285,7 @@ impl<D> Client<D>
 
     ///This task might become a large bottleneck with the scenario of few clients with high concurrent rqs,
     /// As the replicas will make very large batches and respond to all the sent requests in one go.
-    /// This leaves this thread with a very large amount of requests to process, and given
+    /// This leaves this thread with a very large task to do in a very short time and it just can't keep up
     fn message_recv_task(
         params: SystemParams,
         data: Arc<ClientData<D::Reply>>,
@@ -303,10 +303,11 @@ impl<D> Client<D>
                             let (session_id, operation_id, payload) = message.into_inner();
                             let last_operation_id = last_operation_ids
                                 .get(session_id.into())
-                                .unwrap_or(&SeqNo::ZERO);
+                                .copied()
+                                .unwrap_or(SeqNo::ZERO);
 
                             // reply already delivered to application
-                            if last_operation_id >= *operation_id {
+                            if last_operation_id >= operation_id {
                                 continue;
                             }
 
