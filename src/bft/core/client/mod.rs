@@ -344,6 +344,8 @@ impl<D> Client<D>
                                     if ready_callback_lock.contains_key(request_key) {
                                         let callback = ready_callback_lock.remove(request_key).unwrap();
 
+                                        println!("Responding to {} ({:?}, {:?})", request_key, session_id, operation_id);
+
                                         //FIXME: If this callback executes heavy or blocking operations,
                                         //This will block the receiving thread, meaning request processing
                                         //Can be hampered.
