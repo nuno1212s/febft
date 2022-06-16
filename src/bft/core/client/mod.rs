@@ -255,6 +255,8 @@ impl<D> Client<D>
         let request_key = get_request_key(session_id, operation_id);
         let ready = get_ready_callback::<D>(session_id, &*self.data);
 
+        println!("Doing request {} with session id {:?} and op id {:?}", request_key, session_id, operation_id);
+
         let callback = Callback {
             to_call: callback
         };
