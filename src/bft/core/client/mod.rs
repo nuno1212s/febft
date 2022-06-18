@@ -12,7 +12,6 @@ use futures::StreamExt;
 
 use intmap::IntMap;
 use parking_lot::Mutex;
-use thread_priority::ThreadPriority;
 
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::{
@@ -183,8 +182,8 @@ impl<D> Client<D>
         let send_node = node.send_node();
 
         // spawn receiving task
-        thread_priority::ThreadBuilder::default().name(format!("Client {:?} message processing thread", node.id()))
-            .priority(ThreadPriority::Max)
+        std::thread::Builder::new()
+            .name(format!("Client {:?} message processing thread", node.id()))
             .spawn(move |result| {
                 result.expect("Failed to set thread priority");
 

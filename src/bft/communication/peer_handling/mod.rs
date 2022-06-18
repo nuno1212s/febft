@@ -8,7 +8,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use intmap::IntMap;
 use log::error;
 use parking_lot::{Mutex, RwLock};
-use thread_priority::ThreadPriority;
 
 use crate::bft::communication::{channel, NODE_CHAN_BOUND, NodeId};
 use crate::bft::communication::channel::{ChannelMultRx, ChannelMultTx, ChannelSyncTx, TryRecvError};
@@ -586,9 +585,8 @@ impl<T> ConnectedPeersPool<T> where T: Send {
 
         //Spawn the thread that will collect client requests
         //and then send the batches to the channel.
-        thread_priority::ThreadBuilder::default()
+        std::thread::Builder::new()
             .name(format!("Peer pool collector thread #{}", pool_id))
-            .priority(ThreadPriority::Max)
             .spawn(move |result| {
                     result.expect("Failed to set thread priority.");
 

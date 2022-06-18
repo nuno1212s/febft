@@ -11,7 +11,6 @@ mod rayon;
 
 use std::convert::TryInto;
 use std::sync::{Arc, Barrier};
-use thread_priority::{ThreadPriority, ThreadPriorityValue};
 use crate::bft::globals::Global;
 use crate::bft::error::*;
 
@@ -43,8 +42,6 @@ pub struct Builder {
 
     #[cfg(feature = "threadpool_rayon")]
     inner: rayon::Builder,
-
-    priority: Option<ThreadPriority>
 }
 
 impl Builder {
@@ -60,43 +57,13 @@ impl Builder {
             #[cfg(feature = "threadpool_rayon")]
             { rayon::Builder::new() }
         };
-        Builder { inner, priority: None }
+        Builder { inner}
     }
-
-    pub fn priority(mut self, priority: ThreadPriority) -> Self {
-        self.priority = Some(priority);
-
-        self
-    }
-
     /// Returns the handle to a new thread pool.
     pub fn build(self) -> ThreadPool {
         let inner = self.inner.build();
 
         let thread_pool = ThreadPool { inner };
-
-        if let Some(priority) = self.priority {
-
-            let active = thread_pool.inner.active_count();
-            let barrier = Arc::new(Barrier::new(active));
-
-            for _ in 0..active {
-                let barrier = barrier.clone();
-                let priority = priority.clone();
-
-                //Set all the threads in the pool to the given priority
-                thread_pool.execute(move || {
-
-                    thread_priority::set_current_thread_priority(priority).expect("Failed to alter the priority of the thread");
-
-                    //Use the barrier to make sure all threads get put like this, and not just 1 thread doing the same thing
-                    //N times
-                    barrier.wait();
-
-                });
-            }
-
-        }
 
         thread_pool
 
@@ -161,12 +128,10 @@ macro_rules! client_pool {
 pub unsafe fn init(replica_num_thread: usize, client_num_thread: usize) -> Result<()> {
     let replica_pool = Builder::new()
         .num_threads(replica_num_thread)
-        .priority(ThreadPriority::Max)
         .build();
 
     let client_pool = Builder::new()
         .num_threads(client_num_thread)
-        .priority(ThreadPriority::Min)
         .build();
 
     REPLICA_POOL.set(replica_pool);

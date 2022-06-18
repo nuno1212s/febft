@@ -1,5 +1,8 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 use chrono::DateTime;
 use chrono::offset::Utc;
+use parking_lot::Mutex;
 
 use crate::bft::communication::NodeId;
 
@@ -31,6 +34,65 @@ pub struct Measurements {
     pub message_signing_time_taken: BenchmarkHelper,
     //Time taken to create send to objects
     pub message_send_to_create: BenchmarkHelper,
+}
+
+pub struct CommStats {
+    node_id: NodeId,
+    requests_received: AtomicUsize,
+    requests_sent: AtomicUsize,
+    requests_received_last_mark: Mutex<Instant>,
+    requests_sent_last_mark: Mutex<Instant>,
+    measurement_interval: usize
+}
+
+
+impl CommStats {
+
+    pub fn new(owner_id: NodeId, measurement_interval: usize) -> Self {
+
+        Self {
+            node_id: owner_id,
+            requests_received: AtomicUsize::new(0),
+            requests_sent: AtomicUsize::new(0),
+            requests_received_last_mark: Mutex::new(Instant::now()),
+            requests_sent_last_mark: Mutex::new(Instant::now()),
+            measurement_interval
+        }
+
+    }
+
+    fn register_rq(&self, counter: &AtomicUsize, last_mark: &Mutex<Instant>, info: &str) {
+
+        let requests = counter.fetch_add(1, Ordering::Relaxed);
+
+        if requests % self.measurement_interval == 0 {
+            let current_instant = Instant::now();
+
+            let previous_instant = {
+                let mut guard = last_mark.lock();
+
+                let instant_replica = current_instant.clone();
+
+                std::mem::replace(&mut *guard, instant_replica)
+            };
+
+            let duration = current_instant.duration_since(previous_instant).as_micros();
+
+            let rq_per_second = self.measurement_interval as f64 / duration as f64;
+
+            println!("{:?} // {:?} // {} requests {} per second", current_instant, self.node_id, rq_per_second, info);
+        }
+
+    }
+
+    pub fn register_rq_received(&self) {
+        self.register_rq(&self.requests_received, &self.requests_received_last_mark, "received");
+    }
+
+    pub fn register_rq_sent(&self) {
+        self.register_rq(&self.requests_sent, &self.requests_sent_last_mark, "sent");
+    }
+
 }
 
 const CAP: usize = 2048;

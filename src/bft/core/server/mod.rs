@@ -11,7 +11,6 @@ use log::debug;
 use parking_lot::Mutex;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
-use thread_priority::ThreadPriority;
 
 use crate::bft::async_runtime as rt;
 use crate::bft::async_runtime::JoinHandle;
@@ -300,9 +299,7 @@ impl<S> Replica<S>
 
     /// The main loop of a replica.
     pub fn run(&mut self) -> Result<()> {
-        
-        thread_priority::set_current_thread_priority(ThreadPriority::Max).expect("Failed to set thread priority");
-        
+
         // TODO: exit condition?
         loop {
             match self.phase {

@@ -1,11 +1,9 @@
 //! Communication primitives for `febft`, such as wire message formats.
 
-use std::cell::Cell;
-use std::cmp::min;
-use std::convert::TryInto;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use async_tls::{
@@ -31,13 +29,12 @@ use rustls::{ClientConfig, ServerConfig, Stream};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use thread_priority::ThreadPriority;
 
 use crate::bft::async_runtime as rt;
-use crate::bft::benchmarks::BatchMeta;
+use crate::bft::benchmarks::{CommStats};
 use crate::bft::communication::message::{Header, Message, SerializedMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
 use crate::bft::communication::peer_handling::{ConnectedPeer, NodePeers};
-use crate::bft::communication::send_thread::{BroadcastMsg, BroadcastSerialized, MessageSendRq, SendHandle};
+use crate::bft::communication::send_thread::{BroadcastSerialized, MessageSendRq, SendHandle};
 use crate::bft::communication::serialize::{
     Buf,
     DigestData,
@@ -233,7 +230,9 @@ pub struct Node<D: SharedData + 'static> {
     sync_connector: Arc<ClientConfig>,
     peer_addrs: IntMap<PeerAddr>,
     sender_handle: SendHandle<D>,
+    comm_stats: Option<Arc<CommStats>>,
 }
+
 
 ///Represents the server addresses of a peer
 ///Clients will only have 1 address while replicas will have 2 addresses (1 for facing clients,
@@ -306,6 +305,8 @@ pub struct NodeConfig {
     ///How long should a client pool sleep for before attempting to collect requests again
     /// (It actually will sleep between 3/4 and 5/4 of this value, to make sure they don't all sleep / wake up at the same time)
     pub batch_sleep_micros: u64,
+    ///Statistics for communications
+    pub comm_stats: Option<Arc<CommStats>>,
 }
 
 // max no. of messages allowed in the channel
@@ -411,6 +412,7 @@ impl<D> Node<D>
             peer_addrs: cfg.addrs,
             first_cli: cfg.first_cli,
             sender_handle: send_handle,
+            comm_stats: cfg.comm_stats,
         });
 
         let rx_node_clone = node.clone();
@@ -614,6 +616,7 @@ impl<D> Node<D>
         target: NodeId,
         first_cli: NodeId,
         nonce: u64,
+        comm_stats: Option<Arc<CommStats>>,
     ) {
         let send_task = move || {
             // serialize
@@ -635,6 +638,10 @@ impl<D> Node<D>
 
                 //Send to myself, always synchronous since only replicas send to themselves
                 send_to.value_sync(Right((message, nonce, digest, buf)));
+
+                if let Some(comm_stats) = &comm_stats {
+                    comm_stats.register_rq_sent();
+                }
             } else {
 
                 // Left -> peer turn
@@ -650,6 +657,10 @@ impl<D> Node<D>
                         let before_sending = Instant::now();
 
                         send_to.value_sync(Left((nonce, digest, buf)));
+
+                        if let Some(comm_stats) = &comm_stats {
+                            comm_stats.register_rq_sent();
+                        }
                     }
                 }
             }
@@ -729,6 +740,7 @@ impl<D> Node<D>
         my_send_to: Option<SerializedSendTo<D>>,
         other_send_tos: SerializedSendTos<D>,
         first_client: NodeId,
+        comm_stats: Option<Arc<CommStats>>,
     ) {
         threadpool::execute_replicas(move || {
             // send to ourselves
@@ -749,6 +761,10 @@ impl<D> Node<D>
                     let current_instant = Instant::now();
 
                     send_to.value_sync(header, message);
+
+                    if let Some(comm_stats) = &comm_stats {
+                        comm_stats.register_rq_sent();
+                    }
                 };
 
                 if id < first_client {
@@ -782,6 +798,10 @@ impl<D> Node<D>
                             let current_instant = Instant::now();
 
                             send_to.value_sync(header, message);
+
+                            if let Some(comm_stats) = &comm_stats {
+                                comm_stats.register_rq_sent();
+                            }
                         };
 
                         if id < first_client {
@@ -802,6 +822,7 @@ impl<D> Node<D>
         other_send_tos: SendTos<D>,
         first_cli: NodeId,
         nonce: u64,
+        comm_stats: Option<Arc<CommStats>>,
     ) {
         threadpool::execute_replicas(move || {
             let start_serialization = Instant::now();
@@ -830,6 +851,10 @@ impl<D> Node<D>
 
                     // Right -> our turn
                     send_to.value_sync(Right((message, nonce, digest, buf)));
+
+                    if let Some(comm_stats) = &comm_stats {
+                        comm_stats.register_rq_sent();
+                    }
                 };
 
                 if id < first_cli {
@@ -863,6 +888,10 @@ impl<D> Node<D>
                             let before_send_time = Instant::now();
 
                             send_to.value_sync(Left((nonce, digest, buf)));
+
+                            if let Some(comm_stats) = &comm_stats {
+                                comm_stats.register_rq_sent();
+                            }
                         };
 
                         if id < first_cli {
@@ -1369,7 +1398,7 @@ impl<D> Node<D>
                 let first_cli = first_cli.clone();
                 let my_id = my_id.clone();
 
-                threadpool::execute_replicas(move || {
+                threadpool::execute_clients(move || {
                     rx_ref.rx_side_establish_conn_task_sync(first_cli, my_id, replica_acceptor, sock);
                 });
             }
@@ -1454,23 +1483,11 @@ impl<D> Node<D>
                 SecureSocketRecvSync::new_tls(tls_session, sock)
             };
 
-            //Connection has been established, setup a thread for receiving all of the messages
-            let priority = if peer_id >= first_cli {
-                //Client threads have low priority
-                ThreadPriority::Min
-            } else {
-                ThreadPriority::Max
-            };
+            let cpy_peer_id = peer_id.clone();
 
-            thread_priority::ThreadBuilder::default()
-                .priority(priority)
-                .name(format!("Peer {:?} message reception thread", peer_id))
-                .spawn(move |result| {
-                    result.expect("Failed to set thread priority");
-
-                    self.handle_connected_rx_sync(peer_id, sock);
-
-                }).expect(format!("Failed to collect reception thread for peer {:?}", peer_id).as_str());
+            std::thread::Builder::new().name(format!("Reception thread client {:?}", peer_id)).spawn(move || {
+                self.handle_connected_rx_sync(peer_id, sock);
+            }).expect(format!("Failed to create client connection thread for client {:?}", cpy_peer_id).as_str());
 
             return;
         }
@@ -1635,6 +1652,10 @@ impl<D> Node<D>
             let msg = Message::System(header, message);
 
             client.push_request(msg).await;
+
+            if let Some(comm_stats) = &self.comm_stats {
+                comm_stats.register_rq_received();
+            }
         }
 
         // announce we have disconnected
@@ -1663,7 +1684,7 @@ impl<D> Node<D>
 
                 let self_cpy = self.clone();
 
-                threadpool::execute_replicas(move || {
+                threadpool::execute_clients(move || {
                     let id = self_cpy.id;
                     let first_cli = self_cpy.first_cli;
                     let sync_conn = self_cpy.sync_connector.clone();
@@ -1733,6 +1754,10 @@ impl<D> Node<D>
             let msg = Message::System(header, message);
 
             client.push_request_sync(msg);
+
+            if let Some(comm_stats) = &self.comm_stats {
+                comm_stats.register_rq_received();
+            }
         }
 
         // announce we have disconnected

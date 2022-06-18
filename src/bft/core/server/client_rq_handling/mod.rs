@@ -5,7 +5,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use parking_lot::{Mutex};
-use thread_priority::ThreadPriority;
 use crate::bft::communication::{channel, Node, NodeId};
 use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, RequestMessage, StoredMessage, SystemMessage};
@@ -72,8 +71,7 @@ impl<S: Service> RqProcessor<S> {
 
     ///Start this work
     pub fn start(self: Arc<Self>) -> JoinHandle<()> {
-        thread_priority::ThreadBuilder::default()
-            .priority(ThreadPriority::Max)
+        std::thread::Builder::new()
             .spawn(move |result| {
 
                 result.expect("Failed to set thread priority");
