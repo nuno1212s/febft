@@ -72,9 +72,7 @@ impl<S: Service> RqProcessor<S> {
     ///Start this work
     pub fn start(self: Arc<Self>) -> JoinHandle<()> {
         std::thread::Builder::new()
-            .spawn(move |result| {
-
-                result.expect("Failed to set thread priority");
+            .spawn(move || {
 
                 //The currently accumulated requests, accumulated while we wait for the next batch to propose
                 let mut currently_accumulated = Vec::with_capacity(self.node_ref.batch_size() * 10);

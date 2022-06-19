@@ -587,9 +587,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
         //and then send the batches to the channel.
         std::thread::Builder::new()
             .name(format!("Peer pool collector thread #{}", pool_id))
-            .spawn(move |result| {
-                    result.expect("Failed to set thread priority.");
-
+            .spawn(move || {
                     let mut total_rqs_collected: u128 = 0;
                     let mut collections: u64 = 0;
 

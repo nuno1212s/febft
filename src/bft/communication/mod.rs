@@ -532,6 +532,7 @@ impl<D> Node<D>
             peer_tx: self.peer_tx.clone(),
             parent_node: Arc::clone(self),
             channel: Arc::clone(self.loopback_channel()),
+            comm_stats: self.comm_stats.clone()
         }
     }
 
@@ -569,7 +570,7 @@ impl<D> Node<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce);
+                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce, self.comm_stats.clone());
             }
         };
     }
@@ -603,7 +604,8 @@ impl<D> Node<D>
 
                 let nonce = self.rng.next_state();
 
-                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce);
+                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
+                                self.comm_stats.clone());
             }
         };
     }
@@ -640,7 +642,7 @@ impl<D> Node<D>
                 send_to.value_sync(Right((message, nonce, digest, buf)));
 
                 if let Some(comm_stats) = &comm_stats {
-                    comm_stats.register_rq_sent();
+                    comm_stats.register_rq_sent(target);
                 }
             } else {
 
@@ -659,7 +661,7 @@ impl<D> Node<D>
                         send_to.value_sync(Left((nonce, digest, buf)));
 
                         if let Some(comm_stats) = &comm_stats {
-                            comm_stats.register_rq_sent();
+                            comm_stats.register_rq_sent(target);
                         }
                     }
                 }
@@ -690,7 +692,8 @@ impl<D> Node<D>
 
         let nonce = self.rng.next_state();
 
-        Self::broadcast_impl(message, mine, others, self.first_cli, nonce);
+        Self::broadcast_impl(message, mine, others, self.first_cli, nonce,
+                             self.comm_stats.clone());
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -712,7 +715,8 @@ impl<D> Node<D>
 
         let nonce = self.rng.next_state();
 
-        Self::broadcast_impl(message, mine, others, self.first_cli, nonce);
+        Self::broadcast_impl(message, mine, others, self.first_cli, nonce,
+                             self.comm_stats.clone());
     }
 
     pub fn broadcast_serialized(
@@ -731,7 +735,8 @@ impl<D> Node<D>
         );
 
         Self::broadcast_serialized_impl(messages, mine, others,
-                                        self.first_client_id());
+                                        self.first_client_id(),
+                                        self.comm_stats.clone());
     }
 
     #[inline]
@@ -755,6 +760,8 @@ impl<D> Node<D>
                     .map(|stored| stored.into_inner())
                     .unwrap();
 
+                let comm_stats = comm_stats.clone();
+
                 let send_myself_task = move || {
                     //Measuring time taken to get to the point of sending the message
                     //We don't actually want to measure how long it takes to send the message
@@ -763,7 +770,7 @@ impl<D> Node<D>
                     send_to.value_sync(header, message);
 
                     if let Some(comm_stats) = &comm_stats {
-                        comm_stats.register_rq_sent();
+                        comm_stats.register_rq_sent(id);
                     }
                 };
 
@@ -785,6 +792,8 @@ impl<D> Node<D>
                     .map(|stored| stored.into_inner())
                     .unwrap();
 
+                let comm_stats = comm_stats.clone();
+
                 match send_to.socket_type().unwrap() {
                     SecureSocketSend::Async(_) => {
                         rt::spawn(async move {
@@ -800,7 +809,7 @@ impl<D> Node<D>
                             send_to.value_sync(header, message);
 
                             if let Some(comm_stats) = &comm_stats {
-                                comm_stats.register_rq_sent();
+                                comm_stats.register_rq_sent(id);
                             }
                         };
 
@@ -844,6 +853,8 @@ impl<D> Node<D>
 
                 let buf = buf.clone();
 
+                let comm_stats = comm_stats.clone();
+
                 let send_task = move || {
                     //Measuring time taken to get to the point of sending the message
                     //We don't actually want to measure how long it takes to send the message
@@ -853,7 +864,7 @@ impl<D> Node<D>
                     send_to.value_sync(Right((message, nonce, digest, buf)));
 
                     if let Some(comm_stats) = &comm_stats {
-                        comm_stats.register_rq_sent();
+                        comm_stats.register_rq_sent(id);
                     }
                 };
 
@@ -873,6 +884,8 @@ impl<D> Node<D>
                 };
 
                 let buf = buf.clone();
+                
+                let comm_stats = comm_stats.clone();
 
                 match send_to.socket_type().unwrap() {
                     SecureSocketSend::Async(_) => {
@@ -890,7 +903,7 @@ impl<D> Node<D>
                             send_to.value_sync(Left((nonce, digest, buf)));
 
                             if let Some(comm_stats) = &comm_stats {
-                                comm_stats.register_rq_sent();
+                                comm_stats.register_rq_sent(id);
                             }
                         };
 
@@ -1654,7 +1667,7 @@ impl<D> Node<D>
             client.push_request(msg).await;
 
             if let Some(comm_stats) = &self.comm_stats {
-                comm_stats.register_rq_received();
+                comm_stats.register_rq_received(peer_id);
             }
         }
 
@@ -1756,7 +1769,7 @@ impl<D> Node<D>
             client.push_request_sync(msg);
 
             if let Some(comm_stats) = &self.comm_stats {
-                comm_stats.register_rq_received();
+                comm_stats.register_rq_received(peer_id);
             }
         }
 
@@ -1774,6 +1787,7 @@ pub struct SendNode<D: SharedData + 'static> {
     peer_tx: PeerTx,
     parent_node: Arc<Node<D>>,
     channel: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+    comm_stats: Option<Arc<CommStats>>,
 }
 
 impl<D: SharedData> Clone for SendNode<D> {
@@ -1786,6 +1800,7 @@ impl<D: SharedData> Clone for SendNode<D> {
             peer_tx: self.peer_tx.clone(),
             parent_node: self.parent_node.clone(),
             channel: self.channel.clone(),
+            comm_stats: self.comm_stats.clone(),
         }
     }
 }
@@ -1833,7 +1848,7 @@ impl<D> SendNode<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce);
+                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce, self.comm_stats.clone());
             }
         }
     }
@@ -1862,7 +1877,7 @@ impl<D> SendNode<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce);
+                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce, self.comm_stats.clone());
             }
         }
     }
@@ -1884,7 +1899,8 @@ impl<D> SendNode<D>
 
         let nonce = self.rng.next_state();
 
-        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce);
+        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce,
+                                  self.comm_stats.clone());
     }
 
     /// Check the `broadcast_signed()` documentation for `Node`.
@@ -1902,7 +1918,8 @@ impl<D> SendNode<D>
 
         let nonce = self.rng.next_state();
 
-        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce);
+        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce,
+                                  self.comm_stats.clone());
     }
 }
 

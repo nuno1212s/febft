@@ -37,6 +37,12 @@ pub struct Measurements {
 }
 
 pub struct CommStats {
+    client_comm: Option<CommStatsHelper>,
+    replica_comm: CommStatsHelper,
+    first_cli: NodeId
+}
+
+struct CommStatsHelper {
     node_id: NodeId,
     requests_received: AtomicUsize,
     requests_sent: AtomicUsize,
@@ -45,8 +51,48 @@ pub struct CommStats {
     measurement_interval: usize
 }
 
-
 impl CommStats {
+
+    pub fn new(owner_id: NodeId, first_cli: NodeId, measurement_interval: usize) -> Self {
+
+        Self {
+            client_comm: if owner_id > first_cli {Some(CommStatsHelper::new(owner_id, measurement_interval))} else {None},
+            replica_comm: CommStatsHelper::new(owner_id, measurement_interval),
+            first_cli
+        }
+
+    }
+
+    pub fn register_rq_received(&self, sender: NodeId) {
+        if sender > self.first_cli {
+            match &self.client_comm {
+                None => {}
+                Some(stats) => {
+                    stats.register_rq_received();
+                }
+            }
+        } else {
+            self.replica_comm.register_rq_received();
+        }
+    }
+
+    pub fn register_rq_sent(&self, destination: NodeId) {
+        if destination > self.first_cli {
+            match &self.client_comm {
+                None => {}
+                Some(stats) => {
+                    stats.register_rq_sent();
+                }
+            }
+        } else {
+            self.replica_comm.register_rq_sent();
+        }
+    }
+
+
+}
+
+impl CommStatsHelper {
 
     pub fn new(owner_id: NodeId, measurement_interval: usize) -> Self {
 

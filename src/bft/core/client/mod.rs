@@ -184,8 +184,7 @@ impl<D> Client<D>
         // spawn receiving task
         std::thread::Builder::new()
             .name(format!("Client {:?} message processing thread", node.id()))
-            .spawn(move |result| {
-                result.expect("Failed to set thread priority");
+            .spawn(move || {
 
                 Self::message_recv_task(
                     params,

@@ -17,6 +17,7 @@ use serde::{
     Deserialize,
 };
 use intmap::IntMap;
+use febft::bft::benchmarks::CommStats;
 
 use febft::bft::error::*;
 use febft::bft::threadpool;
@@ -96,6 +97,7 @@ async fn node_config(
     sk: KeyPair,
     addrs: IntMap<PeerAddr>,
     pk: IntMap<PublicKey>,
+    comm_stats: Option<Arc<CommStats>>
 ) -> NodeConfig {
     // read TLS configs concurrently
     let (client_config, server_config) = {
@@ -115,6 +117,7 @@ async fn node_config(
         client_config,
         server_config,
         first_cli: NodeId::from(1000u32),
+        comm_stats: comm_stats
     }
 }
 

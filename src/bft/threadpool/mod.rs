@@ -72,7 +72,7 @@ impl Builder {
     /// Configures the number of threads used by the thread pool.
     pub fn num_threads(self, num_threads: usize) -> Self {
         let inner = self.inner.num_threads(num_threads);
-        Builder { inner, priority: None }
+        Builder { inner }
     }
 
     // ...eventually add more options?
