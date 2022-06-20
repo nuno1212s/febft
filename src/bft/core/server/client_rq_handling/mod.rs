@@ -241,6 +241,9 @@ impl<S: Service> RqProcessor<S> {
                             Err(_) => {}
                         }
                     }
+
+                    //Yield to prevent active waiting
+                    std::thread::yield_now();
                 }
             }).unwrap()
     }

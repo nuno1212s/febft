@@ -8,10 +8,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 use futures::StreamExt;
+use futures_timer::Delay;
 
 use intmap::IntMap;
+use log::error;
 use parking_lot::Mutex;
+use tokio::time::MissedTickBehavior::Delay;
 
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::{
@@ -185,7 +189,6 @@ impl<D> Client<D>
         std::thread::Builder::new()
             .name(format!("Client {:?} message processing thread", node.id()))
             .spawn(move || {
-
                 Self::message_recv_task(
                     params,
                     task_data,
@@ -276,6 +279,8 @@ impl<D> Client<D>
         let targets = NodeId::targets(0..self.params.n());
 
         self.node.broadcast(message, targets);
+
+        self.start_timeout(session_id, operation_id, self.data.clone());
     }
 
     fn next_operation_id(&mut self) -> SeqNo {
@@ -284,6 +289,35 @@ impl<D> Client<D>
         self.operation_counter = self.operation_counter.next();
 
         id
+    }
+
+    fn start_timeout(&self, session_id: SeqNo, rq_id: SeqNo, client_data: Arc<ClientData<D::Reply>>) {
+        let node_id = self.node.id();
+
+        crate::bft::async_runtime::spawn(async move {
+
+            //Timeout delay
+            Delay::new(Duration::from_secs(2)).await;
+
+            let req_key = get_request_key(session_id, rq_id);
+
+            {
+                let bucket = get_ready::<D>(session_id, &*client_data);
+
+                if bucket.lock().contains_key(req_key) {
+                    error!("{:?} // Request {:?} of session {:?} has timed OUT!", node_id,
+                    rq_id, session_id);
+                }
+            }
+
+            {
+                let bucket = get_ready_callback::<D>(session_id, &*client_data);
+
+                if bucket.lock().contains_key(req_key) {
+                    error!("{:?} // Request {:?} of session {:?} has timed OUT!", node_id, rq_id, session_id);
+                }
+            }
+        });
     }
 
     ///This task might become a large bottleneck with the scenario of few clients with high concurrent rqs,
