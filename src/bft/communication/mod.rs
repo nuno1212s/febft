@@ -295,8 +295,6 @@ pub struct NodeConfig {
     pub replica_server_config: rustls::ServerConfig,
     ///The TLS configuration used to connect to replica nodes (from replica nodes) (Synchronousy)
     pub replica_client_config: rustls::ClientConfig,
-    ///Should the leader replica attempt to fill out batches (might lead to increased pre consensus latency)
-    pub fill_batch: bool,
     ///How many clients should be placed in a single collecting pool (seen in peer_handling)
     pub clients_per_pool: usize,
     ///The timeout for batch collection in each client pool.

@@ -163,9 +163,6 @@ pub struct ReplicaConfig<S> {
     /// Next sequence number attributed to a request by
     /// the consensus layer.
     pub next_consensus_seq: SeqNo,
-    /// The maximum number of client requests to queue
-    /// before executing the consensus algorithm.
-    pub batch_size: usize,
     ///The targetted global batch size
     pub global_batch_size: usize,
     ///The time limit for creating that batch, in micro seconds
@@ -188,10 +185,13 @@ impl<S> Replica<S>
             global_batch_size,
             batch_timeout,
             node: node_config,
-            batch_size,
             service,
             view,
         } = cfg;
+
+        let per_pool_batch_timeout = node_config.batch_timeout_micros;
+        let per_pool_batch_sleep = node_config.batch_sleep_micros;
+        let per_pool_batch_size = node_config.batch_size;
 
         // system params
         let n = node_config.n;
@@ -199,7 +199,7 @@ impl<S> Replica<S>
         let view = ViewInfo::new(view, n, f)?;
 
         // TODO: get log from persistent storage
-        let log = Log::new(node_config.id.clone(), batch_size);
+        let log = Log::new(node_config.id.clone(), global_batch_size);
 
         // connect to peer nodes
         let (node, rogue) = Node::bootstrap(node_config).await?;
@@ -252,7 +252,8 @@ impl<S> Replica<S>
             node,
             log: log.clone(),
             client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts, consensus_info.clone(),
-                                         consensus_guard.clone(), global_batch_size, batch_timeout),
+                                         consensus_guard.clone(), global_batch_size,
+                                         batch_timeout),
             rq_finalizer,
             consensus_lock: consensus_info,
         };
@@ -288,6 +289,15 @@ impl<S> Replica<S>
                 _ => (),
             }
         }
+
+        println!("{:?} // Started replica.", replica.id());
+
+        println!("{:?} // Per Pool Batch size: {}", replica.id(), per_pool_batch_size);
+        println!("{:?} // Per pool batch sleep: {}", replica.id(), per_pool_batch_sleep);
+        println!("{:?} // Per pool batch timeout: {}", replica.id(), per_pool_batch_timeout);
+
+        println!("{:?} // Global batch size: {}", replica.id(), global_batch_size);
+        println!("{:?} // Global batch timeout: {}", replica.id(), batch_timeout);
 
         Ok(replica)
     }
