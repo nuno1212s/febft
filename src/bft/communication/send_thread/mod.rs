@@ -104,10 +104,6 @@ impl<D> SendWorker<D> where D: SharedData + 'static {
 
         let nonce = send_struct.nonce;
 
-        let time_taken = Instant::now().duration_since(start_serialization).as_nanos();
-
-        send_struct.time_info.0.lock().message_signing_latencies.push(time_taken);
-
         // send
         if send_struct.my_id == send_struct.target {
             // Right -> our turn
@@ -119,7 +115,6 @@ impl<D> SendWorker<D> where D: SharedData + 'static {
             //Send to myself, always synchronous since only replicas send to themselves
             send_struct.send_to.value_sync(Right((send_struct.message, nonce, digest, buf)));
 
-            send_struct.time_info.0.lock().message_passing_latencies.push(dur_since);
         } else {
 
             // Left -> peer turn
@@ -132,11 +127,9 @@ impl<D> SendWorker<D> where D: SharedData + 'static {
                 SecureSocketSend::Sync(_) => {
                     //Measuring time taken to get to the point of sending the message
                     //We don't actually want to measure how long it takes to send the message
-                    let dur_sinc = Instant::now().duration_since(send_struct.time_info.1).as_nanos();
 
                     send_struct.send_to.value_sync(Left((nonce, digest, buf)));
 
-                    send_struct.time_info.0.lock().message_passing_latencies.push(dur_sinc);
                 }
             }
         }
@@ -157,7 +150,6 @@ impl<D> SendWorker<D> where D: SharedData + 'static {
 
         let time_serializing = Instant::now().duration_since(start_serialization);
 
-        broadcast.time_info.0.lock().message_signing_latencies.push(time_serializing.as_nanos());
 
         // send to ourselves
         if let Some(mut send_to) = broadcast.own_send_to {
@@ -170,7 +162,6 @@ impl<D> SendWorker<D> where D: SharedData + 'static {
             // Right -> our turn
             send_to.value_sync(Right((broadcast.message, nonce, digest, buf)));
 
-            broadcast.time_info.0.lock().message_passing_latencies_own.push(dur_since);
         }
 
         // send to others
@@ -195,7 +186,6 @@ impl<D> SendWorker<D> where D: SharedData + 'static {
             }
         }
 
-        broadcast.time_info.0.lock().message_passing_latencies.push(dur_since);
     }
 
     fn broadcast_serialized_impl(mut broadcast: BroadcastSerialized<D>) {
@@ -217,7 +207,6 @@ impl<D> SendWorker<D> where D: SharedData + 'static {
 
             send_to.value_sync(header, message);
 
-            broadcast.time_info.0.lock().message_passing_latencies_own.push(dur_since);
         }
 
 
@@ -248,7 +237,6 @@ impl<D> SendWorker<D> where D: SharedData + 'static {
             }
         }
 
-        broadcast.time_info.0.lock().message_passing_latencies.push(dur_since);
     }
 }
 

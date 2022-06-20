@@ -532,7 +532,7 @@ impl<D> Node<D>
             peer_tx: self.peer_tx.clone(),
             parent_node: Arc::clone(self),
             channel: Arc::clone(self.loopback_channel()),
-            comm_stats: self.comm_stats.clone()
+            comm_stats: self.comm_stats.clone(),
         }
     }
 
@@ -570,7 +570,14 @@ impl<D> Node<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce, self.comm_stats.clone());
+                let comm_stats = if let Some(comm_stats) = &self.comm_stats {
+                    Some((comm_stats.clone(), start_instant))
+                } else {
+                    None
+                };
+
+                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
+                                comm_stats);
             }
         };
     }
@@ -591,6 +598,8 @@ impl<D> Node<D>
                 error!("Failed to send message to client {:?} as the connection to it was not found!", target);
             }
             Some(conn) => {
+                let start_time = Instant::now();
+
                 let send_to = Self::send_to(
                     true,
                     self.id,
@@ -604,8 +613,14 @@ impl<D> Node<D>
 
                 let nonce = self.rng.next_state();
 
+                let comm_stats = if let Some(comm_stats) = &self.comm_stats {
+                    Some((comm_stats.clone(), start_time))
+                } else {
+                    None
+                };
+
                 Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
-                                self.comm_stats.clone());
+                                comm_stats);
             }
         };
     }
@@ -618,7 +633,7 @@ impl<D> Node<D>
         target: NodeId,
         first_cli: NodeId,
         nonce: u64,
-        comm_stats: Option<Arc<CommStats>>,
+        comm_stats: Option<(Arc<CommStats>, Instant)>,
     ) {
         let send_task = move || {
             // serialize
@@ -630,19 +645,32 @@ impl<D> Node<D>
                 &mut buf,
             ).unwrap();
 
+            if let Some((comm_stats, _)) = &comm_stats {
+                let time_taken_signing = Instant::now().duration_since(start_serialization).as_nanos();
+
+                //Broadcasts are always for replicas, so make this
+                comm_stats.insert_message_signing_time(NodeId::from(0u32), time_taken_signing);
+            }
+
             // send
             if my_id == target {
                 // Right -> our turn
 
                 //Measuring time taken to get to the point of sending the message
                 //We don't actually want to measure how long it takes to send the message
-                let before_sending = Instant::now();
+                let before_send_time = Instant::now();
 
                 //Send to myself, always synchronous since only replicas send to themselves
                 send_to.value_sync(Right((message, nonce, digest, buf)));
 
-                if let Some(comm_stats) = &comm_stats {
-                    comm_stats.register_rq_sent(target);
+                if let Some((comm_stats, start_time)) = &comm_stats {
+                    let dur_since = before_send_time.duration_since(*start_time).as_nanos();
+
+                    let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
+
+                    comm_stats.insert_message_passing_latency_own(dur_since);
+                    comm_stats.insert_message_sending_time_own(dur_send);
+                    comm_stats.register_rq_sent(my_id);
                 }
             } else {
 
@@ -650,17 +678,37 @@ impl<D> Node<D>
                 match send_to.socket_type().unwrap() {
                     SecureSocketSend::Async(_) => {
                         rt::spawn(async move {
+                            //Measuring time taken to get to the point of sending the message
+                            //We don't actually want to measure how long it takes to send the message
+                            let before_send_time = Instant::now();
+
                             send_to.value(Left((nonce, digest, buf))).await;
+
+                            if let Some((comm_stats, start_time)) = &comm_stats {
+                                let dur_since = before_send_time.duration_since(*start_time).as_nanos();
+
+                                let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
+
+                                comm_stats.insert_message_passing_latency(target, dur_since);
+                                comm_stats.insert_message_sending_time(target, dur_send);
+                                comm_stats.register_rq_sent(target);
+                            }
                         });
                     }
                     SecureSocketSend::Sync(_) => {
                         //Measuring time taken to get to the point of sending the message
                         //We don't actually want to measure how long it takes to send the message
-                        let before_sending = Instant::now();
+                        let before_send_time = Instant::now();
 
                         send_to.value_sync(Left((nonce, digest, buf)));
 
-                        if let Some(comm_stats) = &comm_stats {
+                        if let Some((comm_stats, start_time)) = &comm_stats {
+                            let dur_since = before_send_time.duration_since(*start_time).as_nanos();
+
+                            let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
+
+                            comm_stats.insert_message_passing_latency(target, dur_since);
+                            comm_stats.insert_message_sending_time(target, dur_send);
                             comm_stats.register_rq_sent(target);
                         }
                     }
@@ -692,8 +740,14 @@ impl<D> Node<D>
 
         let nonce = self.rng.next_state();
 
+        let comm_stats = if let Some(comm_stats) = &self.comm_stats {
+            Some((comm_stats.clone(), start_time))
+        } else {
+            None
+        };
+
         Self::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                             self.comm_stats.clone());
+                             comm_stats);
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -715,8 +769,14 @@ impl<D> Node<D>
 
         let nonce = self.rng.next_state();
 
+        let comm_stats = if let Some(comm_stats) = &self.comm_stats {
+            Some((comm_stats.clone(), start_time))
+        } else {
+            None
+        };
+
         Self::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                             self.comm_stats.clone());
+                             comm_stats);
     }
 
     pub fn broadcast_serialized(
@@ -734,9 +794,15 @@ impl<D> Node<D>
             headers,
         );
 
+        let comm_stats = if let Some(comm_stats) = &self.comm_stats {
+            Some((comm_stats.clone(), start_time))
+        } else {
+            None
+        };
+
         Self::broadcast_serialized_impl(messages, mine, others,
                                         self.first_client_id(),
-                                        self.comm_stats.clone());
+                                        comm_stats);
     }
 
     #[inline]
@@ -745,7 +811,7 @@ impl<D> Node<D>
         my_send_to: Option<SerializedSendTo<D>>,
         other_send_tos: SerializedSendTos<D>,
         first_client: NodeId,
-        comm_stats: Option<Arc<CommStats>>,
+        comm_stats: Option<(Arc<CommStats>, Instant)>,
     ) {
         threadpool::execute_replicas(move || {
             // send to ourselves
@@ -765,11 +831,18 @@ impl<D> Node<D>
                 let send_myself_task = move || {
                     //Measuring time taken to get to the point of sending the message
                     //We don't actually want to measure how long it takes to send the message
-                    let current_instant = Instant::now();
+                    let before_sending = Instant::now();
 
                     send_to.value_sync(header, message);
 
-                    if let Some(comm_stats) = &comm_stats {
+                    if let Some((comm_stats, start_send)) = &comm_stats {
+                        let dur_since = before_sending.duration_since(*start_send).as_nanos();
+
+                        let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
+
+                        comm_stats.insert_message_passing_latency_own(dur_since);
+                        comm_stats.insert_message_sending_time_own(dur_sending);
+
                         comm_stats.register_rq_sent(id);
                     }
                 };
@@ -797,18 +870,40 @@ impl<D> Node<D>
                 match send_to.socket_type().unwrap() {
                     SecureSocketSend::Async(_) => {
                         rt::spawn(async move {
+                            //Measuring time taken to get to the point of sending the message
+                            //We don't actually want to measure how long it takes to send the message
+                            let before_sending = Instant::now();
+
                             send_to.value(header, message).await;
+
+                            if let Some((comm_stats, start_send)) = &comm_stats {
+                                let dur_since = before_sending.duration_since(*start_send).as_nanos();
+
+                                let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
+
+                                comm_stats.insert_message_passing_latency(id, dur_since);
+                                comm_stats.insert_message_sending_time(id, dur_sending);
+
+                                comm_stats.register_rq_sent(id);
+                            }
                         });
                     }
                     SecureSocketSend::Sync(_) => {
                         let send_task = move || {
                             //Measuring time taken to get to the point of sending the message
                             //We don't actually want to measure how long it takes to send the message
-                            let current_instant = Instant::now();
+                            let before_sending = Instant::now();
 
                             send_to.value_sync(header, message);
 
-                            if let Some(comm_stats) = &comm_stats {
+                            if let Some((comm_stats, start_send)) = &comm_stats {
+                                let dur_since = before_sending.duration_since(*start_send).as_nanos();
+
+                                let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
+
+                                comm_stats.insert_message_passing_latency(id, dur_since);
+                                comm_stats.insert_message_sending_time(id, dur_sending);
+
                                 comm_stats.register_rq_sent(id);
                             }
                         };
@@ -831,7 +926,7 @@ impl<D> Node<D>
         other_send_tos: SendTos<D>,
         first_cli: NodeId,
         nonce: u64,
-        comm_stats: Option<Arc<CommStats>>,
+        comm_stats: Option<(Arc<CommStats>, Instant)>,
     ) {
         threadpool::execute_replicas(move || {
             let start_serialization = Instant::now();
@@ -843,6 +938,13 @@ impl<D> Node<D>
                 &message,
                 &mut buf,
             ).unwrap();
+
+            if let Some((comm_stats, _)) = &comm_stats {
+                let time_taken_signing = Instant::now().duration_since(start_serialization).as_nanos();
+
+                //Broadcasts are always for replicas, so make this
+                comm_stats.insert_message_signing_time(NodeId::from(0u32), time_taken_signing);
+            }
 
             // send to ourselves
             if let Some(mut send_to) = my_send_to {
@@ -863,7 +965,13 @@ impl<D> Node<D>
                     // Right -> our turn
                     send_to.value_sync(Right((message, nonce, digest, buf)));
 
-                    if let Some(comm_stats) = &comm_stats {
+                    if let Some((comm_stats, start_time)) = &comm_stats {
+                        let dur_since = before_send_time.duration_since(*start_time).as_nanos();
+
+                        let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
+
+                        comm_stats.insert_message_passing_latency_own(dur_since);
+                        comm_stats.insert_message_sending_time_own(dur_send);
                         comm_stats.register_rq_sent(id);
                     }
                 };
@@ -884,7 +992,7 @@ impl<D> Node<D>
                 };
 
                 let buf = buf.clone();
-                
+
                 let comm_stats = comm_stats.clone();
 
                 match send_to.socket_type().unwrap() {
@@ -902,7 +1010,13 @@ impl<D> Node<D>
 
                             send_to.value_sync(Left((nonce, digest, buf)));
 
-                            if let Some(comm_stats) = &comm_stats {
+                            if let Some((comm_stats, start_time)) = &comm_stats {
+                                let dur_since = before_send_time.duration_since(*start_time).as_nanos();
+
+                                let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
+
+                                comm_stats.insert_message_passing_latency(id, dur_since);
+                                comm_stats.insert_message_sending_time(id, dur_send);
                                 comm_stats.register_rq_sent(id);
                             }
                         };
@@ -1848,7 +1962,14 @@ impl<D> SendNode<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce, self.comm_stats.clone());
+                let comm_stats = if let Some(comm_stats) = &self.comm_stats {
+                    Some((comm_stats.clone(), start_time))
+                } else {
+                    None
+                };
+
+                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
+                                     comm_stats);
             }
         }
     }
@@ -1866,6 +1987,7 @@ impl<D> SendNode<D>
                 error!("Failed to send message to client {:?} as the connection to it was not found!", target);
             }
             Some(conn) => {
+
                 let send_to = <Node<D>>::send_to(
                     true,
                     self.id,
@@ -1877,7 +1999,14 @@ impl<D> SendNode<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce, self.comm_stats.clone());
+                let comm_stats = if let Some(comm_stats) = &self.comm_stats {
+                    Some((comm_stats.clone(), start_time))
+                } else {
+                    None
+                };
+
+                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
+                                     comm_stats);
             }
         }
     }
@@ -1899,8 +2028,14 @@ impl<D> SendNode<D>
 
         let nonce = self.rng.next_state();
 
+        let comm_stats = if let Some(comm_stats) = &self.comm_stats {
+            Some((comm_stats.clone(), start_time))
+        } else {
+            None
+        };
+
         <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                                  self.comm_stats.clone());
+                                  comm_stats);
     }
 
     /// Check the `broadcast_signed()` documentation for `Node`.
@@ -1909,6 +2044,8 @@ impl<D> SendNode<D>
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item=NodeId>,
     ) {
+        let start_time = Instant::now();
+
         let (mine, others) = self.parent_node.send_tos(
             self.id,
             &self.peer_tx,
@@ -1918,8 +2055,14 @@ impl<D> SendNode<D>
 
         let nonce = self.rng.next_state();
 
+        let comm_stats = if let Some(comm_stats) = &self.comm_stats {
+            Some((comm_stats.clone(), start_time))
+        } else {
+            None
+        };
+
         <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                                  self.comm_stats.clone());
+                                  comm_stats);
     }
 }
 

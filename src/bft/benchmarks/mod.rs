@@ -22,43 +22,130 @@ pub struct Measurements {
     pub prepare_time_taken: BenchmarkHelper,
     //Time taken since the first commit message was received until the consensus is finished
     pub commit_time_taken: BenchmarkHelper,
-    //Time since instructed to send the request and the actual sending of the request
-    pub message_passing_time_taken: BenchmarkHelper,
-    //Time since instructed to send the request and the actual sending of the request
-    pub message_passing_time_taken_own: BenchmarkHelper,
-    //Time taken to send the message
-    pub message_sending_time_taken: BenchmarkHelper,
-    //Time taken to send the message to ourselves
-    pub message_sending_time_taken_own: BenchmarkHelper,
-    //Time taken to sign the requests
-    pub message_signing_time_taken: BenchmarkHelper,
-    //Time taken to create send to objects
-    pub message_send_to_create: BenchmarkHelper,
 }
 
 pub struct CommStats {
     client_comm: Option<CommStatsHelper>,
     replica_comm: CommStatsHelper,
-    first_cli: NodeId
+    first_cli: NodeId,
+    node_id: NodeId
 }
 
 struct CommStatsHelper {
     node_id: NodeId,
     requests_received: AtomicUsize,
     requests_sent: AtomicUsize,
-    requests_received_last_mark: Mutex<Instant>,
-    requests_sent_last_mark: Mutex<Instant>,
-    measurement_interval: usize
+    requests_last_mark: Mutex<(Instant, usize, usize)>,
+    measurement_interval: usize,
+    info: String,
+
+    //Time since instructed to send the request and the actual sending of the request
+    pub message_passing_time_taken: Vec<Mutex<BenchmarkHelper>>,
+    //Time since instructed to send the request and the actual sending of the request
+    pub message_passing_time_taken_own: Vec<Mutex<BenchmarkHelper>>,
+    //Time taken to send the message
+    pub message_sending_time_taken: Vec<Mutex<BenchmarkHelper>>,
+    //Time taken to send the message to ourselves
+    pub message_sending_time_taken_own: Vec<Mutex<BenchmarkHelper>>,
+    //Time taken to sign the requests
+    pub message_signing_time_taken: Vec<Mutex<BenchmarkHelper>>,
+    //Time taken to create send to objects
+    pub message_send_to_create: Vec<Mutex<BenchmarkHelper>>,
 }
 
 impl CommStats {
-
     pub fn new(owner_id: NodeId, first_cli: NodeId, measurement_interval: usize) -> Self {
-
         Self {
-            client_comm: if owner_id > first_cli {Some(CommStatsHelper::new(owner_id, measurement_interval))} else {None},
-            replica_comm: CommStatsHelper::new(owner_id, measurement_interval),
-            first_cli
+            client_comm: if owner_id > first_cli { Some(CommStatsHelper::new(owner_id, String::from("Clients"), measurement_interval)) } else { None },
+            replica_comm: CommStatsHelper::new(owner_id, String::from("Replicas"), measurement_interval),
+            first_cli,
+            node_id: owner_id
+        }
+    }
+
+    pub fn insert_message_signing_time(&self, dest: NodeId, time: u128) {
+        if dest > self.first_cli {
+            match &self.client_comm {
+                None => {}
+                Some(stats) => {
+                    stats.insert_message_signing_time(time)
+                }
+            }
+        } else {
+            self.replica_comm.insert_message_signing_time(time)
+        }
+    }
+
+    pub fn insert_message_send_to_create_time(&self, dest: NodeId, time: u128) {
+        if dest > self.first_cli {
+            match &self.client_comm {
+                None => {}
+                Some(stats) => {
+                    stats.insert_message_send_to_create(time);
+                }
+            }
+        } else {
+            self.replica_comm.insert_message_send_to_create(time)
+        }
+    }
+
+    pub fn insert_message_passing_latency_own(&self, time: u128) {
+
+        if self.node_id > self.first_cli {
+            match &self.client_comm {
+                None => {}
+                Some(stats) => {
+                    stats.insert_message_passing_time_own(time);
+                }
+            }
+        } else {
+            self.replica_comm.insert_message_passing_time_own(time)
+        }
+
+    }
+
+
+    pub fn insert_message_passing_latency(&self, dest: NodeId, time: u128) {
+
+        if dest > self.first_cli {
+            match &self.client_comm {
+                None => {}
+                Some(stats) => {
+                    stats.insert_message_passing_time(time);
+                }
+            }
+        } else {
+            self.replica_comm.insert_message_passing_time(time)
+        }
+
+    }
+
+    pub fn insert_message_sending_time_own(&self, time: u128) {
+
+        if self.node_id > self.first_cli {
+            match &self.client_comm {
+                None => {}
+                Some(stats) => {
+                    stats.insert_message_sending_time_own(time);
+                }
+            }
+        } else {
+            self.replica_comm.insert_message_sending_time_own(time)
+        }
+
+    }
+
+    pub fn insert_message_sending_time(&self, dest: NodeId, time: u128) {
+
+        if dest > self.first_cli {
+            match &self.client_comm {
+                None => {}
+                Some(stats) => {
+                    stats.insert_message_sending_time(time);
+                }
+            }
+        } else {
+            self.replica_comm.insert_message_sending_time(time)
         }
 
     }
@@ -88,57 +175,148 @@ impl CommStats {
             self.replica_comm.register_rq_sent();
         }
     }
-
-
 }
 
 impl CommStatsHelper {
+    const CONCURRENCY_LEVEL: u128 = 10;
 
-    pub fn new(owner_id: NodeId, measurement_interval: usize) -> Self {
+    pub fn new(owner_id: NodeId, info: String, measurement_interval: usize) -> Self {
+        let concurrency_level = Self::CONCURRENCY_LEVEL as usize;
 
         Self {
             node_id: owner_id,
             requests_received: AtomicUsize::new(0),
             requests_sent: AtomicUsize::new(0),
-            requests_received_last_mark: Mutex::new(Instant::now()),
-            requests_sent_last_mark: Mutex::new(Instant::now()),
-            measurement_interval
+            requests_last_mark: Mutex::new((Instant::now(), 0, 0)),
+            info,
+            measurement_interval,
+            message_passing_time_taken: std::iter::repeat_with(|| {
+                Mutex::new(BenchmarkHelper::new(owner_id, measurement_interval / concurrency_level))
+            }
+            ).take(concurrency_level).collect(),
+            message_passing_time_taken_own: std::iter::repeat_with(|| {
+                Mutex::new(BenchmarkHelper::new(owner_id, measurement_interval / concurrency_level))
+            }
+            ).take(concurrency_level).collect(),
+            message_sending_time_taken: std::iter::repeat_with(|| {
+                Mutex::new(BenchmarkHelper::new(owner_id, measurement_interval / concurrency_level))
+            }
+            ).take(concurrency_level).collect(),
+            message_sending_time_taken_own: std::iter::repeat_with(|| {
+                Mutex::new(BenchmarkHelper::new(owner_id, measurement_interval / concurrency_level))
+            }
+            ).take(concurrency_level).collect(),
+            message_signing_time_taken: std::iter::repeat_with(|| {
+                Mutex::new(BenchmarkHelper::new(owner_id, measurement_interval / concurrency_level))
+            }
+            ).take(concurrency_level).collect(),
+            message_send_to_create: std::iter::repeat_with(|| {
+                Mutex::new(BenchmarkHelper::new(owner_id, measurement_interval / concurrency_level))
+            }
+            ).take(concurrency_level).collect(),
         }
-
     }
 
-    fn register_rq(&self, counter: &AtomicUsize, last_mark: &Mutex<Instant>, info: &str) {
+    fn insert_value(dest: &Vec<Mutex<BenchmarkHelper>>, time: u128) {
+        let bucket = (time % Self::CONCURRENCY_LEVEL) as usize;
 
+        dest[bucket].lock().values.push(time);
+    }
+
+    pub fn insert_message_passing_time(&self, time: u128) {
+        Self::insert_value(&self.message_passing_time_taken, time);
+    }
+
+    pub fn insert_message_passing_time_own(&self, time: u128) {
+        Self::insert_value(&self.message_passing_time_taken_own, time);
+    }
+
+    pub fn insert_message_sending_time(&self, time: u128) {
+        Self::insert_value(&self.message_sending_time_taken, time);
+    }
+
+    pub fn insert_message_sending_time_own(&self, time: u128) {
+        Self::insert_value(&self.message_sending_time_taken_own, time);
+    }
+
+    pub fn insert_message_signing_time(&self, time: u128) {
+        Self::insert_value(&self.message_signing_time_taken, time);
+    }
+
+    pub fn insert_message_send_to_create(&self, time: u128) {
+        Self::insert_value(&self.message_send_to_create, time);
+    }
+
+    fn gather_rqs(to_gather: &Vec<Mutex<BenchmarkHelper>>) {
+        let mut first_elem = to_gather[0].lock();
+
+        for i in 1..to_gather.len() {
+            first_elem.merge(&mut *to_gather[i].lock());
+        }
+    }
+
+    pub fn gather_all_rqs(&self) {
+        Self::gather_rqs(&self.message_signing_time_taken);
+        Self::gather_rqs(&self.message_send_to_create);
+        Self::gather_rqs(&self.message_sending_time_taken);
+        Self::gather_rqs(&self.message_sending_time_taken_own);
+        Self::gather_rqs(&self.message_passing_time_taken);
+        Self::gather_rqs(&self.message_passing_time_taken_own);
+    }
+
+    fn register_rq(&self, counter: &AtomicUsize) -> usize {
         let requests = counter.fetch_add(1, Ordering::Relaxed);
+        requests
+    }
+
+    pub fn register_rq_received(&self) {
+        self.register_rq(&self.requests_received);
+    }
+
+    pub fn register_rq_sent(&self) {
+        let requests = self.register_rq(&self.requests_sent);
 
         if requests % self.measurement_interval == 0 {
             let current_instant = Instant::now();
 
-            let previous_instant = {
-                let mut guard = last_mark.lock();
+            let current_rcved_requests = self.requests_received.load(Ordering::Relaxed);
+
+            let (previous_instant, prev_sent_rqs, prev_recvd_rqs) = {
+                let mut guard = self.requests_last_mark.lock();
 
                 let instant_replica = current_instant.clone();
 
-                std::mem::replace(&mut *guard, instant_replica)
+                std::mem::replace(&mut *guard, (instant_replica, requests, current_rcved_requests))
             };
 
             let duration = current_instant.duration_since(previous_instant).as_micros();
 
-            let rq_per_second = self.measurement_interval as f64 / duration as f64;
+            let sent_rqs = requests - prev_sent_rqs;
+            let rcved_rqs = current_rcved_requests - prev_recvd_rqs;
 
-            println!("{:?} // {:?} // {} requests {} per second", current_instant, self.node_id, rq_per_second, info);
+            let sent_rq_per_second = (sent_rqs as f64 / duration as f64) * 1000.0 * 1000.0;
+            let recv_rq_per_second = (rcved_rqs as f64 / duration as f64 * 1000.0 * 1000.0);
+
+            self.gather_all_rqs();
+
+            println!("{:?} // {:?} // --- Measurements after {}  ({} samples) ---",
+                     self.node_id, self.info, requests, self.measurement_interval);
+
+            println!("{:?} // {:?} // {} requests {} per second", self.node_id, current_instant,
+                     sent_rq_per_second, "sent");
+
+            println!("{:?} // {:?} // {} requests {} per second", self.node_id, current_instant,
+                     recv_rq_per_second, "received");
+
+            self.message_passing_time_taken_own[0].lock().log_latency("Message passing (Own)");
+            self.message_passing_time_taken[0].lock().log_latency("Message passing");
+            self.message_sending_time_taken[0].lock().log_latency("Message sending");
+            self.message_sending_time_taken_own[0].lock().log_latency("Message sending (Own)");
+            self.message_signing_time_taken[0].lock().log_latency("Message signing");
+            self.message_send_to_create[0].lock().log_latency("Create send to objects");
         }
 
     }
-
-    pub fn register_rq_received(&self) {
-        self.register_rq(&self.requests_received, &self.requests_received_last_mark, "received");
-    }
-
-    pub fn register_rq_sent(&self) {
-        self.register_rq(&self.requests_sent, &self.requests_sent_last_mark, "sent");
-    }
-
 }
 
 const CAP: usize = 2048;
@@ -159,12 +337,6 @@ impl Measurements {
             message_recv_latency: BenchmarkHelper::new(id, CAP),
             prepare_time_taken: BenchmarkHelper::new(id, CAP),
             commit_time_taken: BenchmarkHelper::new(id, CAP),
-            message_passing_time_taken: BenchmarkHelper::new(id, CAP),
-            message_passing_time_taken_own: BenchmarkHelper::new(id, CAP),
-            message_sending_time_taken: BenchmarkHelper::new(id, CAP),
-            message_sending_time_taken_own: BenchmarkHelper::new(id, CAP),
-            message_signing_time_taken: BenchmarkHelper::new(id, CAP),
-            message_send_to_create: BenchmarkHelper::new(id, CAP),
         }
     }
 }
@@ -195,18 +367,6 @@ pub struct BatchMeta {
     pub first_prepare_received: DateTime<Utc>,
     //The time at which we have received the first commit message
     pub first_commit_received: DateTime<Utc>,
-    pub message_passing_latencies_own: Vec<u128>,
-    //Stores times taken since instructing the message to be sent and the message
-    //Actually being sent
-    pub message_passing_latencies: Vec<u128>,
-    //Stores times taken signing the request
-    pub message_signing_latencies: Vec<u128>,
-    //Stores time taken to actually send the message to our own
-    pub message_sending_latencies_own: Vec<u128>,
-    //Stores time taken to actually send the message to others
-    pub message_sending_latencies: Vec<u128>,
-    //Stores the times taken to create the send tos objects
-    pub message_send_to_create: Vec<u128>,
 }
 
 impl BatchMeta {
@@ -231,30 +391,6 @@ impl BatchMeta {
             replied_time: now,
             first_prepare_received: now,
             first_commit_received: now,
-            message_passing_latencies_own: match cap {
-                None => { Vec::new() }
-                Some(cap) => { Vec::with_capacity(cap) }
-            },
-            message_passing_latencies: match cap {
-                None => { Vec::new() }
-                Some(cap) => { Vec::with_capacity(cap) }
-            },
-            message_signing_latencies: match cap {
-                None => { Vec::new() }
-                Some(cap) => { Vec::with_capacity(cap) }
-            },
-            message_send_to_create: match cap {
-                None => { Vec::new() }
-                Some(cap) => { Vec::with_capacity(cap) }
-            },
-            message_sending_latencies: match cap {
-                None => { Vec::new() }
-                Some(cap) => { Vec::with_capacity(cap) }
-            },
-            message_sending_latencies_own: match cap {
-                None => { Vec::new() }
-                Some(cap) => { Vec::with_capacity(cap) }
-            },
         }
     }
 }
@@ -277,6 +413,12 @@ impl BenchmarkHelper {
             node: id,
             values: Vec::with_capacity(capacity),
         }
+    }
+
+    ///Consumes the elements of the other benchmark helper into this one
+    /// Maintains the other benchmark helper
+    pub fn merge(&mut self, mut other: &mut BenchmarkHelper) {
+        self.values.append(&mut other.values)
     }
 
     pub fn reset(&mut self) {
