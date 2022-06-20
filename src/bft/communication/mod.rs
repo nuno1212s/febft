@@ -404,7 +404,8 @@ impl<D> Node<D>
         let send_handle = send_thread::create_send_thread(1, 1024);
 
         //TESTING
-        let sent_rqs = if id > cfg.first_cli { Some(DashMap::with_capacity(1000000)) } else { None };
+        let sent_rqs = None;
+        //if id > cfg.first_cli { Some(DashMap::with_capacity(1000000)) } else { None };
         //
 
         let mut node = Arc::new(Node {
