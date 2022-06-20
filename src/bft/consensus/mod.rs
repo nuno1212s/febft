@@ -237,7 +237,7 @@ impl<S> Consensus<S>
                consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
                consensus_guard: Arc<AtomicBool>) -> Self {
         Self {
-            batch_size: 0,
+            batch_size,
             node_id: id,
             phase: ProtoPhase::Init,
             missing_swapbuf: Vec::new(),

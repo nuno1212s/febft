@@ -243,7 +243,7 @@ impl<S> Replica<S>
         let mut replica = Replica {
             cst: CollabStateTransfer::new(CST_BASE_DUR),
             synchronizer: synchronizer.clone(),
-            consensus: Consensus::new(next_consensus_seq, node.id(), batch_size, consensus_info.clone(),
+            consensus: Consensus::new(next_consensus_seq, node.id(), global_batch_size, consensus_info.clone(),
                                       consensus_guard.clone()),
             phase: ReplicaPhase::NormalPhase,
             phase_stack: None,

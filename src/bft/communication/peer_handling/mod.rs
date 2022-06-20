@@ -52,7 +52,7 @@ unsafe impl<T> Sync for NodePeers<T> where T: Send {}
 unsafe impl<T> Send for NodePeers<T> where T: Send {}
 
 impl<T> NodePeers<T> where T: Send {
-    pub fn new(id: NodeId, first_cli: NodeId, batch_size: usize, fill_batch: bool, clients_per_pool: usize,
+    pub fn new(id: NodeId, first_cli: NodeId, batch_size: usize, clients_per_pool: usize,
                batch_timeout_micros: u64, batch_sleep_micros: u64) -> NodePeers<T> {
         //We only want to setup client handling if we are a replica
         let client_handling;
@@ -66,7 +66,6 @@ impl<T> NodePeers<T> where T: Send {
                                                             batch_size,
                                                             client_tx.clone(),
                                                             id,
-                                                            fill_batch,
                                                             clients_per_pool,
                                                             batch_timeout_micros,
                                                             batch_sleep_micros));
@@ -346,7 +345,6 @@ pub struct ConnectedPeersGroup<T: Send + 'static> {
     batch_timeout_micros: u64,
     //How much time should the thread sleep in between batch collection
     batch_sleep_micros: u64,
-    fill_batch: bool,
     clients_per_pool: usize,
     pool_id_counter: AtomicUsize,
 }
@@ -364,12 +362,11 @@ pub struct ConnectedPeersPool<T: Send + 'static> {
     client_limit: usize,
     batch_timeout_micros: u64,
     batch_sleep_micros: u64,
-    fill_batch: bool,
 }
 
 impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
     pub fn new(per_client_bound: usize, batch_size: usize, batch_transmission: ChannelSyncTx<Vec<T>>,
-               own_id: NodeId, fill_batch: bool, clients_per_pool: usize, batch_timeout_micros: u64,
+               own_id: NodeId, clients_per_pool: usize, batch_timeout_micros: u64,
                batch_sleep_micros: u64) -> Arc<Self> {
         Arc::new(Self {
             client_pools: parking_lot::Mutex::new(BTreeMap::new()),
@@ -381,7 +378,6 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
             batch_target_size: batch_size,
             batch_transmission,
             own_id,
-            fill_batch,
             clients_per_pool,
             pool_id_counter: AtomicUsize::new(0),
         })
@@ -456,7 +452,6 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
             self.batch_target_size,
             self.batch_transmission.clone(),
             Arc::clone(self),
-            self.fill_batch,
             self.clients_per_pool,
             self.batch_timeout_micros,
             self.batch_sleep_micros);
@@ -561,7 +556,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
     //We mark the owner as static since if the pool is active then
     //The owner also has to be active
     pub fn new(pool_id: usize, batch_size: usize, batch_transmission: ChannelSyncTx<Vec<T>>,
-               owner: Arc<ConnectedPeersGroup<T>>, fill_batch: bool, client_per_pool: usize,
+               owner: Arc<ConnectedPeersGroup<T>>, client_per_pool: usize,
                batch_timeout_micros: u64, batch_sleep_micros: u64) -> Arc<Self> {
         let result = Self {
             pool_id,
@@ -573,7 +568,6 @@ impl<T> ConnectedPeersPool<T> where T: Send {
             client_limit: client_per_pool,
             finish_execution: AtomicBool::new(false),
             owner,
-            fill_batch,
         };
 
         let pool = Arc::new(result);

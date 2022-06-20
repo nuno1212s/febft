@@ -390,7 +390,6 @@ impl<D> Node<D>
 
         //Setup all the peer message reception handling.
         let peers = NodePeers::new(cfg.id, cfg.first_cli, cfg.batch_size,
-                                   cfg.fill_batch,
                                    cfg.clients_per_pool,
                                    cfg.batch_timeout_micros,
                                    cfg.batch_sleep_micros);
