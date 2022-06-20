@@ -235,7 +235,7 @@ pub struct Node<D: SharedData + 'static> {
     sender_handle: SendHandle<D>,
     comm_stats: Option<Arc<CommStats>>,
 
-    pub sent_rqs: Option<DashMap<u64, ()>>,
+    pub sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>,
 }
 
 
@@ -404,8 +404,11 @@ impl<D> Node<D>
         let send_handle = send_thread::create_send_thread(1, 1024);
 
         //TESTING
-        let sent_rqs = None;
-        //if id > cfg.first_cli { Some(DashMap::with_capacity(1000000)) } else { None };
+        let sent_rqs = if id > cfg.first_cli {
+            Some(Arc::new(std::iter::repeat_with(|| { DashMap::with_capacity(20000) })
+                    .take(30)
+                    .collect()))
+        } else { None };
         //
 
         let mut node = Arc::new(Node {
@@ -937,7 +940,7 @@ impl<D> Node<D>
         first_cli: NodeId,
         nonce: u64,
         comm_stats: Option<(Arc<CommStats>, Instant)>,
-        sent_rqs: Option<DashMap<u64, ()>>,
+        sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>,
     ) {
         threadpool::execute_replicas(move || {
             let start_serialization = Instant::now();
@@ -1037,7 +1040,7 @@ impl<D> Node<D>
 
                             if let Some(sent_rqs) = sent_rqs {
                                 if let Some(rq_key) = rq_key {
-                                    sent_rqs.insert(rq_key, ());
+                                    sent_rqs[rq_key % sent_rqs.len()].insert(rq_key, ());
                                 }
                             }
 
