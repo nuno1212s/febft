@@ -139,7 +139,8 @@ impl CommStats {
 
         if dest > self.first_cli {
             match &self.client_comm {
-                None => {}
+                None => {
+                }
                 Some(stats) => {
                     stats.insert_message_sending_time(time);
                 }
@@ -153,7 +154,9 @@ impl CommStats {
     pub fn register_rq_received(&self, sender: NodeId) {
         if sender > self.first_cli {
             match &self.client_comm {
-                None => {}
+                None => {
+
+                }
                 Some(stats) => {
                     stats.register_rq_received();
                 }

@@ -857,6 +857,7 @@ impl<D> Node<D>
                     SerializedSendTo::Peers { id, .. } => *id,
                     _ => unreachable!(),
                 };
+
                 let (header, message) = messages
                     .remove(id.into())
                     .map(|stored| stored.into_inner())
