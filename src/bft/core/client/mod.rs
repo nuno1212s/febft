@@ -296,6 +296,8 @@ impl<D> Client<D>
     fn start_timeout(&self, session_id: SeqNo, rq_id: SeqNo, client_data: Arc<ClientData<D::Reply>>) {
         let node_id = self.node.id();
 
+        let node = self.node.clone();
+
         crate::bft::async_runtime::spawn(async move {
 
             //Timeout delay
@@ -311,10 +313,22 @@ impl<D> Client<D>
                 let request = bucket_guard.get(req_key);
 
                 if let Some(request) = request {
-                    error!("{:?} // Request {:?} of session {:?} has timed OUT!", node_id,
-                    rq_id, session_id);
-
                     request.timed_out.store(true, Ordering::Relaxed);
+
+                    if let Some(sent_rqs) = &node.parent_node().sent_rqs {
+                        if sent_rqs.contains_key(&req_key) {
+                            error!("{:?} // Request {:?} of session {:?} was SENT and timed OUT!", node_id,
+                    rq_id, session_id);
+                        };
+                    } else {
+                        error!("{:?} // Request {:?} of session {:?} was NOT SENT and timed OUT!", node_id,
+                    rq_id, session_id);
+                    }
+                } else {
+                    if let Some(sent_rqs) = &node.parent_node().sent_rqs {
+                        //Cleanup
+                        sent_rqs.remove(&req_key);
+                    }
                 }
             }
 
@@ -326,10 +340,23 @@ impl<D> Client<D>
                 let request = bucket_guard.get(req_key);
 
                 if let Some(request) = request {
-                    error!("{:?} // Request {:?} of session {:?} has timed OUT!", node_id,
-                    rq_id, session_id);
 
                     request.timed_out.store(true, Ordering::Relaxed);
+
+                    if let Some(sent_rqs) = &node.parent_node().sent_rqs {
+                        if sent_rqs.contains_key(&req_key) {
+                            error!("{:?} // Request {:?} of session {:?} was SENT and timed OUT!", node_id,
+                    rq_id, session_id);
+                        };
+                    } else {
+                        error!("{:?} // Request {:?} of session {:?} was NOT SENT and timed OUT!", node_id,
+                    rq_id, session_id);
+                    }
+                } else {
+                    //Cleanup
+                    if let Some(sent_rqs) = &node.parent_node().sent_rqs {
+                        sent_rqs.remove(&req_key);
+                    }
                 }
             }
         });

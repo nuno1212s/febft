@@ -10,6 +10,7 @@ use async_tls::{
     TlsAcceptor,
     TlsConnector,
 };
+use dashmap::DashMap;
 use either::{
     Either,
     Left,
@@ -32,6 +33,7 @@ use smallvec::SmallVec;
 
 use crate::bft::async_runtime as rt;
 use crate::bft::benchmarks::{CommStats};
+use crate::bft::collections::ConcurrentHashMap;
 use crate::bft::communication::message::{Header, Message, SerializedMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
 use crate::bft::communication::peer_handling::{ConnectedPeer, NodePeers};
 use crate::bft::communication::send_thread::{BroadcastSerialized, MessageSendRq, SendHandle};
@@ -47,6 +49,7 @@ use crate::bft::crypto::signature::{
     PublicKey,
 };
 use crate::bft::error::*;
+use crate::bft::ordering::Orderable;
 use crate::bft::prng;
 use crate::bft::prng::ThreadSafePrng;
 use crate::bft::threadpool;
@@ -231,6 +234,8 @@ pub struct Node<D: SharedData + 'static> {
     peer_addrs: IntMap<PeerAddr>,
     sender_handle: SendHandle<D>,
     comm_stats: Option<Arc<CommStats>>,
+
+    pub sent_rqs: Option<DashMap<u64, ()>>,
 }
 
 
@@ -398,6 +403,10 @@ impl<D> Node<D>
 
         let send_handle = send_thread::create_send_thread(1, 1024);
 
+        //TESTING
+        let sent_rqs = if id > cfg.first_cli { Some(DashMap::with_capacity(1000000)) } else { None };
+        //
+
         let mut node = Arc::new(Node {
             id,
             rng,
@@ -410,6 +419,7 @@ impl<D> Node<D>
             first_cli: cfg.first_cli,
             sender_handle: send_handle,
             comm_stats: cfg.comm_stats,
+            sent_rqs,
         });
 
         let rx_node_clone = node.clone();
@@ -744,7 +754,8 @@ impl<D> Node<D>
         };
 
         Self::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                             comm_stats);
+                             comm_stats,
+                             self.sent_rqs.clone());
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -773,7 +784,7 @@ impl<D> Node<D>
         };
 
         Self::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                             comm_stats);
+                             comm_stats, self.sent_rqs.clone());
     }
 
     pub fn broadcast_serialized(
@@ -925,6 +936,7 @@ impl<D> Node<D>
         first_cli: NodeId,
         nonce: u64,
         comm_stats: Option<(Arc<CommStats>, Instant)>,
+        sent_rqs: Option<DashMap<u64, ()>>,
     ) {
         threadpool::execute_replicas(move || {
             let start_serialization = Instant::now();
@@ -943,6 +955,18 @@ impl<D> Node<D>
                 //Broadcasts are always for replicas, so make this
                 comm_stats.insert_message_signing_time(NodeId::from(0u32), time_taken_signing);
             }
+
+            let rq_key = match &message {
+                //We only care about requests, as we only want this for the client
+                SystemMessage::Request(req) => {
+                    let session = get_request_key(req.session_id(), req.sequence_number());
+
+                    Some(session)
+                }
+                _ => {
+                    None
+                }
+            };
 
             // send to ourselves
             if let Some(mut send_to) = my_send_to {
@@ -993,6 +1017,8 @@ impl<D> Node<D>
 
                 let comm_stats = comm_stats.clone();
 
+                let sent_rqs = sent_rqs.clone();
+
                 match send_to.socket_type().unwrap() {
                     SecureSocketSend::Async(_) => {
                         rt::spawn(async move {
@@ -1007,6 +1033,12 @@ impl<D> Node<D>
                             let before_send_time = Instant::now();
 
                             send_to.value_sync(Left((nonce, digest, buf)));
+
+                            if let Some(sent_rqs) = sent_rqs {
+                                if let Some(rq_key) = rq_key {
+                                    sent_rqs.insert(rq_key, ());
+                                }
+                            }
 
                             if let Some((comm_stats, start_time)) = &comm_stats {
                                 let dur_since = before_send_time.duration_since(*start_time).as_nanos();
@@ -1932,6 +1964,10 @@ impl<D> SendNode<D>
         &self.channel
     }
 
+    pub fn parent_node(&self) -> &Arc<Node<D>> {
+        &self.parent_node
+    }
+
     /// Check the `master_channel()` documentation for `Node`.
 
     /// Check the `send()` documentation for `Node`.
@@ -1985,7 +2021,6 @@ impl<D> SendNode<D>
                 error!("Failed to send message to client {:?} as the connection to it was not found!", target);
             }
             Some(conn) => {
-
                 let send_to = <Node<D>>::send_to(
                     true,
                     self.id,
@@ -2033,7 +2068,7 @@ impl<D> SendNode<D>
         };
 
         <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                                  comm_stats);
+                                  comm_stats, self.parent_node.sent_rqs.clone());
     }
 
     /// Check the `broadcast_signed()` documentation for `Node`.
@@ -2060,7 +2095,7 @@ impl<D> SendNode<D>
         };
 
         <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                                  comm_stats);
+                                  comm_stats, self.parent_node.sent_rqs.clone());
     }
 }
 
@@ -2485,4 +2520,12 @@ impl<D> SerializedSendTo<D>
             cli.disconnect();
         }
     }
+}
+
+///TODO: REMOVE THIS AFTER TESTING
+#[inline]
+fn get_request_key(session_id: crate::bft::ordering::SeqNo, operation_id: crate::bft::ordering::SeqNo) -> u64 {
+    let sess: u64 = session_id.into();
+    let opid: u64 = operation_id.into();
+    sess | (opid << 32)
 }
