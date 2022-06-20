@@ -316,7 +316,9 @@ impl<D> Client<D>
                     request.timed_out.store(true, Ordering::Relaxed);
 
                     if let Some(sent_rqs) = &node.parent_node().sent_rqs {
-                        if sent_rqs[req_key % sent_rqs.len()].contains_key(&req_key) {
+                        let bucket = &sent_rqs[req_key as usize % sent_rqs.len()];
+
+                        if bucket.contains_key(&req_key) {
                             error!("{:?} // Request {:?} of session {:?} was SENT and timed OUT!", node_id,
                     rq_id, session_id);
                         };
@@ -327,7 +329,9 @@ impl<D> Client<D>
                 } else {
                     if let Some(sent_rqs) = &node.parent_node().sent_rqs {
                         //Cleanup
-                        sent_rqs[req_key % sent_rqs.len()].remove(&req_key);
+                        let bucket = &sent_rqs[req_key as usize % sent_rqs.len()];
+
+                        bucket.remove(&req_key);
                     }
                 }
             }
@@ -344,7 +348,9 @@ impl<D> Client<D>
                     request.timed_out.store(true, Ordering::Relaxed);
 
                     if let Some(sent_rqs) = &node.parent_node().sent_rqs {
-                        if sent_rqs[req_key % sent_rqs.len()].contains_key(&req_key) {
+                        let bucket = &sent_rqs[req_key as usize % sent_rqs.len()];
+
+                        if bucket.contains_key(&req_key) {
                             error!("{:?} // Request {:?} of session {:?} was SENT and timed OUT!", node_id,
                     rq_id, session_id);
                         };
@@ -355,7 +361,9 @@ impl<D> Client<D>
                 } else {
                     //Cleanup
                     if let Some(sent_rqs) = &node.parent_node().sent_rqs {
-                        sent_rqs[req_key % sent_rqs.len()].remove(&req_key);
+                        let bucket = &sent_rqs[req_key as usize % sent_rqs.len()];
+
+                        bucket.remove(&req_key);
                     }
                 }
             }

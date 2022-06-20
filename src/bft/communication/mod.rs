@@ -1040,7 +1040,7 @@ impl<D> Node<D>
 
                             if let Some(sent_rqs) = sent_rqs {
                                 if let Some(rq_key) = rq_key {
-                                    sent_rqs[rq_key % sent_rqs.len()].insert(rq_key, ());
+                                    sent_rqs[rq_key as usize % sent_rqs.len()].insert(rq_key, ());
                                 }
                             }
 
