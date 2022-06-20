@@ -295,7 +295,7 @@ impl CommStatsHelper {
             let rcved_rqs = current_rcved_requests - prev_recvd_rqs;
 
             let sent_rq_per_second = (sent_rqs as f64 / duration as f64) * 1000.0 * 1000.0;
-            let recv_rq_per_second = (rcved_rqs as f64 / duration as f64 * 1000.0 * 1000.0);
+            let recv_rq_per_second = (rcved_rqs as f64 / duration as f64) * 1000.0 * 1000.0;
 
             self.gather_all_rqs();
 
