@@ -167,6 +167,9 @@ impl<S: Service> RqProcessor<S> {
                             let micros_since_last_batch = Instant::now().duration_since(last_proposed_batch).as_micros();
 
                             if micros_since_last_batch <= self.global_batch_time_limit {
+                                //Yield to prevent active waiting
+                                std::thread::yield_now();
+
                                 //Batch isn't large enough and time hasn't passed, don't even attempt to propose
                                 continue;
                             }
