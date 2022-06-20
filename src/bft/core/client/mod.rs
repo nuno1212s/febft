@@ -6,7 +6,7 @@ use std::io::Read;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 use futures::StreamExt;
@@ -47,10 +47,12 @@ macro_rules! certain {
 struct Ready<P> {
     waker: Option<Waker>,
     payload: Option<P>,
+    timed_out: AtomicBool,
 }
 
 struct Callback<P> {
     to_call: Box<dyn FnOnce(P) + Send>,
+    timed_out: AtomicBool,
 }
 
 impl<P> Deref for Callback<P> {
@@ -112,7 +114,7 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
         self.ready.try_lock()
             .map(|mut ready| {
                 let request = IntMapEntry::get(self.request_key, &mut *ready)
-                    .or_insert_with(|| Ready { payload: None, waker: None });
+                    .or_insert_with(|| Ready { payload: None, waker: None, timed_out: AtomicBool::new(false) });
 
                 if let Some(payload) = request.payload.take() {
                     //Response is ready, take it
@@ -263,7 +265,8 @@ impl<D> Client<D>
         let ready = get_ready_callback::<D>(session_id, &*self.data);
 
         let callback = Callback {
-            to_call: callback
+            to_call: callback,
+            timed_out: AtomicBool::new(false),
         };
 
         //Scope the mutex operations to reduce the lifetime of the guard
@@ -296,24 +299,37 @@ impl<D> Client<D>
         crate::bft::async_runtime::spawn(async move {
 
             //Timeout delay
-            Delay::new(Duration::from_secs(2)).await;
+            Delay::new(Duration::from_secs(5)).await;
 
             let req_key = get_request_key(session_id, rq_id);
 
             {
                 let bucket = get_ready::<D>(session_id, &*client_data);
 
-                if bucket.lock().contains_key(req_key) {
+                let bucket_guard = bucket.lock();
+
+                let request = bucket_guard.get(req_key);
+
+                if let Some(request) = request {
                     error!("{:?} // Request {:?} of session {:?} has timed OUT!", node_id,
                     rq_id, session_id);
+
+                    request.timed_out.store(true, Ordering::Relaxed);
                 }
             }
 
             {
                 let bucket = get_ready_callback::<D>(session_id, &*client_data);
 
-                if bucket.lock().contains_key(req_key) {
-                    error!("{:?} // Request {:?} of session {:?} has timed OUT!", node_id, rq_id, session_id);
+                let bucket_guard = bucket.lock();
+
+                let request = bucket_guard.get(req_key);
+
+                if let Some(request) = request {
+                    error!("{:?} // Request {:?} of session {:?} has timed OUT!", node_id,
+                    rq_id, session_id);
+
+                    request.timed_out.store(true, Ordering::Relaxed);
                 }
             }
         });
@@ -391,13 +407,18 @@ impl<D> Client<D>
                                         //So to fix this, move this to a threadpool or just to another thread.
                                         (callback.to_call)(payload);
 
+                                        if callback.timed_out.load(Ordering::Relaxed) {
+                                            error!("{:?} // Received response to timed out request {:?} on session {:?}",
+                                                node.id(), session_id, operation_id);
+                                        }
+
                                         continue;
                                     }
                                 }
 
                                 let mut ready = get_ready::<D>(session_id, &*data).lock();
                                 let request = IntMapEntry::get(request_key, &mut *ready)
-                                    .or_insert_with(|| Ready { payload: None, waker: None });
+                                    .or_insert_with(|| Ready { payload: None, waker: None, timed_out: AtomicBool::new(false) });
 
                                 // register response
                                 request.payload = Some(payload);
@@ -405,6 +426,11 @@ impl<D> Client<D>
                                 // try to wake up a waiting task
                                 if let Some(waker) = request.waker.take() {
                                     waker.wake();
+                                }
+
+                                if request.timed_out.load(Ordering::Relaxed) {
+                                    error!("{:?} // Received response to timed out request {:?} on session {:?}",
+                                        node.id(), session_id, operation_id);
                                 }
                             }
                         }
