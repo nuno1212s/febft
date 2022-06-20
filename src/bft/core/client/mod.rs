@@ -15,7 +15,6 @@ use futures_timer::Delay;
 use intmap::IntMap;
 use log::error;
 use parking_lot::Mutex;
-use tokio::time::MissedTickBehavior::Delay;
 
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::{
