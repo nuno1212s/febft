@@ -56,7 +56,7 @@ struct CommStatsHelper {
 impl CommStats {
     pub fn new(owner_id: NodeId, first_cli: NodeId, measurement_interval: usize) -> Self {
         Self {
-            client_comm: if owner_id > first_cli { Some(CommStatsHelper::new(owner_id, String::from("Clients"), measurement_interval)) } else { None },
+            client_comm: if owner_id < first_cli { Some(CommStatsHelper::new(owner_id, String::from("Clients"), measurement_interval)) } else { None },
             replica_comm: CommStatsHelper::new(owner_id, String::from("Replicas"), measurement_interval),
             first_cli,
             node_id: owner_id
@@ -299,13 +299,16 @@ impl CommStatsHelper {
 
             self.gather_all_rqs();
 
-            println!("{:?} // {:?} // --- Measurements after {}  ({} samples) ---",
+            println!("{:?} // {} // --- Measurements after {}  ({} samples) ---",
                      self.node_id, self.info, requests, self.measurement_interval);
 
-            println!("{:?} // {:?} // {} requests {} per second", self.node_id, current_instant,
+
+            let time = Utc::now().timestamp_millis();
+
+            println!("{:?} // {:?} // {} requests {} per second", self.node_id, time,
                      sent_rq_per_second, "sent");
 
-            println!("{:?} // {:?} // {} requests {} per second", self.node_id, current_instant,
+            println!("{:?} // {:?} // {} requests {} per second", self.node_id, time,
                      recv_rq_per_second, "received");
 
             self.message_passing_time_taken_own[0].lock().log_latency("Message passing (Own)");
