@@ -369,7 +369,7 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
                own_id: NodeId, clients_per_pool: usize, batch_timeout_micros: u64,
                batch_sleep_micros: u64) -> Arc<Self> {
         Arc::new(Self {
-            client_pools: parking_lot::Mutex::new(BTreeMap::new()),
+            client_pools: Mutex::new(BTreeMap::new()),
             client_connections_cache: RwLock::new(IntMap::new()),
             per_client_cache: per_client_bound,
             connected_clients: AtomicUsize::new(0),
@@ -736,6 +736,8 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                         //Stuck while checking for requests
                         break;
                     }
+
+                    std::thread::yield_now();
                 }
             }
         }
