@@ -624,6 +624,7 @@ impl<S> Consensus<S>
 
                     // serialize raw msg
                     let mut buf = Vec::new();
+
                     let digest = <S::Data as DigestData>::serialize_digest(
                         &message,
                         &mut buf,
@@ -631,11 +632,13 @@ impl<S> Consensus<S>
 
                     for peer_id in NodeId::targets(0..n) {
 
+                        let buf_clone = Vec::from(&buf[..]);
+
                         // create header
                         let (header, _) = WireMessage::new(
                             my_id,
                             peer_id,
-                            &buf[..],
+                            buf_clone,
                             // NOTE: nonce not too important here,
                             // since we already contain enough random
                             // data with the unique digest of the

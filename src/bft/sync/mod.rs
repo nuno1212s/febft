@@ -1177,7 +1177,7 @@ impl<S> Synchronizer<S>
             let (h, _) = WireMessage::new(
                 self.view().leader(),
                 node.id(),
-                &buf,
+                buf,
                 prng_state.next_state(),
                 Some(digest),
                 None,
@@ -1443,7 +1443,7 @@ fn validate_signature<'a, S, M>(
         Request<S>: Send + Clone + 'static,
         Reply<S>: Send + 'static,
 {
-    let wm = match WireMessage::from_parts(*stored.header(), &[]) {
+    let wm = match WireMessage::from_parts(*stored.header(), vec![]) {
         Ok(wm) => wm,
         _ => return false,
     };

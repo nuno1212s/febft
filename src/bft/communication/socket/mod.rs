@@ -22,6 +22,9 @@ use futures::io::{
 };
 
 use rustls::{ClientSession, ServerSession, Session, Stream, StreamOwned};
+use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
+use crate::bft::communication::message::{OwnedWireMessage, WireMessage};
+use crate::bft::communication::serialize::Buf;
 
 use crate::bft::error;
 
@@ -193,22 +196,22 @@ pub enum SecureSocketSendAsync {
 
 pub enum SecureSocketRecvSync {
     Plain(SyncSocket),
-    Tls(StreamOwned<rustls::ServerSession, SyncSocket>),
+    Tls(StreamOwned<ServerSession, SyncSocket>),
 }
 
 pub enum SecureSocketSendSync {
     Plain(SyncSocket),
-    Tls(StreamOwned<rustls::ClientSession, SyncSocket>),
+    Tls(StreamOwned<ClientSession, SyncSocket>),
 }
 
 impl SecureSocketRecvSync {
-    pub fn new_tls(session: rustls::ServerSession, socket: SyncSocket) -> Self {
+    pub fn new_tls(session: ServerSession, socket: SyncSocket) -> Self {
         SecureSocketRecvSync::Tls(StreamOwned::new(session, socket))
     }
 }
 
 impl SecureSocketSendSync {
-    pub fn new_tls(session: rustls::ClientSession, socket: SyncSocket) -> Self {
+    pub fn new_tls(session: ClientSession, socket: SyncSocket) -> Self {
         SecureSocketSendSync::Tls(StreamOwned::new(session, socket))
     }
 }
@@ -217,8 +220,51 @@ impl SecureSocketSendSync {
 ///Client stores asynchronous socket references (Client->replica, replica -> client)
 ///Replicas stores synchronous socket references (Replica -> Replica)
 pub enum SecureSocketSend {
-    Async(Arc<futures::lock::Mutex<SecureSocketSendAsync>>),
-    Sync(Arc<parking_lot::Mutex<SecureSocketSendSync>>),
+    Async(SocketSendAsync),
+    Sync(SocketSendSync),
+}
+
+#[derive(Clone)]
+pub struct SocketSendSync {
+    socket: Arc<parking_lot::Mutex<SecureSocketSendSync>>,
+    channel_rcv: ChannelSyncRx<WireMessage>,
+    channel_send: ChannelSyncTx<WireMessage>,
+}
+
+#[derive(Clone)]
+pub struct SocketSendAsync(Arc<futures::lock::Mutex<SecureSocketSendAsync>>);
+
+impl SocketSendSync {
+    pub fn new(
+        socket: Arc<parking_lot::Mutex<SecureSocketSendSync>>,
+        channel_rcv: ChannelSyncRx<WireMessage>,
+        channel_send: ChannelSyncTx<WireMessage>) -> Self {
+        Self {
+            socket,
+            channel_rcv,
+            channel_send
+        }
+    }
+
+    pub fn socket(&self) -> &Arc<parking_lot::Mutex<SecureSocketSendSync>> {
+        &self.socket
+    }
+    pub fn channel_rcv(&self) -> &ChannelSyncRx<WireMessage> {
+        &self.channel_rcv
+    }
+    pub fn channel_send(&self) -> &ChannelSyncTx<WireMessage> {
+        &self.channel_send
+    }
+}
+
+impl SocketSendAsync {
+    pub fn new(socket: Arc<futures::lock::Mutex<SecureSocketSendAsync>>)-> Self {
+        Self (socket)
+    }
+
+    pub fn socket(&self) -> &Arc<futures::lock::Mutex<SecureSocketSendAsync>> {
+        &self.0
+    }
 }
 
 pub enum SecureSocketRecv {

@@ -180,9 +180,9 @@ impl<'de> serde::Deserialize<'de> for Header {
 /// A message to be sent over the wire. The payload should be a serialized
 /// `SystemMessage`, for correctness.
 #[derive(Debug)]
-pub struct WireMessage<'a> {
+pub struct WireMessage {
     pub(crate) header: Header,
-    pub(crate) payload: &'a [u8],
+    pub(crate) payload: Vec<u8>,
 }
 
 /// A generic `WireMessage`, for different `AsRef<[u8]>` types.
@@ -689,6 +689,7 @@ impl Header {
     }
 }
 
+/*
 impl From<WireMessage<'_>> for OwnedWireMessage<Box<[u8]>> {
     fn from(wm: WireMessage<'_>) -> Self {
         OwnedWireMessage {
@@ -721,17 +722,18 @@ impl<T: AsRef<[u8]>> OwnedWireMessage<T> {
     pub fn borrowed<'a>(&'a self) -> WireMessage<'a> {
         WireMessage {
             header: self.header,
-            payload: self.payload.as_ref(),
+            payload: self.payload,
         }
     }
 }
+*/
 
-impl<'a> WireMessage<'a> {
+impl WireMessage {
     /// The current version of the wire protocol.
     pub const CURRENT_VERSION: u32 = 0;
 
     /// Wraps a `Header` and a byte array payload into a `WireMessage`.
-    pub fn from_parts(header: Header, payload: &'a [u8]) -> Result<Self> {
+    pub fn from_parts(header: Header, payload: Vec<u8>) -> Result<Self> {
         let wm = Self { header, payload };
         if !wm.is_valid(None) {
             return Err(Error::simple(ErrorKind::CommunicationMessage));
@@ -743,7 +745,7 @@ impl<'a> WireMessage<'a> {
     pub fn new(
         from: NodeId,
         to: NodeId,
-        payload: &'a [u8],
+        payload: Vec<u8>,
         nonce: u64,
         digest: Option<Digest>,
         sk: Option<&KeyPair>,
@@ -753,6 +755,7 @@ impl<'a> WireMessage<'a> {
             .map(|d| unsafe { std::mem::transmute(d) })
             // if payload length is 0
             .unwrap_or([0; Digest::LENGTH]);
+
         let signature = sk
             .map(|sk| {
                 let signature = Self::sign_parts(
@@ -766,7 +769,9 @@ impl<'a> WireMessage<'a> {
                 unsafe { std::mem::transmute(signature) }
             })
             .unwrap_or([0; Signature::LENGTH]);
+
         let (from, to) = (from.into(), to.into());
+
         let header = Header {
             _align: 0,
             version: Self::CURRENT_VERSION,
@@ -777,6 +782,7 @@ impl<'a> WireMessage<'a> {
             from,
             to,
         };
+
         Self { header, payload }
     }
 
@@ -829,7 +835,7 @@ impl<'a> WireMessage<'a> {
 
     /// Retrieve the inner `Header` and payload byte buffer stored
     /// inside the `WireMessage`.
-    pub fn into_inner(self) -> (Header, &'a [u8]) {
+    pub fn into_inner(self) -> (Header, Vec<u8>) {
         (self.header, self.payload)
     }
 
@@ -839,7 +845,7 @@ impl<'a> WireMessage<'a> {
     }
 
     /// Returns a reference to the payload bytes of the `WireMessage`.
-    pub fn payload(&self) -> &'a [u8] {
+    pub fn payload(&self) -> &[u8] {
         &self.payload
     }
 
@@ -874,7 +880,7 @@ impl<'a> WireMessage<'a> {
         // FIXME: switch to vectored writes?
         w.write_all(&buf[..]).await?;
         if self.payload.len() > 0 {
-            w.write_all(&self.payload).await?;
+            w.write_all(&self.payload[..]).await?;
         }
         if flush {
             w.flush().await?;
@@ -892,7 +898,7 @@ impl<'a> WireMessage<'a> {
         w.write_all(&buf[..]);
 
         if self.payload.len() > 0 {
-            w.write_all(&self.payload);
+            w.write_all(&self.payload[..]);
         }
 
         if flush {
