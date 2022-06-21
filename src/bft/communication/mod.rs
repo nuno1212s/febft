@@ -412,7 +412,7 @@ impl<D> Node<D>
         } else { None };
 
         let rcv_rqs =  None;
-        /*if id < cfg.first_cli {
+        if id < cfg.first_cli {
 
             //We want the replicas to log recved requests
             let arc = Arc::new(RwLock::new(
@@ -428,9 +428,11 @@ impl<D> Node<D>
                         .take(30)
                         .collect();
 
-                    let mut write_guard = rqs.write();
+                    let mut old_vec = {
+                        let mut write_guard = rqs.write();
 
-                    let mut old_vec = std::mem::replace(&mut *write_guard, new_vec);
+                        std::mem::replace(&mut *write_guard, new_vec)
+                    };
 
                     let mut print = String::new();
 
@@ -447,7 +449,7 @@ impl<D> Node<D>
             }).expect("Failed to start logging thread");
 
             Some(arc)
-        } else { None };*/
+        } else { None };
         //
 
         let mut node = Arc::new(Node {
