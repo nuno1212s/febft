@@ -226,7 +226,7 @@ pub struct Node<D: SharedData + 'static> {
     id: NodeId,
     first_cli: NodeId,
     node_handling: NodePeers<Message<D::State, D::Request, D::Reply>>,
-    rng: prng::ThreadSafePrng,
+    rng: ThreadSafePrng,
     shared: Arc<NodeShared>,
     peer_tx: PeerTx,
     connector: TlsConnector,
@@ -236,6 +236,7 @@ pub struct Node<D: SharedData + 'static> {
     comm_stats: Option<Arc<CommStats>>,
 
     pub sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>,
+    pub recv_rqs: Option<Arc<RwLock<Vec<DashMap<u64, ()>>>>>,
 }
 
 
@@ -406,8 +407,45 @@ impl<D> Node<D>
         //TESTING
         let sent_rqs = if id > cfg.first_cli {
             Some(Arc::new(std::iter::repeat_with(|| { DashMap::with_capacity(20000) })
+                .take(30)
+                .collect()))
+        } else { None };
+
+        let rcv_rqs = if id < cfg.first_cli {
+
+            //We want the replicas to log recved requests
+            let arc = Arc::new(RwLock::new(
+                std::iter::repeat_with(|| { DashMap::with_capacity(20000) })
                     .take(30)
-                    .collect()))
+                    .collect()));
+
+            let rqs = arc.clone();
+
+            std::thread::Builder::new().name(String::from("Logging thread")).spawn(move || {
+                loop {
+                    let new_vec: Vec<DashMap<u64, ()>> = std::iter::repeat_with(|| { DashMap::with_capacity(20000) })
+                        .take(30)
+                        .collect();
+
+                    let mut write_guard = rqs.write();
+
+                    let mut old_vec = std::mem::replace(&mut *write_guard, new_vec);
+
+                    let mut print = String::new();
+
+                    for bucket in old_vec {
+                        for (key, _) in bucket.into_iter() {
+                            print = print + " , " + &*format!("{}", key);
+                        }
+                    }
+
+                    println!("{}", print);
+
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            }).expect("Failed to start logging thread");
+
+            Some(arc)
         } else { None };
         //
 
@@ -424,6 +462,7 @@ impl<D> Node<D>
             sender_handle: send_handle,
             comm_stats: cfg.comm_stats,
             sent_rqs,
+            recv_rqs: rcv_rqs,
         });
 
         let rx_node_clone = node.clone();
@@ -1912,12 +1951,29 @@ impl<D> Node<D>
                 }
             };
 
+            let req_key = match &message {
+                SystemMessage::Request(req) => {
+                    Some (get_request_key(req.session_id(), req.sequence_number()))
+                },
+                _ => { None }
+            };
+
             let msg = Message::System(header, message);
 
             client.push_request_sync(msg);
 
             if let Some(comm_stats) = &self.comm_stats {
                 comm_stats.register_rq_received(peer_id);
+            }
+
+            if let Some(req_recv) = &self.recv_rqs {
+                if let Some(req_key) = req_key {
+                    let guard = req_recv.read();
+
+                    let bucket = &guard[req_key as usize % guard.len()];
+
+                    bucket.insert(req_key, ());
+                }
             }
         }
 
