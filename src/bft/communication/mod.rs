@@ -411,7 +411,8 @@ impl<D> Node<D>
                 .collect()))
         } else { None };
 
-        let rcv_rqs = if id < cfg.first_cli {
+        let rcv_rqs =  None;
+        /*if id < cfg.first_cli {
 
             //We want the replicas to log recved requests
             let arc = Arc::new(RwLock::new(
@@ -446,7 +447,7 @@ impl<D> Node<D>
             }).expect("Failed to start logging thread");
 
             Some(arc)
-        } else { None };
+        } else { None };*/
         //
 
         let mut node = Arc::new(Node {
