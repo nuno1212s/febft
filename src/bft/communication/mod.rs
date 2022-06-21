@@ -232,7 +232,6 @@ pub struct Node<D: SharedData + 'static> {
     connector: TlsConnector,
     sync_connector: Arc<ClientConfig>,
     peer_addrs: IntMap<PeerAddr>,
-    sender_handle: SendHandle<D>,
     comm_stats: Option<Arc<CommStats>>,
 
     pub sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>,
@@ -402,16 +401,17 @@ impl<D> Node<D>
 
         let rng = ThreadSafePrng::new();
 
-        let send_handle = send_thread::create_send_thread(1, 1024);
-
         //TESTING
-        let sent_rqs = if id > cfg.first_cli {
+        let sent_rqs = None;
+        /*if id > cfg.first_cli {
             Some(Arc::new(std::iter::repeat_with(|| { DashMap::with_capacity(20000) })
                 .take(30)
                 .collect()))
-        } else { None };
+        } else { None };*/
 
-        let rcv_rqs = if id < cfg.first_cli {
+        let rcv_rqs = None;
+
+            /*if id < cfg.first_cli {
 
             //We want the replicas to log recved requests
             let arc = Arc::new(RwLock::new(
@@ -448,7 +448,7 @@ impl<D> Node<D>
             }).expect("Failed to start logging thread");
 
             Some(arc)
-        } else { None };
+        } else { None };*/
         //
 
         let mut node = Arc::new(Node {
@@ -461,7 +461,6 @@ impl<D> Node<D>
             sync_connector: replica_connector.clone(),
             peer_addrs: cfg.addrs,
             first_cli: cfg.first_cli,
-            sender_handle: send_handle,
             comm_stats: cfg.comm_stats,
             sent_rqs,
             recv_rqs: rcv_rqs,
