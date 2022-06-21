@@ -9,9 +9,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
+
 use futures::StreamExt;
 use futures_timer::Delay;
-
 use intmap::IntMap;
 use log::error;
 use parking_lot::Mutex;
@@ -31,7 +31,7 @@ use crate::bft::communication::message::{
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
-use crate::bft::ordering::{SeqNo};
+use crate::bft::ordering::SeqNo;
 
 use super::SystemParams;
 
@@ -319,12 +319,12 @@ impl<D> Client<D>
                         let bucket = &sent_rqs[req_key as usize % sent_rqs.len()];
 
                         if bucket.contains_key(&req_key) {
-                            error!("{:?} // Request {:?} of session {:?} was SENT and timed OUT!", node_id,
-                    rq_id, session_id);
+                            error!("{:?} // Request {:?} of session {:?} was SENT and timed OUT! Request key {}", node_id,
+                    rq_id, session_id,get_request_key(session_id, rq_id));
                         };
                     } else {
-                        error!("{:?} // Request {:?} of session {:?} was NOT SENT and timed OUT!", node_id,
-                    rq_id, session_id);
+                        error!("{:?} // Request {:?} of session {:?} was NOT SENT and timed OUT! Request key {}", node_id,
+                    rq_id, session_id, get_request_key(session_id, rq_id));
                     }
                 } else {
                     if let Some(sent_rqs) = &node.parent_node().sent_rqs {
@@ -344,7 +344,6 @@ impl<D> Client<D>
                 let request = bucket_guard.get(req_key);
 
                 if let Some(request) = request {
-
                     request.timed_out.store(true, Ordering::Relaxed);
 
                     if let Some(sent_rqs) = &node.parent_node().sent_rqs {
