@@ -1022,29 +1022,21 @@ impl<D> Node<D>
 
                 let comm_stats = comm_stats.clone();
 
-                let send_task = move || {
-                    //Measuring time taken to get to the point of sending the message
-                    //We don't actually want to measure how long it takes to send the message
-                    let before_send_time = Instant::now();
+                //Measuring time taken to get to the point of sending the message
+                //We don't actually want to measure how long it takes to send the message
+                let before_send_time = Instant::now();
 
-                    // Right -> our turn
-                    send_to.value_sync(Right((message, nonce, digest, buf)));
+                // Right -> our turn
+                send_to.value_sync(Right((message, nonce, digest, buf)));
 
-                    if let Some((comm_stats, start_time)) = &comm_stats {
-                        let dur_since = before_send_time.duration_since(*start_time).as_nanos();
+                if let Some((comm_stats, start_time)) = &comm_stats {
+                    let dur_since = before_send_time.duration_since(*start_time).as_nanos();
 
-                        let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
+                    let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
 
-                        comm_stats.insert_message_passing_latency_own(dur_since);
-                        comm_stats.insert_message_sending_time_own(dur_send);
-                        comm_stats.register_rq_sent(id);
-                    }
-                };
-
-                if id < first_cli {
-                    threadpool::execute_replicas(send_task);
-                } else {
-                    threadpool::execute_clients(send_task);
+                    comm_stats.insert_message_passing_latency_own(dur_since);
+                    comm_stats.insert_message_sending_time_own(dur_send);
+                    comm_stats.register_rq_sent(id);
                 }
             }
 
@@ -1077,12 +1069,6 @@ impl<D> Node<D>
 
                             send_to.value_sync(Left((nonce, digest, buf)));
 
-                            if let Some(sent_rqs) = sent_rqs {
-                                if let Some(rq_key) = rq_key {
-                                    sent_rqs[rq_key as usize % sent_rqs.len()].insert(rq_key, ());
-                                }
-                            }
-
                             if let Some((comm_stats, start_time)) = &comm_stats {
                                 let dur_since = before_send_time.duration_since(*start_time).as_nanos();
 
@@ -1092,6 +1078,13 @@ impl<D> Node<D>
                                 comm_stats.insert_message_sending_time(id, dur_send);
                                 comm_stats.register_rq_sent(id);
                             }
+
+                            if let Some(sent_rqs) = sent_rqs {
+                                if let Some(rq_key) = rq_key {
+                                    sent_rqs[rq_key as usize % sent_rqs.len()].insert(rq_key, ());
+                                }
+                            }
+
                         };
 
                         if id < first_cli {
@@ -2443,11 +2436,11 @@ impl<D> SendTo<D>
                                 //TODO: Since this only handles receiving stuff, do we have to disconnect?
                                 //Idk...
                                 cli.disconnect();
-                                return
+                                return;
                             }
                         }
                         Err(_) => {
-                            return
+                            return;
                         }
                     }
 
