@@ -402,11 +402,13 @@ impl<D> Node<D>
         let rng = ThreadSafePrng::new();
 
         //TESTING
-        let sent_rqs = if id > cfg.first_cli {
+        let sent_rqs = None;
+
+        /*if id > cfg.first_cli {
             Some(Arc::new(std::iter::repeat_with(|| { DashMap::with_capacity(20000) })
                 .take(30)
                 .collect()))
-        } else { None };
+        } else { None };*/
 
         let rcv_rqs = None;
 
