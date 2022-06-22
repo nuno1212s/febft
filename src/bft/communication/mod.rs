@@ -3,7 +3,6 @@
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use async_tls::{
@@ -25,7 +24,7 @@ use futures::io::{
 use futures_timer::Delay;
 use intmap::IntMap;
 use tracing::{debug, instrument, error};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{RwLock};
 
 use rustls::{ClientConfig, ServerConfig};
 #[cfg(feature = "serialize_serde")]
@@ -36,6 +35,7 @@ use crate::bft::async_runtime as rt;
 use crate::bft::benchmarks::{CommStats};
 use crate::bft::communication::message::{Header, Message, SerializedMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
 use crate::bft::communication::peer_handling::{ConnectedPeer, NodePeers};
+use crate::bft::communication::peer_sending_threads::ConnectionHandle;
 
 use crate::bft::communication::serialize::{
     Buf,
@@ -59,7 +59,7 @@ pub mod serialize;
 pub mod message;
 pub mod channel;
 pub mod peer_handling;
-pub mod send_thread;
+pub mod peer_sending_threads;
 
 //pub trait HijackMessage {
 //    fn hijack_message(&self, stored: ) -> Either<M
@@ -151,20 +151,20 @@ enum PeerTx {
     // on the second one
     Client {
         first_cli: NodeId,
-        connected: Arc<RwLock<IntMap<SecureSocketSend>>>,
+        connected: Arc<RwLock<IntMap<ConnectionHandle>>>,
     },
     // replicas don't need shared access to the hashmap, so
     // we only need one lock (to restrict I/O to one producer at a time)
     Server {
         first_cli: NodeId,
-        connected: Arc<RwLock<IntMap<SecureSocketSend>>>,
+        connected: Arc<RwLock<IntMap<ConnectionHandle>>>,
     },
 }
 
 impl PeerTx {
     ///Add a tx peer connection to the registry
     ///Requires knowing the first_cli
-    pub fn add_peer(&self, client_id: u64, socket: SecureSocketSend) {
+    pub fn add_peer(&self, client_id: u64, socket: ConnectionHandle) {
         match self {
             PeerTx::Client { connected, .. } => {
                 let mut guard = connected.write();
@@ -179,7 +179,7 @@ impl PeerTx {
         }
     }
 
-    pub fn find_peer(&self, client_id: u64) -> Option<SecureSocketSend> {
+    pub fn find_peer(&self, client_id: u64) -> Option<ConnectionHandle> {
         match self {
             PeerTx::Client { connected, .. } => {
                 let option = {
@@ -293,13 +293,13 @@ pub struct NodeConfig {
     /// The secret key of this particular `Node`.
     pub sk: KeyPair,
     /// The TLS configuration used to connect to replica nodes. (from client nodes)
-    pub client_config: ClientConfig,
+    pub async_client_config: ClientConfig,
     /// The TLS configuration used to accept connections from client nodes.
-    pub server_config: ServerConfig,
+    pub async_server_config: ServerConfig,
     ///The TLS configuration used to accept connections from replica nodes (Synchronously)
-    pub replica_server_config: rustls::ServerConfig,
+    pub sync_server_config: rustls::ServerConfig,
     ///The TLS configuration used to connect to replica nodes (from replica nodes) (Synchronousy)
-    pub replica_client_config: rustls::ClientConfig,
+    pub sync_client_config: rustls::ClientConfig,
     ///How many clients should be placed in a single collecting pool (seen in peer_handling)
     pub clients_per_pool: usize,
     ///The timeout for batch collection in each client pool.
@@ -369,11 +369,11 @@ impl<D> Node<D>
                 .wrapped_msg(ErrorKind::Communication, format!("Failed to bind to address {:?}", server_addr).as_str())?)
         };
 
-        let acceptor: TlsAcceptor = cfg.server_config.into();
-        let connector: TlsConnector = cfg.client_config.into();
+        let acceptor: TlsAcceptor = cfg.async_server_config.into();
+        let connector: TlsConnector = cfg.async_client_config.into();
 
-        let replica_acceptor = Arc::new(cfg.replica_server_config);
-        let replica_connector = Arc::new(cfg.replica_client_config);
+        let replica_acceptor = Arc::new(cfg.sync_server_config);
+        let replica_connector = Arc::new(cfg.sync_client_config);
 
         // node def
         let peer_tx = if id >= cfg.first_cli {
@@ -516,7 +516,7 @@ impl<D> Node<D>
             let first_cli = cfg.first_cli;
 
             //Connect to all replicas
-            threadpool::execute_replicas(move || {
+            threadpool::execute(move || {
                 let mut rng = prng::State::new();
 
                 node_cpy.clone().tx_side_connect_sync(
@@ -687,7 +687,7 @@ impl<D> Node<D>
         nonce: u64,
         comm_stats: Option<(Arc<CommStats>, Instant)>,
     ) {
-        let send_task = move || {
+        threadpool::execute(move || {
             // serialize
             let start_serialization = Instant::now();
 
@@ -728,7 +728,7 @@ impl<D> Node<D>
 
                 // Left -> peer turn
                 match send_to.socket_type().unwrap() {
-                    SecureSocketSend::Async(_) => {
+                    ConnectionHandle::Async(_) => {
                         rt::spawn(async move {
                             //Measuring time taken to get to the point of sending the message
                             //We don't actually want to measure how long it takes to send the message
@@ -747,7 +747,7 @@ impl<D> Node<D>
                             }
                         });
                     }
-                    SecureSocketSend::Sync(_) => {
+                    ConnectionHandle::Sync(_) => {
                         //Measuring time taken to get to the point of sending the message
                         //We don't actually want to measure how long it takes to send the message
                         let before_send_time = Instant::now();
@@ -766,13 +766,7 @@ impl<D> Node<D>
                     }
                 }
             }
-        };
-
-        if target < first_cli {
-            threadpool::execute_replicas(send_task);
-        } else {
-            threadpool::execute_clients(send_task);
-        }
+        });
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -866,7 +860,7 @@ impl<D> Node<D>
         first_client: NodeId,
         comm_stats: Option<(Arc<CommStats>, Instant)>,
     ) {
-        threadpool::execute_replicas(move || {
+        threadpool::execute(move || {
             // send to ourselves
             if let Some(mut send_to) = my_send_to {
                 let id = match &send_to {
@@ -881,29 +875,21 @@ impl<D> Node<D>
 
                 let comm_stats = comm_stats.clone();
 
-                let send_myself_task = move || {
-                    //Measuring time taken to get to the point of sending the message
-                    //We don't actually want to measure how long it takes to send the message
-                    let before_sending = Instant::now();
+                //Measuring time taken to get to the point of sending the message
+                //We don't actually want to measure how long it takes to send the message
+                let before_sending = Instant::now();
 
-                    send_to.value_sync(header, message);
+                send_to.value_sync(header, message);
 
-                    if let Some((comm_stats, start_send)) = &comm_stats {
-                        let dur_since = before_sending.duration_since(*start_send).as_nanos();
+                if let Some((comm_stats, start_send)) = &comm_stats {
+                    let dur_since = before_sending.duration_since(*start_send).as_nanos();
 
-                        let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
+                    let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
 
-                        comm_stats.insert_message_passing_latency_own(dur_since);
-                        comm_stats.insert_message_sending_time_own(dur_sending);
+                    comm_stats.insert_message_passing_latency_own(dur_since);
+                    comm_stats.insert_message_sending_time_own(dur_sending);
 
-                        comm_stats.register_rq_sent(id);
-                    }
-                };
-
-                if id < first_client {
-                    threadpool::execute_replicas(send_myself_task);
-                } else {
-                    threadpool::execute_clients(send_myself_task);
+                    comm_stats.register_rq_sent(id);
                 }
             }
 
@@ -922,7 +908,7 @@ impl<D> Node<D>
                 let comm_stats = comm_stats.clone();
 
                 match send_to.socket_type().unwrap() {
-                    SecureSocketSend::Async(_) => {
+                    ConnectionHandle::Async(_) => {
                         rt::spawn(async move {
                             //Measuring time taken to get to the point of sending the message
                             //We don't actually want to measure how long it takes to send the message
@@ -942,30 +928,22 @@ impl<D> Node<D>
                             }
                         });
                     }
-                    SecureSocketSend::Sync(_) => {
-                        let send_task = move || {
-                            //Measuring time taken to get to the point of sending the message
-                            //We don't actually want to measure how long it takes to send the message
-                            let before_sending = Instant::now();
+                    ConnectionHandle::Sync(_) => {
+                        //Measuring time taken to get to the point of sending the message
+                        //We don't actually want to measure how long it takes to send the message
+                        let before_sending = Instant::now();
 
-                            send_to.value_sync(header, message);
+                        send_to.value_sync(header, message);
 
-                            if let Some((comm_stats, start_send)) = &comm_stats {
-                                let dur_since = before_sending.duration_since(*start_send).as_nanos();
+                        if let Some((comm_stats, start_send)) = &comm_stats {
+                            let dur_since = before_sending.duration_since(*start_send).as_nanos();
 
-                                let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
+                            let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
 
-                                comm_stats.insert_message_passing_latency(id, dur_since);
-                                comm_stats.insert_message_sending_time(id, dur_sending);
+                            comm_stats.insert_message_passing_latency(id, dur_since);
+                            comm_stats.insert_message_sending_time(id, dur_sending);
 
-                                comm_stats.register_rq_sent(id);
-                            }
-                        };
-
-                        if id < first_client {
-                            threadpool::execute_replicas(send_task);
-                        } else {
-                            threadpool::execute_clients(send_task);
+                            comm_stats.register_rq_sent(id);
                         }
                     }
                 }
@@ -983,7 +961,7 @@ impl<D> Node<D>
         comm_stats: Option<(Arc<CommStats>, Instant)>,
         sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>,
     ) {
-        threadpool::execute_replicas(move || {
+        threadpool::execute(move || {
             let start_serialization = Instant::now();
 
             // serialize
@@ -1057,42 +1035,33 @@ impl<D> Node<D>
                 let sent_rqs = sent_rqs.clone();
 
                 match send_to.socket_type().unwrap() {
-                    SecureSocketSend::Async(_) => {
+                    ConnectionHandle::Async(_) => {
                         rt::spawn(async move {
                             // Left -> peer turn
                             send_to.value(Left((nonce, digest, buf))).await;
                         });
                     }
-                    SecureSocketSend::Sync { .. } => {
-                        let send_task = move || {
-                            //Measuring time taken to get to the point of sending the message
-                            //We don't actually want to measure how long it takes to send the message
-                            let before_send_time = Instant::now();
+                    ConnectionHandle::Sync { .. } => {
+                        //Measuring time taken to get to the point of sending the message
+                        //We don't actually want to measure how long it takes to send the message
+                        let before_send_time = Instant::now();
 
-                            send_to.value_sync(Left((nonce, digest, buf)));
+                        send_to.value_sync(Left((nonce, digest, buf)));
 
-                            if let Some((comm_stats, start_time)) = &comm_stats {
-                                let dur_since = before_send_time.duration_since(*start_time).as_nanos();
+                        if let Some((comm_stats, start_time)) = &comm_stats {
+                            let dur_since = before_send_time.duration_since(*start_time).as_nanos();
 
-                                let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
+                            let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
 
-                                comm_stats.insert_message_passing_latency(id, dur_since);
-                                comm_stats.insert_message_sending_time(id, dur_send);
-                                comm_stats.register_rq_sent(id);
+                            comm_stats.insert_message_passing_latency(id, dur_since);
+                            comm_stats.insert_message_sending_time(id, dur_send);
+                            comm_stats.register_rq_sent(id);
+                        }
+
+                        if let Some(sent_rqs) = sent_rqs {
+                            if let Some(rq_key) = rq_key {
+                                sent_rqs[rq_key as usize % sent_rqs.len()].insert(rq_key, ());
                             }
-
-                            if let Some(sent_rqs) = sent_rqs {
-                                if let Some(rq_key) = rq_key {
-                                    sent_rqs[rq_key as usize % sent_rqs.len()].insert(rq_key, ());
-                                }
-                            }
-
-                        };
-
-                        if id < first_cli {
-                            threadpool::execute_replicas(send_task);
-                        } else {
-                            threadpool::execute_clients(send_task);
                         }
                     }
                 }
@@ -1319,7 +1288,25 @@ impl<D> Node<D>
     /// Registers the newly created transmission socket to the peer
     pub fn handle_connected_tx(&self, peer_id: NodeId, sock: SecureSocketSend) {
         debug!("{:?} // Connected TX to peer {:?}", self.id, peer_id);
-        self.peer_tx.add_peer(peer_id.id() as u64, sock);
+
+        let conn_handle = match sock {
+            SecureSocketSend::Async(socket) => {
+                peer_sending_threads::initialize_async_sending_task_for(
+                    peer_id.clone(),
+                    socket,
+                    self.comm_stats.clone(),
+                )
+            }
+            SecureSocketSend::Sync(socket) => {
+                peer_sending_threads::initialize_sync_sending_thread_for(
+                    peer_id.clone(),
+                    socket,
+                    self.comm_stats.clone(),
+                )
+            }
+        };
+
+        self.peer_tx.add_peer(peer_id.id() as u64, conn_handle);
     }
 
     ///Connect to all other replicas in the cluster
@@ -1358,7 +1345,7 @@ impl<D> Node<D>
 
             let arc = self.clone();
 
-            threadpool::execute_replicas(move || {
+            threadpool::execute(move || {
                 debug!("{:?} // Starting connection to node {:?}",my_id, peer_id);
 
                 arc.tx_side_connect_task_sync(my_id, first_cli, peer_id,
@@ -1481,13 +1468,8 @@ impl<D> Node<D>
                     SecureSocketSendSync::new_tls(session, sock)
                 };
 
-                let (bounded_tx, bounded_rx) = crate::bft::communication::channel::new_bounded_sync(256);
 
-                let final_sock = SecureSocketSend::Sync(SocketSendSync::new(
-                    Arc::new(Mutex::new(sock)),
-                    bounded_rx,
-                    bounded_tx,
-                ));
+                let final_sock = SecureSocketSend::Sync(SocketSendSync::new(sock));
 
                 // success
                 self.handle_connected_tx(peer_id, final_sock);
@@ -1565,9 +1547,7 @@ impl<D> Node<D>
                     }
                 };
 
-                let final_sock = SecureSocketSend::Async(
-                    SocketSendAsync::new(Arc::new(futures::lock::Mutex::new(sock)))
-                );
+                let final_sock = SecureSocketSend::Async(SocketSendAsync::new(sock));
 
                 // success
                 self.handle_connected_tx(peer_id, final_sock);
@@ -1600,7 +1580,7 @@ impl<D> Node<D>
                 let first_cli = first_cli.clone();
                 let my_id = my_id.clone();
 
-                threadpool::execute_clients(move || {
+                threadpool::execute(move || {
                     rx_ref.rx_side_establish_conn_task_sync(first_cli, my_id, replica_acceptor, sock);
                 });
             }
@@ -1876,7 +1856,8 @@ impl<D> Node<D>
                 //
                 // FIXME: this line can crash the program if the user
                 // provides an invalid HashMap
-                let addr = self.peer_addrs.get(peer_id.id() as u64).unwrap().client_addr.clone();
+                let addr = self.peer_addrs.get(peer_id.id() as u64)
+                    .expect(format!("Failed to get address for client {:?}", peer_id).as_str()).client_addr.clone();
 
                 debug!("{:?} // Received connection from client {:?}, establish TX connection on port {:?}", self.id, peer_id,
                     addr.0);
@@ -1886,7 +1867,7 @@ impl<D> Node<D>
 
                 let self_cpy = self.clone();
 
-                threadpool::execute_clients(move || {
+                threadpool::execute(move || {
                     let id = self_cpy.id;
                     let first_cli = self_cpy.first_cli;
                     let sync_conn = self_cpy.sync_connector.clone();
@@ -2187,7 +2168,7 @@ pub enum SendTo<D: SharedData> {
         // shared data
         shared: Option<Arc<NodeShared>>,
         // handle to socket
-        sock: SecureSocketSend,
+        sock: ConnectionHandle,
         // a handle to the message channel of the corresponding client
         tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     },
@@ -2206,7 +2187,7 @@ pub enum SerializedSendTo<D: SharedData> {
         //Our own ID
         our_id: NodeId,
         // handle to socket
-        sock: SecureSocketSend,
+        sock: ConnectionHandle,
         // a handle to the message channel of the corresponding client
         tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     },
@@ -2219,7 +2200,7 @@ impl<D> SendTo<D>
         D::Request: Send + 'static,
         D::Reply: Send + 'static,
 {
-    fn socket_type(&self) -> Option<&SecureSocketSend> {
+    fn socket_type(&self) -> Option<&ConnectionHandle> {
         match self {
             SendTo::Me { .. } => {
                 None
@@ -2247,16 +2228,12 @@ impl<D> SendTo<D>
                 flush, my_id, peer_id,
                 shared: ref sh, sock, tx
             } => {
-
-                //Unwrap the socket that must be a async socket
-                let sock = match sock {
-                    SecureSocketSend::Async(_) => {
-                        panic!("Attempted to send synchronously through asynchronous channel")
+                match &sock {
+                    ConnectionHandle::Sync(_) => {}
+                    ConnectionHandle::Async(_) => {
+                        panic!("Attempted to send messages synchronously through a async channel")
                     }
-                    SecureSocketSend::Sync(socket) => {
-                        socket
-                    }
-                };
+                }
 
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Left((n, d, b)) = m {
@@ -2288,16 +2265,12 @@ impl<D> SendTo<D>
                 flush, my_id, peer_id,
                 shared: ref sh, sock, tx
             } => {
-
-                //Unwrap the socket that must be a async socket
-                let sock = match sock {
-                    SecureSocketSend::Async(sock) => {
-                        sock
+                match &sock {
+                    ConnectionHandle::Sync(_) => {}
+                    ConnectionHandle::Async(_) => {
+                        panic!("Attempted to send messages synchronously through a async channel")
                     }
-                    SecureSocketSend::Sync { .. } => {
-                        panic!("Attempted to send asynchronously to a synchronous socket");
-                    }
-                };
+                }
 
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Left((n, d, b)) = m {
@@ -2364,7 +2337,7 @@ impl<D> SendTo<D>
         d: Digest,
         b: Buf,
         sk: Option<&KeyPair>,
-        lock: SocketSendAsync,
+        mut conn_handle: ConnectionHandle,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
 
@@ -2379,19 +2352,9 @@ impl<D> SendTo<D>
             sk,
         );
 
-        // send
-        //
-        // FIXME: sending may hang forever, because of network
-        // problems; add a timeout
-        let mut sock = lock.socket().lock().await;
-        if let Err(_) = wm.write_to(&mut *sock, flush).await {
-            // error sending, drop connection
-
-            //TODO: Since this only handles receiving stuff, do we have to disconnect?
-            //Idk...
-            //TODO: Remove the socket from PeerTx
-            cli.disconnect();
-            //tx.send(Message::DisconnectedTx(peer_id)).await.unwrap_or(());
+        match conn_handle.async_send(wm).await {
+            Ok(_) => {}
+            Err(_) => { cli.disconnect(); }
         }
     }
 
@@ -2403,7 +2366,7 @@ impl<D> SendTo<D>
         d: Digest,
         b: Buf,
         sk: Option<&KeyPair>,
-        lock: SocketSendSync,
+        conn_handle: ConnectionHandle,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>, ) {
 
         // create wire msg
@@ -2416,40 +2379,10 @@ impl<D> SendTo<D>
             sk,
         );
 
-        // send
-        //
-        // FIXME: sending may hang forever, because of network
-        // problems; add a timeout
-
-        lock.channel_send().send(wm)
-            .expect("Failed to send to channel");
-
-        let mut sock = lock.socket().try_lock();
-
-        match sock {
-            None => {}
-            Some(mut sock) => {
-                loop {
-                    match lock.channel_rcv().try_recv() {
-                        Ok(message) => {
-                            if let Err(_) = message.write_to_sync(&mut *sock, false) {
-                                // error sending, drop connection
-
-                                //TODO: Since this only handles receiving stuff, do we have to disconnect?
-                                //Idk...
-                                cli.disconnect();
-                                return;
-                            }
-                        }
-                        Err(_) => {
-                            return;
-                        }
-                    }
-
-                    //We return previously as we don't want to flush if the socket already errored
-                    //Out
-                    sock.flush().expect("Failed to flush socket");
-                }
+        match conn_handle.send(wm) {
+            Ok(_) => {}
+            Err(_) => {
+                cli.disconnect();
             }
         }
     }
@@ -2462,7 +2395,7 @@ impl<D> SerializedSendTo<D>
         D::Request: Send + 'static,
         D::Reply: Send + 'static,
 {
-    fn socket_type(&self) -> Option<&SecureSocketSend> {
+    fn socket_type(&self) -> Option<&ConnectionHandle> {
         match self {
             SerializedSendTo::Me { .. } => {
                 None
@@ -2483,14 +2416,12 @@ impl<D> SerializedSendTo<D>
                 Self::me_sync(h, m, tx);
             }
             SerializedSendTo::Peers { id, our_id, sock, tx } => {
-                let sock = match sock {
-                    SecureSocketSend::Async(_) => {
-                        panic!("Attempted to send messages asynchronously through a sync channel")
+                match &sock {
+                    ConnectionHandle::Sync(_) => {}
+                    ConnectionHandle::Async(_) => {
+                        panic!("Attempted to send messages synchronously through a async channel")
                     }
-                    SecureSocketSend::Sync(socket) => {
-                        socket
-                    }
-                };
+                }
 
                 Self::peers_sync(id, h, m, sock, tx);
             }
@@ -2516,14 +2447,12 @@ impl<D> SerializedSendTo<D>
 
                 //debug!("{:?} // Sending SERIALIZED message {} to other peer {:?} ",our_id,  msg, id);
 
-                let sock = match sock {
-                    SecureSocketSend::Async(sock) => {
-                        sock
-                    }
-                    SecureSocketSend::Sync(_) => {
+                match &sock {
+                    ConnectionHandle::Sync(_) => {
                         panic!("Attempted to send messages asynchronously through a sync channel")
                     }
-                };
+                    ConnectionHandle::Async(_) => {}
+                }
 
                 Self::peers(id, h, m, sock, tx).await;
             }
@@ -2555,40 +2484,17 @@ impl<D> SerializedSendTo<D>
         peer_id: NodeId,
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        lock: SocketSendSync,
+        conn_handle: ConnectionHandle,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
         // create wire msg
         let (_, raw) = m.into_inner();
         let wm = WireMessage::from_parts(h, raw).unwrap();
 
-        lock.channel_send().send(wm)
-            .expect("Failed to send to the channel");
-
-        // send
-        //
-        // FIXME: sending may hang forever, because of network
-        // problems; add a timeout
-        let mut sock = lock.socket().try_lock();
-        match sock {
-            None => {}
-            Some(mut sock) => {
-                loop {
-                    match lock.channel_rcv().try_recv() {
-                        Ok(message) => {
-                            if let Err(_) = message.write_to_sync(&mut *sock, true) {
-                                // error sending, drop connection
-
-                                //TODO: Since this only handles receiving stuff, do we have to disconnect?
-                                //Idk...
-                                cli.disconnect();
-                            }
-                        }
-                        Err(_) => {
-                            break;
-                        }
-                    }
-                }
+        match conn_handle.send(wm) {
+            Ok(_) => {}
+            Err(_) => {
+                cli.disconnect();
             }
         }
     }
@@ -2599,7 +2505,7 @@ impl<D> SerializedSendTo<D>
         peer_id: NodeId,
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        lock: SocketSendAsync,
+        mut conn_handle: ConnectionHandle,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
 
@@ -2607,18 +2513,11 @@ impl<D> SerializedSendTo<D>
         let (_, raw) = m.into_inner();
         let wm = WireMessage::from_parts(h, raw).unwrap();
 
-        // send
-        //
-        // FIXME: sending may hang forever, because of network
-        // problems; add a timeout
-        let mut sock = lock.socket().lock().await;
-
-        if let Err(_) = wm.write_to(&mut *sock, true).await {
-            // error sending, drop connection
-
-            //TODO: Since this only handles receiving stuff, do we have to disconnect?
-            //Idk...
-            cli.disconnect();
+        match conn_handle.async_send(wm).await {
+            Ok(_) => {}
+            Err(_) => {
+                cli.disconnect();
+            }
         }
     }
 }

@@ -31,10 +31,8 @@ static INITIALIZED: Flag = Flag::new();
 pub struct InitConfig {
     /// Number of threads used by the async runtime.
     pub async_threads: usize,
-    /// Number of threads used by the replica thread pool.
-    pub replica_threads: usize,
-    /// Number of threads used by the client thread pool
-    pub client_threads: usize
+    /// Number of threads used by the thread pool.
+    pub threadpool_threads: usize,
 }
 
 /// Handle to the global data.
@@ -55,7 +53,7 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
 
     tracing_subscriber::fmt::init();
 
-    threadpool::init(c.replica_threads, c.client_threads)?;
+    threadpool::init(c.threadpool_threads)?;
     async_runtime::init(c.async_threads)?;
 
     println!("Async threads {}", c.async_threads);

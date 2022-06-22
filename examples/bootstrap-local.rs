@@ -29,7 +29,7 @@ use febft::bft::crypto::signature::{
 
 fn main() {
     let conf = InitConfig {
-        replica_threads: num_cpus::get(),
+        threadpool_threads: num_cpus::get(),
         async_threads: num_cpus::get(),
     };
     let _guard = unsafe { init(conf).unwrap() };

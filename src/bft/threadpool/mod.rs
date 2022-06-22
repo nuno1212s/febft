@@ -99,23 +99,14 @@ impl ThreadPool {
 ///We could get a situation where client responding would flood the threadpool and cause much larger latency
 /// On the requests that are meant for the other replicas, leading to possibly much worse performance
 /// By splitting these up we are assuring that does not happen as frequently at least
+///
+/// UPDATE: This is no longer the case given that we no longer use threadpools for message sending, just
+/// for signing and serializing them
+static mut POOL: Global<ThreadPool> = Global::new();
 
-static mut REPLICA_POOL: Global<ThreadPool> = Global::new();
-
-static mut CLIENT_POOL: Global<ThreadPool> = Global::new();
-
-macro_rules! replica_pool {
+macro_rules! pool {
     () => {
-        match unsafe { REPLICA_POOL.get() } {
-	        Some(ref pool) => pool,
-            None => panic!("Replica thread pool wasn't initialized"),
-        }
-    }
-}
-
-macro_rules! client_pool {
-    () => {
-        match unsafe { CLIENT_POOL.get() } {
+        match unsafe { POOL.get() } {
 	        Some(ref pool) => pool,
             None => panic!("Client thread pool wasn't initialized"),
         }
@@ -125,17 +116,12 @@ macro_rules! client_pool {
 /// This function initializes the thread pools.
 ///
 /// It should be called once before the core protocol starts executing.
-pub unsafe fn init(replica_num_thread: usize, client_num_thread: usize) -> Result<()> {
+pub unsafe fn init(num_threads: usize) -> Result<()> {
     let replica_pool = Builder::new()
-        .num_threads(replica_num_thread)
+        .num_threads(num_threads)
         .build();
 
-    let client_pool = Builder::new()
-        .num_threads(client_num_thread)
-        .build();
-
-    REPLICA_POOL.set(replica_pool);
-    CLIENT_POOL.set(client_pool);
+    POOL.set(replica_pool);
     Ok(())
 }
 
@@ -144,30 +130,20 @@ pub unsafe fn init(replica_num_thread: usize, client_num_thread: usize) -> Resul
 /// It shouldn't be needed to be called manually called, as the
 /// `InitGuard` should take care of calling this.
 pub unsafe fn drop() -> Result<()> {
-    REPLICA_POOL.drop();
-    CLIENT_POOL.drop();
+    POOL.drop();
     Ok(())
 }
 
 /// Spawns a new job into the global thread pool.
-pub fn execute_replicas<F>(job: F)
+pub fn execute<F>(job: F)
 where
     F: FnOnce() + Send + 'static,
 {
-    replica_pool!().execute(job)
-}
-
-/// Spawns a new job into the global thread pool.
-pub fn execute_clients<F>(job: F)
-    where
-        F: FnOnce() + Send + 'static,
-{
-    client_pool!().execute(job)
+    pool!().execute(job)
 }
 
 /// Synchronously waits for all the jobs queued in the
 /// global thread pool to complete.
 pub fn join() {
-    replica_pool!().join();
-    client_pool!().join()
+    pool!().join();
 }

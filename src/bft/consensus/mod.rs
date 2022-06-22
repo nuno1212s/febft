@@ -613,7 +613,7 @@ impl<S> Consensus<S>
                 let n = view.params().n();
 
                 //Speculate in another thread.
-                threadpool::execute_replicas(move || {
+                threadpool::execute(move || {
 
                     // create COMMIT
                     let message = SystemMessage::Consensus(ConsensusMessage::new(

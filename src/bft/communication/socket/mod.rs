@@ -216,7 +216,6 @@ impl SecureSocketSendSync {
     }
 }
 
-#[derive(Clone)]
 ///Client stores asynchronous socket references (Client->replica, replica -> client)
 ///Replicas stores synchronous socket references (Replica -> Replica)
 pub enum SecureSocketSend {
@@ -224,46 +223,42 @@ pub enum SecureSocketSend {
     Sync(SocketSendSync),
 }
 
-#[derive(Clone)]
+///A socket abstraction to use synchronously
 pub struct SocketSendSync {
-    socket: Arc<parking_lot::Mutex<SecureSocketSendSync>>,
-    channel_rcv: ChannelSyncRx<WireMessage>,
-    channel_send: ChannelSyncTx<WireMessage>,
+    socket: SecureSocketSendSync,
 }
 
-#[derive(Clone)]
-pub struct SocketSendAsync(Arc<futures::lock::Mutex<SecureSocketSendAsync>>);
+///A socket abstraction to use asynchronously
+pub struct SocketSendAsync(SecureSocketSendAsync);
 
 impl SocketSendSync {
-    pub fn new(
-        socket: Arc<parking_lot::Mutex<SecureSocketSendSync>>,
-        channel_rcv: ChannelSyncRx<WireMessage>,
-        channel_send: ChannelSyncTx<WireMessage>) -> Self {
+    pub fn new(socket: SecureSocketSendSync) -> Self {
         Self {
             socket,
-            channel_rcv,
-            channel_send
         }
     }
 
-    pub fn socket(&self) -> &Arc<parking_lot::Mutex<SecureSocketSendSync>> {
+    pub fn socket(&self) -> &SecureSocketSendSync {
         &self.socket
     }
-    pub fn channel_rcv(&self) -> &ChannelSyncRx<WireMessage> {
-        &self.channel_rcv
-    }
-    pub fn channel_send(&self) -> &ChannelSyncTx<WireMessage> {
-        &self.channel_send
+
+    pub fn mut_socket(&mut self) -> &mut SecureSocketSendSync {
+        &mut self.socket
     }
 }
 
 impl SocketSendAsync {
-    pub fn new(socket: Arc<futures::lock::Mutex<SecureSocketSendAsync>>)-> Self {
-        Self (socket)
+    pub fn new(socket: SecureSocketSendAsync) -> Self {
+        Self(socket)
     }
 
-    pub fn socket(&self) -> &Arc<futures::lock::Mutex<SecureSocketSendAsync>> {
+    pub fn socket(&self) -> &SecureSocketSendAsync {
         &self.0
+    }
+
+    pub fn mut_socket(&mut self) -> &mut SecureSocketSendAsync
+    {
+        &mut self.0
     }
 }
 
