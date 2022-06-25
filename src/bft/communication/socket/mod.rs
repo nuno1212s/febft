@@ -41,7 +41,7 @@ mod std_tcp;
 
 /// A `Listener` represents a socket listening on new communications
 /// initiated by peer nodes in the BFT system.
-pub struct Listener {
+pub struct AsyncListener {
     #[cfg(feature = "socket_tokio_tcp")]
     inner: tokio_tcp::Listener,
 
@@ -95,7 +95,7 @@ pub unsafe fn drop() -> error::Result<()> {
 }
 
 /// Creates a new `Listener` socket, bound to the address `addr`.
-pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
+pub async fn bind_async_server<A: Into<SocketAddr>>(addr: A) -> io::Result<AsyncListener> {
     {
         #[cfg(feature = "socket_tokio_tcp")]
         { tokio_tcp::bind(addr).await }
@@ -105,10 +105,10 @@ pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
 
         #[cfg(feature = "socket_rio_tcp")]
         { rio_tcp::bind(addr).await }
-    }.and_then(|inner| set_listener_options(Listener { inner }))
+    }.and_then(|inner| set_listener_options(AsyncListener { inner }))
 }
 
-pub fn bind_replica_server<A: Into<SocketAddr>>(addr: A) -> io::Result<SyncListener> {
+pub fn bind_sync_server<A: Into<SocketAddr>>(addr: A) -> io::Result<SyncListener> {
     { std_tcp::bind(addr) }.and_then(|inner| set_listener_options_replica(SyncListener { inner }))
 }
 
@@ -131,7 +131,7 @@ pub fn connect_replica<A: Into<SocketAddr>>(addr: A) -> io::Result<SyncSocket> {
         .and_then(|inner| set_sockstream_options_sync(SyncSocket { inner }))
 }
 
-impl Listener {
+impl AsyncListener {
     pub async fn accept(&self) -> io::Result<Socket> {
         self.inner.accept()
             .await
@@ -392,7 +392,7 @@ impl AsyncWrite for SecureSocketSendAsync {
 
 // set listener socket options; translated from BFT-SMaRt
 #[inline]
-fn set_listener_options(listener: Listener) -> io::Result<Listener> {
+fn set_listener_options(listener: AsyncListener) -> io::Result<AsyncListener> {
     let sock = socket2::SockRef::from(&listener.inner);
     sock.set_send_buffer_size(8 * 10240 * 1024)?;
     sock.set_recv_buffer_size(8 * 10240 * 1024)?;

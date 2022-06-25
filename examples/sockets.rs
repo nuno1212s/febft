@@ -57,7 +57,7 @@ async fn client_main() -> io::Result<()> {
 
 async fn listener_main() -> io::Result<()> {
     let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
-    let listener = socket::bind(addr).await?;
+    let listener = socket::bind_async_server(addr).await?;
 
     loop {
         if let Ok(sock) = listener.accept().await {
