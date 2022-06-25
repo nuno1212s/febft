@@ -167,7 +167,9 @@ impl<D> Clone for PeerTx<D> where D: SharedData + 'static {
             PeerTx::Client { first_cli, connected } => {
                 Self::Client { first_cli: (*first_cli).clone(), connected: Arc::clone(connected) }
             }
-            PeerTx::Server { first_cli, connected } => {
+            PeerTx::Server {
+                first_cli, connected
+            } => {
                 Self::Server { first_cli: (*first_cli).clone(), connected: Arc::clone(connected) }
             }
         }
@@ -1942,12 +1944,11 @@ impl<D> SendNode<D>
         }
     }
 
-    /// Check the `broadcast()` documentation for `Node`.
-    pub fn broadcast(
-        &mut self,
-        message: SystemMessage<D::State, D::Request, D::Reply>,
-        targets: impl Iterator<Item=NodeId>,
-    ) {
+    fn broadcast_with_in_thread(&mut self,
+                 message: SystemMessage<D::State, D::Request, D::Reply>,
+                 targets: impl Iterator<Item=NodeId>,
+                 in_thread_digest: bool) {
+
         let start_time = Instant::now();
 
         let (mine, others) = self.parent_node.send_tos(
@@ -1960,14 +1961,34 @@ impl<D> SendNode<D>
         let nonce = self.rng.next_state();
 
         <Node<D>>::broadcast_impl(message, mine, others, nonce,
-                                  false, start_time);
+                                  in_thread_digest, start_time);
     }
 
-    /// Check the `broadcast_signed()` documentation for `Node`.
-    pub fn broadcast_signed(
+    /// Check the `broadcast()` documentation for `Node`.
+    pub fn broadcast(
         &mut self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item=NodeId>,
+    ) {
+        Self::broadcast_with_in_thread(self, message, targets, false)
+    }
+
+    ///With this broadcast, the digest and serialization of the message
+    ///is done in the current thread, instead of in the sending thread.
+    /// This should reduce load in those threads
+    pub fn broadcast_in_thread_digest(
+        &mut self,
+        message: SystemMessage<D::State, D::Request, D::Reply>,
+        targets: impl Iterator<Item=NodeId>,
+    ) {
+        Self::broadcast_with_in_thread(self, message, targets, true)
+    }
+
+    fn broadcast_signed_with_in_thread(
+        &mut self,
+        message: SystemMessage<D::State, D::Request, D::Reply>,
+        targets: impl Iterator<Item=NodeId>,
+        in_thread_digest: bool
     ) {
         let start_time = Instant::now();
 
@@ -1981,7 +2002,24 @@ impl<D> SendNode<D>
         let nonce = self.rng.next_state();
 
         <Node<D>>::broadcast_impl(message, mine, others, nonce,
-                                  false, start_time);
+                                  in_thread_digest, start_time);
+    }
+    /// Check the `broadcast_signed()` documentation for `Node`.
+    pub fn broadcast_signed(
+        &mut self,
+        message: SystemMessage<D::State, D::Request, D::Reply>,
+        targets: impl Iterator<Item=NodeId>,
+    ) {
+        Self::broadcast_signed_with_in_thread(self, message, targets, false)
+    }
+
+    /// Check the `broadcast_signed()` documentation for `Node`.
+    pub fn broadcast_signed_in_thread_digest(
+        &mut self,
+        message: SystemMessage<D::State, D::Request, D::Reply>,
+        targets: impl Iterator<Item=NodeId>,
+    ) {
+        Self::broadcast_signed_with_in_thread(self, message, targets, true)
     }
 }
 

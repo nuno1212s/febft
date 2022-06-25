@@ -280,7 +280,7 @@ impl<D> Client<D>
         //The callback registered, therefore losing the response
         let targets = NodeId::targets(0..self.params.n());
 
-        self.node.broadcast(message, targets);
+        self.node.broadcast_in_thread_digest(message, targets);
 
         self.start_timeout(session_id, operation_id, self.data.clone());
     }

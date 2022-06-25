@@ -333,6 +333,8 @@ impl<S> Replica<S>
                     SystemMessage::ForwardedRequests(requests) => {
                         // FIXME: is this the correct behavior? to save forwarded requests
                         // while we are retrieving state...
+                        //TODO: These requests need to be given to the network layer so they can be added
+                        //To the client pool
                         self.forwarded_requests_received(requests);
                     }
                     request @ SystemMessage::Request(_) => {
