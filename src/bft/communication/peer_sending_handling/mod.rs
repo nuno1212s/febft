@@ -22,9 +22,11 @@ const QUEUE_SPACE: usize = 128;
 
 pub type MessageType<D> = MessageData<D>;
 
-pub type SendMessage<D: SharedData + 'static> = SendMessageTypes<D>;
+pub type SendMessage<D> = SendMessageTypes<D>;
 
 pub enum SendMessageTypes<D> where D: SharedData + 'static {
+    ///A serialized message that won't have to be digested or signed, as it's already been signed by some other
+    /// thread.
     Serialized((Header, SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>)),
     /// The given message can be of 2 types:
     ///  We can either give the raw message, with an optional serialized buf and digest (if this was already computed)
@@ -55,8 +57,8 @@ pub struct PeerConnectionInfo {
     dest_node_id: NodeId,
     own_node_id: NodeId,
     first_cli: NodeId,
-    comm_stats: Option<Arc<CommStats>>,
     node_shared: Option<Arc<NodeShared>>,
+    comm_stats: Option<Arc<CommStats>>,
 }
 
 pub enum ConnectionHandle<D> where D: SharedData + 'static {
@@ -150,11 +152,13 @@ pub fn initialize_sync_loopback_thread<D>(node_info: PeerConnectionInfo,
     where D: SharedData + 'static {
     let (tx, rx) = bft::communication::channel::new_bounded_sync(QUEUE_SPACE);
 
+    let node_id = node_info.own_node_id;
+
     std::thread::Builder::new()
-        .name(format!("Node {:?} loopback thread", node_info.own_node_id))
+        .name(format!("Node {:?} loopback thread", node_id))
         .spawn(move || {
             sync_sending_thread(node_info, Connection::Me(socket), rx)
-        }).expect(format!("Failed to start loopback thread for peer {:?}", node_info.own_node_id).as_str());
+        }).expect(format!("Failed to start loopback thread for peer {:?}", node_id).as_str());
 
     ConnectionHandle::Sync(tx)
 }
@@ -228,7 +232,7 @@ fn sync_sending_thread<D>(peer_conn_info: PeerConnectionInfo, mut socket: Connec
                             let mut buf: Buf = Buf::new();
 
                             let digest = <D as DigestData>::serialize_digest(
-                                &to_send.message,
+                                &message,
                                 &mut buf,
                             ).unwrap();
 
@@ -274,11 +278,18 @@ fn sync_sending_thread<D>(peer_conn_info: PeerConnectionInfo, mut socket: Connec
 
         match &mut socket {
             Connection::Peer(socket) => {
-                match wm.write_to_sync(socket.mut_socket(), flush) {
-                    Ok(_) => {}
-                    Err(error) => {
-                        error!("Failed to write to socket on client {:?}", dest_node_id);
-                        break;
+                match socket {
+                    SecureSocketSend::Async(_) => {
+                        unreachable!();
+                    }
+                    SecureSocketSend::Sync(socket) => {
+                        match wm.write_to_sync(socket.mut_socket(), flush) {
+                            Ok(_) => {}
+                            Err(error) => {
+                                error!("Failed to write to socket on client {:?}", dest_node_id);
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -344,61 +355,87 @@ async fn async_sending_task<D>(peer_conn_info: PeerConnectionInfo, mut socket: C
 
         let before_sending = Instant::now();
 
+        let should_sign = to_send.sign;
+
+        let start_serialization = Instant::now();
+
         let (wm, m) = match to_send.message {
-            Either::Left((message, serialized)) => {
-                let (buf, digest) = if let Some((buf, digest)) = serialized {
-                    (buf, digest)
-                } else {
-                    let start_serialization = Instant::now();
+            SendMessage::Serialized((h, message)) => {
+                //Serialized messages do not require calculation of signatures or digests.
+                let (original, payload) = message.into_inner();
 
-                    let mut buf: Buf = Buf::new();
+                let wire_message = WireMessage::from_parts(h, payload)
+                    .expect("Given faulty Serialized message!!!!!!");
 
-                    let digest = <D as DigestData>::serialize_digest(
-                        &to_send.message,
-                        &mut buf,
-                    ).unwrap();
-
-                    if let Some(comm_stats) = &comm_stats {
-                        let time_taken_signing = Instant::now().duration_since(start_serialization).as_nanos();
-
-                        //Broadcasts are always for replicas, so make this
-                        comm_stats.insert_message_signing_time(NodeId::from(0u32), time_taken_signing);
-                    }
-
-                    (buf, digest)
-                };
-
-                (WireMessage::new(
-                    own_node_id,
-                    dest_node_id,
-                    buf,
-                    nonce,
-                    Some(digest),
-                    key,
-                ), Some(message))
+                (wire_message, Some(original))
             }
-            Either::Right((buf, digest)) => {
-                // create wire msg
-                (WireMessage::new(
-                    own_node_id,
-                    dest_node_id,
-                    buf,
-                    nonce,
-                    Some(digest),
-                    key,
-                ), None)
+            SendMessage::Normal(to_send) => {
+                match to_send {
+                    Either::Left((message, serialized)) => {
+                        let (buf, digest) = if let Some((buf, digest)) = serialized {
+                            (buf, digest)
+                        } else {
+                            //If we do not have the digest and
+
+                            let mut buf: Buf = Buf::new();
+
+                            let digest = <D as DigestData>::serialize_digest(
+                                &message,
+                                &mut buf,
+                            ).unwrap();
+
+                            (buf, digest)
+                        };
+
+                        //The wire message will calculate the signature and etc..
+                        (WireMessage::new(
+                            own_node_id,
+                            dest_node_id,
+                            buf,
+                            nonce,
+                            Some(digest),
+                            if should_sign { key } else { None },
+                        ), Some(message))
+                    }
+                    Either::Right((buf, digest)) => {
+                        // create wire msg, therefore calculating signature
+                        (WireMessage::new(
+                            own_node_id,
+                            dest_node_id,
+                            buf,
+                            nonce,
+                            Some(digest),
+                            if should_sign { key } else { None },
+                        ), None)
+                    }
+                }
             }
         };
 
+        if let Some(comm_stats) = &comm_stats {
+            let time_taken_signing = Instant::now().duration_since(start_serialization).as_nanos();
+
+            //Broadcasts are always for replicas, so make this
+            comm_stats.insert_message_signing_time(NodeId::from(0u32), time_taken_signing);
+        }
+
         match &mut socket {
             Connection::Peer(socket) => {
-                match wm.write_to(socket.mut_socket(), flush).await {
-                    Ok(_) => {}
-                    Err(error) => {
-                        error!("Failed to write to socket on client {:?}", dest_node_id);
-                        break;
+                match socket {
+                    SecureSocketSend::Async(socket) => {
+                        match wm.write_to(socket.mut_socket(), flush).await {
+                            Ok(_) => {}
+                            Err(error) => {
+                                error!("Failed to write to socket on client {:?}", dest_node_id);
+                                break;
+                            }
+                        }
+                    }
+                    SecureSocketSend::Sync(_) => {
+                        unreachable!();
                     }
                 }
+
             }
             Connection::Me(peer_conn) => {
                 if let Some(message) = m {

@@ -274,7 +274,7 @@ impl<S> Executor<S>
     fn deliver_checkpoint_state(&self) {
         let cloned_state = self.state.clone();
 
-        let mut system_tx = self.send_node.loopback_channel().clone();
+        let mut system_tx = self.send_node.direct_loopback_channel().clone();
 
         let m = Message::ExecutionFinishedWithAppstate(cloned_state);
         system_tx.push_request_sync(m);

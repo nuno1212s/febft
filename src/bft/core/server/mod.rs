@@ -218,7 +218,7 @@ impl<S> Replica<S>
 
         // start timeouts handler
         let timeouts = Timeouts::new(
-            Arc::clone(node.loopback_channel()),
+            Arc::clone(node.direct_loopback_channel()),
         );
 
         // TODO:

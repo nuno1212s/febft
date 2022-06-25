@@ -140,7 +140,6 @@ impl From<NodeId> for u32 {
 
 // TODO: maybe researh cleaner way to share the connections
 // hashmap between two async tasks on the client
-#[derive(Clone)]
 enum PeerTx<D> where D: SharedData + 'static {
     // NOTE: comments below are invalid because of the changes we made to
     // the research branch; we now share a `SendNode` with the execution
@@ -160,6 +159,19 @@ enum PeerTx<D> where D: SharedData + 'static {
         first_cli: NodeId,
         connected: Arc<RwLock<IntMap<ConnectionHandle<D>>>>,
     },
+}
+
+impl<D> Clone for PeerTx<D> where D: SharedData + 'static {
+    fn clone(&self) -> Self {
+        match self {
+            PeerTx::Client { first_cli, connected } => {
+                Self::Client { first_cli: (*first_cli).clone(), connected: Arc::clone(connected) }
+            }
+            PeerTx::Server { first_cli, connected } => {
+                Self::Server { first_cli: (*first_cli).clone(), connected: Arc::clone(connected) }
+            }
+        }
+    }
 }
 
 impl<D> PeerTx<D> where D: SharedData + 'static {
@@ -605,6 +617,10 @@ impl<D> Node<D>
     /// Returns a handle to the loopback channel of this `Node`. (Sending messages to ourselves)
     pub fn loopback_channel(&self) -> &ConnectionHandle<D> {
         &self.loopback_ingest
+    }
+
+    pub fn direct_loopback_channel(&self) -> &Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
+        self.node_handling.peer_loopback()
     }
 
     /// Send a `SystemMessage` to a single destination.
@@ -1849,6 +1865,10 @@ impl<D> SendNode<D>
 
     pub fn loopback_channel(&self) -> &ConnectionHandle<D> {
         &self.channel
+    }
+
+    pub fn direct_loopback_channel(&self) -> &Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
+        &self.parent_node.direct_loopback_channel()
     }
 
     pub fn parent_node(&self) -> &Arc<Node<D>> {
