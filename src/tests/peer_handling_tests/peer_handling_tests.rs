@@ -2,7 +2,7 @@
 pub mod peer_handling_tests {
     use std::sync::Arc;
     use crate::bft::communication::{NodeId};
-    use crate::bft::communication::peer_handling::NodePeers;
+    use crate::bft::communication::peer_receiving_handling::NodePeers;
     use crate::bft::async_runtime as rt;
 
 

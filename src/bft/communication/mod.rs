@@ -1,5 +1,6 @@
 //! Communication primitives for `febft`, such as wire message formats.
 
+use std::future::Future;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -34,8 +35,8 @@ use smallvec::SmallVec;
 use crate::bft::async_runtime as rt;
 use crate::bft::benchmarks::{CommStats};
 use crate::bft::communication::message::{Header, Message, SerializedMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
-use crate::bft::communication::peer_handling::{ConnectedPeer, NodePeers};
-use crate::bft::communication::peer_sending_threads::ConnectionHandle;
+use crate::bft::communication::peer_receiving_handling::{ConnectedPeer, NodePeers};
+use crate::bft::communication::peer_sending_handling::{ConnectionHandle, MessageData, PeerConnectionInfo, SendMessageTypes};
 
 use crate::bft::communication::serialize::{
     Buf,
@@ -58,8 +59,8 @@ pub mod socket;
 pub mod serialize;
 pub mod message;
 pub mod channel;
-pub mod peer_handling;
-pub mod peer_sending_threads;
+pub mod peer_receiving_handling;
+pub mod peer_sending_handling;
 
 //pub trait HijackMessage {
 //    fn hijack_message(&self, stored: ) -> Either<M
@@ -140,7 +141,7 @@ impl From<NodeId> for u32 {
 // TODO: maybe researh cleaner way to share the connections
 // hashmap between two async tasks on the client
 #[derive(Clone)]
-enum PeerTx {
+enum PeerTx<D> where D: SharedData + 'static {
     // NOTE: comments below are invalid because of the changes we made to
     // the research branch; we now share a `SendNode` with the execution
     // layer, to allow faster reply delivery!
@@ -151,20 +152,20 @@ enum PeerTx {
     // on the second one
     Client {
         first_cli: NodeId,
-        connected: Arc<RwLock<IntMap<ConnectionHandle>>>,
+        connected: Arc<RwLock<IntMap<ConnectionHandle<D>>>>,
     },
     // replicas don't need shared access to the hashmap, so
     // we only need one lock (to restrict I/O to one producer at a time)
     Server {
         first_cli: NodeId,
-        connected: Arc<RwLock<IntMap<ConnectionHandle>>>,
+        connected: Arc<RwLock<IntMap<ConnectionHandle<D>>>>,
     },
 }
 
-impl PeerTx {
+impl<D> PeerTx<D> where D: SharedData + 'static {
     ///Add a tx peer connection to the registry
     ///Requires knowing the first_cli
-    pub fn add_peer(&self, client_id: u64, socket: ConnectionHandle) {
+    pub fn add_peer(&self, client_id: u64, socket: ConnectionHandle<D>) {
         match self {
             PeerTx::Client { connected, .. } => {
                 let mut guard = connected.write();
@@ -179,7 +180,7 @@ impl PeerTx {
         }
     }
 
-    pub fn find_peer(&self, client_id: u64) -> Option<ConnectionHandle> {
+    pub fn find_peer(&self, client_id: u64) -> Option<ConnectionHandle<D>> {
         match self {
             PeerTx::Client { connected, .. } => {
                 let option = {
@@ -226,9 +227,10 @@ pub struct Node<D: SharedData + 'static> {
     id: NodeId,
     first_cli: NodeId,
     node_handling: NodePeers<Message<D::State, D::Request, D::Reply>>,
+    loopback_ingest: ConnectionHandle<D>,
     rng: ThreadSafePrng,
     shared: Arc<NodeShared>,
-    peer_tx: PeerTx,
+    peer_tx: PeerTx<D>,
     connector: TlsConnector,
     sync_connector: Arc<ClientConfig>,
     peer_addrs: IntMap<PeerAddr>,
@@ -300,7 +302,7 @@ pub struct NodeConfig {
     pub sync_server_config: rustls::ServerConfig,
     ///The TLS configuration used to connect to replica nodes (from replica nodes) (Synchronousy)
     pub sync_client_config: rustls::ClientConfig,
-    ///How many clients should be placed in a single collecting pool (seen in peer_handling)
+    ///How many clients should be placed in a single collecting pool (seen in peer_receiving_handling)
     pub clients_per_pool: usize,
     ///The timeout for batch collection in each client pool.
     /// (The first to reach between batch size and timeout)
@@ -394,10 +396,21 @@ impl<D> Node<D>
         });
 
         //Setup all the peer message reception handling.
+        //Also sets up the replica handling
         let peers = NodePeers::new(cfg.id, cfg.first_cli, cfg.batch_size,
                                    cfg.clients_per_pool,
                                    cfg.batch_timeout_micros,
                                    cfg.batch_sleep_micros);
+
+        let peer_conn = PeerConnectionInfo::new(cfg.id,
+                                                cfg.id,
+                                                cfg.first_cli,
+                                                cfg.comm_stats.clone(),
+                                                Some(shared.clone()), );
+
+        let loopback_ingest =
+            peer_sending_handling::initialize_sync_loopback_thread(peer_conn,
+                                                                   Arc::clone(peers.peer_loopback()));
 
         let rng = ThreadSafePrng::new();
 
@@ -458,6 +471,7 @@ impl<D> Node<D>
             shared,
             peer_tx,
             node_handling: peers,
+            loopback_ingest,
             connector: connector.clone(),
             sync_connector: replica_connector.clone(),
             peer_addrs: cfg.addrs,
@@ -583,14 +597,14 @@ impl<D> Node<D>
             shared: Arc::clone(&self.shared),
             peer_tx: self.peer_tx.clone(),
             parent_node: Arc::clone(self),
-            channel: Arc::clone(self.loopback_channel()),
+            channel: (*self.loopback_channel()).clone(),
             comm_stats: self.comm_stats.clone(),
         }
     }
 
     /// Returns a handle to the loopback channel of this `Node`. (Sending messages to ourselves)
-    pub fn loopback_channel(&self) -> &Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
-        self.node_handling.peer_loopback()
+    pub fn loopback_channel(&self) -> &ConnectionHandle<D> {
+        &self.loopback_ingest
     }
 
     /// Send a `SystemMessage` to a single destination.
@@ -614,22 +628,17 @@ impl<D> Node<D>
                     flush,
                     self.id,
                     target,
-                    None,
+                    (*self.loopback_channel()).clone(),
                     conn,
                     &self.peer_tx,
+                    false,
                 );
 
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                let comm_stats = if let Some(comm_stats) = &self.comm_stats {
-                    Some((comm_stats.clone(), start_instant))
-                } else {
-                    None
-                };
-
-                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
-                                comm_stats);
+                Self::send_impl(message, send_to, my_id, target, nonce,
+                                false, start_instant);
             }
         };
     }
@@ -656,23 +665,18 @@ impl<D> Node<D>
                     true,
                     self.id,
                     target,
-                    Some(&self.shared),
+                    (*self.loopback_channel()).clone(),
                     conn,
                     &self.peer_tx,
+                    true,
                 );
 
                 let my_id = self.id;
 
                 let nonce = self.rng.next_state();
 
-                let comm_stats = if let Some(comm_stats) = &self.comm_stats {
-                    Some((comm_stats.clone(), start_time))
-                } else {
-                    None
-                };
-
-                Self::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
-                                comm_stats);
+                Self::send_impl(message, send_to, my_id, target, nonce,
+                                false, start_time);
             }
         };
     }
@@ -683,90 +687,55 @@ impl<D> Node<D>
         mut send_to: SendTo<D>,
         my_id: NodeId,
         target: NodeId,
-        first_cli: NodeId,
         nonce: u64,
-        comm_stats: Option<(Arc<CommStats>, Instant)>,
+        in_thread_sign: bool,
+        start_time: Instant,
     ) {
-        threadpool::execute(move || {
+        let digests = if in_thread_sign {
             // serialize
-            let start_serialization = Instant::now();
-
             let mut buf: Buf = Buf::new();
             let digest = <D as DigestData>::serialize_digest(
                 &message,
                 &mut buf,
             ).unwrap();
 
-            if let Some((comm_stats, _)) = &comm_stats {
-                let time_taken_signing = Instant::now().duration_since(start_serialization).as_nanos();
+            Some((buf, digest))
+        } else {
+            None
+        };
 
-                //Broadcasts are always for replicas, so make this
-                comm_stats.insert_message_signing_time(NodeId::from(0u32), time_taken_signing);
-            }
+        // send
+        if my_id == target {
+            // Right -> our turn
 
-            // send
-            if my_id == target {
-                // Right -> our turn
+            //Send to myself, always synchronous since only replicas send to themselves
+            send_to.value_sync(Left((message.clone(), digests.clone())), nonce, start_time);
+        } else {
 
-                //Measuring time taken to get to the point of sending the message
-                //We don't actually want to measure how long it takes to send the message
-                let before_send_time = Instant::now();
-
-                //Send to myself, always synchronous since only replicas send to themselves
-                send_to.value_sync(Right((message, nonce, digest, buf)));
-
-                if let Some((comm_stats, start_time)) = &comm_stats {
-                    let dur_since = before_send_time.duration_since(*start_time).as_nanos();
-
-                    let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
-
-                    comm_stats.insert_message_passing_latency_own(dur_since);
-                    comm_stats.insert_message_sending_time_own(dur_send);
-                    comm_stats.register_rq_sent(my_id);
-                }
-            } else {
-
-                // Left -> peer turn
-                match send_to.socket_type().unwrap() {
-                    ConnectionHandle::Async(_) => {
-                        rt::spawn(async move {
-                            //Measuring time taken to get to the point of sending the message
-                            //We don't actually want to measure how long it takes to send the message
-                            let before_send_time = Instant::now();
-
-                            send_to.value(Left((nonce, digest, buf))).await;
-
-                            if let Some((comm_stats, start_time)) = &comm_stats {
-                                let dur_since = before_send_time.duration_since(*start_time).as_nanos();
-
-                                let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
-
-                                comm_stats.insert_message_passing_latency(target, dur_since);
-                                comm_stats.insert_message_sending_time(target, dur_send);
-                                comm_stats.register_rq_sent(target);
-                            }
-                        });
-                    }
-                    ConnectionHandle::Sync(_) => {
-                        //Measuring time taken to get to the point of sending the message
-                        //We don't actually want to measure how long it takes to send the message
-                        let before_send_time = Instant::now();
-
-                        send_to.value_sync(Left((nonce, digest, buf)));
-
-                        if let Some((comm_stats, start_time)) = &comm_stats {
-                            let dur_since = before_send_time.duration_since(*start_time).as_nanos();
-
-                            let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
-
-                            comm_stats.insert_message_passing_latency(target, dur_since);
-                            comm_stats.insert_message_sending_time(target, dur_send);
-                            comm_stats.register_rq_sent(target);
+            // Left -> peer turn
+            match send_to.socket_type().unwrap() {
+                ConnectionHandle::Async(_) => {
+                    rt::spawn(async move {
+                        //if we are not sending to ourselves and we have digested the message,
+                        //We don't need to clone the message again
+                        if let Some(digested) = digests.clone() {
+                            send_to.value(Right(digested), nonce, start_time).await;
+                        } else {
+                            send_to.value(Left((message.clone(), None)), nonce, start_time);
                         }
+                    });
+                }
+                ConnectionHandle::Sync(_) => {
+                    //if we are not sending to ourselves and we have digested the message,
+                    //We don't need to clone the message again
+                    if let Some(digested) = digests.clone() {
+                        send_to.value_sync(Right(digested), nonce, start_time);
+                    } else {
+                        send_to.value_sync(Left((message.clone(), None)), nonce, start_time);
                     }
                 }
             }
-        });
+        }
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -780,21 +749,13 @@ impl<D> Node<D>
         let (mine, others) = self.send_tos(
             self.id,
             &self.peer_tx,
-            None,
             targets,
+            false,
         );
 
         let nonce = self.rng.next_state();
 
-        let comm_stats = if let Some(comm_stats) = &self.comm_stats {
-            Some((comm_stats.clone(), start_time))
-        } else {
-            None
-        };
-
-        Self::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                             comm_stats,
-                             self.sent_rqs.clone());
+        Self::broadcast_impl(message, mine, others, nonce, false, start_time);
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -810,20 +771,14 @@ impl<D> Node<D>
         let (mine, others) = self.send_tos(
             self.id,
             &self.peer_tx,
-            Some(&self.shared),
             targets,
+            true,
         );
 
         let nonce = self.rng.next_state();
 
-        let comm_stats = if let Some(comm_stats) = &self.comm_stats {
-            Some((comm_stats.clone(), start_time))
-        } else {
-            None
-        };
-
-        Self::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                             comm_stats, self.sent_rqs.clone());
+        Self::broadcast_impl(message, mine, others, nonce,
+                             false, start_time);
     }
 
     pub fn broadcast_serialized(
@@ -841,15 +796,8 @@ impl<D> Node<D>
             headers,
         );
 
-        let comm_stats = if let Some(comm_stats) = &self.comm_stats {
-            Some((comm_stats.clone(), start_time))
-        } else {
-            None
-        };
-
         Self::broadcast_serialized_impl(messages, mine, others,
-                                        self.first_client_id(),
-                                        comm_stats);
+                                        start_time);
     }
 
     #[inline]
@@ -857,98 +805,46 @@ impl<D> Node<D>
         mut messages: IntMap<StoredSerializedSystemMessage<D>>,
         my_send_to: Option<SerializedSendTo<D>>,
         other_send_tos: SerializedSendTos<D>,
-        first_client: NodeId,
-        comm_stats: Option<(Arc<CommStats>, Instant)>,
+        start_time: Instant,
     ) {
-        threadpool::execute(move || {
-            // send to ourselves
-            if let Some(mut send_to) = my_send_to {
-                let id = match &send_to {
-                    SerializedSendTo::Me { id, .. } => *id,
-                    _ => unreachable!(),
-                };
+        // send to ourselves
+        if let Some(mut send_to) = my_send_to {
+            let id = match &send_to {
+                SerializedSendTo::Me { id, .. } => *id,
+                _ => unreachable!(),
+            };
 
-                let (header, message) = messages
-                    .remove(id.into())
-                    .map(|stored| stored.into_inner())
-                    .unwrap();
+            let (header, message) = messages
+                .remove(id.into())
+                .map(|stored| stored.into_inner())
+                .unwrap();
 
-                let comm_stats = comm_stats.clone();
+            send_to.value_sync(header, message, start_time);
+        }
 
-                //Measuring time taken to get to the point of sending the message
-                //We don't actually want to measure how long it takes to send the message
-                let before_sending = Instant::now();
+        // send to others
+        for mut send_to in other_send_tos {
+            let id = match &send_to {
+                SerializedSendTo::Peers { id, .. } => *id,
+                _ => unreachable!(),
+            };
 
-                send_to.value_sync(header, message);
+            let (header, message) = messages
+                .remove(id.into())
+                .map(|stored| stored.into_inner())
+                .unwrap();
 
-                if let Some((comm_stats, start_send)) = &comm_stats {
-                    let dur_since = before_sending.duration_since(*start_send).as_nanos();
-
-                    let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
-
-                    comm_stats.insert_message_passing_latency_own(dur_since);
-                    comm_stats.insert_message_sending_time_own(dur_sending);
-
-                    comm_stats.register_rq_sent(id);
+            match send_to.socket_type().unwrap() {
+                ConnectionHandle::Async(_) => {
+                    rt::spawn(async move {
+                        send_to.value(header, message, start_time).await;
+                    });
+                }
+                ConnectionHandle::Sync(_) => {
+                    send_to.value_sync(header, message, start_time);
                 }
             }
-
-            // send to others
-            for mut send_to in other_send_tos {
-                let id = match &send_to {
-                    SerializedSendTo::Peers { id, .. } => *id,
-                    _ => unreachable!(),
-                };
-
-                let (header, message) = messages
-                    .remove(id.into())
-                    .map(|stored| stored.into_inner())
-                    .unwrap();
-
-                let comm_stats = comm_stats.clone();
-
-                match send_to.socket_type().unwrap() {
-                    ConnectionHandle::Async(_) => {
-                        rt::spawn(async move {
-                            //Measuring time taken to get to the point of sending the message
-                            //We don't actually want to measure how long it takes to send the message
-                            let before_sending = Instant::now();
-
-                            send_to.value(header, message).await;
-
-                            if let Some((comm_stats, start_send)) = &comm_stats {
-                                let dur_since = before_sending.duration_since(*start_send).as_nanos();
-
-                                let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
-
-                                comm_stats.insert_message_passing_latency(id, dur_since);
-                                comm_stats.insert_message_sending_time(id, dur_sending);
-
-                                comm_stats.register_rq_sent(id);
-                            }
-                        });
-                    }
-                    ConnectionHandle::Sync(_) => {
-                        //Measuring time taken to get to the point of sending the message
-                        //We don't actually want to measure how long it takes to send the message
-                        let before_sending = Instant::now();
-
-                        send_to.value_sync(header, message);
-
-                        if let Some((comm_stats, start_send)) = &comm_stats {
-                            let dur_since = before_sending.duration_since(*start_send).as_nanos();
-
-                            let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
-
-                            comm_stats.insert_message_passing_latency(id, dur_since);
-                            comm_stats.insert_message_sending_time(id, dur_sending);
-
-                            comm_stats.register_rq_sent(id);
-                        }
-                    }
-                }
-            }
-        });
+        }
     }
 
     #[inline]
@@ -956,14 +852,11 @@ impl<D> Node<D>
         message: SystemMessage<D::State, D::Request, D::Reply>,
         my_send_to: Option<SendTo<D>>,
         other_send_tos: SendTos<D>,
-        first_cli: NodeId,
         nonce: u64,
-        comm_stats: Option<(Arc<CommStats>, Instant)>,
-        sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>,
+        in_thread_digest: bool,
+        start_time: Instant,
     ) {
-        threadpool::execute(move || {
-            let start_serialization = Instant::now();
-
+        let digested = if in_thread_digest {
             // serialize
             let mut buf: Buf = Buf::new();
 
@@ -972,123 +865,70 @@ impl<D> Node<D>
                 &mut buf,
             ).unwrap();
 
-            if let Some((comm_stats, _)) = &comm_stats {
-                let time_taken_signing = Instant::now().duration_since(start_serialization).as_nanos();
+            Some((buf, digest))
+        } else {
+            None
+        };
 
-                //Broadcasts are always for replicas, so make this
-                comm_stats.insert_message_signing_time(NodeId::from(0u32), time_taken_signing);
-            }
-
-            let rq_key = match &message {
-                //We only care about requests, as we only want this for the client
-                SystemMessage::Request(req) => {
-                    let session = get_request_key(req.session_id(), req.sequence_number());
-
-                    Some(session)
-                }
-                _ => {
-                    None
-                }
+        // send to ourselves
+        if let Some(mut send_to) = my_send_to {
+            let id = match &send_to {
+                SendTo::Me { my_id, .. } => *my_id,
+                _ => unreachable!(),
             };
 
-            // send to ourselves
-            if let Some(mut send_to) = my_send_to {
-                let id = match &send_to {
-                    SendTo::Me { my_id, .. } => *my_id,
-                    _ => unreachable!(),
-                };
+            let digested = digested.clone();
 
-                let buf = buf.clone();
+            // Right -> our turn
+            //Always sync when we send to ourselves
+            send_to.value_sync(Left((message.clone(), digested)), nonce, start_time);
+        }
 
-                let comm_stats = comm_stats.clone();
+        // send to others
 
-                //Measuring time taken to get to the point of sending the message
-                //We don't actually want to measure how long it takes to send the message
-                let before_send_time = Instant::now();
+        for mut send_to in other_send_tos {
+            let id = match &send_to {
+                SendTo::Peers { peer_id, .. } => *peer_id,
+                _ => unreachable!()
+            };
 
-                // Right -> our turn
-                send_to.value_sync(Right((message, nonce, digest, buf)));
+            let digested = digested.clone();
 
-                if let Some((comm_stats, start_time)) = &comm_stats {
-                    let dur_since = before_send_time.duration_since(*start_time).as_nanos();
+            let pass_to = if let Some(digested) = digested {
+                Right(digested)
+            } else {
+                Left((message.clone(), digested))
+            };
 
-                    let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
-
-                    comm_stats.insert_message_passing_latency_own(dur_since);
-                    comm_stats.insert_message_sending_time_own(dur_send);
-                    comm_stats.register_rq_sent(id);
+            match send_to.socket_type().unwrap() {
+                ConnectionHandle::Async(_) => {
+                    rt::spawn(async move {
+                        // Left -> peer turn
+                        send_to.value(pass_to, nonce, start_time).await;
+                    });
+                }
+                ConnectionHandle::Sync { .. } => {
+                    send_to.value_sync(pass_to, nonce, start_time);
                 }
             }
-
-            // send to others
-
-            for mut send_to in other_send_tos {
-                let id = match &send_to {
-                    SendTo::Peers { peer_id, .. } => *peer_id,
-                    _ => unreachable!()
-                };
-
-                let buf = buf.clone();
-
-                let comm_stats = comm_stats.clone();
-
-                let sent_rqs = sent_rqs.clone();
-
-                match send_to.socket_type().unwrap() {
-                    ConnectionHandle::Async(_) => {
-                        rt::spawn(async move {
-                            // Left -> peer turn
-                            send_to.value(Left((nonce, digest, buf))).await;
-                        });
-                    }
-                    ConnectionHandle::Sync { .. } => {
-                        //Measuring time taken to get to the point of sending the message
-                        //We don't actually want to measure how long it takes to send the message
-                        let before_send_time = Instant::now();
-
-                        send_to.value_sync(Left((nonce, digest, buf)));
-
-                        if let Some((comm_stats, start_time)) = &comm_stats {
-                            let dur_since = before_send_time.duration_since(*start_time).as_nanos();
-
-                            let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
-
-                            comm_stats.insert_message_passing_latency(id, dur_since);
-                            comm_stats.insert_message_sending_time(id, dur_send);
-                            comm_stats.register_rq_sent(id);
-                        }
-
-                        if let Some(sent_rqs) = sent_rqs {
-                            if let Some(rq_key) = rq_key {
-                                sent_rqs[rq_key as usize % sent_rqs.len()].insert(rq_key, ());
-                            }
-                        }
-                    }
-                }
-            }
-
-
-            // NOTE: an either enum is used, which allows
-            // rustc to prove only one task gets ownership
-            // of the `message`, i.e. `Right` = ourselves
-        });
+        }
     }
 
     #[inline]
     fn send_tos(
         &self,
         my_id: NodeId,
-        peer_tx: &PeerTx,
-        shared: Option<&Arc<NodeShared>>,
+        peer_tx: &PeerTx<D>,
         targets: impl Iterator<Item=NodeId>,
+        should_sign: bool,
     ) -> (Option<SendTo<D>>, SendTos<D>) {
         let mut my_send_to = None;
         let mut other_send_tos = SendTos::new();
 
         self.create_send_tos(
             my_id,
-            shared,
             peer_tx,
+            should_sign,
             targets,
             &mut my_send_to,
             &mut other_send_tos,
@@ -1101,7 +941,7 @@ impl<D> Node<D>
     fn serialized_send_tos<'a>(
         &self,
         my_id: NodeId,
-        peer_tx: &PeerTx,
+        peer_tx: &PeerTx<D>,
         headers: impl Iterator<Item=&'a Header>,
     ) -> (Option<SerializedSendTo<D>>, SerializedSendTos<D>) {
         let mut my_send_to = None;
@@ -1119,7 +959,7 @@ impl<D> Node<D>
     fn create_serialized_send_tos<'a>(
         &self,
         my_id: NodeId,
-        peer_tx: &PeerTx,
+        peer_tx: &PeerTx<D>,
         headers: impl Iterator<Item=&'a Header>,
         mine: &mut Option<SerializedSendTo<D>>,
         others: &mut SerializedSendTos<D>,
@@ -1130,7 +970,7 @@ impl<D> Node<D>
                 let s = SerializedSendTo::Me {
                     id,
                     //get our own channel to send to ourselves
-                    tx: self.loopback_channel().clone(),
+                    tx: (*self.loopback_channel()).clone(),
                 };
                 *mine = Some(s);
             } else {
@@ -1178,8 +1018,8 @@ impl<D> Node<D>
     fn create_send_tos(
         &self,
         my_id: NodeId,
-        shared: Option<&Arc<NodeShared>>,
-        tx_peers: &PeerTx,
+        tx_peers: &PeerTx<D>,
+        should_sign: bool,
         targets: impl Iterator<Item=NodeId>,
         mine: &mut Option<SendTo<D>>,
         others: &mut SendTos<D>,
@@ -1189,8 +1029,8 @@ impl<D> Node<D>
                 let s = SendTo::Me {
                     my_id,
                     //get our own channel to send to ourselves
-                    tx: self.loopback_channel().clone(),
-                    shared: shared.map(|sh| Arc::clone(sh)),
+                    tx: (*self.loopback_channel()).clone(),
+                    sign: should_sign,
                 };
                 *mine = Some(s);
             } else {
@@ -1228,7 +1068,7 @@ impl<D> Node<D>
                     flush: true,
                     //Get the RX channel for the peer to mark as DCed if it fails
                     tx: rx_conn,
-                    shared: shared.map(|sh| Arc::clone(sh)),
+                    sign: should_sign,
                 };
 
                 others.push(s);
@@ -1241,16 +1081,16 @@ impl<D> Node<D>
         flush: bool,
         my_id: NodeId,
         peer_id: NodeId,
-        shared: Option<&Arc<NodeShared>>,
+        loopback: ConnectionHandle<D>,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
-        peer_tx: &PeerTx,
+        peer_tx: &PeerTx<D>,
+        should_sign: bool,
     ) -> SendTo<D> {
-        let shared = shared.map(|sh| Arc::clone(sh));
         if my_id == peer_id {
             SendTo::Me {
-                shared,
                 my_id,
-                tx: cli,
+                tx: loopback,
+                sign: should_sign,
             }
         } else {
             let sock = peer_tx.find_peer(peer_id.id() as u64).unwrap().clone();
@@ -1258,10 +1098,10 @@ impl<D> Node<D>
             SendTo::Peers {
                 flush,
                 sock,
-                shared,
                 peer_id,
                 my_id,
                 tx: cli,
+                sign: should_sign,
             }
         }
     }
@@ -1286,22 +1126,26 @@ impl<D> Node<D>
     }
 
     /// Registers the newly created transmission socket to the peer
-    pub fn handle_connected_tx(&self, peer_id: NodeId, sock: SecureSocketSend) {
+    pub fn handle_connected_tx(self: &Arc<Self>, peer_id: NodeId, sock: SecureSocketSend) {
         debug!("{:?} // Connected TX to peer {:?}", self.id, peer_id);
+
+        let conn_info = PeerConnectionInfo::new(peer_id.clone(),
+                                                self.id(),
+                                                self.first_client_id(),
+                                                self.comm_stats.clone(),
+                                                Some(self.shared.clone()));
 
         let conn_handle = match sock {
             SecureSocketSend::Async(socket) => {
-                peer_sending_threads::initialize_async_sending_task_for(
-                    peer_id.clone(),
+                peer_sending_handling::initialize_async_sending_task_for(
+                    conn_info,
                     socket,
-                    self.comm_stats.clone(),
                 )
             }
             SecureSocketSend::Sync(socket) => {
-                peer_sending_threads::initialize_sync_sending_thread_for(
-                    peer_id.clone(),
+                peer_sending_handling::initialize_sync_sending_thread_for(
+                    conn_info,
                     socket,
-                    self.comm_stats.clone(),
                 )
             }
         };
@@ -1971,9 +1815,9 @@ pub struct SendNode<D: SharedData + 'static> {
     first_cli: NodeId,
     shared: Arc<NodeShared>,
     rng: prng::State,
-    peer_tx: PeerTx,
+    peer_tx: PeerTx<D>,
     parent_node: Arc<Node<D>>,
-    channel: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+    channel: ConnectionHandle<D>,
     comm_stats: Option<Arc<CommStats>>,
 }
 
@@ -2003,7 +1847,7 @@ impl<D> SendNode<D>
         self.id
     }
 
-    pub fn loopback_channel(&self) -> &Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
+    pub fn loopback_channel(&self) -> &ConnectionHandle<D> {
         &self.channel
     }
 
@@ -2031,22 +1875,17 @@ impl<D> SendNode<D>
                     flush,
                     self.id,
                     target,
-                    None,
+                    (*self.loopback_channel()).clone(),
                     conn,
                     &self.peer_tx,
+                    false,
                 );
 
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                let comm_stats = if let Some(comm_stats) = &self.comm_stats {
-                    Some((comm_stats.clone(), start_time))
-                } else {
-                    None
-                };
-
-                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
-                                     comm_stats);
+                <Node<D>>::send_impl(message, send_to, my_id, target, nonce,
+                                     false, start_time);
             }
         }
     }
@@ -2068,21 +1907,17 @@ impl<D> SendNode<D>
                     true,
                     self.id,
                     target,
-                    Some(&self.shared),
+                    (*self.loopback_channel()).clone(),
                     conn,
                     &self.peer_tx,
+                    true,
                 );
+
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                let comm_stats = if let Some(comm_stats) = &self.comm_stats {
-                    Some((comm_stats.clone(), start_time))
-                } else {
-                    None
-                };
-
-                <Node<D>>::send_impl(message, send_to, my_id, target, self.first_cli, nonce,
-                                     comm_stats);
+                <Node<D>>::send_impl(message, send_to, my_id, target, nonce,
+                                     false, start_time);
             }
         }
     }
@@ -2098,20 +1933,14 @@ impl<D> SendNode<D>
         let (mine, others) = self.parent_node.send_tos(
             self.id,
             &self.peer_tx,
-            None,
             targets,
+            false,
         );
 
         let nonce = self.rng.next_state();
 
-        let comm_stats = if let Some(comm_stats) = &self.comm_stats {
-            Some((comm_stats.clone(), start_time))
-        } else {
-            None
-        };
-
-        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                                  comm_stats, self.parent_node.sent_rqs.clone());
+        <Node<D>>::broadcast_impl(message, mine, others, nonce,
+                                  false, start_time);
     }
 
     /// Check the `broadcast_signed()` documentation for `Node`.
@@ -2125,20 +1954,14 @@ impl<D> SendNode<D>
         let (mine, others) = self.parent_node.send_tos(
             self.id,
             &self.peer_tx,
-            Some(&self.shared),
             targets,
+            true,
         );
 
         let nonce = self.rng.next_state();
 
-        let comm_stats = if let Some(comm_stats) = &self.comm_stats {
-            Some((comm_stats.clone(), start_time))
-        } else {
-            None
-        };
-
-        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                                  comm_stats, self.parent_node.sent_rqs.clone());
+        <Node<D>>::broadcast_impl(message, mine, others, nonce,
+                                  false, start_time);
     }
 }
 
@@ -2149,14 +1972,14 @@ impl<D> SendNode<D>
 // to a network write operation, or channel write operation,
 // depending on whether we're sending a message to a peer node
 // or ourselves
-pub enum SendTo<D: SharedData> {
+pub enum SendTo<D: SharedData + 'static> {
     Me {
         // our id
         my_id: NodeId,
-        // shared data
-        shared: Option<Arc<NodeShared>>,
         // a handle to our client handle
-        tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+        tx: ConnectionHandle<D>,
+        //sign the message
+        sign: bool,
     },
     Peers {
         // should we flush write calls?
@@ -2165,21 +1988,31 @@ pub enum SendTo<D: SharedData> {
         my_id: NodeId,
         // the id of the peer
         peer_id: NodeId,
-        // shared data
-        shared: Option<Arc<NodeShared>>,
         // handle to socket
-        sock: ConnectionHandle,
+        sock: ConnectionHandle<D>,
         // a handle to the message channel of the corresponding client
         tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+        //sign the message?
+        sign: bool,
     },
 }
 
-pub enum SerializedSendTo<D: SharedData> {
+// helper type used when either a `send()` or a `broadcast()`
+// is called by a `Node` or `SendNode`.
+//
+// holds some data that can be shared between threads, relevant
+// to a network write operation, or channel write operation,
+// depending on whether we're sending a message to a peer node
+// or ourselves
+// This is equal to SendTo, but it's made for message that have already been serialized and signed
+// It makes it so we don't have to re serialize and re sign messages that have already been signed
+// When giving this to the peer sending threads.
+pub enum SerializedSendTo<D: SharedData + 'static> {
     Me {
         // our id
         id: NodeId,
         // a handle to our client handle
-        tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+        tx: ConnectionHandle<D>,
     },
     Peers {
         // the id of the peer
@@ -2187,7 +2020,7 @@ pub enum SerializedSendTo<D: SharedData> {
         //Our own ID
         our_id: NodeId,
         // handle to socket
-        sock: ConnectionHandle,
+        sock: ConnectionHandle<D>,
         // a handle to the message channel of the corresponding client
         tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     },
@@ -2200,7 +2033,7 @@ impl<D> SendTo<D>
         D::Request: Send + 'static,
         D::Reply: Send + 'static,
 {
-    fn socket_type(&self) -> Option<&ConnectionHandle> {
+    fn socket_type(&self) -> Option<&ConnectionHandle<D>> {
         match self {
             SendTo::Me { .. } => {
                 None
@@ -2211,22 +2044,51 @@ impl<D> SendTo<D>
         }
     }
 
-    fn value_sync(self,
-                  m: Either<(u64, Digest, Buf), (SystemMessage<D::State, D::Request, D::Reply>, u64, Digest, Buf)>) {
+    ///Execute the send request asynchronously with the given arguments
+    ///@param m: The given message can be of 2 types:
+    ///  We can either give the raw message, with an optional serialized buf and digest (if this was already computed)
+    /// If it was not computed yet, then it will be computed by the sending thread. This message object is mandatory
+    /// for when we are sending to ourselves
+    ///  The other option is providing it with the already serialized message and digest, without actually providing the message
+    /// object.
+    async fn value(self, m: Either<(SystemMessage<D::State, D::Request, D::Reply>, Option<(Buf, Digest)>), (Buf, Digest)>, nonce: u64, start_time: Instant) {
         match self {
-            SendTo::Me { my_id, shared: ref sh, tx } => {
-                let key = sh.as_ref().map(|ref sh| &sh.my_key);
+            SendTo::Me { tx, sign, .. } => {
+                let message = MessageData::new(SendMessageTypes::Normal(m), nonce, start_time, true, sign);
 
-                if let Right((m, n, d, b)) = m {
-                    Self::me_sync(my_id, m, n, d, b, key, tx);
-                } else {
-                    // optimize code path
-                    unreachable!()
+                Self::me(message, tx);
+            }
+            SendTo::Peers { flush, sign, sock, tx, .. } => {
+                match &sock {
+                    ConnectionHandle::Sync(_) => {
+                        panic!("Attempted to send messages asynchronously through a sync channel")
+                    }
+                    ConnectionHandle::Async(_) => {}
                 }
+
+                let message = MessageData::new(SendMessageTypes::Normal(m), nonce, start_time, flush, sign);
+
+                Self::peers_sync(message, sock, tx);
+            }
+        }
+    }
+
+    ///Execute the send request synchronously with the given arguments
+    ///@param m: The given message can be of 2 types:
+    ///  We can either give the raw message, with an optional serialized buf and digest (if this was already computed)
+    /// If it was not computed yet, then it will be computed by the sending thread. This message object is mandatory
+    /// for when we are sending to ourselves
+    ///  The other option is providing it with the already serialized message and digest, without actually providing the message
+    /// object.
+    fn value_sync(self, m: Either<(SystemMessage<D::State, D::Request, D::Reply>, Option<(Buf, Digest)>), (Buf, Digest)>, nonce: u64, start_time: Instant) {
+        match self {
+            SendTo::Me { tx, sign, .. } => {
+                let message = MessageData::new(SendMessageTypes::Normal(m), nonce, start_time, true, sign);
+
+                Self::me_sync(message, tx);
             }
             SendTo::Peers {
-                flush, my_id, peer_id,
-                shared: ref sh, sock, tx
+                flush, sign, sock, tx, ..
             } => {
                 match &sock {
                     ConnectionHandle::Sync(_) => {}
@@ -2235,151 +2097,46 @@ impl<D> SendTo<D>
                     }
                 }
 
-                let key = sh.as_ref().map(|ref sh| &sh.my_key);
-                if let Left((n, d, b)) = m {
-                    Self::peers_sync(flush, my_id, peer_id, n, d, b, key, sock, tx);
-                } else {
-                    // optimize code path
-                    unreachable!()
-                }
+                let message = MessageData::new(SendMessageTypes::Normal(m), nonce, start_time, flush, sign);
+
+                Self::peers_sync(message, sock, tx);
             }
         }
     }
 
-    async fn value(
-        self,
-        m: Either<(u64, Digest, Buf), (SystemMessage<D::State, D::Request, D::Reply>, u64, Digest, Buf)>,
-    ) {
-        match self {
-            SendTo::Me { my_id, shared: ref sh, tx } => {
-                let key = sh.as_ref().map(|ref sh| &sh.my_key);
-
-                if let Right((m, n, d, b)) = m {
-                    Self::me(my_id, m, n, d, b, key, tx).await;
-                } else {
-                    // optimize code path
-                    unreachable!()
-                }
-            }
-            SendTo::Peers {
-                flush, my_id, peer_id,
-                shared: ref sh, sock, tx
-            } => {
-                match &sock {
-                    ConnectionHandle::Sync(_) => {}
-                    ConnectionHandle::Async(_) => {
-                        panic!("Attempted to send messages synchronously through a async channel")
-                    }
-                }
-
-                let key = sh.as_ref().map(|ref sh| &sh.my_key);
-                if let Left((n, d, b)) = m {
-                    Self::peers(flush, my_id, peer_id, n, d, b, key,
-                                sock, tx).await;
-                } else {
-                    // optimize code path
-                    unreachable!()
-                }
-            }
-        }
-    }
-
-    fn me_sync(my_id: NodeId,
-               m: SystemMessage<D::State, D::Request, D::Reply>,
-               n: u64,
-               d: Digest,
-               b: Buf,
-               sk: Option<&KeyPair>,
-               cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>) {
-
-        // create wire msg
-        let (h, _) = WireMessage::new(
-            my_id,
-            my_id,
-            b,
-            n,
-            Some(d),
-            sk,
-        ).into_inner();
-
-        // send
-        cli.push_request_sync(Message::System(h, m));
-    }
-
-    async fn me(
-        my_id: NodeId,
-        m: SystemMessage<D::State, D::Request, D::Reply>,
-        n: u64,
-        d: Digest,
-        b: Buf,
-        sk: Option<&KeyPair>,
-        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
-    ) {
-        // create wire msg
-        let (h, _) = WireMessage::new(
-            my_id,
-            my_id,
-            b,
-            n,
-            Some(d),
-            sk,
-        ).into_inner();
-
-        // send
-        cli.push_request(Message::System(h, m)).await;
-    }
-
-    async fn peers(
-        flush: bool,
-        my_id: NodeId,
-        peer_id: NodeId,
-        n: u64,
-        d: Digest,
-        b: Buf,
-        sk: Option<&KeyPair>,
-        mut conn_handle: ConnectionHandle,
-        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
-    ) {
-
-        //let print = format!("DONE SENDING MESSAGE {:?}", d);
-        // create wire msg
-        let wm = WireMessage::new(
-            my_id,
-            peer_id,
-            b,
-            n,
-            Some(d),
-            sk,
-        );
-
-        match conn_handle.async_send(wm).await {
+    fn me_sync(message: MessageData<D>, conn_handle: ConnectionHandle<D>) {
+        match conn_handle.send(message) {
             Ok(_) => {}
-            Err(_) => { cli.disconnect(); }
+            Err(_) => {
+                error!("Failed to send to loopback channel?????");
+            }
         }
     }
 
-    fn peers_sync(
-        flush: bool,
-        my_id: NodeId,
-        peer_id: NodeId,
-        n: u64,
-        d: Digest,
-        b: Buf,
-        sk: Option<&KeyPair>,
-        conn_handle: ConnectionHandle,
-        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>, ) {
+    async fn me(message: MessageData<D>, mut conn_handle: ConnectionHandle<D>) {
+        match conn_handle.async_send(message).await {
+            Ok(_) => {}
+            Err(_) => {
+                error!("Failed to send to the loopback channel asynchronously???")
+            }
+        }
+    }
 
-        // create wire msg
-        let wm = WireMessage::new(
-            my_id,
-            peer_id,
-            b,
-            n,
-            Some(d),
-            sk,
-        );
+    async fn peers(m: MessageData<D>, mut conn_handle: ConnectionHandle<D>,
+                   cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>) {
+        match conn_handle.async_send(m).await {
+            Ok(_) => {}
+            Err(_) => {
+                cli.disconnect();
+                error!("Failed to send to peer {:?}", cli.client_id());
+            }
+        }
+    }
 
-        match conn_handle.send(wm) {
+    fn peers_sync(m: MessageData<D>,
+                  conn_handle: ConnectionHandle<D>,
+                  cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>) {
+        match conn_handle.send(m) {
             Ok(_) => {}
             Err(_) => {
                 cli.disconnect();
@@ -2395,7 +2152,7 @@ impl<D> SerializedSendTo<D>
         D::Request: Send + 'static,
         D::Reply: Send + 'static,
 {
-    fn socket_type(&self) -> Option<&ConnectionHandle> {
+    fn socket_type(&self) -> Option<&ConnectionHandle<D>> {
         match self {
             SerializedSendTo::Me { .. } => {
                 None
@@ -2410,12 +2167,18 @@ impl<D> SerializedSendTo<D>
         self,
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
+        start_time: Instant,
     ) {
+        let nonce = h.nonce;
+
+        let message = MessageData::new(SendMessageTypes::Serialized((h, m)),
+                                       nonce, start_time, true, false);
+
         match self {
             SerializedSendTo::Me { tx, .. } => {
-                Self::me_sync(h, m, tx);
+                Self::me_sync(message, tx)
             }
-            SerializedSendTo::Peers { id, our_id, sock, tx } => {
+            SerializedSendTo::Peers { sock, tx, .. } => {
                 match &sock {
                     ConnectionHandle::Sync(_) => {}
                     ConnectionHandle::Async(_) => {
@@ -2423,7 +2186,7 @@ impl<D> SerializedSendTo<D>
                     }
                 }
 
-                Self::peers_sync(id, h, m, sock, tx);
+                Self::peers_sync(message, sock, tx);
             }
         }
     }
@@ -2432,21 +2195,18 @@ impl<D> SerializedSendTo<D>
         self,
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
+        start_time: Instant,
     ) {
+        let nonce = h.nonce;
+
+        let message = MessageData::new(SendMessageTypes::Serialized((h, m)),
+                                       nonce, start_time, true, false);
+
         match self {
             SerializedSendTo::Me { tx, .. } => {
-                //let msg = format!("{:?}", m.original());
-                //let peer = format!("{:?}", tx.client_id());
-
-                //debug!("{:?} // Sending SERIALIZED message {:?} to myself", peer,  msg);
-                Self::me(h, m, tx).await;
+                Self::me(message, tx).await;
             }
-            SerializedSendTo::Peers { id, our_id, sock, tx } => {
-                //let msg = format!("{:?}", m.original());
-                //let peer = format!("{:?}", tx.client_id());
-
-                //debug!("{:?} // Sending SERIALIZED message {} to other peer {:?} ",our_id,  msg, id);
-
+            SerializedSendTo::Peers { sock, tx, .. } => {
                 match &sock {
                     ConnectionHandle::Sync(_) => {
                         panic!("Attempted to send messages asynchronously through a sync channel")
@@ -2454,47 +2214,42 @@ impl<D> SerializedSendTo<D>
                     ConnectionHandle::Async(_) => {}
                 }
 
-                Self::peers(id, h, m, sock, tx).await;
+                Self::peers(message, sock, tx).await;
             }
         }
     }
 
+    //Synchronous sending to ourselves
     fn me_sync(
-        h: Header,
-        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>, ) {
-        let (original, _) = m.into_inner();
-
-        // send to ourselves
-        cli.push_request_sync(Message::System(h, original));
+        message: MessageData<D>,
+        conn_handle: ConnectionHandle<D>) {
+        match conn_handle.send(message) {
+            Ok(_) => {}
+            Err(_) => {
+                error!("Failed to send to loopback channel?????");
+            }
+        }
     }
 
-    async fn me(
-        h: Header,
-        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
-    ) {
-        let (original, _) = m.into_inner();
-
-        // send to ourselves
-        cli.push_request(Message::System(h, original)).await;
+    async fn me(message: MessageData<D>, mut conn_handle: ConnectionHandle<D>) {
+        match conn_handle.async_send(message).await {
+            Ok(_) => {}
+            Err(_) => {
+                error!("Failed to send to the loopback channel asynchronously???")
+            }
+        }
     }
 
     fn peers_sync(
-        peer_id: NodeId,
-        h: Header,
-        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        conn_handle: ConnectionHandle,
+        message: MessageData<D>,
+        conn_handle: ConnectionHandle<D>,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
-        // create wire msg
-        let (_, raw) = m.into_inner();
-        let wm = WireMessage::from_parts(h, raw).unwrap();
-
-        match conn_handle.send(wm) {
+        match conn_handle.send(message) {
             Ok(_) => {}
             Err(_) => {
                 cli.disconnect();
+                error!("Failed to send to peer {:?}", cli.client_id());
             }
         }
     }
@@ -2502,21 +2257,15 @@ impl<D> SerializedSendTo<D>
     ///Asynchronous sending to peers
     ///Sends Client->Replica, Replica->Client
     async fn peers(
-        peer_id: NodeId,
-        h: Header,
-        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        mut conn_handle: ConnectionHandle,
+        message: MessageData<D>,
+        mut conn_handle: ConnectionHandle<D>,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
-
-        // create wire msg
-        let (_, raw) = m.into_inner();
-        let wm = WireMessage::from_parts(h, raw).unwrap();
-
-        match conn_handle.async_send(wm).await {
+        match conn_handle.async_send(message).await {
             Ok(_) => {}
             Err(_) => {
                 cli.disconnect();
+                error!("Failed to send to peer {:?}", cli.client_id());
             }
         }
     }

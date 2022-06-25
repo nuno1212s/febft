@@ -15,7 +15,7 @@ use futures_timer::Delay;
 use crate::bft::ordering;
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::message::Message;
-use crate::bft::communication::peer_handling::ConnectedPeer;
+use crate::bft::communication::peer_receiving_handling::ConnectedPeer;
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::executable::{
     Service,
