@@ -1,6 +1,6 @@
 use std::io;
 use std::io::ErrorKind;
-use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
+use std::net::{AddrParseError, IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::ops::{Deref, DerefMut};
 use std::os::unix::io::FromRawFd;
 use std::str::FromStr;
@@ -22,14 +22,23 @@ pub fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
 
 pub fn bind_and_connect<A: Into<SocketAddr>>(addr: A, bind_ip: IpAddr) -> io::Result<Socket> {
 
-    let host = SockaddrIn::from_str(match bind_ip {
+    let addr = addr.into();
+
+    let host = match SockaddrIn::from_str(match bind_ip {
         IpAddr::V4(ipv4) => {
-            format!("{}", ipv4)
+            format!("{}:{}", ipv4, addr.port())
         }
         IpAddr::V6(_) => {
             return Err(std::io::Error::from(ErrorKind::Unsupported));
         }
-    }.as_str()).unwrap();
+    }.as_str()) {
+        Ok(host) => {
+            host
+        }
+        Err(_) => {
+            return Err(std::io::Error::from(ErrorKind::AddrNotAvailable))
+        }
+    };
 
     let raw_fd = match nix::sys::socket::socket(AddressFamily::Inet, SockType::Stream, SockFlag::empty(), None) {
         Ok(raw_fd) => {
@@ -47,7 +56,7 @@ pub fn bind_and_connect<A: Into<SocketAddr>>(addr: A, bind_ip: IpAddr) -> io::Re
         _ => {}
     };
 
-    let connecting_ip = SockaddrIn::from(match addr.into() {
+    let connecting_ip = SockaddrIn::from(match addr {
         SocketAddr::V4(v4) => {v4}
         SocketAddr::V6(_) => {
             return Err(std::io::Error::from(ErrorKind::Unsupported));
