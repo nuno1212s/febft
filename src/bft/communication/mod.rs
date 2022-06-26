@@ -357,6 +357,7 @@ impl<D> Node<D>
             let server_addr = server_addr.0.clone();
 
             //TODO: Maybe add support for asynchronous listeners?
+            println!("{:?} // Binding to address (clients) {:?}", id, server_addr);
 
             let socket = socket::bind_sync_server(server_addr)
                 .wrapped_msg(ErrorKind::Communication, format!("Failed to bind to address {:?}", server_addr).as_str())?;
@@ -385,6 +386,8 @@ impl<D> Node<D>
 
             //Listen on all interfaces.
             server_addr.set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
+
+            println!("{:?} // Binding to address (replicas) {:?}", id, server_addr);
 
             Some(Left(socket::bind_sync_server(server_addr)
                 .wrapped_msg(ErrorKind::Communication, format!("Failed to bind to address {:?}", server_addr).as_str())?))
@@ -1394,7 +1397,8 @@ impl<D> Node<D>
                 return;
             }
 
-            println!("{:?} // Failed to connect to node {:?}, trying again in {} seconds. Peer addr: {:?}", my_id, peer_id, SECS, addr);
+            error!("{:?} // Failed to connect to node {:?}, trying again in {} seconds. Peer addr: {:?}",
+                my_id, peer_id, SECS, addr);
 
             // sleep for `SECS` seconds and retry
             std::thread::sleep(Duration::from_secs(SECS));
