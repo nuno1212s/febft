@@ -1394,7 +1394,7 @@ impl<D> Node<D>
                 return;
             }
 
-            println!("{:?} // Failed to connect to node {:?}, trying again in {} seconds", my_id, peer_id, SECS);
+            println!("{:?} // Failed to connect to node {:?}, trying again in {} seconds. Peer addr: {:?}", my_id, peer_id, SECS, addr);
 
             // sleep for `SECS` seconds and retry
             std::thread::sleep(Duration::from_secs(SECS));
