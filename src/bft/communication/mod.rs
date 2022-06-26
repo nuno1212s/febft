@@ -1258,7 +1258,7 @@ impl<D> Node<D>
                 addr.replica_addr.as_ref().unwrap().clone()
             };
 
-            //println!("Attempting to connect to peer {:?} with address {:?} from node {:?}", peer_id, addr, my_id);
+            println!("Attempting to connect to peer {:?} with address {:?} from node {:?}", peer_id, addr, my_id);
 
             let arc = self.clone();
 
