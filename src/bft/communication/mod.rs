@@ -354,8 +354,9 @@ impl<D> Node<D>
         let either: Either<SyncListener, AsyncListener>;
 
         {
-            let server_addr = server_addr.0.clone();
+            let mut server_addr = server_addr.0.clone();
 
+            server_addr.set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
             //TODO: Maybe add support for asynchronous listeners?
             println!("{:?} // Binding to address (clients) {:?}", id, server_addr);
 
