@@ -593,6 +593,7 @@ impl<D> Node<D>
                 &mut rng,
             );
         } else {
+
             let node_cpy = node.clone();
 
             let n = cfg.n as u32;
@@ -1258,8 +1259,6 @@ impl<D> Node<D>
                 addr.replica_addr.as_ref().unwrap().clone()
             };
 
-            println!("Attempting to connect to peer {:?} with address {:?} from node {:?}", peer_id, addr, my_id);
-
             let arc = self.clone();
 
             threadpool::execute(move || {
@@ -1394,6 +1393,8 @@ impl<D> Node<D>
                 //println!("Ended connection attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
                 return;
             }
+
+            println!("{:?} // Failed to connect to node {:?}, trying again in {} seconds", my_id, peer_id, SECS);
 
             // sleep for `SECS` seconds and retry
             std::thread::sleep(Duration::from_secs(SECS));
