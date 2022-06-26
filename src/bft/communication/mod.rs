@@ -43,7 +43,7 @@ use crate::bft::communication::serialize::{
     DigestData,
     SharedData,
 };
-use crate::bft::communication::socket::{AsyncListener, SyncListener, SyncSocket, SecureSocketRecvAsync, SecureSocketRecvSync, SecureSocketSend, SecureSocketSendAsync, SecureSocketSendSync, Socket, SocketSendSync, SocketSendAsync};
+use crate::bft::communication::socket::{AsyncListener, SyncListener, SyncSocket, SecureSocketRecvAsync, SecureSocketRecvSync, SecureSocketSend, SecureSocketSendAsync, SecureSocketSendSync, AsyncSocket, SocketSendSync, SocketSendAsync};
 use crate::bft::crypto::hash::Digest;
 use crate::bft::crypto::signature::{
     KeyPair,
@@ -248,6 +248,7 @@ pub struct Node<D: SharedData + 'static> {
     connector: TlsConnector,
     sync_connector: Arc<ClientConfig>,
     peer_addrs: IntMap<PeerAddr>,
+    bind_addrs: Option<IntMap<IpAddr>>,
     comm_stats: Option<Arc<CommStats>>,
 
     pub sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>,
@@ -304,6 +305,10 @@ pub struct NodeConfig {
     /// For any `NodeConfig` assigned to `c`, the IP address of
     /// `c.addrs[&c.id]` should be equivalent to `localhost`.
     pub addrs: IntMap<PeerAddr>,
+    ///The bind addresses to connect to some given clients.
+    ///This is in the case of having several network cards in the replicas
+    ///And having to specify which one we have to use to connect to certain peers.
+    pub bind_connection_addrs: Option<IntMap<IpAddr>>,
     /// The list of public keys of all nodes in the system.
     pub pk: IntMap<PublicKey>,
     /// The secret key of this particular `Node`.
@@ -557,6 +562,7 @@ impl<D> Node<D>
             connector: async_connector.clone(),
             sync_connector: sync_connector.clone(),
             peer_addrs: cfg.addrs,
+            bind_addrs: cfg.bind_connection_addrs,
             first_cli: cfg.first_cli,
             comm_stats: cfg.comm_stats,
             sent_rqs,
@@ -594,6 +600,7 @@ impl<D> Node<D>
                 id,
                 sync_connector,
                 &node.peer_addrs,
+                node.bind_addrs.as_ref(),
                 &mut rng,
             );
         } else {
@@ -613,6 +620,7 @@ impl<D> Node<D>
                     id,
                     sync_connector,
                     &node_cpy.peer_addrs,
+                    node_cpy.bind_addrs.as_ref(),
                     &mut rng, );
             });
         }
@@ -1240,6 +1248,7 @@ impl<D> Node<D>
         my_id: NodeId,
         connector: Arc<ClientConfig>,
         addrs: &IntMap<PeerAddr>,
+        bind_addrs: Option<&IntMap<IpAddr>>,
         rng: &mut prng::State,
     ) {
         for peer_id in NodeId::targets_u32(0..n).filter(|&id| id != my_id) {
@@ -1253,6 +1262,12 @@ impl<D> Node<D>
                 }
                 Some(addr) => { addr }
             }.clone();
+
+            let bind_addr = if let Some(bind_addrs) = bind_addrs {
+                bind_addrs.get(peer_id.id() as u64).copied()
+            } else {
+                None
+            };
 
             let connector = connector.clone();
             let nonce = rng.next_state();
@@ -1269,7 +1284,7 @@ impl<D> Node<D>
                 debug!("{:?} // Starting connection to node {:?}",my_id, peer_id);
 
                 arc.tx_side_connect_task_sync(my_id, first_cli, peer_id,
-                                              nonce, connector, peer_addr);
+                                              nonce, connector, peer_addr, bind_addr);
             });
         }
     }
@@ -1285,6 +1300,7 @@ impl<D> Node<D>
         my_id: NodeId,
         connector: TlsConnector,
         addrs: &IntMap<PeerAddr>,
+        bind_addrs: Option<&IntMap<IpAddr>>,
         rng: &mut prng::State,
     ) {
         for peer_id in NodeId::targets_u32(0..n).filter(|&id| id != my_id) {
@@ -1300,6 +1316,12 @@ impl<D> Node<D>
                     continue;
                 }
                 Some(addr) => { addr }
+            };
+
+            let bind_addr = if let Some(bind_addrs) = bind_addrs {
+                bind_addrs.get(peer_id.id() as u64).copied()
+            } else {
+                None
             };
 
             let connector = connector.clone();
@@ -1319,7 +1341,7 @@ impl<D> Node<D>
                 debug!("{:?} // Starting connection to node {:?}",my_id, peer_id);
 
                 arc.tx_side_connect_task(my_id, first_cli, peer_id,
-                                         nonce, connector, peer_addr).await;
+                                         nonce, connector, peer_addr, bind_addr).await;
             });
         }
     }
@@ -1335,6 +1357,7 @@ impl<D> Node<D>
         nonce: u64,
         connector: Arc<ClientConfig>,
         (addr, hostname): (SocketAddr, String),
+        bind_addr: Option<IpAddr>
     ) {
         const SECS: u64 = 1;
         const RETRY: usize = 3 * 60;
@@ -1349,7 +1372,7 @@ impl<D> Node<D>
         // 2) try to connect up to `RETRY` times, then announce
         // failure with a channel send op
         for _try in 0..RETRY {
-            if let Ok(mut sock) = socket::connect_replica(addr) {
+            if let Ok(mut sock) = socket::connect_sync(addr, bind_addr) {
                 // create header
                 let (header, _) = WireMessage::new(
                     my_id,
@@ -1415,6 +1438,7 @@ impl<D> Node<D>
         nonce: u64,
         connector: TlsConnector,
         (addr, hostname): (SocketAddr, String),
+        bind_addr: Option<IpAddr>
     ) {
         const SECS: u64 = 1;
         const RETRY: usize = 3 * 60;
@@ -1430,7 +1454,7 @@ impl<D> Node<D>
         // failure with a channel send op
         for _try in 0..RETRY {
             //println!("Trying attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
-            if let Ok(mut sock) = socket::connect(addr).await {
+            if let Ok(mut sock) = socket::connect_async(addr).await {
                 // create header
                 let (header, _) = WireMessage::new(
                     my_id,
@@ -1607,7 +1631,7 @@ impl<D> Node<D>
         first_cli: NodeId,
         my_id: NodeId,
         acceptor: TlsAcceptor,
-        mut sock: Socket,
+        mut sock: AsyncSocket,
         rand: u32,
     ) {
         let mut buf_header = [0; Header::LENGTH];
@@ -1685,6 +1709,12 @@ impl<D> Node<D>
                         debug!("{:?} // Received connection from client {:?}, establish TX connection on port {:?}", self.id, peer_id,
                             addr.client_addr.0);
 
+                        let bind = if let Some(bind_addrs) = &self.bind_addrs {
+                            bind_addrs.get(peer_id.id() as u64).copied()
+                        } else {
+                            None
+                        };
+
                         // connect
                         let nonce = self.rng.next_state();
 
@@ -1696,6 +1726,7 @@ impl<D> Node<D>
                             nonce,
                             self.connector.clone(),
                             addr.client_addr.clone(),
+                            bind
                         ));
                     }
                 };
@@ -1785,6 +1816,12 @@ impl<D> Node<D>
                 debug!("{:?} // Received connection from client {:?}, establish TX connection on port {:?}", self.id, peer_id,
                     addr.0);
 
+                let bind = if let Some(bind_addrs) = &self.bind_addrs {
+                    bind_addrs.get(peer_id.id() as u64).copied()
+                } else {
+                    None
+                };
+
                 // connect
                 let nonce = self.rng.next_state();
 
@@ -1803,6 +1840,7 @@ impl<D> Node<D>
                         nonce,
                         sync_conn,
                         addr,
+                        bind
                     );
                 });
             }

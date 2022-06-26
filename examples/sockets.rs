@@ -15,7 +15,7 @@ use febft::bft::{
 };
 use febft::bft::communication::socket::{
     self,
-    Socket,
+    AsyncSocket,
 };
 
 fn main() {
@@ -31,7 +31,7 @@ async fn client_main() -> io::Result<()> {
     Delay::new(Duration::from_millis(1)).await;
 
     let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
-    let mut sock = socket::connect(addr).await?;
+    let mut sock = socket::connect_async(addr).await?;
 
     let mut buf = Vec::new();
 
@@ -66,7 +66,7 @@ async fn listener_main() -> io::Result<()> {
     }
 }
 
-async fn handle_client(mut sock: Socket) -> io::Result<()> {
+async fn handle_client(mut sock: AsyncSocket) -> io::Result<()> {
     const TIMES: usize = 5;
     const MSG: &[u8] = b"Badass FreesTyle";
     const LEN: [u8; 4] = (MSG.len() as u32).to_be_bytes();

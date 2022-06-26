@@ -4,7 +4,7 @@ use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::io;
 use std::io::{Read, Write};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -61,7 +61,7 @@ pub struct SyncListener {
 /// A `Socket` represents a connection between two peer processes
 /// in the BFT system.
 /// This is an asynchronous socket
-pub struct Socket {
+pub struct AsyncSocket {
     #[cfg(feature = "socket_tokio_tcp")]
     inner: tokio_tcp::Socket,
 
@@ -113,7 +113,7 @@ pub fn bind_sync_server<A: Into<SocketAddr>>(addr: A) -> io::Result<SyncListener
 }
 
 /// Connects to the remote node pointed to by the address `addr`.
-pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
+pub async fn connect_async<A: Into<SocketAddr>>(addr: A) -> io::Result<AsyncSocket> {
     {
         #[cfg(feature = "socket_tokio_tcp")]
         { tokio_tcp::connect(addr).await }
@@ -123,19 +123,28 @@ pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
 
         #[cfg(feature = "socket_rio_tcp")]
         { rio_tcp::connect(addr).await }
-    }.and_then(|inner| set_sockstream_options(Socket { inner }))
+    }.and_then(|inner| set_sockstream_options(AsyncSocket { inner }))
 }
 
-pub fn connect_replica<A: Into<SocketAddr>>(addr: A) -> io::Result<SyncSocket> {
-    { std_tcp::connect(addr) }
+pub fn connect_and_bind_sync<A: Into<SocketAddr>>(addr: A, bind: IpAddr) -> io::Result<SyncSocket> {
+    { std_tcp::bind_and_connect(addr, bind) }
         .and_then(|inner| set_sockstream_options_sync(SyncSocket { inner }))
 }
 
+pub fn connect_sync<A: Into<SocketAddr>>(addr: A, bind: Option<IpAddr>) -> io::Result<SyncSocket> {
+    if let Some(bind) = bind {
+        connect_and_bind_sync(addr, bind)
+    } else {
+        { std_tcp::connect(addr) }
+            .and_then(|inner| set_sockstream_options_sync(SyncSocket { inner }))
+    }
+}
+
 impl AsyncListener {
-    pub async fn accept(&self) -> io::Result<Socket> {
+    pub async fn accept(&self) -> io::Result<AsyncSocket> {
         self.inner.accept()
             .await
-            .and_then(|inner| set_sockstream_options(Socket { inner }))
+            .and_then(|inner| set_sockstream_options(AsyncSocket { inner }))
     }
 }
 
@@ -146,7 +155,7 @@ impl SyncListener {
     }
 }
 
-impl AsyncRead for Socket {
+impl AsyncRead for AsyncSocket {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -157,7 +166,7 @@ impl AsyncRead for Socket {
     }
 }
 
-impl AsyncWrite for Socket {
+impl AsyncWrite for AsyncSocket {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -185,13 +194,13 @@ impl AsyncWrite for Socket {
 }
 
 pub enum SecureSocketRecvAsync {
-    Plain(BufReader<Socket>),
-    Tls(TlsStreamSrv<Socket>),
+    Plain(BufReader<AsyncSocket>),
+    Tls(TlsStreamSrv<AsyncSocket>),
 }
 
 pub enum SecureSocketSendAsync {
-    Plain(BufWriter<Socket>),
-    Tls(TlsStreamCli<Socket>),
+    Plain(BufWriter<AsyncSocket>),
+    Tls(TlsStreamCli<AsyncSocket>),
 }
 
 pub enum SecureSocketRecvSync {
@@ -422,7 +431,7 @@ fn set_listener_options_replica(listener: SyncListener) -> io::Result<SyncListen
 
 // set connection socket options; translated from BFT-SMaRt
 #[inline]
-fn set_sockstream_options(connection: Socket) -> io::Result<Socket> {
+fn set_sockstream_options(connection: AsyncSocket) -> io::Result<AsyncSocket> {
     let sock = socket2::SockRef::from(&connection.inner);
     sock.set_send_buffer_size(8 * 10240 * 1024)?;
     sock.set_recv_buffer_size(8 * 10240 * 1024)?;
