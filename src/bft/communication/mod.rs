@@ -515,7 +515,15 @@ impl<D> Node<D>
             let n = cfg.n as u32;
             let first_cli = cfg.first_cli;
 
-            //Connect to all replicas
+            //Connect to all replicas, when we are the clients
+
+            rt::spawn(async move {
+               let mut rng = prng::State::new();
+
+                node_cpy.clone().tx_side_connect(n, first_cli, id, connector, &node_cpy.peer_addrs, &mut rng).await;
+            });
+
+            /*
             threadpool::execute(move || {
                 let mut rng = prng::State::new();
 
@@ -526,7 +534,7 @@ impl<D> Node<D>
                     replica_connector,
                     &node_cpy.peer_addrs,
                     &mut rng, );
-            });
+            });*/
         }
 
         let mut rogue = Vec::new();
