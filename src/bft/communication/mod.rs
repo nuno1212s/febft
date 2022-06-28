@@ -1,7 +1,7 @@
 //! Communication primitives for `febft`, such as wire message formats.
 
 use std::io::{Read, Write};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -42,7 +42,7 @@ use crate::bft::communication::serialize::{
     DigestData,
     SharedData,
 };
-use crate::bft::communication::socket::{Listener, SyncListener, SyncSocket, SecureSocketRecvAsync, SecureSocketRecvSync, SecureSocketSend, SecureSocketSendAsync, SecureSocketSendSync, Socket, SocketSendSync, SocketSendAsync};
+use crate::bft::communication::socket::{AsyncListener, SyncListener, SyncSocket, SecureSocketRecvAsync, SecureSocketRecvSync, SecureSocketSend, SecureSocketSendAsync, SecureSocketSendSync, AsyncSocket, SocketSendSync, SocketSendAsync};
 use crate::bft::crypto::hash::Digest;
 use crate::bft::crypto::signature::{
     KeyPair,
@@ -329,6 +329,89 @@ impl<D> Node<D>
         D::Request: Send + 'static,
         D::Reply: Send + 'static,
 {
+    async fn setup_client_facing_socket(id: NodeId, cfg: &NodeConfig) ->
+    Result<Either<SyncListener, AsyncListener>> {
+        let peer_addr = cfg.addrs.get(id.into()).unwrap();
+
+        let server_addr = &peer_addr.client_addr;
+
+        let either: Either<SyncListener, AsyncListener>;
+
+        {
+            let mut server_addr = server_addr.0.clone();
+
+            server_addr.set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
+            //TODO: Maybe add support for asynchronous listeners?
+            println!("{:?} // Binding to address (clients) {:?}", id, server_addr);
+
+            let socket = socket::bind_sync_server(server_addr)
+                .wrapped_msg(ErrorKind::Communication, format!("Failed to bind to address {:?}", server_addr).as_str())?;
+
+            either = Left(socket);
+        }
+
+        Ok(either)
+    }
+
+
+    async fn setup_replica_facing_socket(id: NodeId, cfg: &NodeConfig) ->
+    Result<Option<Either<SyncListener, AsyncListener>>> {
+        let peer_addr = cfg.addrs.get(id.into()).unwrap();
+
+        ///Initialize the replica<->replica facing server
+        let replica_listener = if id >= cfg.first_cli {
+            //Clients don't have a replica<->replica facing server
+            None
+        } else {
+            let replica_facing_addr = peer_addr.replica_addr.as_ref().unwrap();
+
+            //TODO: Maybe add support for asynchronous listeners?
+
+            let mut server_addr = replica_facing_addr.0.clone();
+
+            //Listen on all interfaces.
+            server_addr.set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
+
+            println!("{:?} // Binding to address (replicas) {:?}", id, server_addr);
+
+            Some(Left(socket::bind_sync_server(server_addr)
+                .wrapped_msg(ErrorKind::Communication, format!("Failed to bind to address {:?}", server_addr).as_str())?))
+        };
+
+        Ok(replica_listener)
+    }
+
+    ///Sets up the thread or task (depending on runtime) to receive new connection attempts
+    fn setup_socket_connection_workers_socket(self: Arc<Self>,
+                                              sync_acceptor: Arc<ServerConfig>,
+                                              async_acceptor: TlsAcceptor,
+                                              replica_listener: Either<SyncListener, AsyncListener>, ) {
+        match replica_listener {
+            Left(sync_listener) => {
+                let first_cli = self.first_client_id();
+
+                let my_id = self.id();
+
+                let sync_acceptor = sync_acceptor.clone();
+
+                std::thread::Builder::new().name(format!("{:?} connection acceptor", self.id()))
+                    .spawn(move || {
+                        self.rx_side_accept_sync(first_cli, my_id, sync_listener, sync_acceptor);
+                    }).expect("Failed to start replica's connection acceptor");
+            }
+            Right(async_listener) => {
+                let first_cli = self.first_client_id();
+
+                let my_id = self.id();
+
+                let async_acceptor = async_acceptor.clone();
+
+                rt::spawn(self.rx_side_accept(first_cli, my_id, async_listener, async_acceptor));
+            }
+        }
+    }
+
+
     /// Bootstrap a `Node`, i.e. create connections between itself and its
     /// peer nodes.
     ///
@@ -350,30 +433,16 @@ impl<D> Node<D>
                 .wrapped(ErrorKind::Communication);
         }
 
-        let peer_addr = cfg.addrs.get(id.into()).unwrap();
-
-        let client_server_addr = peer_addr.client_addr.0.clone();
-
         ///Initialize the client facing server
-        let listener = socket::bind_replica_server(client_server_addr)
-            .wrapped_msg(ErrorKind::Communication, format!("Failed to bind to address {:?}", client_server_addr).as_str())?;
+        let client_listener = Self::setup_client_facing_socket(id, &cfg).await?;
 
-        ///Initialize the replica<->replica facing server
-        let replica_listener = if id >= cfg.first_cli {
-            //Clients don't have a replica<->replica facing server
-            None
-        } else {
-            let server_addr = peer_addr.replica_addr.as_ref().unwrap().0.clone();
+        let replica_listener = Self::setup_replica_facing_socket(id, &cfg).await?;
 
-            Some(socket::bind_replica_server(server_addr)
-                .wrapped_msg(ErrorKind::Communication, format!("Failed to bind to address {:?}", server_addr).as_str())?)
-        };
+        let async_acceptor: TlsAcceptor = cfg.async_server_config.into();
+        let async_connector: TlsConnector = cfg.async_client_config.into();
 
-        let acceptor: TlsAcceptor = cfg.async_server_config.into();
-        let connector: TlsConnector = cfg.async_client_config.into();
-
-        let replica_acceptor = Arc::new(cfg.sync_server_config);
-        let replica_connector = Arc::new(cfg.sync_client_config);
+        let sync_acceptor = Arc::new(cfg.sync_server_config);
+        let sync_connector = Arc::new(cfg.sync_client_config);
 
         // node def
         let peer_tx = if id >= cfg.first_cli {
@@ -458,8 +527,8 @@ impl<D> Node<D>
             shared,
             peer_tx,
             node_handling: peers,
-            connector: connector.clone(),
-            sync_connector: replica_connector.clone(),
+            connector: async_connector.clone(),
+            sync_connector: sync_connector.clone(),
             peer_addrs: cfg.addrs,
             first_cli: cfg.first_cli,
             comm_stats: cfg.comm_stats,
@@ -469,31 +538,22 @@ impl<D> Node<D>
 
         let rx_node_clone = node.clone();
 
-        //Rx side accept for client servers
-        match replica_listener {
-            None => {}
-            Some(replica_listener) => {
-                let first_cli = cfg.first_cli;
 
-                let rx_clone_clone = rx_node_clone.clone();
-                let replica_acceptor = replica_acceptor.clone();
-
-                std::thread::Builder::new().name(format!("Replica connection acceptor"))
-                    .spawn(move || {
-                        rx_clone_clone.rx_side_accept_sync(first_cli, id, replica_listener, replica_acceptor);
-                    }).expect("Failed to start replica's connection acceptor");
-            }
-        }
-
+        //Setup the worker threads for receiving new connections before starting to connect to
+        //other peers
+        if let Some(replica_listener) = replica_listener
         {
-            let first_cli = cfg.first_cli;
-
-            // rx side (accept conns from clients)
-            std::thread::Builder::new().name(format!("Client conn acceptor")).spawn(move || {
-                rx_node_clone.rx_side_accept_sync(first_cli, id, listener, replica_acceptor)
-            }).expect("Failed to start client connection acceptor");
+            rx_node_clone.clone().setup_socket_connection_workers_socket(sync_acceptor.clone(),
+                                                                         async_acceptor.clone(),
+                                                                         replica_listener);
         }
 
+        //Setup client listener
+        {
+            rx_node_clone.clone().setup_socket_connection_workers_socket(sync_acceptor.clone(),
+                                                                         async_acceptor.clone(),
+                                                                         client_listener);
+        }
 
         // tx side (connect to replica)
         if id < cfg.first_cli {
@@ -505,7 +565,7 @@ impl<D> Node<D>
                 cfg.n as u32,
                 cfg.first_cli,
                 id,
-                replica_connector,
+                sync_connector,
                 &node.peer_addrs,
                 &mut rng,
             );
@@ -523,7 +583,7 @@ impl<D> Node<D>
                     n,
                     first_cli,
                     id,
-                    replica_connector,
+                    sync_connector,
                     &node_cpy.peer_addrs,
                     &mut rng, );
             });
@@ -1593,7 +1653,7 @@ impl<D> Node<D>
         self: Arc<Self>,
         first_cli: NodeId,
         my_id: NodeId,
-        listener: Listener,
+        listener: AsyncListener,
         acceptor: TlsAcceptor,
     ) {
         loop {
@@ -1684,7 +1744,7 @@ impl<D> Node<D>
         first_cli: NodeId,
         my_id: NodeId,
         acceptor: TlsAcceptor,
-        mut sock: Socket,
+        mut sock: AsyncSocket,
         rand: u32,
     ) {
         let mut buf_header = [0; Header::LENGTH];

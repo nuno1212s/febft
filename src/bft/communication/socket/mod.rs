@@ -41,7 +41,7 @@ mod std_tcp;
 
 /// A `Listener` represents a socket listening on new communications
 /// initiated by peer nodes in the BFT system.
-pub struct Listener {
+pub struct AsyncListener {
     #[cfg(feature = "socket_tokio_tcp")]
     inner: tokio_tcp::Listener,
 
@@ -61,7 +61,7 @@ pub struct SyncListener {
 /// A `Socket` represents a connection between two peer processes
 /// in the BFT system.
 /// This is an asynchronous socket
-pub struct Socket {
+pub struct AsyncSocket {
     #[cfg(feature = "socket_tokio_tcp")]
     inner: tokio_tcp::Socket,
 
@@ -95,7 +95,7 @@ pub unsafe fn drop() -> error::Result<()> {
 }
 
 /// Creates a new `Listener` socket, bound to the address `addr`.
-pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
+pub async fn bind_async_server<A: Into<SocketAddr>>(addr: A) -> io::Result<AsyncListener> {
     {
         #[cfg(feature = "socket_tokio_tcp")]
         { tokio_tcp::bind(addr).await }
@@ -105,15 +105,15 @@ pub async fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
 
         #[cfg(feature = "socket_rio_tcp")]
         { rio_tcp::bind(addr).await }
-    }.and_then(|inner| set_listener_options(Listener { inner }))
+    }.and_then(|inner| set_listener_options(AsyncListener { inner }))
 }
 
-pub fn bind_replica_server<A: Into<SocketAddr>>(addr: A) -> io::Result<SyncListener> {
+pub fn bind_sync_server<A: Into<SocketAddr>>(addr: A) -> io::Result<SyncListener> {
     { std_tcp::bind(addr) }.and_then(|inner| set_listener_options_replica(SyncListener { inner }))
 }
 
 /// Connects to the remote node pointed to by the address `addr`.
-pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
+pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<AsyncSocket> {
     {
         #[cfg(feature = "socket_tokio_tcp")]
         { tokio_tcp::connect(addr).await }
@@ -123,7 +123,7 @@ pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
 
         #[cfg(feature = "socket_rio_tcp")]
         { rio_tcp::connect(addr).await }
-    }.and_then(|inner| set_sockstream_options(Socket { inner }))
+    }.and_then(|inner| set_sockstream_options(AsyncSocket { inner }))
 }
 
 pub fn connect_replica<A: Into<SocketAddr>>(addr: A) -> io::Result<SyncSocket> {
@@ -131,11 +131,11 @@ pub fn connect_replica<A: Into<SocketAddr>>(addr: A) -> io::Result<SyncSocket> {
         .and_then(|inner| set_sockstream_options_sync(SyncSocket { inner }))
 }
 
-impl Listener {
-    pub async fn accept(&self) -> io::Result<Socket> {
+impl AsyncListener {
+    pub async fn accept(&self) -> io::Result<AsyncSocket> {
         self.inner.accept()
             .await
-            .and_then(|inner| set_sockstream_options(Socket { inner }))
+            .and_then(|inner| set_sockstream_options(AsyncSocket { inner }))
     }
 }
 
@@ -146,7 +146,7 @@ impl SyncListener {
     }
 }
 
-impl AsyncRead for Socket {
+impl AsyncRead for AsyncSocket {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -157,7 +157,7 @@ impl AsyncRead for Socket {
     }
 }
 
-impl AsyncWrite for Socket {
+impl AsyncWrite for AsyncSocket {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -185,13 +185,13 @@ impl AsyncWrite for Socket {
 }
 
 pub enum SecureSocketRecvAsync {
-    Plain(BufReader<Socket>),
-    Tls(TlsStreamSrv<Socket>),
+    Plain(BufReader<AsyncSocket>),
+    Tls(TlsStreamSrv<AsyncSocket>),
 }
 
 pub enum SecureSocketSendAsync {
-    Plain(BufWriter<Socket>),
-    Tls(TlsStreamCli<Socket>),
+    Plain(BufWriter<AsyncSocket>),
+    Tls(TlsStreamCli<AsyncSocket>),
 }
 
 pub enum SecureSocketRecvSync {
@@ -392,7 +392,7 @@ impl AsyncWrite for SecureSocketSendAsync {
 
 // set listener socket options; translated from BFT-SMaRt
 #[inline]
-fn set_listener_options(listener: Listener) -> io::Result<Listener> {
+fn set_listener_options(listener: AsyncListener) -> io::Result<AsyncListener> {
     let sock = socket2::SockRef::from(&listener.inner);
     sock.set_send_buffer_size(8 * 10240 * 1024)?;
     sock.set_recv_buffer_size(8 * 10240 * 1024)?;
@@ -422,7 +422,7 @@ fn set_listener_options_replica(listener: SyncListener) -> io::Result<SyncListen
 
 // set connection socket options; translated from BFT-SMaRt
 #[inline]
-fn set_sockstream_options(connection: Socket) -> io::Result<Socket> {
+fn set_sockstream_options(connection: AsyncSocket) -> io::Result<AsyncSocket> {
     let sock = socket2::SockRef::from(&connection.inner);
     sock.set_send_buffer_size(8 * 10240 * 1024)?;
     sock.set_recv_buffer_size(8 * 10240 * 1024)?;
