@@ -159,11 +159,11 @@ impl CommStats {
                 None => {
                 }
                 Some(stats) => {
-                    stats.insert(time);
+                    stats.insert_message_passing_to_send_thread(time);
                 }
             }
         } else {
-            self.replica_comm.insert_message_sending_time(time)
+            self.replica_comm.insert_message_passing_to_send_thread(time)
         }
 
     }
