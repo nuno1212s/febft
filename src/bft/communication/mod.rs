@@ -517,7 +517,9 @@ impl<D> Node<D>
 
             //Connect to all replicas, when we are the clients
 
-            /* rt::spawn(async move {
+            /* Results for this were not very good. Went back to std threads and connections.
+
+            rt::spawn(async move {
                let mut rng = prng::State::new();
 
                 node_cpy.clone().tx_side_connect(n, first_cli, id, connector, &node_cpy.peer_addrs, &mut rng).await;
