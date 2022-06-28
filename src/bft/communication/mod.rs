@@ -1529,7 +1529,6 @@ impl<D> Node<D>
                         SecureSocketSendSync::new_tls(session, sock)
                     };
 
-
                     let final_sock = SecureSocketSend::Sync(SocketSendSync::new(sock));
 
                     // success
@@ -1539,7 +1538,7 @@ impl<D> Node<D>
                     return;
                 }
                 Err(err) => {
-                    debug!("{:?} // Error on connecting {:?}", peer_id, err);
+                    error!("{:?} // Error on connecting {:?}", peer_id, err);
                 }
             }
 
