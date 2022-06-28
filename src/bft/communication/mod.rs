@@ -1489,53 +1489,58 @@ impl<D> Node<D>
         // 2) try to connect up to `RETRY` times, then announce
         // failure with a channel send op
         for _try in 0..RETRY {
-            if let Ok(mut sock) = socket::connect_replica(addr) {
-                // create header
-                let (header, _) = WireMessage::new(
-                    my_id,
-                    peer_id,
-                    vec![],
-                    nonce,
-                    None,
-                    None,
-                ).into_inner();
+            match socket::connect_sync(addr) {
+                Ok(mut sock) => {
+                    // create header
+                    let (header, _) = WireMessage::new(
+                        my_id,
+                        peer_id,
+                        vec![],
+                        nonce,
+                        None,
+                        None,
+                    ).into_inner();
 
-                // serialize header
-                let mut buf = [0; Header::LENGTH];
-                header.serialize_into(&mut buf[..]).unwrap();
+                    // serialize header
+                    let mut buf = [0; Header::LENGTH];
+                    header.serialize_into(&mut buf[..]).unwrap();
 
-                // send header
-                if let Err(_) = sock.write_all(&buf[..]) {
-                    // errors writing -> faulty connection;
-                    // drop this socket
-                    break;
+                    // send header
+                    if let Err(_) = sock.write_all(&buf[..]) {
+                        // errors writing -> faulty connection;
+                        // drop this socket
+                        break;
+                    }
+
+                    if let Err(_) = sock.flush() {
+                        // errors flushing -> faulty connection;
+                        // drop this socket
+                        break;
+                    }
+
+                    // TLS handshake; drop connection if it fails
+                    let sock = if peer_id >= first_cli || my_id >= first_cli {
+                        SecureSocketSendSync::Plain(sock)
+                    } else {
+                        let dns_ref = webpki::DNSNameRef::try_from_ascii_str(hostname.as_str()).expect("Failed to parse DNS hostname");
+
+                        let mut session = rustls::ClientSession::new(&connector, dns_ref);
+
+                        SecureSocketSendSync::new_tls(session, sock)
+                    };
+
+
+                    let final_sock = SecureSocketSend::Sync(SocketSendSync::new(sock));
+
+                    // success
+                    self.handle_connected_tx(peer_id, final_sock);
+
+                    //println!("Ended connection attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
+                    return;
                 }
-
-                if let Err(_) = sock.flush() {
-                    // errors flushing -> faulty connection;
-                    // drop this socket
-                    break;
+                Err(err) => {
+                    debug!("{:?} // Error on connecting {:?}", peer_id, err);
                 }
-
-                // TLS handshake; drop connection if it fails
-                let sock = if peer_id >= first_cli || my_id >= first_cli {
-                    SecureSocketSendSync::Plain(sock)
-                } else {
-                    let dns_ref = webpki::DNSNameRef::try_from_ascii_str(hostname.as_str()).expect("Failed to parse DNS hostname");
-
-                    let mut session = rustls::ClientSession::new(&connector, dns_ref);
-
-                    SecureSocketSendSync::new_tls(session, sock)
-                };
-
-
-                let final_sock = SecureSocketSend::Sync(SocketSendSync::new(sock));
-
-                // success
-                self.handle_connected_tx(peer_id, final_sock);
-
-                //println!("Ended connection attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
-                return;
             }
 
             // sleep for `SECS` seconds and retry
@@ -1567,7 +1572,7 @@ impl<D> Node<D>
         // failure with a channel send op
         for _try in 0..RETRY {
             //println!("Trying attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
-            if let Ok(mut sock) = socket::connect(addr).await {
+            if let Ok(mut sock) = socket::connect_async(addr).await {
                 // create header
                 let (header, _) = WireMessage::new(
                     my_id,

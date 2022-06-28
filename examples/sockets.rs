@@ -31,7 +31,7 @@ async fn client_main() -> io::Result<()> {
     Delay::new(Duration::from_millis(1)).await;
 
     let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
-    let mut sock = socket::connect(addr).await?;
+    let mut sock = socket::connect_async(addr).await?;
 
     let mut buf = Vec::new();
 

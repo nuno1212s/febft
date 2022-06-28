@@ -113,7 +113,7 @@ pub fn bind_sync_server<A: Into<SocketAddr>>(addr: A) -> io::Result<SyncListener
 }
 
 /// Connects to the remote node pointed to by the address `addr`.
-pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<AsyncSocket> {
+pub async fn connect_async<A: Into<SocketAddr>>(addr: A) -> io::Result<AsyncSocket> {
     {
         #[cfg(feature = "socket_tokio_tcp")]
         { tokio_tcp::connect(addr).await }
@@ -126,7 +126,7 @@ pub async fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<AsyncSocket> {
     }.and_then(|inner| set_sockstream_options(AsyncSocket { inner }))
 }
 
-pub fn connect_replica<A: Into<SocketAddr>>(addr: A) -> io::Result<SyncSocket> {
+pub fn connect_sync<A: Into<SocketAddr>>(addr: A) -> io::Result<SyncSocket> {
     { std_tcp::connect(addr) }
         .and_then(|inner| set_sockstream_options_sync(SyncSocket { inner }))
 }
