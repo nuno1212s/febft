@@ -517,16 +517,16 @@ impl<D> Node<D>
 
             //Connect to all replicas, when we are the clients
 
-            /* Results for this were not very good. Went back to std threads and connections.
+            // Results for this were not very good. Went back to std threads and connections.
 
             rt::spawn(async move {
                let mut rng = prng::State::new();
 
                 node_cpy.clone().tx_side_connect(n, first_cli, id, connector, &node_cpy.peer_addrs, &mut rng).await;
-            });*/
+            });
 
 
-            threadpool::execute(move || {
+            /*threadpool::execute(move || {
                 let mut rng = prng::State::new();
 
                 node_cpy.clone().tx_side_connect_sync(
@@ -536,7 +536,7 @@ impl<D> Node<D>
                     replica_connector,
                     &node_cpy.peer_addrs,
                     &mut rng, );
-            });
+            });*/
         }
 
         let mut rogue = Vec::new();
