@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 use log::error;
 use crate::bft::benchmarks::CommStats;
 use crate::bft::communication::channel::{ChannelAsyncRx, ChannelAsyncTx, ChannelSyncRx, ChannelSyncTx};
@@ -12,10 +13,12 @@ use crate::bft::async_runtime as rt;
 ///Sending messages from it
 const QUEUE_SPACE: usize = 128;
 
+pub type SendMessage = (WireMessage, Instant);
+
 #[derive(Clone)]
 pub enum ConnectionHandle {
-    Sync(ChannelSyncTx<WireMessage>),
-    Async(ChannelAsyncTx<WireMessage>),
+    Sync(ChannelSyncTx<SendMessage>),
+    Async(ChannelAsyncTx<SendMessage>),
 }
 
 impl ConnectionHandle {
@@ -30,7 +33,7 @@ impl ConnectionHandle {
             }
         };
 
-        match channel.send(message) {
+        match channel.send((message, Instant::now())) {
             Ok(_) => {
                 Ok(())
             }
@@ -53,7 +56,7 @@ impl ConnectionHandle {
             }
         };
 
-        match channel.send(message).await {
+        match channel.send((message, Instant::now())).await {
             Ok(_) => {
                 Ok(())
             }
@@ -77,24 +80,26 @@ pub fn initialize_sync_sending_thread_for(peer_id: NodeId, socket: SocketSendSyn
         .spawn(move || {
             sync_sending_thread(peer_id, socket, rx, comm_stats)
         }).expect(format!("Failed to start sending thread for client {:?}", peer_id).as_str());
-
+    
     ConnectionHandle::Sync(tx)
 }
 
 ///Receives requests from the queue and sends them using the provided socket
-fn sync_sending_thread(peer_id: NodeId, mut socket: SocketSendSync, recv: ChannelSyncRx<WireMessage>,
+fn sync_sending_thread(peer_id: NodeId, mut socket: SocketSendSync, recv: ChannelSyncRx<SendMessage>,
                           comm_stats: Option<Arc<CommStats>>) {
     loop {
         let recv_result = recv.recv();
 
-        let to_send = match recv_result {
+        let (to_send, init_time) = match recv_result {
             Ok(to_send) => { to_send }
             Err(recv_err) => {
                 error!("Sending channel for client {:?} has disconnected!", peer_id);
                 break;
             }
         };
-
+        
+        let before_send = Instant::now();
+        
         // send
         //
         // FIXME: sending may hang forever, because of network
@@ -105,6 +110,16 @@ fn sync_sending_thread(peer_id: NodeId, mut socket: SocketSendSync, recv: Channe
                 error!("Failed to write to socket on client {:?}", peer_id);
                 break;
             }
+        }
+        
+        if let Some(comm_stats) = &comm_stats {
+            let time_taken_passing = before_send.duration_since(init_time).as_nanos();
+
+            let time_taken_sending = Instant::now().duration_since(before_send).as_nanos();
+            
+            comm_stats.insert_message_passing_to_send_thread(to_send.header.to(), time_taken_passing);
+            comm_stats.insert_message_sending_time(to_send.header.to(), time_taken_sending);
+            comm_stats.register_rq_sent(to_send.header.to());
         }
     }
 }
@@ -119,18 +134,20 @@ pub fn initialize_async_sending_task_for(peer_id: NodeId, socket: SocketSendAsyn
 }
 
 ///Receives requests from the queue and sends them using the provided socket
-async fn async_sending_task(peer_id: NodeId, mut socket: SocketSendAsync, mut recv: ChannelAsyncRx<WireMessage>,
+async fn async_sending_task(peer_id: NodeId, mut socket: SocketSendAsync, mut recv: ChannelAsyncRx<SendMessage>,
                             comm_stats: Option<Arc<CommStats>>) {
     loop {
         let recv_result = recv.recv().await;
 
-        let to_send = match recv_result {
+        let (to_send, init_time) = match recv_result {
             Ok(to_send) => { to_send }
             Err(recv_err) => {
                 error!("Sending channel for client {:?} has disconnected!", peer_id);
                 break;
             }
         };
+        
+        let before_send = Instant::now();
 
         // send
         //
@@ -142,6 +159,16 @@ async fn async_sending_task(peer_id: NodeId, mut socket: SocketSendAsync, mut re
                 error!("Failed to write to socket on client {:?}", peer_id);
                 break;
             }
+        }
+
+        if let Some(comm_stats) = &comm_stats {
+            let time_taken_passing = before_send.duration_since(init_time).as_nanos();
+
+            let time_taken_sending = Instant::now().duration_since(before_send).as_nanos();
+
+            comm_stats.insert_message_passing_to_send_thread(to_send.header.to(), time_taken_passing);
+            comm_stats.insert_message_sending_time(to_send.header.to(), time_taken_sending);
+            comm_stats.register_rq_sent(to_send.header.to());
         }
     }
 }

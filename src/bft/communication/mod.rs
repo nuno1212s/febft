@@ -800,8 +800,6 @@ impl<D> Node<D>
                                 let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
 
                                 comm_stats.insert_message_passing_latency(target, dur_since);
-                                comm_stats.insert_message_sending_time(target, dur_send);
-                                comm_stats.register_rq_sent(target);
                             }
                         });
                     }
@@ -818,8 +816,6 @@ impl<D> Node<D>
                             let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
 
                             comm_stats.insert_message_passing_latency(target, dur_since);
-                            comm_stats.insert_message_sending_time(target, dur_send);
-                            comm_stats.register_rq_sent(target);
                         }
                     }
                 }
@@ -977,12 +973,7 @@ impl<D> Node<D>
                             if let Some((comm_stats, start_send)) = &comm_stats {
                                 let dur_since = before_sending.duration_since(*start_send).as_nanos();
 
-                                let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
-
                                 comm_stats.insert_message_passing_latency(id, dur_since);
-                                comm_stats.insert_message_sending_time(id, dur_sending);
-
-                                comm_stats.register_rq_sent(id);
                             }
                         });
                     }
@@ -996,12 +987,7 @@ impl<D> Node<D>
                         if let Some((comm_stats, start_send)) = &comm_stats {
                             let dur_since = before_sending.duration_since(*start_send).as_nanos();
 
-                            let dur_sending = Instant::now().duration_since(before_sending).as_nanos();
-
                             comm_stats.insert_message_passing_latency(id, dur_since);
-                            comm_stats.insert_message_sending_time(id, dur_sending);
-
-                            comm_stats.register_rq_sent(id);
                         }
                     }
                 }
@@ -1109,11 +1095,7 @@ impl<D> Node<D>
                         if let Some((comm_stats, start_time)) = &comm_stats {
                             let dur_since = before_send_time.duration_since(*start_time).as_nanos();
 
-                            let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
-
                             comm_stats.insert_message_passing_latency(id, dur_since);
-                            comm_stats.insert_message_sending_time(id, dur_send);
-                            comm_stats.register_rq_sent(id);
                         }
 
                         if let Some(sent_rqs) = sent_rqs {

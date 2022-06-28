@@ -51,6 +51,8 @@ struct CommStatsHelper {
     pub message_signing_time_taken: Vec<Mutex<BenchmarkHelper>>,
     //Time taken to create send to objects
     pub message_send_to_create: Vec<Mutex<BenchmarkHelper>>,
+    //Time taken to pass from threadpool to each individual thread
+    pub message_passing_to_send_thread: Vec<Mutex<BenchmarkHelper>>
 }
 
 impl CommStats {
@@ -151,6 +153,21 @@ impl CommStats {
 
     }
 
+    pub fn insert_message_passing_to_send_thread(&self, dest: NodeId, time: u128) {
+        if dest > self.first_cli {
+            match &self.client_comm {
+                None => {
+                }
+                Some(stats) => {
+                    stats.insert(time);
+                }
+            }
+        } else {
+            self.replica_comm.insert_message_sending_time(time)
+        }
+
+    }
+
     pub fn register_rq_received(&self, sender: NodeId) {
         if sender > self.first_cli {
             match &self.client_comm {
@@ -217,6 +234,10 @@ impl CommStatsHelper {
                 Mutex::new(BenchmarkHelper::new(owner_id, measurement_interval / concurrency_level))
             }
             ).take(concurrency_level).collect(),
+            message_passing_to_send_thread: std::iter::repeat_with(|| {
+                Mutex::new(BenchmarkHelper::new(owner_id, measurement_interval / concurrency_level))
+            }
+            ).take(concurrency_level).collect(),
         }
     }
 
@@ -232,6 +253,10 @@ impl CommStatsHelper {
 
     pub fn insert_message_passing_time_own(&self, time: u128) {
         Self::insert_value(&self.message_passing_time_taken_own, time);
+    }
+
+    pub fn insert_message_passing_to_send_thread(&self, time: u128) {
+        Self::insert_value(&self.message_passing_to_send_thread, time);
     }
 
     pub fn insert_message_sending_time(&self, time: u128) {
@@ -265,6 +290,7 @@ impl CommStatsHelper {
         Self::gather_rqs(&self.message_sending_time_taken_own);
         Self::gather_rqs(&self.message_passing_time_taken);
         Self::gather_rqs(&self.message_passing_time_taken_own);
+        Self::gather_rqs(&self.message_passing_to_send_thread);
     }
 
     fn register_rq(&self, counter: &AtomicUsize) -> usize {
@@ -320,6 +346,7 @@ impl CommStatsHelper {
             self.message_sending_time_taken_own[0].lock().log_latency("Message sending (Own)");
             self.message_signing_time_taken[0].lock().log_latency("Message signing");
             self.message_send_to_create[0].lock().log_latency("Create send to objects");
+            self.message_passing_to_send_thread[0].lock().log_latency("Message passing send thread");
         }
 
     }
