@@ -2274,10 +2274,10 @@ impl<D> SendTo<D>
                 shared: ref sh, sock, tx
             } => {
                 match &sock {
-                    ConnectionHandle::Sync(_) => {}
-                    ConnectionHandle::Async(_) => {
+                    ConnectionHandle::Sync(_) => {
                         panic!("Attempted to send messages synchronously through a async channel")
                     }
+                    ConnectionHandle::Async(_) => {}
                 }
 
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
