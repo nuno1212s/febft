@@ -1346,7 +1346,7 @@ impl<D> Node<D>
             let arc = self.clone();
 
             threadpool::execute(move || {
-                debug!("{:?} // Starting connection to node {:?}",my_id, peer_id);
+                debug!("{:?} // Starting connection to node {:?} with address {:?}",my_id, peer_id, peer_addr.0);
 
                 arc.tx_side_connect_task_sync(my_id, first_cli, peer_id,
                                               nonce, connector, peer_addr);
@@ -1859,7 +1859,7 @@ impl<D> Node<D>
                 let addr = self.peer_addrs.get(peer_id.id() as u64)
                     .expect(format!("Failed to get address for client {:?}", peer_id).as_str()).client_addr.clone();
 
-                debug!("{:?} // Received connection from client {:?}, establish TX connection on port {:?}", self.id, peer_id,
+                debug!("{:?} // Received connection from client {:?}, establish TX connection on address {:?}", self.id, peer_id,
                     addr.0);
 
                 // connect
