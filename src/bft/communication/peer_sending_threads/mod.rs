@@ -14,7 +14,7 @@ use crate::bft::async_runtime as rt;
 ///Sending messages from it
 const QUEUE_SPACE: usize = 128;
 
-pub type SendMessage = (WireMessage, Instant);
+pub type SendMessage = (WireMessage, Instant, Option<u64>);
 
 #[derive(Clone)]
 pub enum ConnectionHandle {
@@ -23,7 +23,7 @@ pub enum ConnectionHandle {
 }
 
 impl ConnectionHandle {
-    pub fn send(&self, message: WireMessage) -> Result<(), ()> {
+    pub fn send(&self, message: WireMessage, rq_key: Option<u64>) -> Result<(), ()> {
         let channel = match self {
             ConnectionHandle::Sync(channel) => {
                 channel
@@ -33,7 +33,7 @@ impl ConnectionHandle {
             }
         };
 
-        match channel.send((message, Instant::now())) {
+        match channel.send((message, Instant::now(), rq_key)) {
             Ok(_) => {
                 Ok(())
             }
@@ -55,7 +55,7 @@ impl ConnectionHandle {
             }
         };
 
-        match channel.send((message, Instant::now())).await {
+        match channel.send((message, Instant::now(), None)).await {
             Ok(_) => {
                 Ok(())
             }
@@ -89,7 +89,7 @@ fn sync_sending_thread(peer_id: NodeId, mut socket: SocketSendSync, recv: Channe
     loop {
         let recv_result = recv.recv();
 
-        let (to_send, init_time) = match recv_result {
+        let (to_send, init_time, rq_key) = match recv_result {
             Ok(to_send) => { to_send }
             Err(recv_err) => {
                 error!("Sending channel for client {:?} has disconnected!", peer_id);
@@ -144,7 +144,7 @@ async fn async_sending_task(peer_id: NodeId, mut socket: SocketSendAsync, mut re
     loop {
         let recv_result = recv.recv().await;
 
-        let (to_send, init_time) = match recv_result {
+        let (to_send, init_time, _) = match recv_result {
             Ok(to_send) => { to_send }
             Err(recv_err) => {
                 error!("Sending channel for client {:?} has disconnected!", peer_id);

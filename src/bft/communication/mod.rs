@@ -771,7 +771,7 @@ impl<D> Node<D>
                 let before_send_time = Instant::now();
 
                 //Send to myself, always synchronous since only replicas send to themselves
-                send_to.value_sync(Right((message, nonce, digest, buf)));
+                send_to.value_sync(Right((message, nonce, digest, buf)), None);
 
                 if let Some((comm_stats, start_time)) = &comm_stats {
                     let dur_since = before_send_time.duration_since(*start_time).as_nanos();
@@ -806,7 +806,7 @@ impl<D> Node<D>
                         //We don't actually want to measure how long it takes to send the message
                         let before_send_time = Instant::now();
 
-                        send_to.value_sync(Left((nonce, digest, buf)));
+                        send_to.value_sync(Left((nonce, digest, buf)), None);
 
                         if let Some((comm_stats, start_time)) = &comm_stats {
                             let dur_since = before_send_time.duration_since(*start_time).as_nanos();
@@ -1045,7 +1045,7 @@ impl<D> Node<D>
                 let before_send_time = Instant::now();
 
                 // Right -> our turn
-                send_to.value_sync(Right((message, nonce, digest, buf)));
+                send_to.value_sync(Right((message, nonce, digest, buf)), rq_key.clone());
 
                 if let Some((comm_stats, start_time)) = &comm_stats {
                     let dur_since = before_send_time.duration_since(*start_time).as_nanos();
@@ -1082,7 +1082,7 @@ impl<D> Node<D>
                         //We don't actually want to measure how long it takes to send the message
                         let before_send_time = Instant::now();
 
-                        send_to.value_sync(Left((nonce, digest, buf)));
+                        send_to.value_sync(Left((nonce, digest, buf)), rq_key.clone());
 
                         if let Some((comm_stats, start_time)) = &comm_stats {
                             let dur_since = before_send_time.duration_since(*start_time).as_nanos();
@@ -2243,7 +2243,8 @@ impl<D> SendTo<D>
     }
 
     fn value_sync(self,
-                  m: Either<(u64, Digest, Buf), (SystemMessage<D::State, D::Request, D::Reply>, u64, Digest, Buf)>) {
+                  m: Either<(u64, Digest, Buf), (SystemMessage<D::State, D::Request, D::Reply>, u64, Digest, Buf)>,
+                    rq_key: Option<u64>) {
         match self {
             SendTo::Me { my_id, shared: ref sh, tx } => {
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
@@ -2268,7 +2269,7 @@ impl<D> SendTo<D>
 
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Left((n, d, b)) = m {
-                    Self::peers_sync(flush, my_id, peer_id, n, d, b, key, sock, tx);
+                    Self::peers_sync(flush, my_id, peer_id, n, d, b, key, sock, tx, rq_key);
                 } else {
                     // optimize code path
                     unreachable!()
@@ -2398,7 +2399,8 @@ impl<D> SendTo<D>
         b: Buf,
         sk: Option<&KeyPair>,
         conn_handle: ConnectionHandle,
-        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>, ) {
+        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+        rq_key: Option<u64>) {
 
         // create wire msg
         let wm = WireMessage::new(
@@ -2410,7 +2412,7 @@ impl<D> SendTo<D>
             sk,
         );
 
-        match conn_handle.send(wm) {
+        match conn_handle.send(wm, rq_key) {
             Ok(_) => {}
             Err(_) => {
                 cli.disconnect();
@@ -2522,7 +2524,7 @@ impl<D> SerializedSendTo<D>
         let (_, raw) = m.into_inner();
         let wm = WireMessage::from_parts(h, raw).unwrap();
 
-        match conn_handle.send(wm) {
+        match conn_handle.send(wm, None) {
             Ok(_) => {}
             Err(_) => {
                 cli.disconnect();

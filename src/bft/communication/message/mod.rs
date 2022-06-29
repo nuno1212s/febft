@@ -205,6 +205,7 @@ pub enum Message<S, O, P> where S: Send, O: Send, P: Send {
     ExecutionFinishedWithAppstate(S),
     /// We received a timeout from the timeouts layer.
     Timeout(TimeoutKind),
+    //We received a request batch
     RequestBatch(DateTime<Utc>, Vec<StoredMessage<RequestMessage<O>>>),
 }
 
