@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::time::Instant;
+use dashmap::DashMap;
 use log::error;
 use crate::bft::benchmarks::CommStats;
 use crate::bft::communication::channel::{ChannelAsyncRx, ChannelAsyncTx, ChannelSyncRx, ChannelSyncTx};
@@ -22,8 +23,7 @@ pub enum ConnectionHandle {
 }
 
 impl ConnectionHandle {
-
-    pub fn send(&self, message: WireMessage) -> Result<(), ()>{
+    pub fn send(&self, message: WireMessage) -> Result<(), ()> {
         let channel = match self {
             ConnectionHandle::Sync(channel) => {
                 channel
@@ -43,10 +43,9 @@ impl ConnectionHandle {
                 Err(())
             }
         }
-
     }
 
-    pub async fn async_send(&mut self, message: WireMessage) -> Result<(), ()>{
+    pub async fn async_send(&mut self, message: WireMessage) -> Result<(), ()> {
         let channel = match self {
             ConnectionHandle::Sync(_) => {
                 panic!("Cannot send synchronously on asynchronous channel");
@@ -66,27 +65,27 @@ impl ConnectionHandle {
                 Err(())
             }
         }
-
     }
-
 }
 
 pub fn initialize_sync_sending_thread_for(peer_id: NodeId, socket: SocketSendSync,
-                                             comm_stats: Option<Arc<CommStats>>) -> ConnectionHandle {
+                                          comm_stats: Option<Arc<CommStats>>,
+                                          sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>, ) -> ConnectionHandle {
     let (tx, rx) = crate::bft::communication::channel::new_bounded_sync(QUEUE_SPACE);
 
     std::thread::Builder::new()
         .name(format!("Peer {:?} sending thread", peer_id))
         .spawn(move || {
-            sync_sending_thread(peer_id, socket, rx, comm_stats)
+            sync_sending_thread(peer_id, socket, rx, comm_stats, sent_rqs)
         }).expect(format!("Failed to start sending thread for client {:?}", peer_id).as_str());
-    
+
     ConnectionHandle::Sync(tx)
 }
 
 ///Receives requests from the queue and sends them using the provided socket
 fn sync_sending_thread(peer_id: NodeId, mut socket: SocketSendSync, recv: ChannelSyncRx<SendMessage>,
-                          comm_stats: Option<Arc<CommStats>>) {
+                       comm_stats: Option<Arc<CommStats>>,
+                       sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>, ) {
     loop {
         let recv_result = recv.recv();
 
@@ -97,9 +96,9 @@ fn sync_sending_thread(peer_id: NodeId, mut socket: SocketSendSync, recv: Channe
                 break;
             }
         };
-        
+
         let before_send = Instant::now();
-        
+
         // send
         //
         // FIXME: sending may hang forever, because of network
@@ -111,21 +110,27 @@ fn sync_sending_thread(peer_id: NodeId, mut socket: SocketSendSync, recv: Channe
                 break;
             }
         }
-        
+
         if let Some(comm_stats) = &comm_stats {
             let time_taken_passing = before_send.duration_since(init_time).as_nanos();
 
             let time_taken_sending = Instant::now().duration_since(before_send).as_nanos();
-            
+
             comm_stats.insert_message_passing_to_send_thread(to_send.header.to(), time_taken_passing);
             comm_stats.insert_message_sending_time(to_send.header.to(), time_taken_sending);
             comm_stats.register_rq_sent(to_send.header.to());
+        }
+
+        if let Some(sent_rqs) = &sent_rqs {
+            if let Some(rq_key) = rq_key {
+                sent_rqs[rq_key as usize % sent_rqs.len()].insert(rq_key, ());
+            }
         }
     }
 }
 
 pub fn initialize_async_sending_task_for(peer_id: NodeId, socket: SocketSendAsync,
-                                            comm_stats: Option<Arc<CommStats>>) -> ConnectionHandle {
+                                         comm_stats: Option<Arc<CommStats>>) -> ConnectionHandle {
     let (tx, rx) = crate::bft::communication::channel::new_bounded_async(QUEUE_SPACE);
 
     rt::spawn(async_sending_task(peer_id, socket, rx, comm_stats));
@@ -146,7 +151,7 @@ async fn async_sending_task(peer_id: NodeId, mut socket: SocketSendAsync, mut re
                 break;
             }
         };
-        
+
         let before_send = Instant::now();
 
         // send

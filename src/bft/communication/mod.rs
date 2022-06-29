@@ -797,8 +797,6 @@ impl<D> Node<D>
                             if let Some((comm_stats, start_time)) = &comm_stats {
                                 let dur_since = before_send_time.duration_since(*start_time).as_nanos();
 
-                                let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
-
                                 comm_stats.insert_message_passing_latency(target, dur_since);
                             }
                         });
@@ -812,8 +810,6 @@ impl<D> Node<D>
 
                         if let Some((comm_stats, start_time)) = &comm_stats {
                             let dur_since = before_send_time.duration_since(*start_time).as_nanos();
-
-                            let dur_send = Instant::now().duration_since(before_send_time).as_nanos();
 
                             comm_stats.insert_message_passing_latency(target, dur_since);
                         }
@@ -847,8 +843,7 @@ impl<D> Node<D>
         };
 
         Self::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                             comm_stats,
-                             self.sent_rqs.clone());
+                             comm_stats,);
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -877,7 +872,7 @@ impl<D> Node<D>
         };
 
         Self::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                             comm_stats, self.sent_rqs.clone());
+                             comm_stats);
     }
 
     pub fn broadcast_serialized(
@@ -1003,7 +998,6 @@ impl<D> Node<D>
         first_cli: NodeId,
         nonce: u64,
         comm_stats: Option<(Arc<CommStats>, Instant)>,
-        sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>,
     ) {
         threadpool::execute(move || {
             let start_serialization = Instant::now();
@@ -1076,8 +1070,6 @@ impl<D> Node<D>
 
                 let comm_stats = comm_stats.clone();
 
-                let sent_rqs = sent_rqs.clone();
-
                 match send_to.socket_type().unwrap() {
                     ConnectionHandle::Async(_) => {
                         rt::spawn(async move {
@@ -1096,12 +1088,6 @@ impl<D> Node<D>
                             let dur_since = before_send_time.duration_since(*start_time).as_nanos();
 
                             comm_stats.insert_message_passing_latency(id, dur_since);
-                        }
-
-                        if let Some(sent_rqs) = sent_rqs {
-                            if let Some(rq_key) = rq_key {
-                                sent_rqs[rq_key as usize % sent_rqs.len()].insert(rq_key, ());
-                            }
                         }
                     }
                 }
@@ -1342,6 +1328,7 @@ impl<D> Node<D>
                     peer_id.clone(),
                     socket,
                     self.comm_stats.clone(),
+                    self.sent_rqs.clone()
                 )
             }
         };
@@ -2155,7 +2142,7 @@ impl<D> SendNode<D>
         };
 
         <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                                  comm_stats, self.parent_node.sent_rqs.clone());
+                                  comm_stats);
     }
 
     /// Check the `broadcast_signed()` documentation for `Node`.
@@ -2182,7 +2169,7 @@ impl<D> SendNode<D>
         };
 
         <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                                  comm_stats, self.parent_node.sent_rqs.clone());
+                                  comm_stats);
     }
 }
 
