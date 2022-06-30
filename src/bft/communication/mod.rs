@@ -668,14 +668,21 @@ impl<D> Node<D>
                 error!("Failed to send message to client {:?} as the connection to it was not found!", target);
             }
             Some(conn) => {
-                let send_to = Self::send_to(
+                let send_to = match Self::send_to(
                     flush,
                     self.id,
                     target,
                     None,
                     conn,
                     &self.peer_tx,
-                );
+                ) {
+                    Ok(send_to) => {
+                        send_to
+                    }
+                    Err(err) => {
+                        error!("{:?} // {:?}", self.id, err);
+                    }
+                };
 
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
@@ -710,14 +717,21 @@ impl<D> Node<D>
             Some(conn) => {
                 let start_time = Instant::now();
 
-                let send_to = Self::send_to(
+                let send_to = match Self::send_to(
                     true,
                     self.id,
                     target,
                     Some(&self.shared),
                     conn,
                     &self.peer_tx,
-                );
+                ) {
+                    Ok(send_to) => {
+                        send_to
+                    }
+                    Err(error) => {
+                        error!("{:?} // {:?}", self.id, error);
+                    }
+                };
 
                 let my_id = self.id;
 
@@ -1270,25 +1284,28 @@ impl<D> Node<D>
         shared: Option<&Arc<NodeShared>>,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
         peer_tx: &PeerTx,
-    ) -> SendTo<D> {
+    ) -> Result<SendTo<D>> {
         let shared = shared.map(|sh| Arc::clone(sh));
         if my_id == peer_id {
-            SendTo::Me {
+            Ok(SendTo::Me {
                 shared,
                 my_id,
                 tx: cli,
-            }
+            })
         } else {
-            let sock = peer_tx.find_peer(peer_id.id() as u64).unwrap().clone();
+            let sock = match peer_tx.find_peer(peer_id.id() as u64) {
+                None => { return Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to find peer id"));}
+                Some(sock) => { sock }
+            }.clone();
 
-            SendTo::Peers {
+            Ok(SendTo::Peers {
                 flush,
                 sock,
                 shared,
                 peer_id,
                 my_id,
                 tx: cli,
-            }
+            })
         }
     }
 
@@ -2058,14 +2075,21 @@ impl<D> SendNode<D>
                 error!("Failed to send message to client {:?} as the connection to it was not found!", target);
             }
             Some(conn) => {
-                let send_to = <Node<D>>::send_to(
+                let send_to = match <Node<D>>::send_to(
                     flush,
                     self.id,
                     target,
                     None,
                     conn,
                     &self.peer_tx,
-                );
+                ) {
+                    Ok(send_to) => {
+                        send_to
+                    }
+                    Err(error) => {
+                        error!("{:?} // {:?}", self.id, error);
+                    }
+                };
 
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
@@ -2095,14 +2119,22 @@ impl<D> SendNode<D>
                 error!("Failed to send message to client {:?} as the connection to it was not found!", target);
             }
             Some(conn) => {
-                let send_to = <Node<D>>::send_to(
+                let send_to = match <Node<D>>::send_to(
                     true,
                     self.id,
                     target,
                     Some(&self.shared),
                     conn,
                     &self.peer_tx,
-                );
+                ) {
+                    Ok(send_to) => {
+                        send_to
+                    }
+                    Err(err) => {
+                        error!("{:?} // {:?}", self.id, err);
+                    }
+                };
+
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
