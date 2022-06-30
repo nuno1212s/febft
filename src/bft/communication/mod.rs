@@ -1505,7 +1505,7 @@ impl<D> Node<D>
                     return;
                 }
                 Err(err) => {
-                    error!("{:?} // Error on connecting {:?}", peer_id, err);
+                    error!("{:?} // Error on connecting to addr {:?}: {:?}", peer_id, addr, err);
                 }
             }
 
