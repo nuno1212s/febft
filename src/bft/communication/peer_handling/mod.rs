@@ -282,7 +282,7 @@ impl<T> ReplicaHandling<T> where T: Send {
                 capacity,
                 channel_rx_replica: receiver,
                 channel_tx_replica: sender,
-                connected_clients: DashMap,
+                connected_clients: DashMap::new(),
                 connected_client_count: AtomicUsize::new(0),
             }
         )
@@ -403,7 +403,7 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
                 return Err(Error::simple(ErrorKind::Communication));
             }
 
-            if !self.client_pools.lock().contains_key(&pool_id) {
+            if !self.client_pools.lock().unwrap().contains_key(&pool_id) {
                 break pool_id;
             }
         };
@@ -430,7 +430,7 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
         let mut clone_queue = connected_client.clone();
 
         {
-            let mut guard = self.client_pools.lock();
+            let mut guard = self.client_pools.lock().unwrap();
 
             for (pool_id, pool) in &*guard {
                 match pool.attempt_to_add(clone_queue) {
@@ -470,7 +470,7 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
             }
         };
         {
-            let mut guard = self.client_pools.lock();
+            let mut guard = self.client_pools.lock().unwrap();
 
             let pool_clone = pool.clone();
 
@@ -499,7 +499,7 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
     fn del_pool(&self, pool_id: usize) -> bool {
         println!("{:?} // DELETING POOL {}", self.own_id, pool_id);
 
-        match self.client_pools.lock().remove(&pool_id) {
+        match self.client_pools.lock().unwrap().remove(&pool_id) {
             None => { false }
             Some(pool) => {
                 pool.shutdown();
@@ -511,7 +511,6 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
     }
 
     fn del_cached_clients(&self, clients: Vec<NodeId>) {
-
         for client_id in &clients {
             self.client_connections_cache.remove(&client_id.0);
         }
@@ -550,58 +549,58 @@ impl<T> ConnectedPeersPool<T> where T: Send {
         std::thread::Builder::new()
             .name(format!("Peer pool collector thread #{}", pool_id))
             .spawn(move || {
-                    let mut total_rqs_collected: u128 = 0;
-                    let mut collections: u64 = 0;
+                let mut total_rqs_collected: u128 = 0;
+                let mut collections: u64 = 0;
 
-                    loop {
-                        if self.finish_execution.load(Ordering::Relaxed) {
-                            break;
-                        }
-
-                        let vec = match self.collect_requests(self.batch_size, &self.owner) {
-                            Ok(vec) => { vec }
-                            Err(err) => {
-                                match err.kind() {
-                                    ErrorKind::Communication => {
-                                        //The pool is empty, so to save CPU, delete it
-                                        self.owner.del_pool(self.pool_id);
-
-                                        self.finish_execution.store(true, Ordering::SeqCst);
-
-                                        break;
-                                    }
-                                    _ => { break; }
-                                }
-                            }
-                        };
-
-                        total_rqs_collected += vec.len() as u128;
-                        collections += 1;
-
-                        if !vec.is_empty() {
-                            self.batch_transmission.send(vec);
-                            // Sleep for a determined amount of time to allow clients to send requests
-                            let three_quarters_sleep = (self.batch_sleep_micros / 4) * 3;
-                            let five_quarters_sleep = (self.batch_sleep_micros / 4) * 5;
-
-                            let sleep_micros = fastrand::u64(three_quarters_sleep..=five_quarters_sleep);
-
-                            std::thread::sleep(Duration::from_micros(sleep_micros));
-                        }
-
-                        if collections % 10000000 == 0 {
-                            let current_time_millis = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-
-                            println!("{:?} // {:?} // {} rqs collected in {} collections", self.owner.own_id, current_time_millis,
-                                     total_rqs_collected, collections);
-
-                            total_rqs_collected = 0;
-                            collections = 0;
-                        }
-
-                        // backoff.spin();
+                loop {
+                    if self.finish_execution.load(Ordering::Relaxed) {
+                        break;
                     }
-                }).unwrap();
+
+                    let vec = match self.collect_requests(self.batch_size, &self.owner) {
+                        Ok(vec) => { vec }
+                        Err(err) => {
+                            match err.kind() {
+                                ErrorKind::Communication => {
+                                    //The pool is empty, so to save CPU, delete it
+                                    self.owner.del_pool(self.pool_id);
+
+                                    self.finish_execution.store(true, Ordering::SeqCst);
+
+                                    break;
+                                }
+                                _ => { break; }
+                            }
+                        }
+                    };
+
+                    total_rqs_collected += vec.len() as u128;
+                    collections += 1;
+
+                    if !vec.is_empty() {
+                        self.batch_transmission.send(vec);
+                        // Sleep for a determined amount of time to allow clients to send requests
+                        let three_quarters_sleep = (self.batch_sleep_micros / 4) * 3;
+                        let five_quarters_sleep = (self.batch_sleep_micros / 4) * 5;
+
+                        let sleep_micros = fastrand::u64(three_quarters_sleep..=five_quarters_sleep);
+
+                        std::thread::sleep(Duration::from_micros(sleep_micros));
+                    }
+
+                    if collections % 10000000 == 0 {
+                        let current_time_millis = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+
+                        println!("{:?} // {:?} // {} rqs collected in {} collections", self.owner.own_id, current_time_millis,
+                                 total_rqs_collected, collections);
+
+                        total_rqs_collected = 0;
+                        collections = 0;
+                    }
+
+                    // backoff.spin();
+                }
+            }).unwrap();
     }
 
     pub fn attempt_to_add(&self, client: Arc<ConnectedPeer<T>>) -> std::result::Result<(), Arc<ConnectedPeer<T>>> {
@@ -771,7 +770,7 @@ impl<T> ConnectedPeer<T> where T: Send {
                 disconnected.load(Ordering::Relaxed)
             }
             Self::UnpooledConnection { sender, .. } => {
-                sender.lock().is_none()
+                sender.lock().unwrap().is_none()
             }
         }
     }
@@ -792,7 +791,7 @@ impl<T> ConnectedPeer<T> where T: Send {
     pub fn dump_requests(&self, replacement_vec: Vec<T>) -> std::result::Result<Vec<T>, Vec<T>> {
         return match self {
             Self::PoolConnection { queue, .. } => {
-                let mut guard = queue.lock();
+                let mut guard = queue.lock().unwrap();
 
                 match &mut *guard {
                     None => {
@@ -812,7 +811,7 @@ impl<T> ConnectedPeer<T> where T: Send {
     pub fn push_request_sync(&self, msg: T) -> Result<()> {
         match self {
             Self::PoolConnection { queue, client_id, .. } => {
-                let mut sender_guard = queue.lock();
+                let mut sender_guard = queue.lock().unwrap();
 
                 match &mut *sender_guard {
                     None => {
@@ -830,8 +829,8 @@ impl<T> ConnectedPeer<T> where T: Send {
                     }
                 }
             }
-            Self::UnpooledConnection { sender, .. } => {
-                let send_lock = sender.lock();
+            Self::UnpooledConnection { sender, client_id } => {
+                let send_lock = sender.lock().unwrap();
                 let mut sender_guard = send_lock.as_ref();
 
                 match sender_guard {
@@ -860,10 +859,10 @@ impl<T> ConnectedPeer<T> where T: Send {
         }
     }
 
-    pub async fn push_request(&self, msg: T) -> Result<()>{
+    pub async fn push_request(&self, msg: T) -> Result<()> {
         match self {
             Self::PoolConnection { queue, client_id, .. } => {
-                let mut sender_guard = queue.lock();
+                let mut sender_guard = queue.lock().unwrap();
 
                 match &mut *sender_guard {
                     Some(guard) => {
@@ -879,25 +878,25 @@ impl<T> ConnectedPeer<T> where T: Send {
                 }
             }
             Self::UnpooledConnection { sender, client_id, .. } => {
-                let mut send = {
-                    let sender_guard = sender.lock().unwrap();
+                let sender_guard = sender.lock().unwrap();
 
-                    match &*sender_guard {
-                        Some(send) => {
-                            match send.send(msg) {
-                                Ok(_) => {}
-                                Err(err) => {
-                                    Err(Error::simple_with_msg(ErrorKind::Communication, format!("Failed to receive data from {:?} because {:?}", self.client_id(), err).as_str()))
-                                }
+                match &*sender_guard {
+                    Some(send) => {
+                        match send.send(msg) {
+                            Ok(_) => {
+                                Ok(())
+                            }
+                            Err(err) => {
+                                Err(Error::simple_with_msg(ErrorKind::Communication, format!("Failed to receive data from {:?} because {:?}", self.client_id(), err).as_str()))
                             }
                         }
-                        None => {
-                            error!("Failed to receive to client queue {:?} as he was already disconnected", client_id);
-
-                            Err(Error::simple_with_msg(ErrorKind::Communication, "Channel is closed"))
-                        }
                     }
-                };
+                    None => {
+                        error!("Failed to receive to client queue {:?} as he was already disconnected", client_id);
+
+                        Err(Error::simple_with_msg(ErrorKind::Communication, "Channel is closed"))
+                    }
+                }
             }
         }
     }

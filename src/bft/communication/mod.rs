@@ -683,6 +683,7 @@ impl<D> Node<D>
                     }
                     Err(err) => {
                         error!("{:?} // {:?}", self.id, err);
+                        return;
                     }
                 };
 
@@ -732,6 +733,7 @@ impl<D> Node<D>
                     }
                     Err(error) => {
                         error!("{:?} // {:?}", self.id, error);
+                        return;
                     }
                 };
 
@@ -1885,8 +1887,8 @@ impl<D> Node<D>
 
             let msg = Message::System(header, message);
 
-            if let Error(err) = client.push_request(msg).await {
-                error!("{:?} // Channel closed, closing tcp connection as well to peer {:?}. {:?}", self.id(), peer_id, err);
+            if let Err(inner) = client.push_request(msg).await {
+                error!("{:?} // Channel closed, closing tcp connection as well to peer {:?}. {:?}", self.id(), peer_id, inner);
                 break;
             }
 
@@ -1998,8 +2000,8 @@ impl<D> Node<D>
 
             let msg = Message::System(header, message);
 
-            if let Error(err) = client.push_request_sync(msg) {
-                error!("{:?} // Channel closed, closing tcp connection as well to peer {:?}. {:?}", self.id(), peer_id, err);
+            if let Err(inner) = client.push_request_sync(msg) {
+                error!("{:?} // Channel closed, closing tcp connection as well to peer {:?}. {:?}", self.id(), peer_id, inner);
                 break;
             };
 
@@ -2098,6 +2100,8 @@ impl<D> SendNode<D>
                     }
                     Err(error) => {
                         error!("{:?} // {:?}", self.id, error);
+
+                        return;
                     }
                 };
 
@@ -2142,6 +2146,8 @@ impl<D> SendNode<D>
                     }
                     Err(err) => {
                         error!("{:?} // {:?}", self.id, err);
+
+                        return;
                     }
                 };
 
@@ -2377,8 +2383,8 @@ impl<D> SendTo<D>
         ).into_inner();
 
         // send
-        if let Error(err) = cli.push_request_sync(Message::System(h, m)) {
-            error!("{:?} // Failed to push to myself!", my_id);
+        if let Err(inner) = cli.push_request_sync(Message::System(h, m)) {
+            error!("{:?} // Failed to push to myself! {:?}", my_id, inner);
         };
     }
 
@@ -2402,8 +2408,8 @@ impl<D> SendTo<D>
         ).into_inner();
 
         // send
-        if let Error(err) = cli.push_request(Message::System(h, m)).await {
-            error!("{:?} // Failed to push to myself!", my_id);
+        if let Err(inner) = cli.push_request(Message::System(h, m)).await {
+            error!("{:?} // Failed to push to myself! {:?}", my_id, inner);
         };
     }
 
@@ -2547,8 +2553,7 @@ impl<D> SerializedSendTo<D>
         let myself = h.from;
 
         // send to ourselves
-        let Err(err) = cli.push_request_sync(Message::System(h, original))
-        {
+        if let Err(err) = cli.push_request_sync(Message::System(h, original)) {
             error!("{:?} // FAILED TO SEND TO MYSELF {:?}", myself, err);
         }
     }

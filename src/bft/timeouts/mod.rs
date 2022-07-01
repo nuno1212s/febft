@@ -109,7 +109,7 @@ where
             Delay::new(dur).await;
 
             if let Err(err) = system_tx.push_request(Message::Timeout(kind)).await {
-                error!("{:?} // Failed to deliver timeout {:?}", self.system_tx.client_id(), err);
+                error!("{:?} // Failed to deliver timeout {:?}", system_tx.client_id(), err);
             }
         });
     }
@@ -128,7 +128,7 @@ where
             Delay::new(dur).await;
             if !shared.was_canceled(seq) {
                 if let Err(err) = system_tx.push_request(Message::Timeout(kind)).await {
-                    error!("{:?} // Failed to deliver timeout with cancel {:?}", self.system_tx.client_id(), err);
+                    error!("{:?} // Failed to deliver timeout with cancel {:?}", system_tx.client_id(), err);
                 }
             }
         });

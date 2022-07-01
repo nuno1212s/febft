@@ -141,7 +141,9 @@ fn sync_sending_thread<D>(node: Arc<Node<D>>, peer_id: NodeId, mut socket: Socke
      */
     let mut state = bft::prng::State::new();
 
-    match node.peer_addrs.get(peer_id.id() as u64) {
+    let peer_addr = node.peer_addrs.get(peer_id.id() as u64);
+
+    match peer_addr {
         None => {
             error!("{:?} // Failed to find address for node {:?}", node.id(), peer_id);
         }
@@ -149,18 +151,28 @@ fn sync_sending_thread<D>(node: Arc<Node<D>>, peer_id: NodeId, mut socket: Socke
             if node.id() < node.first_client_id() && peer_id < node.first_client_id() {
                 //Both nodes are replicas, so attempt to connect to the replica
                 if let Some(addr) = &addr.replica_addr {
+                    let id = node.id();
+                    let first_cli = node.first_client_id();
+                    let sync_conn = Arc::clone(&node.sync_connector);
+                    let addr = addr.clone();
+
                     //If we have the replica only IP (port) of the replicas, then we are probably a replica and
-                    node.tx_side_connect_task_sync(node.id(), node.first_client_id(),
+                    node.tx_side_connect_task_sync(id, first_cli,
                                                    peer_id, state.next_state(),
-                                                   Arc::clone(&node.sync_connector), addr.clone());
+                                                   sync_conn, addr);
                 } else {
                     error!("{:?} // Failed to connect because no IP was present for replica {:?}", node.id(), peer_id);
                 }
             } else {
+                let id = node.id();
+                let first_cli = node.first_client_id();
+                let sync_conn = Arc::clone(&node.sync_connector);
+                let addr = addr.client_addr.clone();
+
                 //If we are not a replica connecting to a replica, we will always use the "client" ports.
-                node.tx_side_connect_task_sync(node.id(), node.first_client_id(),
+                node.tx_side_connect_task_sync(id, first_cli,
                                                peer_id, state.next_state(),
-                                               Arc::clone(&node.sync_connector), addr.client_addr.clone());
+                                               sync_conn, addr);
             }
         }
     }
@@ -220,7 +232,9 @@ async fn async_sending_task<D>(node: Arc<Node<D>>, peer_id: NodeId, mut socket: 
      */
     let mut state = bft::prng::State::new();
 
-    match node.peer_addrs.get(peer_id.id() as u64) {
+    let addr = node.peer_addrs.get(peer_id.id() as u64);
+
+    match addr {
         None => {
             error!("{:?} // Failed to find address for node {:?}", node.id(), peer_id);
         }
@@ -228,20 +242,29 @@ async fn async_sending_task<D>(node: Arc<Node<D>>, peer_id: NodeId, mut socket: 
             if node.id() < node.first_client_id() && peer_id < node.first_client_id() {
                 //Both nodes are replicas, so attempt to connect to the replica
                 if let Some(addr) = &addr.replica_addr {
+                    let id = node.id();
+                    let first_cli = node.first_client_id();
+                    let conn = node.connector.clone();
+                    let addr = addr.clone();
+
                     //If we have the replica only IP (port) of the replicas, then we are probably a replica and
-                    node.tx_side_connect_task(node.id(), node.first_client_id(),
+                    node.tx_side_connect_task(id, first_cli,
                                               peer_id, state.next_state(),
-                                              node.connector.clone(), addr.clone()).await;
+                                              conn, addr).await;
                 } else {
                     error!("{:?} // Failed to connect because no IP was present for replica {:?}", node.id(), peer_id);
                 }
             } else {
+                let id = node.id();
+                let first_cli = node.first_client_id();
+                let conn = node.connector.clone();
+                let addr = addr.client_addr.clone();
+
                 //If we are not a replica connecting to a replica, we will always use the "client" ports.
-                node.tx_side_connect_task(node.id(), node.first_client_id(),
+                node.tx_side_connect_task(id, first_cli,
                                           peer_id, state.next_state(),
-                                          node.connector.clone(), addr.client_addr.clone()).await;
+                                          conn, addr).await;
             }
         }
     }
-}
 }
