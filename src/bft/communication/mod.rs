@@ -1834,6 +1834,12 @@ impl<D> Node<D>
                         ));
                     }
                 };
+            } else {
+
+                if let Some(conn) = self.node_handling.resolve_peer_conn(peer_id) {
+
+                }
+
             }
         }
 
@@ -2023,6 +2029,8 @@ impl<D> Node<D>
                 }
             }
         }
+
+        debug!("{:?} // Terminated connection with node {:?}", self.id(), peer_id);
 
         // announce we have disconnected
         client.disconnect();
