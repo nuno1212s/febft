@@ -3,6 +3,7 @@
 // XXX: maybe `Box<(BatchMeta, UpdateBatch<O>)>`
 
 use std::sync::{Arc};
+use log::error;
 
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::{channel, NodeId, SendNode};
@@ -277,7 +278,10 @@ impl<S> Executor<S>
         let mut system_tx = self.send_node.loopback_channel().clone();
 
         let m = Message::ExecutionFinishedWithAppstate(cloned_state);
-        system_tx.push_request_sync(m);
+
+        if let Some(err) = system_tx.push_request_sync(m) {
+            error!("{:?} // FAILED TO DELIVER CHECKPOINT STATE", self.send_node.id());
+        };
     }
 
     fn execution_finished(&mut self, batch: UpdateBatchReplies<Reply<S>>) {
@@ -286,7 +290,6 @@ impl<S> Executor<S>
         let mut send_node = self.send_node.clone();
 
         crate::bft::threadpool::execute(move || {
-
             let mut batch = batch.into_inner();
 
             batch.sort_unstable_by_key(|update_reply| update_reply.to());
@@ -303,7 +306,6 @@ impl<S> Executor<S>
                 // branch, perhaps we can come up with a better approach,
                 // but for now this will do
                 if let Some((message, last_peer_id)) = curr_send.take() {
-
                     let flush = peer_id != last_peer_id;
                     send_node.send(message, last_peer_id, flush);
                 }
@@ -328,7 +330,6 @@ impl<S> Executor<S>
                 // (there is always at least one request in the batch)
                 unreachable!();
             }
-
         });
 
         //self.reply_worker.send(batch).unwrap();
@@ -401,7 +402,6 @@ impl<P> UpdateBatchReplies<P> {
     pub fn into_inner(self) -> Vec<UpdateReply<P>> {
         self.inner
     }
-
 
 
     /// Returns the length of the batch.

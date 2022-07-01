@@ -1,13 +1,12 @@
 use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::fmt::{Debug, format, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use dashmap::DashMap;
 
-use intmap::IntMap;
-use log::error;
-use parking_lot::{Mutex, RwLock};
+use log::{error, info};
 
 use crate::bft::communication::{channel, NODE_CHAN_BOUND, NodeId};
 use crate::bft::communication::channel::{ChannelMultRx, ChannelMultTx, ChannelSyncTx, TryRecvError};
@@ -270,7 +269,7 @@ pub struct ReplicaHandling<T> where T: Send {
     capacity: usize,
     channel_tx_replica: ChannelSyncTx<T>,
     channel_rx_replica: ChannelSyncRx<T>,
-    connected_clients: RwLock<IntMap<Arc<ConnectedPeer<T>>>>,
+    connected_clients: DashMap<u32, Arc<ConnectedPeer<T>>>,
     connected_client_count: AtomicUsize,
 }
 
@@ -283,7 +282,7 @@ impl<T> ReplicaHandling<T> where T: Send {
                 capacity,
                 channel_rx_replica: receiver,
                 channel_tx_replica: sender,
-                connected_clients: RwLock::new(IntMap::new()),
+                connected_clients: DashMap,
                 connected_client_count: AtomicUsize::new(0),
             }
         )
@@ -295,20 +294,26 @@ impl<T> ReplicaHandling<T> where T: Send {
             sender: Mutex::new(Some(self.channel_tx_replica.clone())),
         });
 
-        //TODO: Handle replica disconnects
-        self.connected_clients.write().insert(peer_id.id() as u64, peer.clone());
+        match self.connected_clients.insert(peer_id.id(), peer.clone()) {
+            None => {}
+            Some(old) => {
+                //When we insert a new channel, we want the old channel to become closed.
+                old.disconnect();
+            }
+        };
+
         self.connected_client_count.fetch_add(1, Ordering::Relaxed);
 
         peer
     }
 
     pub fn resolve_connection(&self, peer_id: NodeId) -> Option<Arc<ConnectedPeer<T>>> {
-        match self.connected_clients.read().get(peer_id.id() as u64) {
+        match self.connected_clients.get(&peer_id.id()) {
             None => {
                 None
             }
             Some(peer) => {
-                Some(Arc::clone(peer))
+                Some(Arc::clone(peer.value()))
             }
         }
     }
@@ -329,14 +334,14 @@ impl<T> ReplicaHandling<T> where T: Send {
 /// This is just built on top of the actual per client connection socket stuff and each socket
 /// should push items into its own ConnectedPeer instance
 pub struct ConnectedPeersGroup<T: Send + 'static> {
+    own_id: NodeId,
     //We can use mutexes here since there will only be concurrency on client connections and dcs
     //And since each client has his own reference to push data to, this only needs to be accessed by the thread
     //That's producing the batches and the threads of clients connecting and disconnecting
     client_pools: Mutex<BTreeMap<usize, Arc<ConnectedPeersPool<T>>>>,
-    client_connections_cache: RwLock<IntMap<Arc<ConnectedPeer<T>>>>,
+    client_connections_cache: DashMap<u32, Arc<ConnectedPeer<T>>>,
     connected_clients: AtomicUsize,
     batch_transmission: ChannelSyncTx<Vec<T>>,
-    own_id: NodeId,
     per_client_cache: usize,
     //What batch size should we target for each batch (there is no set limit on requests,
     //Just a hint on when it should move on)
@@ -346,6 +351,7 @@ pub struct ConnectedPeersGroup<T: Send + 'static> {
     //How much time should the thread sleep in between batch collection
     batch_sleep_micros: u64,
     clients_per_pool: usize,
+    //Counter used to keep track of the created pools
     pool_id_counter: AtomicUsize,
 }
 
@@ -369,15 +375,15 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
                own_id: NodeId, clients_per_pool: usize, batch_timeout_micros: u64,
                batch_sleep_micros: u64) -> Arc<Self> {
         Arc::new(Self {
+            own_id,
             client_pools: Mutex::new(BTreeMap::new()),
-            client_connections_cache: RwLock::new(IntMap::new()),
+            client_connections_cache: DashMap::new(),
             per_client_cache: per_client_bound,
             connected_clients: AtomicUsize::new(0),
             batch_timeout_micros,
             batch_sleep_micros,
             batch_target_size: batch_size,
             batch_transmission,
-            own_id,
             clients_per_pool,
             pool_id_counter: AtomicUsize::new(0),
         })
@@ -412,13 +418,14 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
             queue: Mutex::new(Some(Vec::with_capacity(self.per_client_cache))),
         });
 
-        let mut cached_clients = self.client_connections_cache.write();
-
-        cached_clients.insert(peer_id.0 as u64, connected_client.clone());
-
-        drop(cached_clients);
-
         self.connected_clients.fetch_add(1, Ordering::SeqCst);
+
+        match self.client_connections_cache.insert(peer_id.0, connected_client.clone()) {
+            None => {}
+            Some(old_conn) => {
+                old_conn.disconnect();
+            }
+        };
 
         let mut clone_queue = connected_client.clone();
 
@@ -479,14 +486,12 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
     }
 
     pub fn get_client_conn(&self, client_id: NodeId) -> Option<Arc<ConnectedPeer<T>>> {
-        let cache_guard = self.client_connections_cache.read();
-
-        return match cache_guard.get(client_id.0 as u64) {
+        return match self.client_connections_cache.get(&client_id.0) {
             None => {
                 None
             }
             Some(peer) => {
-                Some(Arc::clone(peer))
+                Some(Arc::clone(peer.value()))
             }
         };
     }
@@ -506,49 +511,12 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
     }
 
     fn del_cached_clients(&self, clients: Vec<NodeId>) {
-        let mut cache_guard = self.client_connections_cache.write();
 
         for client_id in &clients {
-            cache_guard.remove(client_id.0 as u64);
+            self.client_connections_cache.remove(&client_id.0);
         }
-
-        drop(cache_guard);
 
         self.connected_clients.fetch_sub(clients.len(), Ordering::Relaxed);
-    }
-
-    pub fn del_client(&self, client_id: &NodeId) -> bool {
-        let mut cache_guard = self.client_connections_cache.write();
-
-        cache_guard.remove(client_id.0 as u64);
-
-        drop(cache_guard);
-
-        let mut guard = self.client_pools.lock();
-
-        let mut empty = false;
-        let mut pool_id_g = 0;
-
-        for (pool_id, pool) in guard.iter() {
-            match pool.attempt_to_remove(client_id) {
-                Ok(is_empty) => {
-                    self.connected_clients.fetch_sub(1, Ordering::SeqCst);
-
-                    empty = is_empty;
-                    pool_id_g = *pool_id;
-
-                    break;
-                }
-                Err(_) => {}
-            }
-        }
-
-        if empty {
-            guard.remove(&pool_id_g);
-        }
-
-        //Could not find the requested client in any of the client pools
-        false
     }
 }
 
@@ -560,7 +528,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                batch_timeout_micros: u64, batch_sleep_micros: u64) -> Arc<Self> {
         let result = Self {
             pool_id,
-            connected_clients: parking_lot::Mutex::new(Vec::new()),
+            connected_clients: Mutex::new(Vec::new()),
             batch_size,
             batch_transmission,
             batch_timeout_micros,
@@ -637,7 +605,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
     }
 
     pub fn attempt_to_add(&self, client: Arc<ConnectedPeer<T>>) -> std::result::Result<(), Arc<ConnectedPeer<T>>> {
-        let mut guard = self.connected_clients.lock();
+        let mut guard = self.connected_clients.lock().unwrap();
 
         if guard.len() < self.client_limit {
             guard.push(client);
@@ -649,7 +617,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
     }
 
     pub fn attempt_to_remove(&self, client_id: &NodeId) -> std::result::Result<bool, ()> {
-        let mut guard = self.connected_clients.lock();
+        let mut guard = self.connected_clients.lock().unwrap();
 
         return match guard.iter().position(|client| client.client_id().eq(client_id)) {
             None => {
@@ -668,7 +636,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
 
         let mut batch = Vec::with_capacity(vec_size);
 
-        let mut guard = self.connected_clients.lock();
+        let mut guard = self.connected_clients.lock().unwrap();
 
         let mut dced = Vec::new();
 
@@ -745,7 +713,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
         //This might cause some lag since it has to access the intmap, but
         //Should be fine as it will only happen on client dcs
         if !dced.is_empty() {
-            let mut guard = self.connected_clients.lock();
+            let mut guard = self.connected_clients.lock().unwrap();
 
             for node in &dced {
                 //This is O(n*c) but there isn't really a much better way to do it I guess
@@ -779,6 +747,8 @@ impl<T> ConnectedPeersPool<T> where T: Send {
     }
 
     pub fn shutdown(&self) {
+        info!("{:?} // Pool {} is shutting down", self.owner.own_id, self.pool_id);
+
         self.finish_execution.store(true, Ordering::Relaxed);
     }
 }
@@ -812,7 +782,7 @@ impl<T> ConnectedPeer<T> where T: Send {
                 disconnected.store(false, Ordering::Relaxed)
             }
             Self::UnpooledConnection { sender, .. } => {
-                sender.lock().take();
+                sender.lock().unwrap().take();
             }
         };
     }
@@ -839,7 +809,7 @@ impl<T> ConnectedPeer<T> where T: Send {
         };
     }
 
-    pub fn push_request_sync(&self, msg: T) {
+    pub fn push_request_sync(&self, msg: T) -> Result<()> {
         match self {
             Self::PoolConnection { queue, client_id, .. } => {
                 let mut sender_guard = queue.lock();
@@ -847,12 +817,16 @@ impl<T> ConnectedPeer<T> where T: Send {
                 match &mut *sender_guard {
                     None => {
                         error!("Failed to send to client {:?} as he was already disconnected", client_id);
+
+                        Err(Error::simple_with_msg(ErrorKind::Communication, "Channel is closed"))
                     }
                     Some(sender) => {
                         //We don't clone and ditch the lock since each replica
                         //has a thread dedicated to receiving his requests, but only the single thread
                         //So, no more than one thread will be trying to acquire this lock at the same time
                         sender.push(msg);
+
+                        Ok(())
                     }
                 }
             }
@@ -862,17 +836,22 @@ impl<T> ConnectedPeer<T> where T: Send {
 
                 match sender_guard {
                     None => {
-                        //debug!("{:?} // Failed to receive because there is no sender.", self.client_id());
-                        return;
+                        error!("Failed to send to replica {:?} as he was already disconnected", client_id);
+
+                        Err(Error::simple_with_msg(ErrorKind::Communication, "Channel is closed"))
                     }
                     Some(send) => {
                         //We don't clone and ditch the lock since each client
                         //has a thread dedicated to receiving his requests, but only the single thread
                         //So, no more than one thread will be trying to acquire this lock at the same time
                         match send.send(msg) {
-                            Ok(_) => {}
+                            Ok(_) => {
+                                Ok(())
+                            }
                             Err(err) => {
-                                panic!("Failed to receive data from {:?} because {:?}", self.client_id(), err);
+                                error!("Failed to receive data from {:?} because {:?}", self.client_id(), err);
+
+                                Err(Error::simple_with_msg(ErrorKind::Communication, "Channel is closed"))
                             }
                         }
                     }
@@ -881,7 +860,7 @@ impl<T> ConnectedPeer<T> where T: Send {
         }
     }
 
-    pub async fn push_request(&self, msg: T) {
+    pub async fn push_request(&self, msg: T) -> Result<()>{
         match self {
             Self::PoolConnection { queue, client_id, .. } => {
                 let mut sender_guard = queue.lock();
@@ -889,29 +868,33 @@ impl<T> ConnectedPeer<T> where T: Send {
                 match &mut *sender_guard {
                     Some(guard) => {
                         guard.push(msg);
+
+                        Ok(())
                     }
                     None => {
                         error!("Failed to send to client {:?} as he was already disconnected", client_id);
-                        return;
+
+                        Err(Error::simple_with_msg(ErrorKind::Communication, "Channel is closed"))
                     }
                 }
             }
             Self::UnpooledConnection { sender, client_id, .. } => {
                 let mut send = {
-                    let sender_guard = sender.lock();
+                    let sender_guard = sender.lock().unwrap();
 
                     match &*sender_guard {
                         Some(send) => {
                             match send.send(msg) {
                                 Ok(_) => {}
                                 Err(err) => {
-                                    panic!("Failed to receive data from {:?} because {:?}", self.client_id(), err);
+                                    Err(Error::simple_with_msg(ErrorKind::Communication, format!("Failed to receive data from {:?} because {:?}", self.client_id(), err).as_str()))
                                 }
                             }
                         }
                         None => {
-                            error!("Failed to send to client {:?} as he was already disconnected", client_id);
-                            return;
+                            error!("Failed to receive to client queue {:?} as he was already disconnected", client_id);
+
+                            Err(Error::simple_with_msg(ErrorKind::Communication, "Channel is closed"))
                         }
                     }
                 };

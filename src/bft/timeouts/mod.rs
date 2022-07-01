@@ -11,6 +11,7 @@ use std::sync::Arc;
 use intmap::IntMap;
 use parking_lot::Mutex;
 use futures_timer::Delay;
+use log::error;
 
 use crate::bft::ordering;
 use crate::bft::async_runtime as rt;
@@ -106,7 +107,10 @@ where
         let mut system_tx = self.system_tx.clone();
         rt::spawn(async move {
             Delay::new(dur).await;
-            system_tx.push_request(Message::Timeout(kind)).await;
+
+            if let Err(err) = system_tx.push_request(Message::Timeout(kind)).await {
+                error!("{:?} // Failed to deliver timeout {:?}", self.system_tx.client_id(), err);
+            }
         });
     }
 
@@ -123,7 +127,9 @@ where
         rt::spawn(async move {
             Delay::new(dur).await;
             if !shared.was_canceled(seq) {
-                system_tx.push_request(Message::Timeout(kind)).await;
+                if let Err(err) = system_tx.push_request(Message::Timeout(kind)).await {
+                    error!("{:?} // Failed to deliver timeout with cancel {:?}", self.system_tx.client_id(), err);
+                }
             }
         });
 

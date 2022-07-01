@@ -22,7 +22,7 @@ pub type HashMap<K, V> = ::std::collections::HashMap<K, V, RandomState>;
 /// A `HashSet` with a faster hashing function.
 pub type HashSet<T> = ::std::collections::HashSet<T, RandomState>;
 
-pub type ConcurrentHashMap<K, V> = ::dashmap::DashMap<K, V, RandomState>;
+pub type ConcurrentHashMap<K, V> = DashMap<K, V, RandomState>;
 
 /// Creates a new `OrderedMap`.
 pub fn ordered_map<K: Eq + ::std::hash::Hash, V>() -> OrderedMap<K, V> {

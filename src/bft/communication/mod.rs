@@ -23,6 +23,7 @@ use futures::io::{
 };
 use futures_timer::Delay;
 use intmap::IntMap;
+use log::kv::Source;
 use tracing::{debug, instrument, error};
 use parking_lot::{RwLock};
 
@@ -33,6 +34,7 @@ use smallvec::SmallVec;
 
 use crate::bft::async_runtime as rt;
 use crate::bft::benchmarks::{CommStats};
+use crate::bft::collections::{ConcurrentHashMap, RandomState};
 use crate::bft::communication::message::{Header, Message, SerializedMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
 use crate::bft::communication::peer_handling::{ConnectedPeer, NodePeers};
 use crate::bft::communication::peer_sending_threads::ConnectionHandle;
@@ -151,13 +153,13 @@ enum PeerTx {
     // on the second one
     Client {
         first_cli: NodeId,
-        connected: Arc<RwLock<IntMap<ConnectionHandle>>>,
+        connected: Arc<DashMap<u64, ConnectionHandle>>,
     },
     // replicas don't need shared access to the hashmap, so
     // we only need one lock (to restrict I/O to one producer at a time)
     Server {
         first_cli: NodeId,
-        connected: Arc<RwLock<IntMap<ConnectionHandle>>>,
+        connected: Arc<DashMap<u64, ConnectionHandle>>,
     },
 }
 
@@ -165,36 +167,36 @@ impl PeerTx {
     ///Add a tx peer connection to the registry
     ///Requires knowing the first_cli
     pub fn add_peer(&self, client_id: u64, socket: ConnectionHandle) {
-        match self {
+        let previous_conn = match self {
             PeerTx::Client { connected, .. } => {
-                let mut guard = connected.write();
-
-                guard.insert(client_id, socket);
+                connected.insert(client_id, socket)
             }
             PeerTx::Server { connected, .. } => {
-                let mut guard = connected.write();
-
-                guard.insert(client_id, socket);
+                connected.insert(client_id, socket)
             }
-        }
+        };
+
+        if let Some(existing_conn) = previous_conn {
+            existing_conn.close();
+        };
     }
 
     pub fn find_peer(&self, client_id: u64) -> Option<ConnectionHandle> {
         match self {
             PeerTx::Client { connected, .. } => {
                 let option = {
-                    let guard = connected.read();
-
-                    guard.get(client_id).cloned()
+                    connected.get(&client_id).map(|reference| {
+                        (reference.value()).clone()
+                    })
                 };
 
                 option
             }
             PeerTx::Server { connected, .. } => {
                 let option = {
-                    let guard = connected.read();
-
-                    guard.get(client_id).cloned()
+                    connected.get(&client_id).map(|reference| {
+                        (reference.value()).clone()
+                    })
                 };
 
                 option
@@ -448,12 +450,12 @@ impl<D> Node<D>
         let peer_tx = if id >= cfg.first_cli {
             PeerTx::Client {
                 first_cli: cfg.first_cli,
-                connected: Arc::new(RwLock::new(IntMap::new())),
+                connected: Arc::new(DashMap::new()),
             }
         } else {
             PeerTx::Server {
                 first_cli: cfg.first_cli,
-                connected: Arc::new(RwLock::new(IntMap::new())),
+                connected: Arc::new(DashMap::new()),
             }
         };
 
@@ -857,7 +859,7 @@ impl<D> Node<D>
         };
 
         Self::broadcast_impl(message, mine, others, self.first_cli, nonce,
-                             comm_stats,);
+                             comm_stats, );
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
@@ -1294,7 +1296,7 @@ impl<D> Node<D>
             })
         } else {
             let sock = match peer_tx.find_peer(peer_id.id() as u64) {
-                None => { return Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to find peer id"));}
+                None => { return Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to find peer id")); }
                 Some(sock) => { sock }
             }.clone();
 
@@ -1329,12 +1331,13 @@ impl<D> Node<D>
     }
 
     /// Registers the newly created transmission socket to the peer
-    pub fn handle_connected_tx(&self, peer_id: NodeId, sock: SecureSocketSend) {
+    pub fn handle_connected_tx(self: &Arc<Self>, peer_id: NodeId, sock: SecureSocketSend) {
         debug!("{:?} // Connected TX to peer {:?}", self.id, peer_id);
 
         let conn_handle = match sock {
             SecureSocketSend::Async(socket) => {
                 peer_sending_threads::initialize_async_sending_task_for(
+                    Arc::clone(self),
                     peer_id.clone(),
                     socket,
                     self.comm_stats.clone(),
@@ -1342,10 +1345,11 @@ impl<D> Node<D>
             }
             SecureSocketSend::Sync(socket) => {
                 peer_sending_threads::initialize_sync_sending_thread_for(
+                    Arc::clone(self),
                     peer_id.clone(),
                     socket,
                     self.comm_stats.clone(),
-                    self.sent_rqs.clone()
+                    self.sent_rqs.clone(),
                 )
             }
         };
@@ -1881,7 +1885,10 @@ impl<D> Node<D>
 
             let msg = Message::System(header, message);
 
-            client.push_request(msg).await;
+            if let Error(err) = client.push_request(msg).await {
+                error!("{:?} // Channel closed, closing tcp connection as well to peer {:?}. {:?}", self.id(), peer_id, err);
+                break;
+            }
 
             if let Some(comm_stats) = &self.comm_stats {
                 comm_stats.register_rq_received(peer_id);
@@ -1991,7 +1998,10 @@ impl<D> Node<D>
 
             let msg = Message::System(header, message);
 
-            client.push_request_sync(msg);
+            if let Error(err) = client.push_request_sync(msg) {
+                error!("{:?} // Channel closed, closing tcp connection as well to peer {:?}. {:?}", self.id(), peer_id, err);
+                break;
+            };
 
             if let Some(comm_stats) = &self.comm_stats {
                 comm_stats.register_rq_received(peer_id);
@@ -2276,7 +2286,7 @@ impl<D> SendTo<D>
 
     fn value_sync(self,
                   m: Either<(u64, Digest, Buf), (SystemMessage<D::State, D::Request, D::Reply>, u64, Digest, Buf)>,
-                    rq_key: Option<u64>) {
+                  rq_key: Option<u64>) {
         match self {
             SendTo::Me { my_id, shared: ref sh, tx } => {
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
@@ -2367,7 +2377,9 @@ impl<D> SendTo<D>
         ).into_inner();
 
         // send
-        cli.push_request_sync(Message::System(h, m));
+        if let Error(err) = cli.push_request_sync(Message::System(h, m)) {
+            error!("{:?} // Failed to push to myself!", my_id);
+        };
     }
 
     async fn me(
@@ -2390,7 +2402,9 @@ impl<D> SendTo<D>
         ).into_inner();
 
         // send
-        cli.push_request(Message::System(h, m)).await;
+        if let Error(err) = cli.push_request(Message::System(h, m)).await {
+            error!("{:?} // Failed to push to myself!", my_id);
+        };
     }
 
     async fn peers(
@@ -2530,8 +2544,13 @@ impl<D> SerializedSendTo<D>
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>, ) {
         let (original, _) = m.into_inner();
 
+        let myself = h.from;
+
         // send to ourselves
-        cli.push_request_sync(Message::System(h, original));
+        let Err(err) = cli.push_request_sync(Message::System(h, original))
+        {
+            error!("{:?} // FAILED TO SEND TO MYSELF {:?}", myself, err);
+        }
     }
 
     async fn me(
@@ -2541,8 +2560,12 @@ impl<D> SerializedSendTo<D>
     ) {
         let (original, _) = m.into_inner();
 
+        let myself = h.from;
+
         // send to ourselves
-        cli.push_request(Message::System(h, original)).await;
+        if let Err(err) = cli.push_request(Message::System(h, original)).await {
+            error!("{:?} // FAILED TO SEND TO MYSELF {:?}", myself, err);
+        }
     }
 
     fn peers_sync(

@@ -37,10 +37,12 @@ pub mod peer_handling_tests {
                 let arc = peer_ref.init_peer_conn(client_id);
 
                 for i in 0..REQUESTS_PER_CLI {
-                    arc.push_request(Message {
+                    if let Err(err) = arc.push_request(Message {
                         seq: i,
                         size: 0,
-                    }).await;
+                    }).await {
+                        panic!();
+                    }
 
                     if i % 1000 == 0 {
                         rt::yield_now().await;
