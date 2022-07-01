@@ -1634,6 +1634,8 @@ impl<D> Node<D>
                 let first_cli = first_cli.clone();
                 let my_id = my_id.clone();
 
+                debug!("{:?} // Received new connection", my_id);
+
                 threadpool::execute(move || {
                     rx_ref.rx_side_establish_conn_task_sync(first_cli, my_id, replica_acceptor, sock);
                 });
@@ -1720,6 +1722,8 @@ impl<D> Node<D>
             };
 
             let cpy_peer_id = peer_id.clone();
+
+            debug!("{:?} // Received new connection from id {:?}", my_id, peer_id);
 
             std::thread::Builder::new().name(format!("Reception thread client {:?}", peer_id)).spawn(move || {
                 self.handle_connected_rx_sync(peer_id, sock);
