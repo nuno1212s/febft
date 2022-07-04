@@ -1,39 +1,43 @@
 //! A module to manage the `febft` message log.
 
+use std::borrow::Borrow;
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
+use dashmap::DashMap;
+use intmap::IntMap;
+use log::debug;
+use parking_lot::{Mutex, RwLock};
 #[cfg(feature = "serialize_serde")]
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-use crate::bft::error::*;
-use crate::bft::cst::RecoveryState;
-use crate::bft::crypto::hash::Digest;
-use crate::bft::core::server::ViewInfo;
-use crate::bft::executable::UpdateBatch;
+use crate::bft::benchmarks::BatchMeta;
+use crate::bft::collections;
+use crate::bft::collections::{ConcurrentHashMap, HashMap};
 use crate::bft::communication::message::{
-    Header,
-    StoredMessage,
-    SystemMessage,
-    RequestMessage,
     ConsensusMessage,
     ConsensusMessageKind,
+    Header,
+    RequestMessage,
+    StoredMessage,
+    SystemMessage,
 };
-use crate::bft::collections::{
-    self,
-    HashMap,
-    OrderedMap,
-};
-use crate::bft::ordering::{
-    SeqNo,
-    Orderable,
-};
+use crate::bft::communication::NodeId;
+use crate::bft::core::server::ViewInfo;
+use crate::bft::crypto::hash::Digest;
+use crate::bft::cst::RecoveryState;
+use crate::bft::error::*;
+use crate::bft::executable::{Request, UpdateBatch};
+use crate::bft::ordering::{Orderable, SeqNo, tbo_pop_message};
 
 /// Checkpoint period.
 ///
 /// Every `PERIOD` messages, the message log is cleared,
 /// and a new log checkpoint is initiated.
-pub const PERIOD: u32 = 1000;
+pub const PERIOD: u32 = 120_000_000;
 
 /// Information reported after a logging operation.
 pub enum Info {
@@ -100,20 +104,20 @@ impl<S> Checkpoint<S> {
 /// Subset of a `Log`, containing only consensus messages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct DecisionLog {
+pub struct DecisionLog<O> {
     last_exec: Option<SeqNo>,
-    pre_prepares: Vec<StoredMessage<ConsensusMessage>>,
-    prepares: Vec<StoredMessage<ConsensusMessage>>,
-    commits: Vec<StoredMessage<ConsensusMessage>>,
+    pre_prepares: Vec<StoredMessage<ConsensusMessage<O>>>,
+    prepares: Vec<StoredMessage<ConsensusMessage<O>>>,
+    commits: Vec<StoredMessage<ConsensusMessage<O>>>,
 }
 
 /// Represents a single decision from the `DecisionLog`.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct Proof {
-    pre_prepare: StoredMessage<ConsensusMessage>,
-    prepares: Vec<StoredMessage<ConsensusMessage>>,
-    commits: Vec<StoredMessage<ConsensusMessage>>,
+pub struct Proof<O> {
+    pre_prepare: StoredMessage<ConsensusMessage<O>>,
+    prepares: Vec<StoredMessage<ConsensusMessage<O>>>,
+    commits: Vec<StoredMessage<ConsensusMessage<O>>>,
 }
 
 /// Contains a collection of `ViewDecisionPair` values,
@@ -144,24 +148,24 @@ impl WriteSet {
     /// Iterate over this `WriteSet`.
     ///
     /// Convenience method for calling `iter()` on the inner `Vec`.
-    pub fn iter(&self) -> impl Iterator<Item = &ViewDecisionPair> {
+    pub fn iter(&self) -> impl Iterator<Item=&ViewDecisionPair> {
         self.0.iter()
     }
 }
 
-impl Proof {
+impl<O> Proof<O> {
     /// Returns the `PRE-PREPARE` message of this `Proof`.
-    pub fn pre_prepare(&self) -> &StoredMessage<ConsensusMessage> {
+    pub fn pre_prepare(&self) -> &StoredMessage<ConsensusMessage<O>> {
         &self.pre_prepare
     }
 
     /// Returns the `PREPARE` message of this `Proof`.
-    pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage>] {
+    pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
         &self.prepares[..]
     }
 
     /// Returns the `COMMIT` message of this `Proof`.
-    pub fn commits(&self) -> &[StoredMessage<ConsensusMessage>] {
+    pub fn commits(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
         &self.commits[..]
     }
 }
@@ -192,22 +196,22 @@ impl IncompleteProof {
 /// Corresponds to the class of the same name in `BFT-SMaRt`.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct CollectData {
+pub struct CollectData<O> {
     incomplete_proof: IncompleteProof,
-    last_proof: Option<Proof>,
+    last_proof: Option<Proof<O>>,
 }
 
-impl CollectData {
+impl<O> CollectData<O> {
     pub fn incomplete_proof(&self) -> &IncompleteProof {
         &self.incomplete_proof
     }
 
-    pub fn last_proof(&self) -> Option<&Proof> {
+    pub fn last_proof(&self) -> Option<&Proof<O>> {
         self.last_proof.as_ref()
     }
 }
 
-impl DecisionLog {
+impl<O: Clone> DecisionLog<O> {
     /// Returns a brand new `DecisionLog`.
     pub fn new() -> Self {
         Self {
@@ -228,24 +232,24 @@ impl DecisionLog {
 
     /// Returns the list of `PRE-PREPARE` messages after the last checkpoint
     /// at the moment of the creation of this `DecisionLog`.
-    pub fn pre_prepares(&self) -> &[StoredMessage<ConsensusMessage>] {
+    pub fn pre_prepares(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
         &self.pre_prepares[..]
     }
 
     /// Returns the list of `PREPARE` messages after the last checkpoint
     /// at the moment of the creation of this `DecisionLog`.
-    pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage>] {
+    pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
         &self.prepares[..]
     }
 
     /// Returns the list of `COMMIT` messages after the last checkpoint
     /// at the moment of the creation of this `DecisionLog`.
-    pub fn commits(&self) -> &[StoredMessage<ConsensusMessage>] {
+    pub fn commits(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
         &self.commits[..]
     }
 
     // TODO: quorum sizes may differ when we implement reconfiguration
-    pub fn collect_data(&self, view: ViewInfo) -> CollectData {
+    pub fn collect_data(&self, view: ViewInfo) -> CollectData<O> {
         CollectData {
             incomplete_proof: self.to_be_decided(view),
             last_proof: self.last_decision(view),
@@ -277,7 +281,7 @@ impl DecisionLog {
                             stored.message().view(),
                             stored.header().digest().clone(),
                         ));
-                    },
+                    }
                     Ordering::Less => break,
                     // impossible, because we are executing `in_exec`
                     Ordering::Greater => unreachable!(),
@@ -313,7 +317,7 @@ impl DecisionLog {
                                 digest,
                             ));
                         }
-                    },
+                    }
                     Ordering::Less => break,
                     // impossible, because we are executing `in_exec`
                     Ordering::Greater => unreachable!(),
@@ -328,7 +332,7 @@ impl DecisionLog {
 
     /// Returns the proof of the last executed consensus
     /// instance registered in this `DecisionLog`.
-    pub fn last_decision(&self, view: ViewInfo) -> Option<Proof> {
+    pub fn last_decision(&self, view: ViewInfo) -> Option<Proof<O>> {
         let last_exec = self.last_exec?;
 
         let pre_prepare = 'outer: loop {
@@ -410,12 +414,12 @@ impl DecisionLog {
         &mut self,
         in_exec: SeqNo,
         value: Option<&Digest>,
-    ) -> Option<StoredMessage<ConsensusMessage>> {
+    ) -> Option<StoredMessage<ConsensusMessage<O>>> {
         let mut scratch = Vec::with_capacity(8);
 
         fn clear_log<M>(in_exec: SeqNo, scratch: &mut Vec<usize>, log: &mut Vec<StoredMessage<M>>)
-        where
-            M: Orderable,
+            where
+                M: Orderable,
         {
             for (i, stored) in log.iter().enumerate().rev() {
                 if stored.message().sequence_number() != in_exec {
@@ -452,10 +456,10 @@ impl DecisionLog {
                     Some(j) if i == j => {
                         pre_prepare = Some(self.pre_prepares.swap_remove(i));
                         pre_prepare_i = None;
-                    },
+                    }
                     _ => {
                         self.pre_prepares.swap_remove(i);
-                    },
+                    }
                 }
             }
 
@@ -470,58 +474,91 @@ impl DecisionLog {
 
 /// Represents a log of messages received by the BFT system.
 pub struct Log<S, O, P> {
-    curr_seq: SeqNo,
+    node_id: NodeId,
+    //This item will only be accessed by the replica request thread
+    curr_seq: Cell<SeqNo>,
     batch_size: usize,
-    declog: DecisionLog,
-    requests: OrderedMap<Digest, StoredMessage<RequestMessage<O>>>,
-    deciding: HashMap<Digest, StoredMessage<RequestMessage<O>>>,
-    decided: Vec<O>,
-    checkpoint: CheckpointState<S>,
+    //This will only be accessed by the replica processing thread since requests will only be
+    //Decided by the consensus protocol, which operates completly in the replica thread
+    declog: RefCell<DecisionLog<O>>,
+    //This item will also be accessed from both the client request thread and the
+    //replica request thread. However the client request thread will always only read
+    //And the replica request thread writes and reads from it
+    latest_op: Mutex<IntMap<SeqNo>>,
+    ///TODO: Implement a concurrent IntMap and replace this one with it
+    //This item will be accessed from both the client request thread and the
+    //Replica request thread
+    //This stores all requests
+    requests: ConcurrentHashMap<Digest, StoredMessage<RequestMessage<O>>>,
+    //Stores just request batches. Much faster than individually storing all the requests and
+    //Then having to always access them one by one
+    request_batches: ConcurrentHashMap<Digest, Vec<StoredMessage<RequestMessage<O>>>>,
+    //This will only be accessed from the replica request thread so we can wrap it
+    //In a simple cell
+    decided: RefCell<Vec<O>>,
+    checkpoint: RefCell<CheckpointState<S>>,
+    //Some stuff for statistics.
+    meta: Arc<Mutex<BatchMeta>>,
     _marker: PhantomData<P>,
 }
+
+///Justification/Sketch of proof:
+/// The current sequence number, decision log, decided and checkpoint
+/// Will only be accessed by the replica request thread, since they require communication
+/// from the other threads and actual consensus to be reached.
+/// The requests, latest_op and batch meta can be accessed and altered by both the replica request thread
+/// and the client request thread, so we protected only those fields
+unsafe impl<S, O, P> Sync for Log<S, O, P> {}
 
 // TODO:
 // - garbage collect the log
 // - save the log to persistent storage
-impl<S, O, P> Log<S, O, P> {
+impl<S, O: Clone, P> Log<S, O, P> {
     /// Creates a new message log.
     ///
     /// The value `batch_size` represents the maximum number of
     /// client requests to queue before executing a consensus instance.
-    pub fn new(batch_size: usize) -> Self {
-        Self {
+    pub fn new(node: NodeId, batch_size: usize) -> Arc<Self> {
+        Arc::new(Self {
+            node_id: node,
             batch_size,
-            curr_seq: SeqNo::ZERO,
-            declog: DecisionLog::new(),
-            deciding: collections::hash_map_capacity(batch_size),
+            curr_seq: Cell::new(SeqNo::ZERO),
+            latest_op: Mutex::new(IntMap::new()),
+            declog: RefCell::new(DecisionLog::new()),
             // TODO: use config value instead of const
-            decided: Vec::with_capacity(PERIOD as usize),
-            requests: collections::ordered_map(),
-            checkpoint: CheckpointState::None,
+            decided: RefCell::new(Vec::with_capacity(PERIOD as usize)),
+            requests: collections::concurrent_hash_map_with_capacity(PERIOD as usize),
+            request_batches: collections::concurrent_hash_map(),
+            checkpoint: RefCell::new(CheckpointState::None),
+            meta: Arc::new(Mutex::new(BatchMeta::new())),
             _marker: PhantomData,
-        }
+        })
+    }
+
+    pub fn latest_op(&self) -> &Mutex<IntMap<SeqNo>> {
+        &self.latest_op
+    }
+
+    pub fn batch_meta(&self) -> &Arc<Mutex<BatchMeta>> {
+        &self.meta
     }
 
     /// Returns a reference to a subset of this log, containing only
     /// consensus messages.
-    pub fn decision_log(&self) -> &DecisionLog {
+    pub fn decision_log(&self) -> &RefCell<DecisionLog<O>> {
         &self.declog
     }
 
-    /// Returns a mutable reference to a subset of this log, containing
-    /// only consensus messages.
-    pub fn decision_log_mut(&mut self) -> &mut DecisionLog {
-        &mut self.declog
-    }
-
     /// Update the log state, received from the CST protocol.
-    pub fn install_state(&mut self, last_seq: SeqNo, rs: RecoveryState<S, O>) {
+    pub fn install_state(&self, last_seq: SeqNo, mut rs: RecoveryState<S, O>) {
         // FIXME: what to do with `self.deciding`..?
 
-        self.declog = rs.declog;
-        self.decided = rs.requests;
-        self.checkpoint = CheckpointState::Complete(rs.checkpoint);
-        self.curr_seq = last_seq;
+        //Replace the log
+        self.declog.replace(rs.declog);
+
+        self.decided.replace(rs.requests);
+        self.checkpoint.replace(CheckpointState::Complete(rs.checkpoint));
+        self.curr_seq.replace(last_seq);
     }
 
     /// Take a snapshot of the log, used to recover a replica.
@@ -533,101 +570,110 @@ impl<S, O, P> Log<S, O, P> {
     // it, which can be quite expensive
     //
     pub fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<S, O>>
-    where
-        S: Clone,
-        O: Clone,
+        where
+            S: Clone,
+            O: Clone,
     {
-        match self.checkpoint {
-            CheckpointState::Complete(ref checkpoint) => {
+        match &*self.checkpoint.borrow() {
+            CheckpointState::Complete(checkpoint) => {
                 Ok(RecoveryState::new(
                     view,
                     checkpoint.clone(),
-                    self.decided.clone(),
-                    self.declog.clone(),
+                    self.decided.borrow().clone(),
+                    self.declog.borrow().clone(),
                 ))
-            },
+            }
             _ => Err("Checkpoint to be finalized").wrapped(ErrorKind::ConsensusLog),
         }
     }
 
-/*
-    /// Replaces the current `Log` with an empty one, and returns
-    /// the replaced instance.
-    pub fn take(&mut self) -> Self {
-        std::mem::replace(self, Log::new())
-    }
-*/
+    /*
+        /// Replaces the current `Log` with an empty one, and returns
+        /// the replaced instance.
+        pub fn take(&mut self) -> Self {
+            std::mem::replace(self, Log::new())
+        }
+    */
 
     /// Adds a new `message` and its respective `header` to the log.
-    pub fn insert(&mut self, header: Header, message: SystemMessage<S, O, P>) {
+    pub fn insert(&self, header: Header, message: SystemMessage<S, O, P>) {
         match message {
             SystemMessage::Request(message) => {
+                let key = operation_key::<O>(&header, &message);
+
+                let latest_op_guard = self.latest_op.lock();
+
+                let seq_no = latest_op_guard
+                    .get(key)
+                    .copied()
+                    .unwrap_or(SeqNo::ZERO);
+
+                drop(latest_op_guard);
+
+                // avoid executing earlier requests twice
+                if message.sequence_number() < seq_no {
+                    return;
+                }
+
                 let digest = header.unique_digest();
                 let stored = StoredMessage::new(header, message);
+
                 self.requests.insert(digest, stored);
-                self.deciding.remove(&digest);
-            },
+            }
             SystemMessage::Consensus(message) => {
+                //These messages can only be sent by replicas, so the dec_log
+                //Is only accessed by one thread.
                 let stored = StoredMessage::new(header, message);
+
+                let mut dec_log = self.declog.borrow_mut();
+
                 match stored.message().kind() {
-                    ConsensusMessageKind::PrePrepare(_) => self.declog.pre_prepares.push(stored),
-                    ConsensusMessageKind::Prepare(_) => self.declog.prepares.push(stored),
-                    ConsensusMessageKind::Commit(_) => self.declog.commits.push(stored),
+                    ConsensusMessageKind::PrePrepare(_) => dec_log.pre_prepares.push(stored),
+                    ConsensusMessageKind::Prepare(_) => dec_log.prepares.push(stored),
+                    ConsensusMessageKind::Commit(_) => dec_log.commits.push(stored),
                 }
-            },
+            }
             // rest are not handled by the log
             _ => (),
         }
     }
 
-    /// Retrieves the next batch of requests available for proposing, if any.
-    pub fn next_batch(&mut self) -> Option<Vec<Digest>> {
-        let (digest, stored) = self.requests.pop_front()?;
-        self.deciding.insert(digest, stored);
-        // TODO:
-        // - we may include another condition here to decide on a
-        // smaller batch size, so that client request latency is lower
-        // - prevent non leader replicas from collecting a batch of digests,
-        // as only the leader will actually propose!
-        if self.deciding.len() >= self.batch_size {
-            Some(self.deciding
-                .keys()
-                .copied()
-                .take(self.batch_size)
-                .collect())
-        } else {
-            None
+    pub fn insert_batched(&self, batch_digest: Digest, batch: Vec<StoredMessage<RequestMessage<O>>>) {
+        self.request_batches.insert(batch_digest, batch);
+    }
+
+    pub fn take_batched_requests(&self, batch_digest: &Digest) -> Option<Vec<StoredMessage<RequestMessage<O>>>> {
+        match self.request_batches.remove(batch_digest) {
+            None => {
+                None
+            }
+            Some((digest, batch)) => {
+                Some(batch)
+            }
         }
     }
 
     /// Retrieves a batch of requests to be proposed during a view change.
-    pub fn view_change_propose(&self) -> Vec<Digest> {
-        self.requests
-            .keys()
-            .chain(self.deciding.keys())
-            .take(self.batch_size)
-            .cloned()
-            .collect()
+    pub fn view_change_propose(&self) -> Vec<StoredMessage<RequestMessage<O>>> {
+        todo!()
+
+        //COLLECT ALL REQUESTS FROM THE MAP
     }
 
     /// Checks if this `Log` has a particular request with the given `digest`.
     pub fn has_request(&self, digest: &Digest) -> bool {
-        match () {
-            _ if self.deciding.contains_key(digest) => true,
-            _ if self.requests.contains_key(digest) => true,
-            _ => false,
-        }
+        self.requests.contains_key(digest)
     }
 
     /// Clone the requests corresponding to the provided list of hash digests.
     pub fn clone_requests(&self, digests: &[Digest]) -> Vec<StoredMessage<RequestMessage<O>>>
-    where
-        O: Clone,
+        where
+            O: Clone,
     {
         digests
             .iter()
-            .flat_map(|d| self.deciding.get(d).or_else(|| self.requests.get(d)))
-            .cloned()
+            .flat_map(|d| self.requests.get(d))
+            .map(|rq_ref| rq_ref.value().clone())
             .collect()
     }
 
@@ -637,38 +683,82 @@ impl<S, O, P> Log<S, O, P> {
     ///
     /// The log may be cleared resulting from this operation. Check the enum variant of
     /// `Info`, to perform a local checkpoint when appropriate.
-    pub fn finalize_batch(&mut self, seq: SeqNo, digests: &[Digest]) -> Result<(Info, UpdateBatch<O>)>
-    where
-        O: Clone,
+    pub fn finalize_batch(&self, seq: SeqNo, batch_digest: Digest, digests: &[Digest])
+                          -> Result<(Info, UpdateBatch<O>)>
     {
-        let mut batch = UpdateBatch::new();
-        for digest in digests {
-            let (header, message) = self.deciding
-                .remove(digest)
-                .or_else(|| self.requests.remove(digest))
-                .map(StoredMessage::into_inner)
-                .ok_or(Error::simple(ErrorKind::ConsensusLog))?;
-            batch.add(header.from(), digest.clone(), message.into_inner());
+        //println!("Finalized batch of OPS seq {:?} on Node {:?}", seq, self.node_id);
+
+        let mut rqs;
+
+        match self.take_batched_requests(&batch_digest) {
+            None => {
+                debug!("Could not find batched requests, having to go 1 by 1");
+
+                rqs = Vec::with_capacity(digests.len());
+
+                for digest in digests {
+                    let message = self.requests
+                        .remove(digest)
+                        .map(|f| f.1)
+                        .ok_or(Error::simple_with_msg(ErrorKind::ConsensusLog,
+                                                      "Request not present in log when finalizing"))?;
+
+                    rqs.push(message);
+                }
+            }
+            Some(requests) => {
+                rqs = requests;
+            }
         }
 
-        // TODO: optimize batch cloning, as this can take
-        // several ms if the batch size is large, and each
-        // request also large
-        for update in batch.as_ref() {
-            self.decided.push(update.operation().clone());
+        {
+            //Encase in a scope to limit the action of the borrow
+            let mut guard = self.decided.borrow_mut();
+
+            for request in &rqs {
+                guard.push(request.message().operation().clone());
+            }
         }
 
-        // retrive the sequence number stored within the PRE-PREPARE message
+        // let mut latest_op_guard = self.latest_op().lock();
+
+        let mut batch = UpdateBatch::new_with_cap(rqs.len());
+
+        for x in rqs {
+            let (header, message) = x.into_inner();
+
+            let key = operation_key::<O>(&header, &message);
+
+            // let seq_no = latest_op_guard
+            //     .get(key)
+            //     .unwrap_or(&SeqNo::ZERO);
+            //
+            // if message.sequence_number() > *seq_no {
+            //     latest_op_guard.insert(key, message.sequence_number());
+            // }
+
+            batch.add(
+                header.from(),
+                message.session_id(),
+                message.sequence_number(),
+                message.into_inner_operation(),
+            );
+        }
+
+        // retrieve the sequence number stored within the PRE-PREPARE message
         // pertaining to the current request being executed
-        let last_seq_no = if self.declog.pre_prepares.len() > 0 {
+        let mut dec_log_guard = self.declog.borrow_mut();
+
+        let last_seq_no = if dec_log_guard.pre_prepares.len() > 0 {
             let stored_pre_prepare =
-                &self.declog.pre_prepares[self.declog.pre_prepares.len()-1].message();
+                &dec_log_guard.pre_prepares[dec_log_guard.pre_prepares.len() - 1].message();
             stored_pre_prepare.sequence_number()
         } else {
             // the log was cleared concurrently, retrieve
             // the seq number stored before the log was cleared
-            self.curr_seq
+            self.curr_seq.get()
         };
+
         let last_seq_no_u32 = u32::from(last_seq_no);
 
         let info = if last_seq_no_u32 > 0 && last_seq_no_u32 % PERIOD == 0 {
@@ -678,21 +768,22 @@ impl<S, O, P> Log<S, O, P> {
         };
 
         // the last executed sequence number
-        self.declog.last_exec = Some(seq);
+        dec_log_guard.last_exec = Some(seq);
 
         Ok((info, batch))
     }
 
-    fn begin_checkpoint(&mut self, seq: SeqNo) -> Result<Info> {
-        let earlier = std::mem::replace(&mut self.checkpoint, CheckpointState::None);
-        self.checkpoint = match earlier {
+    fn begin_checkpoint(&self, seq: SeqNo) -> Result<Info> {
+        let earlier = self.checkpoint.replace(CheckpointState::None);
+
+        self.checkpoint.replace(match earlier {
             CheckpointState::None => CheckpointState::Partial { seq },
             CheckpointState::Complete(earlier) => CheckpointState::PartialWithEarlier { seq, earlier },
             // FIXME: this may not be an invalid state after all; we may just be generating
             // checkpoints too fast for the execution layer to keep up, delivering the
             // hash digests of the appstate
             _ => return Err("Invalid checkpoint state detected").wrapped(ErrorKind::ConsensusLog),
-        };
+        });
         Ok(Info::BeginCheckpoint)
     }
 
@@ -701,40 +792,56 @@ impl<S, O, P> Log<S, O, P> {
     /// This method should only be called when `finalize_request()` reports
     /// `Info::BeginCheckpoint`, and the requested application state is received
     /// on the core server task's master channel.
-    pub fn finalize_checkpoint(&mut self, appstate: S) -> Result<()> {
-        match self.checkpoint {
+    pub fn finalize_checkpoint(&self, appstate: S) -> Result<()> {
+        match *self.checkpoint.borrow() {
             CheckpointState::None => Err("No checkpoint has been initiated yet").wrapped(ErrorKind::ConsensusLog),
             CheckpointState::Complete(_) => Err("Checkpoint already finalized").wrapped(ErrorKind::ConsensusLog),
             CheckpointState::Partial { ref seq } | CheckpointState::PartialWithEarlier { ref seq, .. } => {
                 let seq = *seq;
-                self.checkpoint = CheckpointState::Complete(Checkpoint {
+
+                self.checkpoint.replace(CheckpointState::Complete(Checkpoint {
                     seq,
                     appstate,
-                });
-                self.decided.clear();
+                }));
+
+                self.decided.borrow_mut().clear();
                 //
                 // NOTE: workaround bug where when we clear the log,
                 // we remove the PRE-PREPARE of an on-going request
                 //
                 // FIXME: the log should not be cleared until a request is over
                 //
-                match self.declog.pre_prepares.pop() {
+                let mut guard = self.declog.borrow_mut();
+
+                match guard.pre_prepares.pop() {
                     Some(last_pre_prepare) => {
-                        self.declog.pre_prepares.clear();
+                        guard.pre_prepares.clear();
 
                         // store the id of the last received pre-prepare,
                         // which corresponds to the request currently being
                         // processed
-                        self.curr_seq = last_pre_prepare.message().sequence_number();
-                    },
+                        self.curr_seq.replace(last_pre_prepare.message().sequence_number());
+                    }
                     None => {
                         // no stored PRE-PREPARE messages, NOOP
-                    },
+                    }
                 }
-                self.declog.prepares.clear();
-                self.declog.commits.clear();
+
+                guard.prepares.clear();
+                guard.commits.clear();
+
                 Ok(())
-            },
+            }
         }
     }
+}
+
+#[inline]
+pub fn operation_key<O>(header: &Header, message: &RequestMessage<O>) -> u64 {
+    // both of these values are 32-bit in width
+    let client_id: u64 = header.from().into();
+    let session_id: u64 = message.session_id().into();
+
+    // therefore this is safe, and will not delete any bits
+    client_id | (session_id << 32)
 }

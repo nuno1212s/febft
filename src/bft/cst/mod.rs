@@ -7,6 +7,7 @@
 // consensus sequence number
 
 use std::cmp::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(feature = "serialize_serde")]
@@ -69,14 +70,14 @@ pub struct RecoveryState<S, O> {
     // the request batches have been concatenated,
     // for memory efficiency
     pub(crate) requests: Vec<O>,
-    pub(crate) declog: DecisionLog,
+    pub(crate) declog: DecisionLog<O>,
 }
 
 /// Allow a replica to recover from the state received by peer nodes.
 pub fn install_recovery_state<S>(
     recovery_state: RecoveryState<State<S>, Request<S>>,
-    synchronizer: &mut Synchronizer<S>,
-    log: &mut Log<State<S>, Request<S>, Reply<S>>,
+    synchronizer: &Synchronizer<S>,
+    log: &Log<State<S>, Request<S>, Reply<S>>,
     executor: &mut ExecutorHandle<S>,
     consensus: &mut Consensus<S>,
 ) -> Result<()>
@@ -113,7 +114,7 @@ impl<S, O> RecoveryState<S, O> {
         view: ViewInfo,
         checkpoint: Checkpoint<S>,
         requests: Vec<O>,
-        declog: DecisionLog,
+        declog: DecisionLog<O>,
     ) -> Self {
         Self {
             view,
@@ -140,7 +141,7 @@ impl<S, O> RecoveryState<S, O> {
     }
 
     /// Returns a reference to the decided consensus messages of this recovery state.
-    pub fn decision_log(&self) -> &DecisionLog {
+    pub fn decision_log(&self) -> &DecisionLog<O> {
         &self.declog
     }
 }
@@ -250,9 +251,9 @@ where
         message: CstMessage<State<S>, Request<S>>,
         synchronizer: &Synchronizer<S>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
-        node: &mut Node<S::Data>,
+        node: &Node<S::Data>,
     ) {
-        let snapshot = match log.snapshot(*synchronizer.view()) {
+        let snapshot = match log.snapshot(synchronizer.view()) {
             Ok(snapshot) => snapshot,
             Err(_) => {
                 self.phase = ProtoPhase::WaitingCheckpoint(header, message);
@@ -263,7 +264,7 @@ where
             message.sequence_number(),
             CstMessageKind::ReplyState(snapshot),
         ));
-        node.send(reply, header.from());
+        node.send(reply, header.from(), true);
     }
 
     /// Advances the state of the CST state machine.
@@ -273,7 +274,7 @@ where
         synchronizer: &Synchronizer<S>,
         consensus: &Consensus<S>,
         log: &Log<State<S>, Request<S>, Reply<S>>,
-        node: &mut Node<S::Data>,
+        node: &Node<S::Data>,
     ) -> CstStatus<State<S>, Request<S>> {
         match self.phase {
             ProtoPhase::WaitingCheckpoint(_, _) => {
@@ -292,7 +293,7 @@ where
                             message.sequence_number(),
                             kind,
                         ));
-                        node.send(reply, header.from());
+                        node.send(reply, header.from(), true);
                     },
                     CstMessageKind::RequestState => {
                         self.process_reply_state(header, message, synchronizer, log, node);
@@ -471,7 +472,8 @@ where
         &mut self,
         synchronizer: &Synchronizer<S>,
         timeouts: &TimeoutsHandle<S>,
-        node: &mut Node<S::Data>,
+        node: &Node<S::Data>,
+        log: &Log<State<S>, Request<S>, Reply<S>>
     ) {
         // reset state of latest seq no. request
         self.latest_cid = SeqNo::ZERO;
@@ -486,6 +488,7 @@ where
             CstMessageKind::RequestLatestConsensusSeq,
         ));
         let targets = NodeId::targets(0..synchronizer.view().params().n());
+
         node.broadcast(message, targets);
     }
 
@@ -494,7 +497,8 @@ where
         &mut self,
         synchronizer: &Synchronizer<S>,
         timeouts: &TimeoutsHandle<S>,
-        node: &mut Node<S::Data>,
+        node: &Node<S::Data>,
+        log: &Log<State<S>, Request<S>, Reply<S>>
     ) {
         // reset hashmap of received states
         self.received_states.clear();

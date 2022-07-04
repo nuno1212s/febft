@@ -1,15 +1,17 @@
 //! Abstractions over different crypto hash digest algorithms.
 
+use std::fmt::{Debug, Formatter};
+
+#[cfg(feature = "serialize_serde")]
+use serde::{Deserialize, Serialize};
+
+use crate::bft::error::*;
+
 #[cfg(feature = "crypto_hash_ring_sha2")]
 mod ring_sha2;
 
 #[cfg(feature = "crypto_hash_blake3_blake3")]
 mod blake3_blake3;
-
-#[cfg(feature = "serialize_serde")]
-use serde::{Serialize, Deserialize};
-
-use crate::bft::error::*;
 
 /// The type `Context` represents an on-going hash digest calculation.
 pub struct Context {
@@ -21,7 +23,7 @@ pub struct Context {
 }
 
 /// Represents a hash digest.
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Hash, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 #[repr(transparent)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct Digest {
@@ -39,10 +41,10 @@ impl Context {
     pub fn new() -> Self {
         let inner = {
             #[cfg(feature = "crypto_hash_ring_sha2")]
-            { ring_sha2::Context::new() }
+                { ring_sha2::Context::new() }
 
             #[cfg(feature = "crypto_hash_blake3_blake3")]
-            { blake3_blake3::Context::new() }
+                { blake3_blake3::Context::new() }
         };
         Context { inner }
     }
@@ -63,20 +65,20 @@ impl Digest {
     /// The length of the `Digest` in bytes.
     pub const LENGTH: usize = {
         #[cfg(feature = "crypto_hash_ring_sha2")]
-        { ring_sha2::Digest::LENGTH }
+            { ring_sha2::Digest::LENGTH }
 
         #[cfg(feature = "crypto_hash_blake3_blake3")]
-        { blake3_blake3::Digest::LENGTH }
+            { blake3_blake3::Digest::LENGTH }
     };
 
     /// Constructs a `Digest` from a byte buffer of appropriate size.
     pub fn from_bytes(raw_bytes: &[u8]) -> Result<Self> {
         let inner = {
             #[cfg(feature = "crypto_hash_ring_sha2")]
-            { ring_sha2::Digest::from_bytes(raw_bytes) }
+                { ring_sha2::Digest::from_bytes(raw_bytes) }
 
             #[cfg(feature = "crypto_hash_blake3_blake3")]
-            { blake3_blake3::Digest::from_bytes(raw_bytes) }
+                { blake3_blake3::Digest::from_bytes(raw_bytes) }
         }?;
         Ok(Digest { inner })
     }
@@ -93,6 +95,12 @@ impl Digest {
 impl AsRef<[u8]> for Digest {
     fn as_ref(&self) -> &[u8] {
         self.inner.as_ref()
+    }
+}
+
+impl Debug for Digest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:x?}", self.inner.as_ref().chunks(4).next().unwrap())
     }
 }
 

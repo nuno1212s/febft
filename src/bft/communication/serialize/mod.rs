@@ -8,8 +8,6 @@
 
 use std::io::{Read, Write};
 
-use smallvec::SmallVec;
-
 use crate::bft::error::*;
 use crate::bft::crypto::hash::{Context, Digest};
 use crate::bft::communication::message::SystemMessage;
@@ -19,18 +17,20 @@ use crate::bft::communication::message::SystemMessage;
 ///
 /// Both clients and replicas should implement this trait,
 /// to communicate with each other.
-pub trait SharedData {
+/// This data type must be Send since it will be sent across
+/// threads for processing and follow up reception
+pub trait SharedData : Send {
     /// The application state, which is mutated by client
     /// requests.
-    type State;
+    type State: Send + Clone;
 
     /// Represents the requests forwarded to replicas by the
     /// clients of the BFT system.
-    type Request;
+    type Request: Send + Clone;
 
     /// Represents the replies forwarded to clients by replicas
     /// in the BFT system.
-    type Reply;
+    type Reply: Send + Clone;
 
     /// Serialize a wire message into the writer `W`.
     fn serialize_message<W>(w: W, m: &SystemMessage<Self::State, Self::Request, Self::Reply>) -> Result<()>
@@ -54,10 +54,10 @@ pub trait SharedData {
 }
 
 // max no. of bytes to inline before doing a heap alloc
-const NODE_BUFSIZ: usize = 16384;
+//const NODE_BUFSIZ: usize = 16384;
 
 /// The buffer type used to serialize messages into.
-pub type Buf = SmallVec<[u8; NODE_BUFSIZ]>;
+pub type Buf = Vec<u8>;
 
 /// Extension of `SharedData` to obtain hash digests.
 pub trait DigestData: SharedData {

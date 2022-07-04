@@ -9,7 +9,7 @@ pub struct Context {
     inner: blake3::Hasher,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Hash, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 #[repr(transparent)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct Digest([u8; Digest::LENGTH]);

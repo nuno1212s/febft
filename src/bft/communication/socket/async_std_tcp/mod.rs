@@ -71,3 +71,37 @@ impl Listener {
             .map(|(inner, _)| Socket { inner })
     }
 }
+
+#[cfg(windows)]
+mod sys {
+    use std::os::windows::io::{RawSocket, AsRawSocket};
+
+    impl AsRawSocket for super::Socket {
+        fn as_raw_socket(&self) -> RawSocket {
+            self.inner.as_raw_socket()
+        }
+    }
+
+    impl AsRawSocket for super::Listener {
+        fn as_raw_socket(&self) -> RawSocket {
+            self.inner.as_raw_socket()
+        }
+    }
+}
+
+#[cfg(unix)]
+mod sys {
+    use std::os::unix::io::{RawFd, AsRawFd};
+
+    impl AsRawFd for super::Socket {
+        fn as_raw_fd(&self) -> RawFd {
+            self.inner.as_raw_fd()
+        }
+    }
+
+    impl AsRawFd for super::Listener {
+        fn as_raw_fd(&self) -> RawFd {
+            self.inner.as_raw_fd()
+        }
+    }
+}

@@ -2,9 +2,9 @@ mod common;
 
 use common::*;
 
+use intmap::IntMap;
+
 use febft::bft::prng;
-use febft::bft::threadpool;
-use febft::bft::collections::HashMap;
 use febft::bft::communication::NodeId;
 use febft::bft::async_runtime as rt;
 use febft::bft::{
@@ -19,6 +19,7 @@ use febft::bft::crypto::signature::{
 fn main() {
     let conf = InitConfig {
         async_threads: num_cpus::get(),
+        threadpool_threads: num_cpus::get(),
     };
     let _guard = unsafe { init(conf).unwrap() };
     rt::block_on(async_main());
@@ -27,35 +28,29 @@ fn main() {
 async fn async_main() {
     let id = NodeId::from(1000u32);
 
-    let mut secret_keys: HashMap<NodeId, KeyPair> = [0u32, 1, 2, 3, 1000]
-        .iter()
+    let mut secret_keys: IntMap<KeyPair> = std::iter::IntoIterator::into_iter([0u64, 1, 2, 3, 1000])
         .zip(sk_stream())
-        .map(|(&id, sk)| (NodeId::from(id), sk))
         .collect();
-    let public_keys: HashMap<NodeId, PublicKey> = secret_keys
+    let public_keys: IntMap<PublicKey> = secret_keys
         .iter()
         .map(|(id, sk)| (*id, sk.public_key().into()))
         .collect();
 
-    let pool = threadpool::Builder::new()
-        .num_threads(4)
-        .build();
-
-    let sk = secret_keys.remove(&id).unwrap();
+    let sk = secret_keys.remove(id.into()).unwrap();
     drop(secret_keys);
 
     let addrs = map! {
         // replicas
-        NodeId::from(0u32) => addr!("cop01" => "127.0.0.1:10001"),
-        NodeId::from(1u32) => addr!("cop02" => "127.0.0.1:10002"),
-        NodeId::from(2u32) => addr!("cop03" => "127.0.0.1:10003"),
-        NodeId::from(3u32) => addr!("cop04" => "127.0.0.1:10004"),
+        0 => addr!("cop01" => "127.0.0.1:10001"),
+        1 => addr!("cop02" => "127.0.0.1:10002"),
+        2 => addr!("cop03" => "127.0.0.1:10003"),
+        3 => addr!("cop04" => "127.0.0.1:10004"),
 
         // clients
-        NodeId::from(1000u32) => addr!("cli1000" => "127.0.0.1:11000")
+        1000 => addr!("cli1000" => "127.0.0.1:11000")
     };
+
     let client = setup_client(
-        pool,
         id,
         sk,
         addrs,

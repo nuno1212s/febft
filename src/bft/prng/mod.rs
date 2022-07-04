@@ -4,11 +4,37 @@
 //! from David Blackman and Sebastiano Vigna. This source code is a one-to-one translation of their
 //! C code, released to the public domain.
 
+use std::cell::RefCell;
+use std::os::linux::raw::stat;
 use rand_core::{RngCore, OsRng};
+use thread_local::ThreadLocal;
 
 /// This type is a container for the 256-bit state of `xoshiro256**`.
 pub struct State {
     s: [u64; 4],
+}
+
+pub struct ThreadSafePrng {
+    rng: ThreadLocal<RefCell<State>>
+}
+
+impl ThreadSafePrng {
+
+    pub fn new() -> Self {
+        Self {
+            rng: ThreadLocal::new()
+        }
+    }
+
+    #[inline]
+    pub fn next_state(&self) -> u64 {
+        let state = self.rng.get_or(|| {
+            RefCell::new(State::new())
+        });
+
+        state.borrow_mut().next_state()
+    }
+
 }
 
 impl State {

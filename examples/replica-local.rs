@@ -1,9 +1,10 @@
 mod common;
 
+use std::fmt::format;
 use common::*;
 
-use febft::bft::threadpool;
-use febft::bft::collections::HashMap;
+use intmap::IntMap;
+
 use febft::bft::communication::NodeId;
 use febft::bft::async_runtime as rt;
 use febft::bft::{
@@ -18,59 +19,70 @@ use febft::bft::crypto::signature::{
 fn main() {
     let conf = InitConfig {
         async_threads: num_cpus::get(),
+        threadpool_threads: num_cpus::get(),
     };
     let _guard = unsafe { init(conf).unwrap() };
-    rt::block_on(async_main());
+
+    main_();
 }
 
-async fn async_main() {
-    let mut secret_keys: HashMap<NodeId, KeyPair> = sk_stream()
+fn main_() {
+    let mut secret_keys: IntMap<KeyPair> = sk_stream()
         .take(4)
         .enumerate()
-        .map(|(id, sk)| (NodeId::from(id), sk))
+        .map(|(id, sk)| (id as u64, sk))
         .collect();
-    let public_keys: HashMap<NodeId, PublicKey> = secret_keys
+    let public_keys: IntMap<PublicKey> = secret_keys
         .iter()
         .map(|(id, sk)| (*id, sk.public_key().into()))
         .collect();
 
-    let pool = threadpool::Builder::new()
-        .num_threads(4)
-        .build();
+    let mut pending_threads = Vec::with_capacity(4);
 
     for id in NodeId::targets(0..4) {
-        let addrs= map! {
+        let addrs = map! {
             // replicas
-            NodeId::from(0u32) => addr!("cop01" => "127.0.0.1:10001"),
-            NodeId::from(1u32) => addr!("cop02" => "127.0.0.1:10002"),
-            NodeId::from(2u32) => addr!("cop03" => "127.0.0.1:10003"),
-            NodeId::from(3u32) => addr!("cop04" => "127.0.0.1:10004"),
+            0 => addr!("cop01" => "127.0.0.1:10001"),
+            1 => addr!("cop02" => "127.0.0.1:10002"),
+            2 => addr!("cop03" => "127.0.0.1:10003"),
+            3 => addr!("cop04" => "127.0.0.1:10004"),
 
             // clients
-            NodeId::from(1000u32) => addr!("cli1000" => "127.0.0.1:11000")
+            1000 => addr!("cli1000" => "127.0.0.1:11000")
         };
-        let sk = secret_keys.remove(&id).unwrap();
+        let sk = secret_keys.remove(id.into()).unwrap();
         let fut = setup_replica(
-            pool.clone(),
             id,
             sk,
             addrs,
             public_keys.clone(),
         );
-        rt::spawn(async move {
-            println!("Bootstrapping replica #{}", u32::from(id));
-            let mut replica = fut.await.unwrap();
-            println!("Running replica #{}", u32::from(id));
-            replica.run().await.unwrap();
-        });
+
+        let main_thread = std::thread::Builder::new().name(format!("Main thread for {:?}", id)).spawn(move || {
+            let mut replica = rt::block_on(async move {
+                println!("Bootstrapping replica #{}", u32::from(id));
+                let replica = fut.await.unwrap();
+                println!("Running replica #{}", u32::from(id));
+
+                replica
+            });
+
+            replica.run().unwrap();
+        }).unwrap();
+
+
+        pending_threads.push(main_thread);
     }
-    drop((pool, secret_keys, public_keys));
+
+    drop((secret_keys, public_keys));
 
     // run forever
-    std::future::pending().await
+    for x in pending_threads {
+        x.join();
+    }
 }
 
-fn sk_stream() -> impl Iterator<Item = KeyPair> {
+fn sk_stream() -> impl Iterator<Item=KeyPair> {
     std::iter::repeat_with(|| {
         // only valid for ed25519!
         let buf = [0; 32];

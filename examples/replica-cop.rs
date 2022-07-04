@@ -30,7 +30,8 @@ fn main() {
         async_threads: 39,
     };
     let _guard = unsafe { init(conf).unwrap() };
-    rt::block_on(async_main(NodeId::from(id)));
+
+    main_(NodeId::from(id));
 }
 
 macro_rules! ip {
@@ -46,7 +47,7 @@ macro_rules! ip {
     }
 }
 
-async fn async_main(id: NodeId) {
+fn main_(id: NodeId) {
     let mut replica = {
         let mut secret_keys: HashMap<NodeId, KeyPair> = sk_stream()
             .take(4)
@@ -92,7 +93,7 @@ async fn async_main(id: NodeId) {
     };
 
     // run forever
-    replica.run().await.unwrap();
+    replica.run().unwrap();
 }
 
 fn sk_stream() -> impl Iterator<Item = KeyPair> {

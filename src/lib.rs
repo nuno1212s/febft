@@ -28,6 +28,12 @@
 #[cfg(feature = "expose_impl")]
 pub mod bft;
 
+pub mod tests {
+    pub mod peer_handling_tests {
+        pub mod peer_handling_tests;
+    }
+}
+
 #[cfg(not(feature = "expose_impl"))]
 mod bft;
 

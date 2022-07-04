@@ -69,7 +69,7 @@ pub struct Error {
 
 #[derive(Debug)]
 enum ErrorInner {
-    Simple(ErrorKind),
+    Simple(ErrorKind, String),
     Wrapped(ErrorKind, Box<dyn error::Error + Send + Sync>),
 }
 
@@ -83,7 +83,12 @@ impl Error {
     /// Returns an error not wrapping another
     /// error implementation, with kind `ErrorKind`.
     pub fn simple(kind: ErrorKind) -> Self {
-        let inner = ErrorInner::Simple(kind);
+        let inner = ErrorInner::Simple(kind, String::new());
+        Error { inner }
+    }
+
+    pub fn simple_with_msg(kind: ErrorKind, msg: &str) -> Self {
+        let inner = ErrorInner::Simple(kind, String::from(msg));
         Error { inner }
     }
 
@@ -100,7 +105,7 @@ impl Error {
     /// Returns a copy of the `ErrorKind` of this `Error`.
     pub fn kind(&self) -> ErrorKind {
         match &self.inner {
-            ErrorInner::Simple(k) => *k,
+            ErrorInner::Simple(k, ..) => *k,
             ErrorInner::Wrapped(k, _) => *k,
         }
     }
@@ -108,7 +113,7 @@ impl Error {
     /// Swaps the `ErrorKind` of this `Error`.
     pub fn swap_kind(self, k: ErrorKind) -> Self {
         let inner = match self.inner {
-            ErrorInner::Simple(_) => ErrorInner::Simple(k),
+            ErrorInner::Simple(_, ..) => ErrorInner::Simple(k, String::new()),
             ErrorInner::Wrapped(_, e) => ErrorInner::Wrapped(k, e),
         };
         Error { inner }
@@ -118,7 +123,7 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.inner {
-            ErrorInner::Simple(k) => write!(fmt, "{:?}", k),
+            ErrorInner::Simple(k, str) => write!(fmt, "{:?}, {}", k, str),
             ErrorInner::Wrapped(k, e) => write!(fmt, "{:?}: {}", k, e),
         }
     }

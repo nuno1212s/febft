@@ -3,6 +3,7 @@
 use std::fs::File;
 use std::net::SocketAddr;
 use std::io::{BufReader, Read, Write};
+use std::time::Duration;
 
 use rustls::{
     internal::pemfile,
@@ -15,12 +16,13 @@ use serde::{
     Serialize,
     Deserialize,
 };
+use intmap::IntMap;
+use febft::bft::benchmarks::CommStats;
 
 use febft::bft::error::*;
+use febft::bft::threadpool;
 use febft::bft::ordering::SeqNo;
 use febft::bft::executable::Service;
-use febft::bft::collections::HashMap;
-use febft::bft::threadpool::ThreadPool;
 use febft::bft::communication::serialize::SharedData;
 use febft::bft::communication::message::{
     Message,
@@ -44,6 +46,9 @@ use febft::bft::core::server::{
     ReplicaConfig,
 };
 
+#[global_allocator]
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[macro_export]
 macro_rules! addr {
     ($h:expr => $a:expr) => {{
@@ -55,7 +60,7 @@ macro_rules! addr {
 #[macro_export]
 macro_rules! map {
     ( $($key:expr => $value:expr),+ ) => {{
-        let mut m = ::febft::bft::collections::hash_map();
+        let mut m = ::intmap::IntMap::new();
         $(
             m.insert($key, $value);
         )+
@@ -81,27 +86,23 @@ pub fn debug_msg(m: Message<f32, Action, f32>) -> &'static str {
             SystemMessage::Request(_) => "Req",
             _ => unreachable!(),
         },
-        Message::ConnectedTx(_, _) => "CTx",
-        Message::ConnectedRx(_, _) => "CRx",
-        Message::DisconnectedTx(_) => "DTx",
-        Message::DisconnectedRx(_) => "DRx",
-        Message::ExecutionFinished(_) => "Exe",
-        Message::ExecutionFinishedWithAppstate(_, _) => "ExA",
+        Message::ExecutionFinishedWithAppstate(_) => "ExA",
         Message::Timeout(_) => "Tim",
+        Message::RequestBatch(_, _) => "RqB",
     }
 }
 
 async fn node_config(
-    t: &ThreadPool,
     id: NodeId,
     sk: KeyPair,
-    addrs: HashMap<NodeId, (SocketAddr, String)>,
-    pk: HashMap<NodeId, PublicKey>,
+    addrs: IntMap<PeerAddr>,
+    pk: IntMap<PublicKey>,
+    comm_stats: Option<Arc<CommStats>>
 ) -> NodeConfig {
     // read TLS configs concurrently
     let (client_config, server_config) = {
-        let cli = get_client_config(t, id);
-        let srv = get_server_config(t, id);
+        let cli = get_client_config(id);
+        let srv = get_server_config(id);
         futures::join!(cli, srv)
     };
 
@@ -113,20 +114,20 @@ async fn node_config(
         sk,
         pk,
         addrs,
-        client_config,
-        server_config,
+        async_client_config: client_config,
+        async_server_config: server_config,
         first_cli: NodeId::from(1000u32),
+        comm_stats: comm_stats
     }
 }
 
 pub async fn setup_client(
-    t: ThreadPool,
     id: NodeId,
     sk: KeyPair,
-    addrs: HashMap<NodeId, (SocketAddr, String)>,
-    pk: HashMap<NodeId, PublicKey>,
+    addrs: IntMap<(SocketAddr, String)>,
+    pk: IntMap<PublicKey>,
 ) -> Result<Client<CalcData>> {
-    let node = node_config(&t, id, sk, addrs, pk).await;
+    let node = node_config(id, sk, addrs, pk).await;
     let conf = client::ClientConfig {
         node,
     };
@@ -134,37 +135,41 @@ pub async fn setup_client(
 }
 
 pub async fn setup_replica(
-    t: ThreadPool,
     id: NodeId,
     sk: KeyPair,
-    addrs: HashMap<NodeId, (SocketAddr, String)>,
-    pk: HashMap<NodeId, PublicKey>,
+    addrs: IntMap<(SocketAddr, String)>,
+    pk: IntMap<PublicKey>,
 ) -> Result<Replica<CalcService>> {
-    let node = node_config(&t, id, sk, addrs, pk).await;
+    let node = node_config(id, sk, addrs, pk).await;
     let conf = ReplicaConfig {
         node,
         batch_size: 1024,
+        global_batch_size: 1024,
         next_consensus_seq: SeqNo::ZERO,
         view: SeqNo::ZERO,
         service: CalcService(id, 0),
+        batch_timeout: Duration::from_millis(10).as_micros()
     };
     Replica::bootstrap(conf).await
 }
 
 pub async fn setup_node(
-    t: ThreadPool,
     id: NodeId,
     sk: KeyPair,
-    addrs: HashMap<NodeId, (SocketAddr, String)>,
-    pk: HashMap<NodeId, PublicKey>,
+    addrs: IntMap<(SocketAddr, String)>,
+    pk: IntMap<PublicKey>,
 ) -> Result<(Node<CalcData>, Vec<Message<f32, Action, f32>>)> {
-    let conf = node_config(&t, id, sk, addrs, pk).await;
-    Node::bootstrap(conf).await
+    let conf = node_config(id, sk, addrs, pk).await;
+    let (node, batcher, rogue) = Node::bootstrap(conf).await?;
+    if let Some(b) = batcher {
+        b.spawn(1024);
+    }
+    Ok((node, rogue))
 }
 
-async fn get_server_config(t: &ThreadPool, id: NodeId) -> ServerConfig {
+async fn get_server_config(id: NodeId) -> ServerConfig {
     let (tx, rx) = oneshot::channel();
-    t.execute(move || {
+    threadpool::execute(move || {
         let id = usize::from(id);
         let mut root_store = RootCertStore::empty();
 
@@ -206,9 +211,9 @@ async fn get_server_config(t: &ThreadPool, id: NodeId) -> ServerConfig {
     rx.await.unwrap()
 }
 
-async fn get_client_config(t: &ThreadPool, id: NodeId) -> ClientConfig {
+async fn get_client_config(id: NodeId) -> ClientConfig {
     let (tx, rx) = oneshot::channel();
-    t.execute(move || {
+    threadpool::execute(move || {
         let id = usize::from(id);
         let mut cfg = ClientConfig::new();
 

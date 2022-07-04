@@ -3,6 +3,7 @@
 //! By default, it is hidden to the user, unless explicitly enabled
 //! with the feature flag `expose_impl`.
 
+pub mod benchmarks;
 pub mod async_runtime;
 pub mod communication;
 pub mod collections;
@@ -30,6 +31,8 @@ static INITIALIZED: Flag = Flag::new();
 pub struct InitConfig {
     /// Number of threads used by the async runtime.
     pub async_threads: usize,
+    /// Number of threads used by the thread pool.
+    pub threadpool_threads: usize,
 }
 
 /// Handle to the global data.
@@ -45,7 +48,16 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
     if INITIALIZED.test() {
         return Ok(None);
     }
+
+    //env_logger::init();
+
+    tracing_subscriber::fmt::init();
+
+    threadpool::init(c.threadpool_threads)?;
     async_runtime::init(c.async_threads)?;
+
+    println!("Async threads {}", c.async_threads);
+
     communication::socket::init()?;
     INITIALIZED.set();
     Ok(Some(InitGuard))
@@ -59,6 +71,7 @@ impl Drop for InitGuard {
 
 unsafe fn drop() -> Result<()> {
     INITIALIZED.unset();
+    threadpool::drop()?;
     async_runtime::drop()?;
     communication::socket::drop()?;
     Ok(())
