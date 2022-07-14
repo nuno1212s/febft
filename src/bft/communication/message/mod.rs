@@ -244,12 +244,8 @@ pub enum SystemMessage<S, O, P> {
     Cst(CstMessage<S, O>),
     ViewChange(ViewChangeMessage<O>),
     ForwardedRequests(ForwardedRequestsMessage<O>),
-
-    ///Observer client related messages
-    ///Register the client that sent this as an observer
-    ObserverRegister,
-    ///A status update sent to an observer client as an observer
-    ObservedValue(ObserveEventKind),
+    //Observer related messages
+    ObserverMessage(ObserverMessage),
 }
 
 impl<S, O, P> Debug for SystemMessage<S, O, P> {
@@ -603,6 +599,19 @@ impl<O> ConsensusMessage<O> {
 
 ///Observer related messages
 ///@{
+
+pub enum ObserverMessage {
+
+    ///Observer client related messages
+    ///Register the client that sent this as an observer
+    ObserverRegister,
+    //Response to the register request of an observer
+    ObserverRegisterResponse(bool),
+    ObserverUnregister,
+    ///A status update sent to an observer client as an observer
+    ObservedValue(ObserveEventKind),
+
+}
 
 ///The kinds of events that can be reported by the replicas to observers
 #[derive(Clone)]

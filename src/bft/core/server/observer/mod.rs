@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use log::warn;
 use crate::bft;
 use crate::bft::communication::channel::{ChannelMixedRx, ChannelMixedTx};
-use crate::bft::communication::message::{ObserveEventKind, SystemMessage};
+use crate::bft::communication::message::{ObserveEventKind, ObserverMessage, SystemMessage};
 use crate::bft::communication::{NodeId, SendNode};
 use crate::bft::communication::serialize::SharedData;
 
@@ -92,7 +92,7 @@ impl<D> Observers<D> where D: SharedData + 'static{
                         }
                         MessageType::Event(event_type) => {
                             //Send the observed event to the registered observers
-                            let message = SystemMessage::ObservedValue(event_type);
+                            let message = SystemMessage::ObserverMessage(ObserverMessage::ObservedValue(event_type));
 
                             let registered_obs = self.registered_observers.iter().copied().into_iter();
                             

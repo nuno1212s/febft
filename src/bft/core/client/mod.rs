@@ -7,24 +7,25 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 
 use futures::StreamExt;
+use futures_timer::Delay;
 use intmap::IntMap;
-use log::{warn};
+use log::{error, warn};
 
 use crate::bft::benchmarks::BatchMeta;
-use crate::bft::communication::{
-    Node,
-    NodeConfig,
-    SendNode,
-};
+use crate::bft::communication::{Node, NodeConfig, NodeId, SendNode};
 use crate::bft::communication::message::{ObserveEventKind, Message, RequestMessage, SystemMessage};
 use crate::bft::communication::serialize::SharedData;
+use crate::bft::core::client::observing::ObserverClient;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
 
 use super::SystemParams;
+
+pub mod observing;
 
 macro_rules! certain {
     ($some:expr) => {
@@ -54,12 +55,14 @@ impl<P> Deref for Callback<P> {
     }
 }
 
-struct ClientData<D>  where D: SharedData + 'static{
+struct ClientData<D> where D: SharedData + 'static {
     session_counter: AtomicU32,
     ready: Vec<Mutex<IntMap<Ready<D::Reply>>>>,
     callback_ready: Vec<Mutex<IntMap<Callback<D::Reply>>>>,
-    //We only want to have a single observer client
-    observer: Mutex<Option<ObserverClient<D>>>
+    //We only want to have a single observer client for any and all sessions that the user
+    //May have, so we keep this reference in here
+    observer: Arc<Mutex<Option<ObserverClient<D>>>>,
+    observer_ready: Mutex<Option<observing::Ready>>,
 }
 
 /// Represents a client node in `febft`.
@@ -71,33 +74,6 @@ pub struct Client<D: SharedData + 'static> {
     params: SystemParams,
     node: SendNode<D>,
     dummy_meta: Arc<Mutex<BatchMeta>>,
-}
-
-pub trait ObserverCallback<D> where D: SharedData + 'static {
-    fn handle_event(&self, event: ObserveEventKind);
-}
-
-pub struct ObserverClient<D> where D: SharedData + 'static {
-    registered_callbacks: Vec<Box<dyn ObserverCallback<D>>>,
-}
-
-impl<D> ObserverClient<D> where D: SharedData + 'static {
-
-    fn handle_observed_message(&self, observed_msg: SystemMessage<D::State, D::Request, D::Reply>) {
-        match observed_msg {
-            SystemMessage::ObservedValue(event) => {
-                for to_call in self.registered_callbacks {
-
-                    to_call.handle_event(event)
-
-                }
-
-            }
-            _ => {
-                warn!("Passed non observer message into observer client");
-            }
-        }
-    }
 }
 
 impl<D: SharedData> Clone for Client<D> {
@@ -199,7 +175,7 @@ impl<D> Client<D>
             callback_ready: std::iter::repeat_with(|| Mutex::new(IntMap::new()))
                 .take(num_cpus::get())
                 .collect(),
-            observer: Mutex::new(None)
+            observer: Arc::new(Mutex::new(None)),
         });
 
         let task_data = Arc::clone(&data);
@@ -234,14 +210,15 @@ impl<D> Client<D>
         })
     }
 
-    pub fn bootstrap_observer(&self) ->  {
-        let guard = self.data.observer.lock().unwrap();
-
-        if let Some(observer) = &*guard {
-
+    fn bootstrap_observer(&self) -> &Arc<Mutex<Option<ObserverClient<D>>>> {
+        {
+            let guard = self.data.observer.lock().unwrap();
         }
 
+        &self.data.observer
     }
+
+    pub fn observer(&self) -> Arc<ObserverClient<D>> {}
 
     #[inline]
     pub fn id(&self) -> NodeId {
@@ -500,8 +477,10 @@ impl<D> Client<D>
                                 }
                             }
                         }
-                        SystemMessage::ObservedValue(event) => {
-                            //Notify the observers of the event
+                        SystemMessage::ObserverMessage(message) => {
+
+                            //Pass this message off to the observing module
+                            ObserverClient::handle_observed_message(&data, message);
                         }
                         // FIXME: handle rogue messages on clients
                         _ => panic!("rogue message detected"),
