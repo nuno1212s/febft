@@ -244,6 +244,12 @@ pub enum SystemMessage<S, O, P> {
     Cst(CstMessage<S, O>),
     ViewChange(ViewChangeMessage<O>),
     ForwardedRequests(ForwardedRequestsMessage<O>),
+
+    ///Observer client related messages
+    ///Register the client that sent this as an observer
+    ObserverRegister,
+    ///A status update sent to an observer client as an observer
+    ObservedValue(ObserveEventKind),
 }
 
 impl<S, O, P> Debug for SystemMessage<S, O, P> {
@@ -277,10 +283,15 @@ impl<S, O, P> Debug for SystemMessage<S, O, P> {
             SystemMessage::ForwardedRequests(fr) => {
                 write!(f, "forwarded requests")
             }
+            SystemMessage::ObserverRegister => {
+                write!(f, "register observer")
+            }
+            SystemMessage::ObservedValue(_) => {
+                write!(f, "observed value")
+            }
         }
     }
 }
-
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
@@ -590,6 +601,56 @@ impl<O> ConsensusMessage<O> {
     }
 }
 
+///Observer related messages
+///@{
+
+///The kinds of events that can be reported by the replicas to observers
+#[derive(Clone)]
+pub enum ObserveEventKind {
+    ///Report a checkpoint type event
+    /// The provided SeqNo is the last seq number of requests executed before the checkpoint
+    Checkpoint(SeqNo),
+    ///Report a consensus type event
+    /// The provided SeqNo is the sequence number of the last executed operation
+    Consensus(SeqNo),
+    ///Report that the replica is now in the normal
+    ///phase of the algorithm
+    ///
+    /// The provided SeqNo is of the current view number and the current sequence number within
+    /// That view and the nodeid is of the current leader in this new view
+    NormalPhase((SeqNo, SeqNo, NodeId)),
+    ///Report that the replica has entered the view change phase
+    /// The provided SeqNo is the seq number of the new view and the current seq no
+    ViewChangePhase,
+    /// Report that the replica is now in the collaborative state
+    /// transfer state
+    CollabStateTransfer
+}
+
+impl Debug for ObserveEventKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ObserveEventKind::Checkpoint(_) => {
+                write!(f, "Checkpoint event")
+            }
+            ObserveEventKind::Consensus(_) => {
+                write!(f, "Consensus event")
+            }
+            ObserveEventKind::NormalPhase(_) => {
+                write!(f, "Normal phase")
+            }
+            ObserveEventKind::ViewChangePhase => {
+                write!(f, "View change phase")
+            }
+            ObserveEventKind::CollabStateTransfer => {
+                write!(f, "Collab state transfer")
+            }
+        }
+    }
+}
+
+///}@
+
 // FIXME: perhaps use references for serializing and deserializing,
 // to save a stack allocation? probably overkill
 impl Header {
@@ -598,13 +659,13 @@ impl Header {
 
     unsafe fn serialize_into_unchecked(self, buf: &mut [u8]) {
         #[cfg(target_endian = "big")]
-            {
-                self.version = self.version.to_le();
-                self.nonce = self.nonce.to_le();
-                self.from = self.from.to_le();
-                self.to = self.to.to_le();
-                self.length = self.length.to_le();
-            }
+        {
+            self.version = self.version.to_le();
+            self.nonce = self.nonce.to_le();
+            self.from = self.from.to_le();
+            self.to = self.to.to_le();
+            self.length = self.length.to_le();
+        }
         let hdr: [u8; Self::LENGTH] = std::mem::transmute(self);
         (&mut buf[..Self::LENGTH]).copy_from_slice(&hdr[..]);
     }
@@ -625,13 +686,13 @@ impl Header {
         };
         (&mut hdr[..]).copy_from_slice(&buf[..Self::LENGTH]);
         #[cfg(target_endian = "big")]
-            {
-                hdr.version = hdr.version.to_be();
-                hdr.nonce = hdr.nonce.to_be();
-                hdr.from = hdr.from.to_be();
-                hdr.to = hdr.to.to_le();
-                hdr.length = hdr.length.to_be();
-            }
+        {
+            hdr.version = hdr.version.to_be();
+            hdr.nonce = hdr.nonce.to_be();
+            hdr.from = hdr.from.to_be();
+            hdr.to = hdr.to.to_le();
+            hdr.length = hdr.length.to_be();
+        }
         std::mem::transmute(hdr)
     }
 

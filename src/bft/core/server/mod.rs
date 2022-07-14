@@ -20,14 +20,7 @@ use crate::bft::communication::{
     NodeConfig,
     NodeId,
 };
-use crate::bft::communication::message::{
-    ForwardedRequestsMessage,
-    Header,
-    Message,
-    RequestMessage,
-    StoredMessage,
-    SystemMessage,
-};
+use crate::bft::communication::message::{ForwardedRequestsMessage, Header, Message, ObserveEventKind, RequestMessage, StoredMessage, SystemMessage};
 use crate::bft::consensus::{
     Consensus,
     ConsensusPollStatus,
@@ -39,6 +32,7 @@ use crate::bft::consensus::log::{
 };
 use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::client_rq_handling::RqProcessor;
+use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::core::server::rq_finalizer::{RqFinalizer, RqFinalizerHandle};
 use crate::bft::cst::{
     CollabStateTransfer,
@@ -72,10 +66,13 @@ use crate::bft::timeouts::{
 
 use super::SystemParams;
 
+pub mod observer;
+
 pub mod client_rq_handling;
 pub mod rq_finalizer;
 pub mod client_replier;
 
+#[derive(Copy, Clone, PartialEq, Eq)]
 enum ReplicaPhase {
     // the replica is retrieving state from
     // its peer replicas
@@ -150,7 +147,8 @@ pub struct Replica<S: Service + 'static> {
     client_rqs: Arc<RqProcessor<S>>,
     node: Arc<Node<S::Data>>,
     rq_finalizer: RqFinalizerHandle<S>,
-    consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
+    //A handle to the observer worker thread
+    observer_handle: ObserverHandle,
 }
 
 /// Represents a configuration used to bootstrap a `Replica`.
@@ -239,23 +237,25 @@ impl<S> Replica<S>
 
         let consensus_guard = Arc::new(AtomicBool::new(false));
 
+        let observers = observer::start_observers(node.send_node());
+
         //Initialize replica data with the initialized variables from above
         let mut replica = Replica {
+            phase: ReplicaPhase::NormalPhase,
+            phase_stack: None,
             cst: CollabStateTransfer::new(CST_BASE_DUR),
             synchronizer: synchronizer.clone(),
             consensus: Consensus::new(next_consensus_seq, node.id(), global_batch_size, consensus_info.clone(),
                                       consensus_guard.clone()),
-            phase: ReplicaPhase::NormalPhase,
-            phase_stack: None,
+            client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts, consensus_info.clone(),
+                                         consensus_guard.clone(), global_batch_size,
+                                         batch_timeout),
             timeouts: timeouts.clone(),
             executor,
             node,
             log: log.clone(),
-            client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts, consensus_info.clone(),
-                                         consensus_guard.clone(), global_batch_size,
-                                         batch_timeout),
             rq_finalizer,
-            consensus_lock: consensus_info,
+            observer_handle: observers,
         };
 
         //Start receiving and processing client requests
@@ -320,6 +320,39 @@ impl<S> Replica<S>
         }
     }
 
+    pub fn switch_phase(&mut self, new_phase: ReplicaPhase) {
+        let old_phase = self.phase.clone();
+
+        self.phase = new_phase;
+
+        //Observing code
+        if self.phase != old_phase {
+            //If the phase is the same, then we got nothing to do as no states have changed
+
+            let to_send = match (old_phase, self.phase) {
+                (_, ReplicaPhase::RetrievingState) => {
+                    ObserveEventKind::CollabStateTransfer
+                }
+                (_, ReplicaPhase::SyncPhase) => {
+                    ObserveEventKind::ViewChangePhase
+                }
+                (_, ReplicaPhase::NormalPhase) => {
+
+                    let current_view = self.synchronizer.view();
+
+                    let view_seq = current_view.sequence_number();
+                    let current_seq = self.consensus.sequence_number();
+
+                    let leader = current_view.leader();
+
+                    ObserveEventKind::NormalPhase((view_seq, current_seq, leader));
+                }
+            };
+
+            self.observer_handle.tx().send(MessageType::Event(to_send)).expect("Failed to notify observer thread");
+        }
+    }
+
     fn update_retrieving_state(&mut self) -> Result<()> {
         debug!("{:?} // Retrieving state...", self.id());
         let message = self.node.receive_from_replicas().unwrap();
@@ -362,9 +395,9 @@ impl<S> Replica<S>
                                     &mut self.executor,
                                     &mut self.consensus,
                                 )?;
-                                self.phase = self.phase_stack
+                                self.switch_phase(self.phase_stack
                                     .take()
-                                    .unwrap_or(ReplicaPhase::NormalPhase);
+                                    .unwrap_or(ReplicaPhase::NormalPhase));
                             }
                             CstStatus::SeqNo(seq) => {
                                 if self.consensus.sequence_number() < seq {
@@ -384,7 +417,7 @@ impl<S> Replica<S>
                                         &self.log,
                                     );
                                 } else {
-                                    self.phase = ReplicaPhase::NormalPhase;
+                                    self.switch_phase(ReplicaPhase::NormalPhase);
                                 }
                             }
                             CstStatus::RequestLatestCid => {
@@ -444,7 +477,7 @@ impl<S> Replica<S>
                     &self.node,
                 );
 
-                self.phase = ReplicaPhase::NormalPhase;
+                self.switch_phase(ReplicaPhase::NormalPhase);
                 return Ok(false);
             }
         };
@@ -492,11 +525,21 @@ impl<S> Replica<S>
                             SynchronizerStatus::Nil => return Ok(false),
                             SynchronizerStatus::Running => (),
                             SynchronizerStatus::NewView => {
-                                self.phase = ReplicaPhase::NormalPhase;
+
+                                //Our current view has been updated and we have no more state operations
+                                //to perform. This happens if we are a correct replica and therefore do not need
+                                //To update our state or if we are a replica that was incorrect and whose state has
+                                //Already been updated from the Cst protocol
+                                self.switch_phase(ReplicaPhase::NormalPhase);
                                 return Ok(false);
                             }
                             SynchronizerStatus::RunCst => {
-                                self.phase = ReplicaPhase::RetrievingState;
+                                //This happens when a new view is being introduced and we are not up to date
+                                //With the rest of the replicas. This might happen because the replica was faulty
+                                //or any other reason that might cause it to lose some updates from the other replicas
+                                self.switch_phase(ReplicaPhase::RetrievingState);
+                                //After we update the state, we go back to the sync phase (this phase) so we can check if we are missing
+                                //Anything or to finalize and go back to the normal phase
                                 self.phase_stack = Some(ReplicaPhase::SyncPhase);
                             }
                             // should not happen...
@@ -531,7 +574,8 @@ impl<S> Replica<S>
         if self.synchronizer.can_process_stops() {
             let running = self.update_sync_phase()?;
             if running {
-                self.phase = ReplicaPhase::SyncPhase;
+                self.switch_phase(ReplicaPhase::SyncPhase);
+
                 return Ok(());
             }
         }
@@ -607,7 +651,7 @@ impl<S> Replica<S>
 
                         match status {
                             SynchronizerStatus::Nil => (),
-                            SynchronizerStatus::Running => self.phase = ReplicaPhase::SyncPhase,
+                            SynchronizerStatus::Running => self.switch_phase(ReplicaPhase::SyncPhase),
                             // should not happen...
                             _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
                         }
@@ -737,7 +781,8 @@ impl<S> Replica<S>
                             &self.node,
                             &self.log,
                         );
-                        self.phase = ReplicaPhase::RetrievingState;
+
+                        self.switch_phase(ReplicaPhase::RetrievingState);
                     }
                     CstStatus::RequestState => {
                         self.cst.request_latest_state(
@@ -746,7 +791,8 @@ impl<S> Replica<S>
                             &self.node,
                             &self.log,
                         );
-                        self.phase = ReplicaPhase::RetrievingState;
+
+                        self.switch_phase(ReplicaPhase::RetrievingState);
                     }
                     // nothing to do
                     _ => (),

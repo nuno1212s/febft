@@ -1,33 +1,24 @@
 //! Contains the client side core protocol logic of `febft`.
 
-use std::fs::read;
 use std::future::Future;
 use std::io::Read;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::task::{Context, Poll, Waker};
-use std::time::Duration;
 
 use futures::StreamExt;
-use futures_timer::Delay;
 use intmap::IntMap;
-use log::error;
-use parking_lot::Mutex;
+use log::{warn};
 
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::{
     Node,
     NodeConfig,
-    NodeId,
     SendNode,
 };
-use crate::bft::communication::message::{
-    Message,
-    RequestMessage,
-    SystemMessage,
-};
+use crate::bft::communication::message::{ObserveEventKind, Message, RequestMessage, SystemMessage};
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
@@ -63,10 +54,12 @@ impl<P> Deref for Callback<P> {
     }
 }
 
-struct ClientData<P> {
+struct ClientData<D>  where D: SharedData + 'static{
     session_counter: AtomicU32,
-    ready: Vec<Mutex<IntMap<Ready<P>>>>,
-    callback_ready: Vec<Mutex<IntMap<Callback<P>>>>,
+    ready: Vec<Mutex<IntMap<Ready<D::Reply>>>>,
+    callback_ready: Vec<Mutex<IntMap<Callback<D::Reply>>>>,
+    //We only want to have a single observer client
+    observer: Mutex<Option<ObserverClient<D>>>
 }
 
 /// Represents a client node in `febft`.
@@ -74,10 +67,37 @@ struct ClientData<P> {
 pub struct Client<D: SharedData + 'static> {
     session_id: SeqNo,
     operation_counter: SeqNo,
-    data: Arc<ClientData<D::Reply>>,
+    data: Arc<ClientData<D>>,
     params: SystemParams,
     node: SendNode<D>,
     dummy_meta: Arc<Mutex<BatchMeta>>,
+}
+
+pub trait ObserverCallback<D> where D: SharedData + 'static {
+    fn handle_event(&self, event: ObserveEventKind);
+}
+
+pub struct ObserverClient<D> where D: SharedData + 'static {
+    registered_callbacks: Vec<Box<dyn ObserverCallback<D>>>,
+}
+
+impl<D> ObserverClient<D> where D: SharedData + 'static {
+
+    fn handle_observed_message(&self, observed_msg: SystemMessage<D::State, D::Request, D::Reply>) {
+        match observed_msg {
+            SystemMessage::ObservedValue(event) => {
+                for to_call in self.registered_callbacks {
+
+                    to_call.handle_event(event)
+
+                }
+
+            }
+            _ => {
+                warn!("Passed non observer message into observer client");
+            }
+        }
+    }
 }
 
 impl<D: SharedData> Clone for Client<D> {
@@ -179,6 +199,7 @@ impl<D> Client<D>
             callback_ready: std::iter::repeat_with(|| Mutex::new(IntMap::new()))
                 .take(num_cpus::get())
                 .collect(),
+            observer: Mutex::new(None)
         });
 
         let task_data = Arc::clone(&data);
@@ -213,6 +234,15 @@ impl<D> Client<D>
         })
     }
 
+    pub fn bootstrap_observer(&self) ->  {
+        let guard = self.data.observer.lock().unwrap();
+
+        if let Some(observer) = &*guard {
+
+        }
+
+    }
+
     #[inline]
     pub fn id(&self) -> NodeId {
         self.node.id()
@@ -238,6 +268,8 @@ impl<D> Client<D>
         // await response
         let request_key = get_request_key(session_id, operation_id);
         let ready = get_ready::<D>(session_id, &*self.data);
+
+        self.start_timeout(session_id, operation_id, self.data.clone());
 
         ClientRequestFut { request_key, ready }.await
     }
@@ -467,6 +499,9 @@ impl<D> Client<D>
                                         node.id(), session_id, operation_id);
                                 }
                             }
+                        }
+                        SystemMessage::ObservedValue(event) => {
+                            //Notify the observers of the event
                         }
                         // FIXME: handle rogue messages on clients
                         _ => panic!("rogue message detected"),

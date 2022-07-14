@@ -576,7 +576,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                     collections += 1;
 
                     if !vec.is_empty() {
-                        self.batch_transmission.send(vec);
+                        self.batch_transmission.send(vec).expect("Failed to send proposed batch");
                         // Sleep for a determined amount of time to allow clients to send requests
                         let three_quarters_sleep = (self.batch_sleep_micros / 4) * 3;
                         let five_quarters_sleep = (self.batch_sleep_micros / 4) * 5;

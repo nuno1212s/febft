@@ -166,7 +166,7 @@ pub struct CollabStateTransfer<S: Service> {
     phase: ProtoPhase<State<S>, Request<S>>,
 }
 
-/// Status returned from processnig a state transfer message.
+/// Status returned from processing a state transfer message.
 pub enum CstStatus<S, O> {
     /// We are not running the CST protocol.
     ///
