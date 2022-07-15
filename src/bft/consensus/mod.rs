@@ -22,6 +22,7 @@ use crate::bft::communication::{
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, Message, RequestMessage, SerializedMessage, StoredMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
 use crate::bft::communication::serialize::DigestData;
 use crate::bft::consensus::log::Log;
+use crate::bft::core::server::observer::ObserverHandle;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
@@ -190,8 +191,10 @@ pub struct Consensus<S: Service> {
     missing_requests: VecDeque<Digest>,
     missing_swapbuf: Vec<usize>,
     speculative_commits: Arc<Mutex<IntMap<StoredSerializedSystemMessage<S::Data>>>>,
+    //TODO: Make sure the consensus is locked during view changes and Csts
     consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
     consensus_guard: Arc<AtomicBool>,
+    observer_handle: ObserverHandle,
 }
 
 /// Status returned from processing a consensus message.
@@ -235,7 +238,8 @@ impl<S> Consensus<S>
     /// Starts a new consensus protocol tracker.
     pub fn new(initial_seq_no: SeqNo, id: NodeId, batch_size: usize,
                consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
-               consensus_guard: Arc<AtomicBool>) -> Self {
+               consensus_guard: Arc<AtomicBool>,
+               observer_handle: ObserverHandle) -> Self {
         Self {
             batch_size,
             node_id: id,
@@ -252,6 +256,7 @@ impl<S> Consensus<S>
                 .collect(),
             consensus_lock,
             consensus_guard,
+            observer_handle
         }
     }
 
@@ -303,7 +308,7 @@ impl<S> Consensus<S>
         requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         synchronizer: &Synchronizer<S>,
         node: &Node<S::Data>,
-        log: &Log<State<S>, Request<S>, Reply<S>>
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) {
         //debug!("Phase {:?}", self.phase);
 
@@ -396,6 +401,13 @@ impl<S> Consensus<S>
             let targets = NodeId::targets(0..synchronizer.view().params().n());
             node.broadcast(message, targets);
         }
+
+        //Update the current view and seq numbers
+        let mut guard = self.consensus_lock.lock();
+
+        *guard = (self.curr_seq, synchronizer.view());
+
+        self.consensus_guard.store(false, Ordering::SeqCst);
     }
 
     /// Check if we can process new consensus messages.
@@ -505,6 +517,13 @@ impl<S> Consensus<S>
         self.tbo.get_queue = true;
         self.phase = ProtoPhase::Init;
 
+        let mut guard = self.consensus_lock.lock();
+
+        let prev_view = (*guard).1;
+
+        *guard = (self.curr_seq, prev_view);
+
+        self.consensus_guard.store(false, Ordering::SeqCst);
         // FIXME: do we need to clear the missing requests buffers?
     }
 
@@ -631,7 +650,6 @@ impl<S> Consensus<S>
                     ).unwrap();
 
                     for peer_id in NodeId::targets(0..n) {
-
                         let buf_clone = Vec::from(&buf[..]);
 
                         // create header

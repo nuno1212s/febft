@@ -3,35 +3,28 @@
 use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use dashmap::DashMap;
 use intmap::IntMap;
 use log::debug;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Mutex};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::collections;
-use crate::bft::collections::{ConcurrentHashMap, HashMap};
-use crate::bft::communication::message::{
-    ConsensusMessage,
-    ConsensusMessageKind,
-    Header,
-    RequestMessage,
-    StoredMessage,
-    SystemMessage,
-};
+use crate::bft::collections::{ConcurrentHashMap};
+use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, ObserveEventKind, RequestMessage, StoredMessage, SystemMessage};
 use crate::bft::communication::NodeId;
+use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
 use crate::bft::executable::{Request, UpdateBatch};
-use crate::bft::ordering::{Orderable, SeqNo, tbo_pop_message};
+use crate::bft::ordering::{Orderable, SeqNo};
 
 /// Checkpoint period.
 ///
@@ -500,6 +493,9 @@ pub struct Log<S, O, P> {
     //Some stuff for statistics.
     meta: Arc<Mutex<BatchMeta>>,
     _marker: PhantomData<P>,
+
+    //Observer
+    observer: Option<ObserverHandle>,
 }
 
 ///Justification/Sketch of proof:
@@ -518,7 +514,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
     ///
     /// The value `batch_size` represents the maximum number of
     /// client requests to queue before executing a consensus instance.
-    pub fn new(node: NodeId, batch_size: usize) -> Arc<Self> {
+    pub fn new(node: NodeId, batch_size: usize, observer: ObserverHandle) -> Arc<Self> {
         Arc::new(Self {
             node_id: node,
             batch_size,
@@ -532,6 +528,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
             checkpoint: RefCell::new(CheckpointState::None),
             meta: Arc::new(Mutex::new(BatchMeta::new())),
             _marker: PhantomData,
+            observer: Some(observer),
         })
     }
 
@@ -784,6 +781,11 @@ impl<S, O: Clone, P> Log<S, O, P> {
             // hash digests of the appstate
             _ => return Err("Invalid checkpoint state detected").wrapped(ErrorKind::ConsensusLog),
         });
+
+        if let Some(observer) = &self.observer {
+            observer.tx().send(MessageType::Event(ObserveEventKind::CheckpointStart(seq))).unwrap();
+        }
+
         Ok(Info::BeginCheckpoint)
     }
 
@@ -829,6 +831,10 @@ impl<S, O: Clone, P> Log<S, O, P> {
 
                 guard.prepares.clear();
                 guard.commits.clear();
+
+                if let Some(observer) = &self.observer {
+                    observer.tx().send(MessageType::Event(ObserveEventKind::CheckpointEnd(self.curr_seq.get()))).unwrap();
+                }
 
                 Ok(())
             }

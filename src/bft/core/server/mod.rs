@@ -197,10 +197,12 @@ impl<S> Replica<S>
         let view = ViewInfo::new(view, n, f)?;
 
         // TODO: get log from persistent storage
-        let log = Log::new(node_config.id.clone(), global_batch_size);
-
         // connect to peer nodes
         let (node, rogue) = Node::bootstrap(node_config).await?;
+
+        let observer_handle = observer::start_observers(node.send_node());
+
+        let mut log = Log::new(node_config.id.clone(), global_batch_size, observer_handle);
 
         let node_clone = node.clone();
 
@@ -237,8 +239,6 @@ impl<S> Replica<S>
 
         let consensus_guard = Arc::new(AtomicBool::new(false));
 
-        let observers = observer::start_observers(node.send_node());
-
         //Initialize replica data with the initialized variables from above
         let mut replica = Replica {
             phase: ReplicaPhase::NormalPhase,
@@ -246,7 +246,7 @@ impl<S> Replica<S>
             cst: CollabStateTransfer::new(CST_BASE_DUR),
             synchronizer: synchronizer.clone(),
             consensus: Consensus::new(next_consensus_seq, node.id(), global_batch_size, consensus_info.clone(),
-                                      consensus_guard.clone()),
+                                      consensus_guard.clone(), observer_handle.clone()),
             timeouts: timeouts.clone(),
             executor,
             node,
@@ -255,7 +255,7 @@ impl<S> Replica<S>
                                          consensus_guard.clone(), global_batch_size,
                                          batch_timeout),
             rq_finalizer,
-            observer_handle: observers,
+            observer_handle: observer_handle.clone(),
         };
 
         //Start receiving and processing client requests
@@ -325,6 +325,13 @@ impl<S> Replica<S>
         let old_phase = self.phase.clone();
 
         self.phase = new_phase;
+
+        //TODO: Handle locking the consensus to the proposer thread
+        //When we change to another phase to prevent the proposer thread from
+        //Constantly proposing new batches. This is also "fixed" by the fact that the proposer
+        //thread never proposes two batches to the same sequence id (this might have to be changed
+        //however if it's possible to have various proposals for the same seq number in case of leader
+        //Failure or something like that. I think that's impossible though so lets keep it as is)
 
         //Observing code
         if self.phase != old_phase {

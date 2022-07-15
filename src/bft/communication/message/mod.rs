@@ -614,9 +614,11 @@ pub enum ObserverMessage {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub enum ObserveEventKind {
-    ///Report a checkpoint type event
+    ///Report a checkpoint start type event
     /// The provided SeqNo is the last seq number of requests executed before the checkpoint
-    Checkpoint(SeqNo),
+    CheckpointStart(SeqNo),
+    ///Report a checkpoint end type event
+    CheckpointEnd(SeqNo),
     ///Report a consensus type event
     /// The provided SeqNo is the sequence number of the last executed operation
     Consensus(SeqNo),
