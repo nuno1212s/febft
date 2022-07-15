@@ -21,7 +21,7 @@ pub trait ObserverCallback<D> where D: SharedData + 'static {
 ///Structure to hold all of the currently registered callbacks to know
 ///where to deliver the messages
 pub struct ObserverClient<D> where D: SharedData + 'static {
-    registered_callbacks: Vec<Box<dyn ObserverCallback<D>>>,
+    registered_callbacks: Vec<Box<dyn ObserverCallback<D> + Send + 'static>>,
 }
 
 impl<D> ObserverClient<D> where D: SharedData + 'static {
@@ -29,7 +29,7 @@ impl<D> ObserverClient<D> where D: SharedData + 'static {
         let targets = NodeId::targets(0..client.params.n());
 
         //Register the observer clients with the client node
-        client.node.broadcast(targets, SystemMessage::ObserverMessage(ObserverMessage::ObserverRegister));
+        client.node.broadcast(SystemMessage::ObserverMessage(ObserverMessage::ObserverRegister), targets);
 
         PendingObserverRequestFut { responses_needed: 0, ready: &client.data.observer_ready }.await;
 
@@ -38,7 +38,7 @@ impl<D> ObserverClient<D> where D: SharedData + 'static {
         }
     }
 
-    pub fn register_observer(&mut self, callback: Box<dyn ObserverCallback<D>>) {
+    pub fn register_observer(&mut self, callback: Box<dyn ObserverCallback<D> + Send + 'static>) {
         self.registered_callbacks.push(callback);
     }
 
@@ -129,7 +129,7 @@ impl<'a> Future for PendingObserverRequestFut<'a> {
                 rq.waker = Some(cx.waker().clone());
 
                 Poll::Pending
-            }).unwrap_or_else(|| {
+            }).unwrap_or_else(|_| {
             cx.waker().wake_by_ref();
 
             Poll::Pending

@@ -94,7 +94,9 @@ impl<D> Observers<D> where D: SharedData + 'static{
                             //Send the observed event to the registered observers
                             let message = SystemMessage::ObserverMessage(ObserverMessage::ObservedValue(event_type));
 
-                            let registered_obs = self.registered_observers.iter().copied().into_iter();
+                            let registered_obs = self.registered_observers.iter().copied().map(|f| {
+                                f.0 as usize
+                            }).into_iter();
                             
                             let targets = NodeId::targets(registered_obs);
                             

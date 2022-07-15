@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use chrono::DateTime;
 use chrono::offset::Utc;
-use log::debug;
+use log::{debug, warn};
 use parking_lot::Mutex;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
@@ -73,7 +73,7 @@ pub mod rq_finalizer;
 pub mod client_replier;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-enum ReplicaPhase {
+pub(crate) enum ReplicaPhase {
     // the replica is retrieving state from
     // its peer replicas
     RetrievingState,
@@ -247,13 +247,13 @@ impl<S> Replica<S>
             synchronizer: synchronizer.clone(),
             consensus: Consensus::new(next_consensus_seq, node.id(), global_batch_size, consensus_info.clone(),
                                       consensus_guard.clone()),
-            client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts, consensus_info.clone(),
-                                         consensus_guard.clone(), global_batch_size,
-                                         batch_timeout),
             timeouts: timeouts.clone(),
             executor,
             node,
             log: log.clone(),
+            client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts, consensus_info.clone(),
+                                         consensus_guard.clone(), global_batch_size,
+                                         batch_timeout),
             rq_finalizer,
             observer_handle: observers,
         };
@@ -273,13 +273,14 @@ impl<S> Replica<S>
                             replica.consensus.queue(header, message);
                         }
                         // FIXME: handle rogue reply messages
-                        SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
+                        SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
                         // FIXME: handle rogue cst messages
-                        SystemMessage::Cst(_) => panic!("Rogue cst message detected"),
+                        SystemMessage::Cst(_) => warn!("Rogue cst message detected"),
                         // FIXME: handle rogue view change messages
-                        SystemMessage::ViewChange(_) => panic!("Rogue view change message detected"),
+                        SystemMessage::ViewChange(_) => warn!("Rogue view change message detected"),
                         // FIXME: handle rogue forwarded requests messages
-                        SystemMessage::ForwardedRequests(_) => panic!("Rogue forwarded requests message detected"),
+                        SystemMessage::ForwardedRequests(_) => warn!("Rogue forwarded requests message detected"),
+                        SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected")
                     }
                 }
                 Message::RequestBatch(time, batch) => {
@@ -320,7 +321,7 @@ impl<S> Replica<S>
         }
     }
 
-    pub fn switch_phase(&mut self, new_phase: ReplicaPhase) {
+    pub(crate) fn switch_phase(&mut self, new_phase: ReplicaPhase) {
         let old_phase = self.phase.clone();
 
         self.phase = new_phase;
@@ -337,7 +338,6 @@ impl<S> Replica<S>
                     ObserveEventKind::ViewChangePhase
                 }
                 (_, ReplicaPhase::NormalPhase) => {
-
                     let current_view = self.synchronizer.view();
 
                     let view_seq = current_view.sequence_number();
@@ -345,7 +345,7 @@ impl<S> Replica<S>
 
                     let leader = current_view.leader();
 
-                    ObserveEventKind::NormalPhase((view_seq, current_seq, leader));
+                    ObserveEventKind::NormalPhase((view_seq, current_seq, leader))
                 }
             };
 
@@ -395,9 +395,12 @@ impl<S> Replica<S>
                                     &mut self.executor,
                                     &mut self.consensus,
                                 )?;
-                                self.switch_phase(self.phase_stack
+
+                                let next_phase = self.phase_stack
                                     .take()
-                                    .unwrap_or(ReplicaPhase::NormalPhase));
+                                    .unwrap_or(ReplicaPhase::NormalPhase);
+
+                                self.switch_phase(next_phase);
                             }
                             CstStatus::SeqNo(seq) => {
                                 if self.consensus.sequence_number() < seq {
@@ -444,7 +447,9 @@ impl<S> Replica<S>
                         }
                     }
                     // FIXME: handle rogue reply messages
-                    SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
+                    // Should never
+                    SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
+                    SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected")
                 }
             }
             Message::Timeout(timeout_kind) => {
@@ -547,7 +552,8 @@ impl<S> Replica<S>
                         }
                     }
                     // FIXME: handle rogue reply messages
-                    SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
+                    SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
+                    SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected")
                 }
             }
             //////// XXX XXX XXX XXX
@@ -724,7 +730,8 @@ impl<S> Replica<S>
                         // std::hint::spin_loop();
                     }
                     // FIXME: handle rogue reply messages
-                    SystemMessage::Reply(_) => panic!("Rogue reply message detected"),
+                    SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
+                    SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected")
                 }
             }
             Message::Timeout(timeout_kind) => {

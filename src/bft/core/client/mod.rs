@@ -124,7 +124,7 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
 
                 Poll::Pending
             })
-            .unwrap_or_else(|| {
+            .unwrap_or_else(|_| {
                 //Failed to get the lock, try again
                 cx.waker().wake_by_ref();
                 Poll::Pending
@@ -176,6 +176,7 @@ impl<D> Client<D>
                 .take(num_cpus::get())
                 .collect(),
             observer: Arc::new(Mutex::new(None)),
+            observer_ready: Mutex::new(None)
         });
 
         let task_data = Arc::clone(&data);
@@ -217,8 +218,6 @@ impl<D> Client<D>
 
         &self.data.observer
     }
-
-    pub fn observer(&self) -> Arc<ObserverClient<D>> {}
 
     #[inline]
     pub fn id(&self) -> NodeId {
@@ -280,7 +279,7 @@ impl<D> Client<D>
 
         //Scope the mutex operations to reduce the lifetime of the guard
         {
-            let mut ready_callback_guard = ready.lock();
+            let mut ready_callback_guard = ready.lock().unwrap();
 
             ready_callback_guard.insert(request_key, callback);
         }
@@ -302,7 +301,7 @@ impl<D> Client<D>
         id
     }
 
-    fn start_timeout(&self, session_id: SeqNo, rq_id: SeqNo, client_data: Arc<ClientData<D::Reply>>) {
+    fn start_timeout(&self, session_id: SeqNo, rq_id: SeqNo, client_data: Arc<ClientData<D>>) {
         let node_id = self.node.id();
 
         let node = self.node.clone();
@@ -317,7 +316,7 @@ impl<D> Client<D>
             {
                 let bucket = get_ready::<D>(session_id, &*client_data);
 
-                let bucket_guard = bucket.lock();
+                let bucket_guard = bucket.lock().unwrap();
 
                 let request = bucket_guard.get(req_key);
 
@@ -348,7 +347,7 @@ impl<D> Client<D>
             {
                 let bucket = get_ready_callback::<D>(session_id, &*client_data);
 
-                let bucket_guard = bucket.lock();
+                let bucket_guard = bucket.lock().unwrap();
 
                 let request = bucket_guard.get(req_key);
 
@@ -383,7 +382,7 @@ impl<D> Client<D>
     /// This leaves this thread with a very large task to do in a very short time and it just can't keep up
     fn message_recv_task(
         params: SystemParams,
-        data: Arc<ClientData<D::Reply>>,
+        data: Arc<ClientData<D>>,
         node: Arc<Node<D>>,
     ) {
         // use session id as key
@@ -439,7 +438,7 @@ impl<D> Client<D>
                                 {
                                     let ready_callback = get_ready_callback::<D>(session_id, &*data);
 
-                                    let mut ready_callback_lock = ready_callback.lock();
+                                    let mut ready_callback_lock = ready_callback.lock().unwrap();
 
                                     if ready_callback_lock.contains_key(request_key) {
                                         let callback = ready_callback_lock.remove(request_key).unwrap();
@@ -459,7 +458,7 @@ impl<D> Client<D>
                                     }
                                 }
 
-                                let mut ready = get_ready::<D>(session_id, &*data).lock();
+                                let mut ready = get_ready::<D>(session_id, &*data).lock().unwrap();
                                 let request = IntMapEntry::get(request_key, &mut *ready)
                                     .or_insert_with(|| Ready { payload: None, waker: None, timed_out: AtomicBool::new(false) });
 
@@ -501,14 +500,14 @@ fn get_request_key(session_id: SeqNo, operation_id: SeqNo) -> u64 {
 }
 
 #[inline]
-fn get_ready<D: SharedData>(session_id: SeqNo, data: &ClientData<D::Reply>) -> &Mutex<IntMap<Ready<D::Reply>>> {
+fn get_ready<D: SharedData>(session_id: SeqNo, data: &ClientData<D>) -> &Mutex<IntMap<Ready<D::Reply>>> {
     let session_id: usize = session_id.into();
     let index = session_id % data.ready.len();
     &data.ready[index]
 }
 
 #[inline]
-fn get_ready_callback<D: SharedData>(session_id: SeqNo, data: &ClientData<D::Reply>) -> &Mutex<IntMap<Callback<D::Reply>>> {
+fn get_ready_callback<D: SharedData>(session_id: SeqNo, data: &ClientData<D>) -> &Mutex<IntMap<Callback<D::Reply>>> {
     let session_id: usize = session_id.into();
     let index = session_id % data.callback_ready.len();
 

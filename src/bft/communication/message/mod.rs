@@ -279,11 +279,8 @@ impl<S, O, P> Debug for SystemMessage<S, O, P> {
             SystemMessage::ForwardedRequests(fr) => {
                 write!(f, "forwarded requests")
             }
-            SystemMessage::ObserverRegister => {
-                write!(f, "register observer")
-            }
-            SystemMessage::ObservedValue(_) => {
-                write!(f, "observed value")
+            SystemMessage::ObserverMessage(message) => {
+                write!(f, "observer message")
             }
         }
     }
@@ -599,9 +596,9 @@ impl<O> ConsensusMessage<O> {
 
 ///Observer related messages
 ///@{
-
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
 pub enum ObserverMessage {
-
     ///Observer client related messages
     ///Register the client that sent this as an observer
     ObserverRegister,
@@ -614,6 +611,7 @@ pub enum ObserverMessage {
 }
 
 ///The kinds of events that can be reported by the replicas to observers
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub enum ObserveEventKind {
     ///Report a checkpoint type event
