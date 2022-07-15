@@ -639,8 +639,11 @@ pub enum ObserveEventKind {
 impl Debug for ObserveEventKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ObserveEventKind::Checkpoint(_) => {
-                write!(f, "Checkpoint event")
+            ObserveEventKind::CheckpointStart(_) => {
+                write!(f, "Checkpoint start event")
+            }
+            ObserveEventKind::CheckpointEnd(_) => {
+                write!(f, "Checkpoint end event")
             }
             ObserveEventKind::Consensus(_) => {
                 write!(f, "Consensus event")

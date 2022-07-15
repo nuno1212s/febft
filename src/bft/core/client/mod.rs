@@ -211,9 +211,21 @@ impl<D> Client<D>
         })
     }
 
-    fn bootstrap_observer(&self) -> &Arc<Mutex<Option<ObserverClient<D>>>> {
+    ///Bootstrap an observer client and get a reference to the observer clientA
+    async fn bootstrap_observer(&mut self) -> &Arc<Mutex<Option<ObserverClient<D>>>> {
         {
-            let guard = self.data.observer.lock().unwrap();
+            let mut guard = self.data.observer.lock().unwrap();
+
+            if let None = &*guard {
+
+                drop(guard);
+
+                let observer = ObserverClient::bootstrap_client(self).await;
+
+                let mut guard = self.data.observer.lock().unwrap();
+
+                let _ = guard.insert(observer);
+            }
         }
 
         &self.data.observer

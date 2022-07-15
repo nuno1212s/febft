@@ -196,13 +196,15 @@ impl<S> Replica<S>
         let f = node_config.f;
         let view = ViewInfo::new(view, n, f)?;
 
+        let log_node_id = node_config.id.clone();
+
         // TODO: get log from persistent storage
         // connect to peer nodes
         let (node, rogue) = Node::bootstrap(node_config).await?;
 
         let observer_handle = observer::start_observers(node.send_node());
 
-        let mut log = Log::new(node_config.id.clone(), global_batch_size, observer_handle);
+        let mut log = Log::new(log_node_id, global_batch_size, observer_handle.clone());
 
         let node_clone = node.clone();
 
