@@ -607,7 +607,6 @@ pub enum ObserverMessage {
     ObserverUnregister,
     ///A status update sent to an observer client as an observer
     ObservedValue(ObserveEventKind),
-
 }
 
 ///The kinds of events that can be reported by the replicas to observers
@@ -625,7 +624,7 @@ pub enum ObserveEventKind {
     ///Report that the replica is now in the normal
     ///phase of the algorithm
     ///
-    /// The provided SeqNo is of the current view number and the current sequence number within
+    /// The provided SeqNos are, in order, of the current view number and the current sequence number within
     /// That view and the nodeid is of the current leader in this new view
     NormalPhase((SeqNo, SeqNo, NodeId)),
     ///Report that the replica has entered the view change phase

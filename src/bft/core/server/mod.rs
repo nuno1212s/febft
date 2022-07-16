@@ -253,9 +253,9 @@ impl<S> Replica<S>
             executor,
             node,
             log: log.clone(),
-            client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts, consensus_info.clone(),
+            client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts,consensus_info.clone(),
                                          consensus_guard.clone(), global_batch_size,
-                                         batch_timeout),
+                                         batch_timeout, observer_handle.clone(),),
             rq_finalizer,
             observer_handle: observer_handle.clone(),
         };

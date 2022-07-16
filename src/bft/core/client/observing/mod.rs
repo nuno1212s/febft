@@ -14,18 +14,18 @@ use crate::bft::core::client::{Client, ClientData};
 
 ///Callback to when the replicas send their notifications
 ///When a new observe event is received, this function will be executed
-pub trait ObserverCallback<D> where D: SharedData + 'static {
+pub trait ObserverCallback {
     fn handle_event(&self, event: ObserveEventKind);
 }
 
 ///Structure to hold all of the currently registered callbacks to know
 ///where to deliver the messages
-pub struct ObserverClient<D> where D: SharedData + 'static {
-    registered_callbacks: Vec<Box<dyn ObserverCallback<D> + Send + 'static>>,
+pub struct ObserverClient {
+    registered_callbacks: Vec<Box<dyn ObserverCallback + Send + 'static>>,
 }
 
-impl<D> ObserverClient<D> where D: SharedData + 'static {
-    pub async fn bootstrap_client(client: &mut Client<D>) -> ObserverClient<D> {
+impl ObserverClient {
+    pub async fn bootstrap_client<D>(client: &mut Client<D>) -> ObserverClient where D: SharedData + 'static {
         let targets = NodeId::targets(0..client.params.n());
 
         //Register the observer clients with the client node
@@ -38,11 +38,11 @@ impl<D> ObserverClient<D> where D: SharedData + 'static {
         }
     }
 
-    pub fn register_observer(&mut self, callback: Box<dyn ObserverCallback<D> + Send + 'static>) {
+    pub fn register_observer(&mut self, callback: Box<dyn ObserverCallback + Send + 'static>) {
         self.registered_callbacks.push(callback);
     }
 
-    pub(super) fn handle_observed_message(client_data: &Arc<ClientData<D>>, observed_msg: ObserverMessage) {
+    pub(super) fn handle_observed_message<D>(client_data: &Arc<ClientData<D>>, observed_msg: ObserverMessage) where D: SharedData + 'static {
         match observed_msg {
             ObserverMessage::ObserverRegister | ObserverMessage::ObserverUnregister => {
                 warn!("Cannot register at the client side???");

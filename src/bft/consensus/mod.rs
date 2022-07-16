@@ -6,7 +6,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ::log::debug;
+use ::log::{debug, warn};
 use chrono::offset::Utc;
 use either::{
     Left,
@@ -19,10 +19,10 @@ use crate::bft::communication::{
     Node,
     NodeId,
 };
-use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, Message, RequestMessage, SerializedMessage, StoredMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
+use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, Message, ObserveEventKind, RequestMessage, SerializedMessage, StoredMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
 use crate::bft::communication::serialize::DigestData;
 use crate::bft::consensus::log::Log;
-use crate::bft::core::server::observer::ObserverHandle;
+use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
@@ -465,6 +465,8 @@ impl<S> Consensus<S>
 
     /// Starts a new consensus instance.
     pub fn next_instance(&mut self, sync: &Arc<Synchronizer<S>>) {
+        let prev_seq = self.curr_seq.clone();
+
         self.tbo.next_instance_queue();
 
         let mut guard = self.consensus_lock.lock();
@@ -472,6 +474,10 @@ impl<S> Consensus<S>
         *guard = (self.curr_seq, sync.view());
 
         self.consensus_guard.store(false, Ordering::SeqCst);
+
+        if let Err(_) = self.observer_handle.tx().send(MessageType::Event(ObserveEventKind::Consensus(prev_seq))) {
+            warn!("Failed to notify observers of the consensus instance")
+        }
     }
 
     /// Sets the id of the current consensus.

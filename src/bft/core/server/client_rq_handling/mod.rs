@@ -2,16 +2,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use log::{error, warn};
 
 use chrono::{DateTime, Utc};
 use parking_lot::{Mutex};
 use crate::bft::communication::{channel, Node, NodeId};
 use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
-use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, RequestMessage, StoredMessage, SystemMessage};
+use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, ObserverMessage, RequestMessage, StoredMessage, SystemMessage};
 use crate::bft::communication::message::Message::System;
 
 use crate::bft::consensus::log::Log;
 use crate::bft::core::server::{ViewInfo};
+use crate::bft::core::server::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::executable::{Reply, Request, Service, State};
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::sync::Synchronizer;
@@ -29,6 +31,7 @@ pub struct RqProcessor<S: Service + 'static> {
     log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
     consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
     consensus_guard: Arc<AtomicBool>,
+    observer_handle: ObserverHandle,
     cancelled: AtomicBool,
     //The target
     target_global_batch_size: usize,
@@ -48,7 +51,8 @@ impl<S: Service> RqProcessor<S> {
                consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
                consensus_guard: Arc<AtomicBool>,
                target_global_batch_size: usize,
-               global_batch_time_limit: u128) -> Arc<Self> {
+               global_batch_time_limit: u128,
+               observer_handle: ObserverHandle, ) -> Arc<Self> {
         let (channel_tx, channel_rx) = channel::new_bounded_sync(BATCH_CHANNEL_SIZE);
 
         Arc::new(Self {
@@ -62,6 +66,7 @@ impl<S: Service> RqProcessor<S> {
             consensus_guard,
             target_global_batch_size,
             global_batch_time_limit,
+            observer_handle,
         })
     }
 
@@ -142,15 +147,32 @@ impl<S: Service> RqProcessor<S> {
                                             //to_log.push(StoredMessage::new(header, req));
                                         }
                                         SystemMessage::Reply(rep) => {
-                                            panic!("Received system reply msg")
+                                            warn!("Received system reply msg")
+                                        }
+                                        SystemMessage::ObserverMessage(msg) => {
+                                            match msg {
+                                                ObserverMessage::ObserverRegister => {
+                                                    //Avoid sending these messages to the main replica
+                                                    //Processing thread and just process them here instead as it
+                                                    //Does not delay the process
+                                                    if let Err(_) = self.observer_handle.tx().send(
+                                                        MessageType::Conn(ConnState::Connected(header.from()))
+                                                    ) {
+                                                        error!("Failed to send messages to the observer handle.");
+                                                    }
+                                                }
+                                                _ => {
+                                                    warn!("Received observer message that are not register?");
+                                                }
+                                            }
                                         }
                                         _ => {
-                                            panic!("Received system message that was unexpected!");
+                                            warn!("Received system message that was unexpected!");
                                         }
                                     }
                                 }
                                 _ => {
-                                    panic!("Client sent a message that he should not have sent!");
+                                    warn!("Client sent a message that he should not have sent!");
                                 }
                             }
                         }

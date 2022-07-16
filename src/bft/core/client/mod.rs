@@ -61,7 +61,7 @@ struct ClientData<D> where D: SharedData + 'static {
     callback_ready: Vec<Mutex<IntMap<Callback<D::Reply>>>>,
     //We only want to have a single observer client for any and all sessions that the user
     //May have, so we keep this reference in here
-    observer: Arc<Mutex<Option<ObserverClient<D>>>>,
+    observer: Arc<Mutex<Option<ObserverClient>>>,
     observer_ready: Mutex<Option<observing::Ready>>,
 }
 
@@ -211,8 +211,8 @@ impl<D> Client<D>
         })
     }
 
-    ///Bootstrap an observer client and get a reference to the observer clientA
-    async fn bootstrap_observer(&mut self) -> &Arc<Mutex<Option<ObserverClient<D>>>> {
+    ///Bootstrap an observer client and get a reference to the observer client
+    pub async fn bootstrap_observer(&mut self) -> &Arc<Mutex<Option<ObserverClient>>> {
         {
             let mut guard = self.data.observer.lock().unwrap();
 

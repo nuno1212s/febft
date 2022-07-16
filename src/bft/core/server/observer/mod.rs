@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use log::warn;
+use log::{info, warn};
 use crate::bft;
 use crate::bft::communication::channel::{ChannelMixedRx, ChannelMixedTx};
 use crate::bft::communication::message::{ObserveEventKind, ObserverMessage, SystemMessage};
@@ -79,8 +79,10 @@ impl<D> Observers<D> where D: SharedData + 'static{
                             match connection {
                                 ConnState::Connected(connected_client) => {
                                     //Register the new observer into the observer vec
-                                    if self.register_observer(connected_client) {
-                                        warn!("Tried to double add an observer.");
+                                    if !self.register_observer(connected_client.clone()) {
+                                        warn!("{:?} // Tried to double add an observer.", self.send_node.id());
+                                    } else {
+                                        info!("{:?} // Observer {:?} has been registered", self.send_node.id(), connected_client);
                                     }
                                 }
                                 ConnState::Disconnected(disconnected_client) => {
@@ -99,7 +101,9 @@ impl<D> Observers<D> where D: SharedData + 'static{
                             }).into_iter();
                             
                             let targets = NodeId::targets(registered_obs);
-                            
+
+                            info!("{:?} // Notifying observers of occurrence" , self.send_node.id());
+
                             self.send_node.broadcast(message, targets);
                         }
                     }
