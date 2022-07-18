@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use log::{info, warn};
+use log::{debug, info, warn};
 use crate::bft;
 use crate::bft::communication::channel::{ChannelMixedRx, ChannelMixedTx};
 use crate::bft::communication::message::{ObserveEventKind, ObserverMessage, SystemMessage};
@@ -79,11 +79,17 @@ impl<D> Observers<D> where D: SharedData + 'static{
                             match connection {
                                 ConnState::Connected(connected_client) => {
                                     //Register the new observer into the observer vec
-                                    if !self.register_observer(connected_client.clone()) {
+                                    let res = self.register_observer(connected_client.clone());
+
+                                    if !res {
                                         warn!("{:?} // Tried to double add an observer.", self.send_node.id());
                                     } else {
                                         info!("{:?} // Observer {:?} has been registered", self.send_node.id(), connected_client);
                                     }
+
+                                    let message = SystemMessage::ObserverMessage(ObserverMessage::ObserverRegisterResponse(res));
+
+                                    self.send_node.send(message, connected_client, true);
                                 }
                                 ConnState::Disconnected(disconnected_client) => {
                                     if !self.remove_observers(&disconnected_client) {
@@ -102,7 +108,7 @@ impl<D> Observers<D> where D: SharedData + 'static{
                             
                             let targets = NodeId::targets(registered_obs);
 
-                            info!("{:?} // Notifying observers of occurrence" , self.send_node.id());
+                            debug!("{:?} // Notifying observers of occurrence" , self.send_node.id());
 
                             self.send_node.broadcast(message, targets);
                         }

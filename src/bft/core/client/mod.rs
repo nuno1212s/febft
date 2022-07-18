@@ -1,5 +1,6 @@
 //! Contains the client side core protocol logic of `febft`.
 
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::io::Read;
 use std::ops::Deref;
@@ -12,7 +13,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use futures_timer::Delay;
 use intmap::IntMap;
-use log::{error, warn};
+use log::{error, info, warn};
 
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::{Node, NodeConfig, NodeId, SendNode};
@@ -140,6 +141,7 @@ pub struct ClientConfig {
 
 struct ReplicaVotes {
     count: usize,
+    voted: BTreeSet<NodeId>,
     digest: Digest,
 }
 
@@ -176,7 +178,7 @@ impl<D> Client<D>
                 .take(num_cpus::get())
                 .collect(),
             observer: Arc::new(Mutex::new(None)),
-            observer_ready: Mutex::new(None)
+            observer_ready: Mutex::new(None),
         });
 
         let task_data = Arc::clone(&data);
@@ -217,7 +219,6 @@ impl<D> Client<D>
             let mut guard = self.data.observer.lock().unwrap();
 
             if let None = &*guard {
-
                 drop(guard);
 
                 let observer = ObserverClient::bootstrap_client(self).await;
@@ -429,22 +430,28 @@ impl<D> Client<D>
                                 .or_insert_with(|| {
                                     ReplicaVotes {
                                         count: 0,
+                                        voted: Default::default(),
                                         digest: header.digest().clone(),
                                     }
                                 });
+
+                            if votes.voted.contains(&header.from()) {
+                                error!("Replica {:?} voted twice for the same request, ignoring!", header.from());
+                                continue
+                            }
+
+                            votes.voted.insert(header.from());
 
                             // register new reply received
                             if &votes.digest == header.digest() {
                                 votes.count += 1;
                             }
 
-                            // TODO: check if a replica hasn't voted
-                            // twice for the same digest
-
-                            // wait for at least f+1 identical replies
-                            if votes.count > params.f() {
-                                // update intmap states
+                            // wait for at least 2f+1 identical replies
+                            if votes.count > 2 * params.f() {
                                 replica_votes.remove(request_key);
+
+                                last_operation_ids.remove(session_id.into());
                                 last_operation_ids.insert(session_id.into(), operation_id);
 
                                 {
