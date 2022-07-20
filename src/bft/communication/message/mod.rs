@@ -618,7 +618,19 @@ pub enum ObserveEventKind {
     CheckpointStart(SeqNo),
     ///Report a checkpoint end type event
     CheckpointEnd(SeqNo),
-    ///Report a consensus type event
+    ///Report that the given replica has received a preprepare request
+    ///And it's now going to enter into it's prepare phase
+    /// 
+    ///  param is the seq no of the received preprepare request, and therefore
+    /// of the current consensus instance
+    Prepare(SeqNo),
+    ///Report that the given replica has received all required prepare messages
+    ///And is now going to enter consensus phase
+    /// 
+    /// param is the seq no of the current consensus instance
+    Commit(SeqNo),
+    ///Report that the given replica has received all required commit messages
+    /// and has sent the request for execution as the consensus has been finished
     /// The provided SeqNo is the sequence number of the last executed operation
     Consensus(SeqNo),
     ///Report that the replica is now in the normal
@@ -655,6 +667,12 @@ impl Debug for ObserveEventKind {
             }
             ObserveEventKind::CollabStateTransfer => {
                 write!(f, "Collab state transfer")
+            }
+            ObserveEventKind::Prepare(_) => {
+                write!(f, "Prepare state entered")
+            }
+            ObserveEventKind::Commit(_) => {
+                write!(f, "Commit state entered")
             }
         }
     }
