@@ -1,5 +1,6 @@
 //! Communication primitives for `febft`, such as wire message formats.
 
+use std::convert::TryFrom;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -27,7 +28,8 @@ use log::kv::Source;
 use tracing::{debug, instrument, error};
 use parking_lot::{RwLock};
 
-use rustls::{ClientConfig, ServerConfig};
+use rustls::{ClientConfig, ClientConnection, ServerConfig, ServerConnection, ServerName};
+use rustls::client::InvalidDnsNameError;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -1512,11 +1514,22 @@ impl<D> Node<D>
                     let sock = if peer_id >= first_cli || my_id >= first_cli {
                         SecureSocketSendSync::Plain(sock)
                     } else {
-                        let dns_ref = webpki::DNSNameRef::try_from_ascii_str(hostname.as_str()).expect("Failed to parse DNS hostname");
+                        let dns_ref = match ServerName::try_from(hostname.as_str()) {
+                            Ok(server_name) => {
+                                server_name
+                            }
+                            Err(err) => {
+                                error!("Failed to parse DNS name {:?}", err);
 
-                        let mut session = rustls::ClientSession::new(&connector, dns_ref);
+                                break;
+                            }
+                        };
 
-                        SecureSocketSendSync::new_tls(session, sock)
+                        if let Ok(mut session) = ClientConnection::new(connector.clone(), dns_ref) {
+                            SecureSocketSendSync::new_tls(session, sock)
+                        } else {
+                            break;
+                        }
                     };
 
                     let final_sock = SecureSocketSend::Sync(SocketSendSync::new(sock));
@@ -1716,9 +1729,13 @@ impl<D> Node<D>
             let sock = if peer_id >= first_cli || my_id >= first_cli {
                 SecureSocketRecvSync::Plain(sock)
             } else {
-                let mut tls_session = rustls::ServerSession::new(&acceptor);
+                if let Ok(mut tls_session) = ServerConnection::new(acceptor.clone()) {
+                    SecureSocketRecvSync::new_tls(tls_session, sock)
+                } else {
+                    error!("{:?} // Failed to setup TLS Connection with peer {:?}", my_id, peer_id);
 
-                SecureSocketRecvSync::new_tls(tls_session, sock)
+                    return;
+                }
             };
 
             let cpy_peer_id = peer_id.clone();

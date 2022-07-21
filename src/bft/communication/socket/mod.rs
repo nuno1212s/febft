@@ -1,12 +1,9 @@
 //! Abstractions over different socket types of crates in the Rust ecosystem.
 
-use std::borrow::BorrowMut;
-use std::cell::RefCell;
 use std::io;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use async_tls::{
@@ -21,10 +18,7 @@ use futures::io::{
     BufWriter,
 };
 
-use rustls::{ClientSession, ServerSession, Session, Stream, StreamOwned};
-use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
-use crate::bft::communication::message::{OwnedWireMessage, WireMessage};
-use crate::bft::communication::serialize::Buf;
+use rustls::{ClientConnection, ServerConnection, StreamOwned};
 
 use crate::bft::error;
 
@@ -196,22 +190,22 @@ pub enum SecureSocketSendAsync {
 
 pub enum SecureSocketRecvSync {
     Plain(SyncSocket),
-    Tls(StreamOwned<ServerSession, SyncSocket>),
+    Tls(StreamOwned<ServerConnection, SyncSocket>),
 }
 
 pub enum SecureSocketSendSync {
     Plain(SyncSocket),
-    Tls(StreamOwned<ClientSession, SyncSocket>),
+    Tls(StreamOwned<ClientConnection, SyncSocket>),
 }
 
 impl SecureSocketRecvSync {
-    pub fn new_tls(session: ServerSession, socket: SyncSocket) -> Self {
+    pub fn new_tls(session: ServerConnection, socket: SyncSocket) -> Self {
         SecureSocketRecvSync::Tls(StreamOwned::new(session, socket))
     }
 }
 
 impl SecureSocketSendSync {
-    pub fn new_tls(session: ClientSession, socket: SyncSocket) -> Self {
+    pub fn new_tls(session: ClientConnection, socket: SyncSocket) -> Self {
         SecureSocketSendSync::Tls(StreamOwned::new(session, socket))
     }
 }
