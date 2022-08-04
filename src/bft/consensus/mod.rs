@@ -6,7 +6,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ::log::{debug, warn};
+use ::log::{debug, error, warn};
 use chrono::offset::Utc;
 use either::{
     Left,
@@ -469,13 +469,15 @@ impl<S> Consensus<S>
 
         self.tbo.next_instance_queue();
 
-        let mut guard = self.consensus_lock.lock();
+        {
+            let mut guard = self.consensus_lock.lock();
 
-        *guard = (self.curr_seq, sync.view());
+            *guard = (self.curr_seq, sync.view());
+        }
 
         self.consensus_guard.store(false, Ordering::SeqCst);
 
-        if let Err(_) = self.observer_handle.tx().send(MessageType::Event(ObserveEventKind::Consensus(prev_seq))) {
+        if let Err(_) = self.observer_handle.tx().send(MessageType::Event(ObserveEventKind::Ready(self.curr_seq))) {
             warn!("Failed to notify observers of the consensus instance")
         }
     }
@@ -720,6 +722,13 @@ impl<S> Consensus<S>
 
                 //Start the count at one since the leader always agrees with his own pre-prepare message
                 self.phase = ProtoPhase::Preparing(1);
+
+                //Notify the observers
+                if let Err(err) =
+                self.observer_handle.tx().send(MessageType::Event(ObserveEventKind::Prepare(seq))) {
+                    error!("{:?}", err);
+                }
+
                 ConsensusStatus::Deciding
             }
             ProtoPhase::PreparingRequests => {
@@ -821,6 +830,11 @@ impl<S> Consensus<S>
 
                     log.batch_meta().lock().commit_sent_time = Utc::now();
 
+                    if let Err(err) =
+                    self.observer_handle.tx().send(MessageType::Event(ObserveEventKind::Commit(self.sequence_number()))) {
+                        error!("{:?}", err);
+                    }
+
                     //Preemptively store the next instance and view and allow the rq handler
                     //to start sending the propose request for the next batch
 
@@ -892,6 +906,10 @@ impl<S> Consensus<S>
                     // notify core protocol
                     self.phase = ProtoPhase::Init;
                     log.batch_meta().lock().consensus_decision_time = Utc::now();
+
+                    if let Err(_) = self.observer_handle.tx().send(MessageType::Event(ObserveEventKind::Consensus(self.sequence_number()))) {
+                        warn!("Failed to notify observers of the consensus instance")
+                    }
 
                     ConsensusStatus::Decided(batch_digest, &self.current[..self.batch_size])
                 } else {

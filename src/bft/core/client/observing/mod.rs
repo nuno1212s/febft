@@ -22,6 +22,7 @@ pub trait ObserverCallback {
 ///where to deliver the messages
 pub struct ObserverClient {
     registered_callbacks: Vec<Box<dyn ObserverCallback + Send + 'static>>,
+    registered_callback_fns: Vec<Box<fn(ObserveEventKind)>>
 }
 
 impl ObserverClient {
@@ -34,12 +35,17 @@ impl ObserverClient {
         PendingObserverRequestFut { responses_needed: 0, ready: &client.data.observer_ready }.await;
 
         ObserverClient {
-            registered_callbacks: Vec::new()
+            registered_callbacks: Vec::new(),
+            registered_callback_fns: Vec::new()
         }
     }
 
     pub fn register_observer(&mut self, callback: Box<dyn ObserverCallback + Send + 'static>) {
         self.registered_callbacks.push(callback);
+    }
+
+    pub fn register_observer_fn(&mut self, callback: Box<fn(ObserveEventKind)>) {
+        self.registered_callback_fns.push(callback)
     }
 
     pub(super) fn handle_observed_message<D>(client_data: &Arc<ClientData<D>>, observed_msg: ObserverMessage) where D: SharedData + 'static {
@@ -81,6 +87,10 @@ impl ObserverClient {
                 if let Some(observer) = &*result {
                     for x in observer.registered_callbacks.iter() {
                         x.handle_event(value.clone());
+                    }
+
+                    for x in observer.registered_callback_fns.iter() {
+                        x(value.clone());
                     }
                 }
             }

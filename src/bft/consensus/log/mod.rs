@@ -719,7 +719,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
 
         // let mut latest_op_guard = self.latest_op().lock();
 
-        let mut batch = UpdateBatch::new_with_cap(rqs.len());
+        let mut batch = UpdateBatch::new_with_cap(seq, rqs.len());
 
         for x in rqs {
             let (header, message) = x.into_inner();

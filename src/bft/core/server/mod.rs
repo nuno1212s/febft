@@ -216,6 +216,7 @@ impl<S> Replica<S>
             log.clone(),
             service,
             node.send_node(),
+            observer_handle.clone(),
         )?;
 
         // start timeouts handler
@@ -349,12 +350,9 @@ impl<S> Replica<S>
                 (_, ReplicaPhase::NormalPhase) => {
                     let current_view = self.synchronizer.view();
 
-                    let view_seq = current_view.sequence_number();
                     let current_seq = self.consensus.sequence_number();
 
-                    let leader = current_view.leader();
-
-                    ObserveEventKind::NormalPhase((view_seq, current_seq, leader))
+                    ObserveEventKind::NormalPhase((current_view, current_seq))
                 }
             };
 
@@ -770,6 +768,7 @@ impl<S> Replica<S>
                 &mut self.node,
             );
         }
+
         Ok(())
     }
 

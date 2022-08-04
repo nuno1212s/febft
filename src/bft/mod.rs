@@ -38,6 +38,7 @@ pub struct InitConfig {
 /// Handle to the global data.
 ///
 /// When dropped, the data is deinitialized.
+#[repr(transparent)]
 pub struct InitGuard;
 
 /// Initializes global data.

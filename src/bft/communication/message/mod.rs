@@ -37,6 +37,7 @@ use crate::bft::ordering::{
 use crate::bft::consensus::log::CollectData;
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::NodeId;
+use crate::bft::core::server::ViewInfo;
 use crate::bft::timeouts::TimeoutKind;
 use crate::bft::sync::LeaderCollects;
 use crate::bft::cst::RecoveryState;
@@ -617,7 +618,12 @@ pub enum ObserveEventKind {
     /// The provided SeqNo is the last seq number of requests executed before the checkpoint
     CheckpointStart(SeqNo),
     ///Report a checkpoint end type event
+    /// The provided SeqNo is the current seq number that is going to be used
     CheckpointEnd(SeqNo),
+    ///Report that the system is ready for another round of consensus
+    ///
+    /// The param is the seq no of the next consensus round
+    Ready(SeqNo),
     ///Report that the given replica has received a preprepare request
     ///And it's now going to enter into it's prepare phase
     /// 
@@ -631,20 +637,24 @@ pub enum ObserveEventKind {
     Commit(SeqNo),
     ///Report that the given replica has received all required commit messages
     /// and has sent the request for execution as the consensus has been finished
+    ///
     /// The provided SeqNo is the sequence number of the last executed operation
     Consensus(SeqNo),
+    ///Report that the previous consensus has been executed and written to the drive
+    ///
+    /// param is the seq number of the consensus instance that was executed
+    Executed(SeqNo),
     ///Report that the replica is now in the normal
     ///phase of the algorithm
     ///
-    /// The provided SeqNos are, in order, of the current view number and the current sequence number within
-    /// That view and the nodeid is of the current leader in this new view
-    NormalPhase((SeqNo, SeqNo, NodeId)),
+    /// The provided info is the info about the view and the current sequence number
+    NormalPhase((ViewInfo, SeqNo)),
     ///Report that the replica has entered the view change phase
     /// The provided SeqNo is the seq number of the new view and the current seq no
     ViewChangePhase,
     /// Report that the replica is now in the collaborative state
     /// transfer state
-    CollabStateTransfer
+    CollabStateTransfer,
 }
 
 impl Debug for ObserveEventKind {
@@ -673,6 +683,12 @@ impl Debug for ObserveEventKind {
             }
             ObserveEventKind::Commit(_) => {
                 write!(f, "Commit state entered")
+            }
+            ObserveEventKind::Ready(seq) => {
+                write!(f, "Ready to receive next consensus {:?}", seq)
+            }
+            ObserveEventKind::Executed(seq) => {
+                write!(f, "Executed the consensus instance {:?}", seq)
             }
         }
     }

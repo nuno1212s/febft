@@ -11,7 +11,7 @@ use crate::bft::consensus::log::{Info, Log, operation_key};
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UpdateBatch};
 use crate::bft::ordering::{Orderable, SeqNo};
 
-type RequestToProcess<O> = (Info, BatchMeta, Vec<StoredMessage<RequestMessage<O>>>);
+type RequestToProcess<O> = (Info, BatchMeta, SeqNo, Vec<StoredMessage<RequestMessage<O>>>);
 
 const REQ_BATCH_BUFF: usize = 1024;
 
@@ -34,8 +34,8 @@ impl<S> RqFinalizerHandle<S> where S: Service + 'static {
         }
     }
 
-    pub fn queue_finalize(&self, info: Info, batch_meta: BatchMeta, rqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
-        self.channel.send((info, batch_meta, rqs)).expect("Failed to finalize")
+    pub fn queue_finalize(&self, info: Info, batch_meta: BatchMeta, seq: SeqNo, rqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
+        self.channel.send((info, batch_meta,seq, rqs)).expect("Failed to finalize")
     }
 }
 
@@ -80,9 +80,9 @@ impl<S> RqFinalizer<S> where S: Service + 'static {
         std::thread::Builder::new().name(format!("{:?} // Request finalizer thread", self.node_id))
             .spawn(move || {
                 loop {
-                    let (info, batch_meta, rqs) = self.channel.recv().unwrap();
+                    let (info, batch_meta, seq, rqs) = self.channel.recv().unwrap();
 
-                    let mut batch = UpdateBatch::new_with_cap(rqs.len());
+                    let mut batch = UpdateBatch::new_with_cap(seq, rqs.len());
 
                     let mut latest_op_update = BTreeMap::new();
 

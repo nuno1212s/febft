@@ -8,17 +8,14 @@ use log::error;
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::{channel, NodeId, SendNode};
 use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
-use crate::bft::communication::message::{
-    Message,
-    ReplyMessage,
-    SystemMessage,
-};
+use crate::bft::communication::message::{Message, ObserveEventKind, ReplyMessage, SystemMessage};
 use crate::bft::communication::serialize::{
     //ReplicaDurability,
     SharedData,
 };
 use crate::bft::consensus::log::Log;
 use crate::bft::core::server::client_replier::ReplyHandle;
+use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
 
@@ -43,6 +40,7 @@ pub struct UpdateReply<P> {
 /// Storage for a batch of client update requests to be executed.
 #[derive(Clone)]
 pub struct UpdateBatch<O> {
+    seq_no: SeqNo,
     inner: Vec<Update<O>>,
 }
 
@@ -157,6 +155,7 @@ pub struct Executor<S: Service + 'static> {
     log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
     reply_worker: ReplyHandle<S>,
     send_node: SendNode<S::Data>,
+    observer_handle: ObserverHandle,
 }
 
 /// Represents a handle to the client request executor.
@@ -216,6 +215,7 @@ impl<S> Executor<S>
         log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
         mut service: S,
         send_node: SendNode<S::Data>,
+        observer: ObserverHandle,
     ) -> Result<ExecutorHandle<S>> {
         let (e_tx, e_rx) = channel::new_bounded_sync(EXECUTING_BUFFER);
 
@@ -230,6 +230,7 @@ impl<S> Executor<S>
             reply_worker,
             log,
             send_node,
+            observer_handle: observer,
         };
 
         // this thread is responsible for actually executing
@@ -248,19 +249,23 @@ impl<S> Executor<S>
                         }
                     }
                     ExecutionRequest::Update(meta, batch) => {
+                        let seq_no = batch.seq_no.clone();
+
                         let reply_batch = exec.service.update_batch(&mut exec.state, batch, meta);
 
                         // deliver replies
-                        exec.execution_finished(reply_batch);
+                        exec.execution_finished(seq_no, reply_batch);
                     }
                     ExecutionRequest::UpdateAndGetAppstate(meta, batch) => {
+                        let seq_no = batch.seq_no.clone();
+
                         let reply_batch = exec.service.update_batch(&mut exec.state, batch, meta);
 
                         // deliver checkpoint state to the replica
                         exec.deliver_checkpoint_state();
 
                         // deliver replies
-                        exec.execution_finished(reply_batch);
+                        exec.execution_finished(seq_no, reply_batch);
                     }
                     ExecutionRequest::Read(_peer_id) => {
                         todo!()
@@ -284,10 +289,13 @@ impl<S> Executor<S>
         };
     }
 
-    fn execution_finished(&mut self, batch: UpdateBatchReplies<Reply<S>>) {
-        let batch_meta = Arc::clone(self.log.batch_meta());
-
+    fn execution_finished(&mut self, seq: SeqNo, batch: UpdateBatchReplies<Reply<S>>) {
         let mut send_node = self.send_node.clone();
+
+        if let Err(err) =
+        self.observer_handle.tx().send(MessageType::Event(ObserveEventKind::Executed(seq))) {
+            error!("{:?}", err);
+        }
 
         crate::bft::threadpool::execute(move || {
             let mut batch = batch.into_inner();
@@ -338,12 +346,12 @@ impl<S> Executor<S>
 
 impl<O> UpdateBatch<O> {
     /// Returns a new, empty batch of requests.
-    pub fn new() -> Self {
-        Self { inner: Vec::new() }
+    pub fn new(seq_no: SeqNo) -> Self {
+        Self { seq_no, inner: Vec::new() }
     }
 
-    pub fn new_with_cap(capacity: usize) -> Self {
-        Self { inner: Vec::with_capacity(capacity) }
+    pub fn new_with_cap(seq_no: SeqNo, capacity: usize) -> Self {
+        Self { seq_no, inner: Vec::with_capacity(capacity) }
     }
 
     /// Adds a new update request to the batch.
