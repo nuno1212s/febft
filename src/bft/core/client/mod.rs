@@ -497,8 +497,10 @@ impl<D> Client<D>
                         }
                         SystemMessage::ObserverMessage(message) => {
 
+                            let msg = Message::System(header, SystemMessage::ObserverMessage(message));
+
                             //Pass this message off to the observing module
-                            ObserverClient::handle_observed_message(&data, message);
+                            ObserverClient::handle_observed_message(&data, msg);
                         }
                         // FIXME: handle rogue messages on clients
                         _ => panic!("rogue message detected"),

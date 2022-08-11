@@ -27,7 +27,7 @@ use crate::bft::timeouts::{
     TimeoutsHandle,
 };
 use crate::bft::consensus::log::{
-    Log,
+    MemLog,
     Checkpoint,
     DecisionLog,
 };
@@ -77,7 +77,7 @@ pub struct RecoveryState<S, O> {
 pub fn install_recovery_state<S>(
     recovery_state: RecoveryState<State<S>, Request<S>>,
     synchronizer: &Synchronizer<S>,
-    log: &Log<State<S>, Request<S>, Reply<S>>,
+    log: &MemLog<State<S>, Request<S>, Reply<S>>,
     executor: &mut ExecutorHandle<S>,
     consensus: &mut Consensus<S>,
 ) -> Result<()>
@@ -250,7 +250,7 @@ where
         header: Header,
         message: CstMessage<State<S>, Request<S>>,
         synchronizer: &Synchronizer<S>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &MemLog<State<S>, Request<S>, Reply<S>>,
         node: &Node<S::Data>,
     ) {
         let snapshot = match log.snapshot(synchronizer.view()) {
@@ -273,7 +273,7 @@ where
         progress: CstProgress<State<S>, Request<S>>,
         synchronizer: &Synchronizer<S>,
         consensus: &Consensus<S>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &MemLog<State<S>, Request<S>, Reply<S>>,
         node: &Node<S::Data>,
     ) -> CstStatus<State<S>, Request<S>> {
         match self.phase {
@@ -473,7 +473,7 @@ where
         synchronizer: &Synchronizer<S>,
         timeouts: &TimeoutsHandle<S>,
         node: &Node<S::Data>,
-        log: &Log<State<S>, Request<S>, Reply<S>>
+        log: &MemLog<State<S>, Request<S>, Reply<S>>
     ) {
         // reset state of latest seq no. request
         self.latest_cid = SeqNo::ZERO;
@@ -498,7 +498,7 @@ where
         synchronizer: &Synchronizer<S>,
         timeouts: &TimeoutsHandle<S>,
         node: &Node<S::Data>,
-        log: &Log<State<S>, Request<S>, Reply<S>>
+        log: &MemLog<State<S>, Request<S>, Reply<S>>
     ) {
         // reset hashmap of received states
         self.received_states.clear();

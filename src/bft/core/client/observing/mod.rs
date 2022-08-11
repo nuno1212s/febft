@@ -2,12 +2,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use log::warn;
+use log::{error, warn};
 use core::task::{Waker, Context};
-
 use std::task::Poll;
-
-use crate::bft::communication::message::{ObserveEventKind, ObserverMessage, SystemMessage};
+use crate::bft::communication::message::{Message, ObserveEventKind, ObserverMessage, SystemMessage};
 use crate::bft::communication::NodeId;
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::core::client::{Client, ClientData};
@@ -15,14 +13,21 @@ use crate::bft::core::client::{Client, ClientData};
 ///Callback to when the replicas send their notifications
 ///When a new observe event is received, this function will be executed
 pub trait ObserverCallback {
-    fn handle_event(&self, event: ObserveEventKind);
+    fn handle_event(&self, event: ObserveEventKind, n: usize);
 }
+
+const QUORUM: usize = 3;
 
 ///Structure to hold all of the currently registered callbacks to know
 ///where to deliver the messages
 pub struct ObserverClient {
     registered_callbacks: Vec<Box<dyn ObserverCallback + Send + 'static>>,
-    registered_callback_fns: Vec<Box<fn(ObserveEventKind)>>
+    registered_callback_fns: Vec<Box<fn(ObserveEventKind, usize)>>,
+
+    //The messages that we have received and the replicas that sent them
+    //This is because we only want to deliver messages when we get 2f+1, as that's the only
+    //Time where we can guarantee that the observation is the correct one.
+    received_observations: Vec<(ObserveEventKind, Vec<NodeId>)>,
 }
 
 impl ObserverClient {
@@ -36,7 +41,9 @@ impl ObserverClient {
 
         ObserverClient {
             registered_callbacks: Vec::new(),
-            registered_callback_fns: Vec::new()
+            registered_callback_fns: Vec::new(),
+
+            received_observations: vec![],
         }
     }
 
@@ -44,56 +51,111 @@ impl ObserverClient {
         self.registered_callbacks.push(callback);
     }
 
-    pub fn register_observer_fn(&mut self, callback: Box<fn(ObserveEventKind)>) {
+    pub fn register_observer_fn(&mut self, callback: Box<fn(ObserveEventKind, usize)>) {
         self.registered_callback_fns.push(callback)
     }
 
-    pub(super) fn handle_observed_message<D>(client_data: &Arc<ClientData<D>>, observed_msg: ObserverMessage) where D: SharedData + 'static {
+    pub(super) fn handle_observed_message<D>(client_data: &Arc<ClientData<D>>,
+                                             observed_msg: Message<D::State, D::Request, D::Reply>)
+        where D: SharedData + 'static {
         match observed_msg {
-            ObserverMessage::ObserverRegister | ObserverMessage::ObserverUnregister => {
-                warn!("Cannot register at the client side???");
-            }
-            ObserverMessage::ObserverRegisterResponse(success) => {
-                if success {
-                    let mut guard = client_data.observer_ready.lock().unwrap();
+            Message::System(header, sys_msg) => {
+                match sys_msg {
+                    SystemMessage::ObserverMessage(observed_msg) => {
+                        match observed_msg {
+                            ObserverMessage::ObserverRegister | ObserverMessage::ObserverUnregister => {
+                                warn!("Cannot register at the client side???");
+                            }
+                            ObserverMessage::ObserverRegisterResponse(success) => {
+                                if success {
+                                    let mut guard = client_data.observer_ready.lock().unwrap();
 
-                    let ready = match &mut *guard {
-                        None => {
-                            guard.insert(Ready {
-                                waker: None,
-                                responses_received: Default::default(),
-                                timed_out: Default::default(),
-                            })
+                                    let ready = match &mut *guard {
+                                        None => {
+                                            guard.insert(Ready {
+                                                waker: None,
+                                                responses_received: Default::default(),
+                                                timed_out: Default::default(),
+                                            })
+                                        }
+                                        Some(ready) => { ready }
+                                    };
+
+                                    ready.responses_received.fetch_add(1, Ordering::SeqCst);
+
+                                    if let Some(waker) = &ready.waker {
+                                        //Since we don't have access to the necessary number of responses
+                                        //We just wake the thread to check if it's done
+                                        waker.wake_by_ref();
+                                    }
+                                }
+                            }
+                            ObserverMessage::ObservedValue(value) => {
+                                let mut result = client_data.observer.lock().unwrap();
+
+                                //Since there probably won't be much contention in this lock
+                                //as this will only be accessed when registering the observer
+                                //And when delivering requests (and that's only done on the message processing thread of each client
+                                //So only one thread will access it at once for most of the time
+                                if let Some(observer) = &mut *result {
+                                    for i in 0..observer.received_observations.len() {
+                                        let (event, sent) = observer.received_observations.get_mut(i).unwrap();
+
+                                        match (&value, event) {
+                                            (ObserveEventKind::CheckpointStart(seq), ObserveEventKind::CheckpointStart(seq2)) if seq == seq2 => {}
+                                            (ObserveEventKind::CheckpointEnd(seq), ObserveEventKind::CheckpointEnd(seq2)) if seq == seq2 => {}
+                                            (ObserveEventKind::Ready(seq), ObserveEventKind::Ready(seq2)) if seq == seq2 => {}
+                                            (ObserveEventKind::Prepare(seq), ObserveEventKind::Prepare(seq2)) if seq == seq2 => {}
+                                            (ObserveEventKind::Commit(seq), ObserveEventKind::Commit(seq2)) if seq == seq2 => {}
+                                            (ObserveEventKind::Executed(seq), ObserveEventKind::Executed(seq2)) if seq == seq2 => {}
+                                            (ObserveEventKind::NormalPhase((view, seq)), ObserveEventKind::NormalPhase((view2, seq2))) if seq == seq2 && view == view2 => {}
+                                            (ObserveEventKind::ViewChangePhase, ObserveEventKind::ViewChangePhase) => {}
+                                            (ObserveEventKind::CollabStateTransfer, ObserveEventKind::CollabStateTransfer) => {}
+                                            (_, _) => {
+                                                continue;
+                                            }
+                                        }
+
+                                        if sent.contains(&header.from()) {
+                                            error!("Repeat message received!");
+
+                                            break;
+                                        } else {
+                                            sent.push(header.from());
+
+                                            if sent.len() == QUORUM {
+                                                //Deliver the observed
+                                                for x in observer.registered_callbacks.iter() {
+                                                    x.handle_event(value.clone(), sent.len());
+                                                }
+
+                                                for x in observer.registered_callback_fns.iter() {
+                                                    x(value.clone(), sent.len());
+                                                }
+                                            } else if sent.len() > QUORUM {
+                                                observer.received_observations.remove(i);
+
+                                                //Deliver the observed
+                                                for x in observer.registered_callbacks.iter() {
+                                                    x.handle_event(value.clone(), sent.len());
+                                                }
+
+                                                for x in observer.registered_callback_fns.iter() {
+                                                    x(value.clone(), sent.len());
+                                                }
+                                            }
+                                        }
+
+                                        break;
+                                    }
+                                }
+                            }
                         }
-                        Some(ready) => { ready }
-                    };
-
-                    ready.responses_received.fetch_add(1, Ordering::SeqCst);
-
-                    if let Some(waker) = &ready.waker {
-                        //Since we don't have access to the necessary number of responses
-                        //We just wake the thread to check if it's done
-                        waker.wake_by_ref();
                     }
+                    _ => { error!("Wrong sys message type!") }
                 }
             }
-            ObserverMessage::ObservedValue(value) => {
-                let result = client_data.observer.lock().unwrap();
-
-                //Since there probably won't be much contention in this lock
-                //as this will only be accessed when registering the observer
-                //And when delivering requests (and that's only done on the message processing thread of each client
-                //So only one thread will access it at once for most of the time
-                if let Some(observer) = &*result {
-                    for x in observer.registered_callbacks.iter() {
-                        x.handle_event(value.clone());
-                    }
-
-                    for x in observer.registered_callback_fns.iter() {
-                        x(value.clone());
-                    }
-                }
-            }
+            _ => { error!("This message does not belong here!"); }
         }
     }
 }

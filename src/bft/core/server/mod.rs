@@ -1,19 +1,16 @@
 //! Contains the server side core protocol logic of `febft`.
 
-use std::cell::Cell;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use chrono::DateTime;
 use chrono::offset::Utc;
 use log::{debug, warn};
-use parking_lot::Mutex;
+use rocksdb::{DB, Options};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 
-use crate::bft::async_runtime as rt;
-use crate::bft::async_runtime::JoinHandle;
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::{
     Node,
@@ -28,7 +25,7 @@ use crate::bft::consensus::{
 };
 use crate::bft::consensus::log::{
     Info,
-    Log,
+    MemLog,
 };
 use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::client_rq_handling::RqProcessor;
@@ -71,6 +68,7 @@ pub mod observer;
 pub mod client_rq_handling;
 pub mod rq_finalizer;
 pub mod client_replier;
+pub mod follower_handling;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub(crate) enum ReplicaPhase {
@@ -143,7 +141,7 @@ pub struct Replica<S: Service + 'static> {
     synchronizer: Arc<Synchronizer<S>>,
     consensus: Consensus<S>,
     cst: CollabStateTransfer<S>,
-    log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
+    log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
     client_rqs: Arc<RqProcessor<S>>,
     node: Arc<Node<S::Data>>,
     rq_finalizer: RqFinalizerHandle<S>,
@@ -198,13 +196,15 @@ impl<S> Replica<S>
 
         let log_node_id = node_config.id.clone();
 
+        let db = DB::open(&Options::default(), node_config.db_path).unwrap();
+
         // TODO: get log from persistent storage
         // connect to peer nodes
         let (node, rogue) = Node::bootstrap(node_config).await?;
 
         let observer_handle = observer::start_observers(node.send_node());
 
-        let mut log = Log::new(log_node_id, global_batch_size, observer_handle.clone());
+        let mut log = MemLog::new(log_node_id, global_batch_size, observer_handle.clone());
 
         let node_clone = node.clone();
 
@@ -251,12 +251,14 @@ impl<S> Replica<S>
             consensus: Consensus::new(next_consensus_seq, node.id(), global_batch_size, consensus_info.clone(),
                                       consensus_guard.clone(), observer_handle.clone()),
             timeouts: timeouts.clone(),
-            executor,
             node,
             log: log.clone(),
-            client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts,consensus_info.clone(),
+            client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts,
+                                         executor.clone(),
+                                         consensus_info.clone(),
                                          consensus_guard.clone(), global_batch_size,
                                          batch_timeout, observer_handle.clone(),),
+            executor,
             rq_finalizer,
             observer_handle: observer_handle.clone(),
         };

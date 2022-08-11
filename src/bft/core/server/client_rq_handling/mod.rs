@@ -1,20 +1,20 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use log::{error, warn};
 
 use chrono::{DateTime, Utc};
-use parking_lot::{Mutex};
 use crate::bft::communication::{channel, Node, NodeId};
 use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, ObserverMessage, RequestMessage, StoredMessage, SystemMessage};
 use crate::bft::communication::message::Message::System;
 
-use crate::bft::consensus::log::Log;
+use crate::bft::threadpool;
+use crate::bft::consensus::log::MemLog;
 use crate::bft::core::server::{ViewInfo};
 use crate::bft::core::server::observer::{ConnState, MessageType, ObserverHandle};
-use crate::bft::executable::{Reply, Request, Service, State};
+use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UnorderedBatch};
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::sync::Synchronizer;
 use crate::bft::timeouts::TimeoutsHandle;
@@ -28,7 +28,9 @@ pub struct RqProcessor<S: Service + 'static> {
     node_ref: Arc<Node<S::Data>>,
     synchronizer: Arc<Synchronizer<S>>,
     timeouts: Arc<TimeoutsHandle<S>>,
-    log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
+    log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
+    //For unordered request execution
+    executor_handle: ExecutorHandle<S>,
     consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
     consensus_guard: Arc<AtomicBool>,
     observer_handle: ObserverHandle,
@@ -46,8 +48,9 @@ const BATCH_CHANNEL_SIZE: usize = 128;
 
 impl<S: Service> RqProcessor<S> {
     pub fn new(node: Arc<Node<S::Data>>, sync: Arc<Synchronizer<S>>,
-               log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
+               log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
                timeouts: Arc<TimeoutsHandle<S>>,
+               executor_handle: ExecutorHandle<S>,
                consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
                consensus_guard: Arc<AtomicBool>,
                target_global_batch_size: usize,
@@ -67,6 +70,7 @@ impl<S: Service> RqProcessor<S> {
             target_global_batch_size,
             global_batch_time_limit,
             observer_handle,
+            executor_handle,
         })
     }
 
@@ -78,15 +82,17 @@ impl<S: Service> RqProcessor<S> {
     pub fn start(self: Arc<Self>) -> JoinHandle<()> {
         std::thread::Builder::new()
             .spawn(move || {
-
-                //The currently accumulated requests, accumulated while we wait for the next batch to propose
-                let mut currently_accumulated = Vec::with_capacity(self.node_ref.batch_size() * 10);
-
-                let mut last_seq = Option::None;
-
                 let mut collected_per_batch_total: u64 = 0;
                 let mut collections: u32 = 0;
                 let mut batches_made: u32 = 0;
+
+                //The currently accumulated requests, accumulated while we wait for the next batch to propose
+                let mut currently_accumulated = Vec::with_capacity(self.target_global_batch_size * 10);
+
+                let mut last_seq = None;
+                let mut last_unordered_batch = Instant::now();
+
+                let mut currently_accumulated_unordered = Vec::with_capacity(self.target_global_batch_size * 2);
 
                 let mut last_proposed_batch = Instant::now();
 
@@ -96,7 +102,9 @@ impl<S: Service> RqProcessor<S> {
                     }
 
                     //We only want to produce batches to the channel if we are the leader, as
-                    //Only the leader will propose things
+                    //Only the leader will propose thing
+
+                    //TODO: Maybe not use this as it can spam the lock on synchronizer?
                     let mut is_leader = self.synchronizer.view().leader() == self.node_ref.id();
 
                     //We do this as we don't want to get stuck waiting for requests that might never arrive
@@ -146,6 +154,9 @@ impl<S: Service> RqProcessor<S> {
                                             //Store the message in the log in this thread.
                                             //to_log.push(StoredMessage::new(header, req));
                                         }
+                                        SystemMessage::UnOrderedRequest(req) => {
+                                            currently_accumulated_unordered.push(StoredMessage::new(header, req));
+                                        }
                                         SystemMessage::Reply(rep) => {
                                             warn!("Received system reply msg")
                                         }
@@ -182,6 +193,9 @@ impl<S: Service> RqProcessor<S> {
                         //self.requests_received(DateTime::from(SystemTime::now()), to_log);
                     }
 
+                    //Lets first deal with unordered requests since it should be much quicker and easier
+                    self.propose_unordered(&mut currently_accumulated_unordered, &mut last_unordered_batch);
+
                     if is_leader && !currently_accumulated.is_empty() {
                         let current_batch_size = currently_accumulated.len();
 
@@ -196,13 +210,14 @@ impl<S: Service> RqProcessor<S> {
                                 continue;
                             }
                         }
+
                         //Attempt to propose new batch
                         match self.consensus_guard.compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed) {
                             Ok(_) => {
                                 last_proposed_batch = Instant::now();
 
                                 batches_made += 1;
-                                let guard = self.consensus_lock.lock();
+                                let guard = self.consensus_lock.lock().unwrap();
 
                                 let (seq, view) = *guard;
 
@@ -222,7 +237,7 @@ impl<S: Service> RqProcessor<S> {
                                 let next_batch = if currently_accumulated.len() > self.target_global_batch_size {
 
                                     //TODO: just make processing these batches faster
-                                    //If the batch is too large (120k requests for example, we can get stuck on processing them as they all come at once and
+                                    //If the batch is too large (120k requests for example, we can get stuck on processing (execution) them as they all come at once and
                                     //Producing the replies takes some time.)
                                     //So we will split it up here
 
@@ -252,6 +267,7 @@ impl<S: Service> RqProcessor<S> {
 
                                 currently_accumulated = next_batch.unwrap_or(Vec::with_capacity(self.node_ref.batch_size() * 2));
 
+                                //Stats
                                 if batches_made % 10000 == 0 {
                                     let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
 
@@ -271,6 +287,56 @@ impl<S: Service> RqProcessor<S> {
                     std::thread::yield_now();
                 }
             }).unwrap()
+    }
+
+    fn propose_unordered(&self,
+                         currently_unordered_batch: &mut Vec<StoredMessage<RequestMessage<S::Data>>>,
+                         last_unordered_batch: &mut Instant) {
+
+        if !currently_unordered_batch.is_empty() {
+            let current_batch_size = currently_unordered_batch.len();
+
+            let should_exec = if current_batch_size < self.target_global_batch_size {
+                let micros_since_last_batch = Instant::now().duration_since(*last_unordered_batch).as_micros();
+
+                if micros_since_last_batch <= self.global_batch_time_limit {
+                    //Don't execute yet since we don't have the size and haven't timed
+                    //out
+                    false
+                } else {
+                    //We have timed out, execute the pending requests
+                    true
+                }
+            } else {
+                true
+            };
+
+            if should_exec {
+
+                let mut new_accumulated_vec = Vec::with_capacity(self.target_global_batch_size * 2);
+
+                std::mem::swap(last_unordered_batch, &mut Instant::now());
+                //swap in the new vec and take the previous one to the threadpool
+                std::mem::swap(currently_unordered_batch, &mut new_accumulated_vec);
+
+                threadpool::execute(move || {
+                    let mut unordered_batch = UnorderedBatch::new_with_cap(new_accumulated_vec.len());
+
+                    for request in new_accumulated_vec {
+                        let (header, message) = request.into_inner();
+
+                        unordered_batch.add(header.from(),
+                                            message.session_id(),
+                                            message.sequence_number(),
+                                            message.operation());
+                    }
+
+                    if let Err(err) = self.executor_handle.queue_update_unordered(unordered_batch) {
+                        error!("Error while proposing unordered batch of requests: {:?}", err);
+                    }
+                });
+            }
+        }
     }
 
     pub fn cancel(&self) {

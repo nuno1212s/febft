@@ -10,6 +10,7 @@ use std::sync::Arc;
 use intmap::IntMap;
 use log::debug;
 use parking_lot::{Mutex};
+use rocksdb::DB;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +26,8 @@ use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
 use crate::bft::executable::{Request, UpdateBatch};
 use crate::bft::ordering::{Orderable, SeqNo};
+
+pub mod persistent;
 
 /// Checkpoint period.
 ///
@@ -466,8 +469,11 @@ impl<O: Clone> DecisionLog<O> {
 }
 
 /// Represents a log of messages received by the BFT system.
-pub struct Log<S, O, P> {
+pub struct MemLog<S, O, P> {
     node_id: NodeId,
+
+    db_obj: DB,
+
     //This item will only be accessed by the replica request thread
     curr_seq: Cell<SeqNo>,
     batch_size: usize,
@@ -504,17 +510,17 @@ pub struct Log<S, O, P> {
 /// from the other threads and actual consensus to be reached.
 /// The requests, latest_op and batch meta can be accessed and altered by both the replica request thread
 /// and the client request thread, so we protected only those fields
-unsafe impl<S, O, P> Sync for Log<S, O, P> {}
+unsafe impl<S, O, P> Sync for MemLog<S, O, P> {}
 
 // TODO:
 // - garbage collect the log
 // - save the log to persistent storage
-impl<S, O: Clone, P> Log<S, O, P> {
+impl<S, O: Clone, P> MemLog<S, O, P> {
     /// Creates a new message log.
     ///
     /// The value `batch_size` represents the maximum number of
     /// client requests to queue before executing a consensus instance.
-    pub fn new(node: NodeId, batch_size: usize, observer: ObserverHandle) -> Arc<Self> {
+    pub fn new(node: NodeId, batch_size: usize, observer: ObserverHandle, db: DB) -> Arc<Self> {
         Arc::new(Self {
             node_id: node,
             batch_size,
@@ -529,6 +535,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
             meta: Arc::new(Mutex::new(BatchMeta::new())),
             _marker: PhantomData,
             observer: Some(observer),
+            db_obj: db,
         })
     }
 
@@ -598,14 +605,14 @@ impl<S, O: Clone, P> Log<S, O, P> {
             SystemMessage::Request(message) => {
                 let key = operation_key::<O>(&header, &message);
 
-                let latest_op_guard = self.latest_op.lock();
+                let seq_no = {
+                    let latest_op_guard = self.latest_op.lock();
 
-                let seq_no = latest_op_guard
-                    .get(key)
-                    .copied()
-                    .unwrap_or(SeqNo::ZERO);
-
-                drop(latest_op_guard);
+                    latest_op_guard
+                        .get(key)
+                        .copied()
+                        .unwrap_or(SeqNo::ZERO)
+                };
 
                 // avoid executing earlier requests twice
                 if message.sequence_number() < seq_no {
@@ -850,4 +857,65 @@ pub fn operation_key<O>(header: &Header, message: &RequestMessage<O>) -> u64 {
 
     // therefore this is safe, and will not delete any bits
     client_id | (session_id << 32)
+}
+
+pub trait LogT<S, O: Clone, P> {
+    fn latest_op(&self) -> &Mutex<IntMap<SeqNo>>;
+
+    fn batch_meta(&self) -> &Arc<Mutex<BatchMeta>>;
+
+    /// Adds a new `message` and its respective `header` to the log.
+    fn insert(&self, header: Header, message: SystemMessage<S, O, P>);
+
+    /// Checks if this `Log` has a particular request with the given `digest`.
+    fn has_request(&self, digest: &Digest) -> bool;
+
+    /// Clone the requests corresponding to the provided list of hash digests.
+    fn clone_requests(&self, digest: &[Digest]) -> Vec<StoredMessage<RequestMessage<O>>>;
+
+    ///Insert a batched group of operations into the log.
+    /// This batch comes from the pre-prepare operations sent by the leader
+    fn insert_batched(&self, batch_digest: Digest, batch: Vec<StoredMessage<RequestMessage<O>>>);
+
+    ///Take batched requests from the log.
+    ///This returns the batch of requests corresponding the given digest
+    fn take_batched(&self, batch_digest: &Digest) -> Option<Vec<StoredMessage<RequestMessage<O>>>>;
+
+    /// Finalize a batch of client requests decided on the consensus instance
+    /// with sequence number `seq`, retrieving the payload associated with their
+    /// given digests `digests`.
+    ///
+    /// The log may be cleared resulting from this operation. Check the enum variant of
+    /// `Info`, to perform a local checkpoint when appropriate.
+    fn finalize_batch(&self, seq: SeqNo, batch_digest: Digest, digests: &[Digest]) -> Result<(Info, UpdateBatch<O>)>;
+
+    /// Retrieves a batch of requests to be proposed during a view change.
+    /// This request batch should be composed of requests that were not proposed
+    /// by the leader and that should be proposed.
+    fn view_change_propose(&self) -> Vec<StoredMessage<RequestMessage<O>>>;
+
+    /// Update the log state, received from the CST protocol.
+    fn install_state(&self, last_seq: SeqNo, rs: RecoveryState<S, O>);
+
+    /// Take a snapshot of the log, used to recover a replica.
+    ///
+    /// This method may fail if we are waiting for the latest application
+    /// state to be returned by the execution layer.
+    //
+    // TODO: return reference to the log state, so we don't have to clone()
+    // it, which can be quite expensive
+    //
+    fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<S, O>>
+        where
+            S: Clone,
+            O: Clone;
+
+    fn begin_checkpoint(&self, seq: SeqNo) -> Result<Info>;
+
+    /// End the state of an on-going checkpoint.
+    ///
+    /// This method should only be called when `finalize_request()` reports
+    /// `Info::BeginCheckpoint`, and the requested application state is received
+    /// on the core server task's master channel.
+    fn finalize_checkpoint(&self, appstate: S) -> Result<()>;
 }

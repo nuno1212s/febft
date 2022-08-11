@@ -301,9 +301,9 @@ pub struct NodeConfig {
     /// The TLS configuration used to accept connections from client nodes.
     pub async_server_config: ServerConfig,
     ///The TLS configuration used to accept connections from replica nodes (Synchronously)
-    pub sync_server_config: rustls::ServerConfig,
+    pub sync_server_config: ServerConfig,
     ///The TLS configuration used to connect to replica nodes (from replica nodes) (Synchronousy)
-    pub sync_client_config: rustls::ClientConfig,
+    pub sync_client_config: ClientConfig,
     ///How many clients should be placed in a single collecting pool (seen in peer_handling)
     pub clients_per_pool: usize,
     ///The timeout for batch collection in each client pool.
@@ -314,6 +314,8 @@ pub struct NodeConfig {
     pub batch_sleep_micros: u64,
     ///Statistics for communications
     pub comm_stats: Option<Arc<CommStats>>,
+    ///Path for the db file
+    pub db_path: &'static str
 }
 
 // max no. of messages allowed in the channel
@@ -2018,6 +2020,8 @@ impl<D> Node<D>
                 }
             };
 
+            //Just to obtain the request key for logging purposes, in the case this is indeed a 
+            //Client request
             let req_key = match &message {
                 SystemMessage::Request(req) => {
                     Some(get_request_key(req.session_id(), req.sequence_number()))

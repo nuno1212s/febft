@@ -3,16 +3,16 @@ use std::sync::Arc;
 use crate::bft::communication::{channel, NodeId, SendNode};
 use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::{ReplyMessage, SystemMessage};
-use crate::bft::consensus::log::Log;
-use crate::bft::executable::{Reply, Request, Service, State, UpdateBatchReplies};
+use crate::bft::consensus::log::MemLog;
+use crate::bft::executable::{Reply, Request, Service, State, BatchReplies};
 
-type RepliesType<S> = UpdateBatchReplies<S>;
+type RepliesType<S> = BatchReplies<S>;
 
 pub struct Replier<S> where S: Service + 'static {
     node_id: NodeId,
     channel:  ChannelSyncRx<RepliesType<Reply<S>>>,
     send_node: SendNode<S::Data>,
-    log: Arc<Log<State<S>, Request<S>, Reply<S>>>
+    log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>
 }
 
 pub struct ReplyHandle<S> where S: Service {
@@ -50,7 +50,7 @@ impl<S> Clone for ReplyHandle<S> where S: Service {
 impl<S> Replier<S> where S: Service + 'static{
 
     pub fn new(node_id: NodeId, send_node: SendNode<S::Data>,
-               log: Arc<Log<State<S>, Request<S>, Reply<S>>>) -> ReplyHandle<S> {
+               log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>) -> ReplyHandle<S> {
         let (ch_tx, ch_rx) = channel::new_bounded_sync(REPLY_CHANNEL_SIZE);
 
         let reply_task = Self {

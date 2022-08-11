@@ -6,13 +6,12 @@
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::collections::VecDeque;
-use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
+
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use intmap::IntMap;
-use parking_lot::{Mutex, RwLock};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 
@@ -38,7 +37,7 @@ use crate::bft::communication::serialize::{
 use crate::bft::consensus::Consensus;
 use crate::bft::consensus::log::{
     CollectData,
-    Log,
+    MemLog,
     Proof,
     ViewDecisionPair,
 };
@@ -383,15 +382,15 @@ impl<S> Synchronizer<S>
     }
 
     pub fn signal(&self) {
-        self.tbo.lock().signal()
+        self.tbo.lock().unwrap().signal()
     }
 
     pub fn queue(&self, header: Header, message: ViewChangeMessage<Request<S>>) {
-        self.tbo.lock().queue(header, message)
+        self.tbo.lock().unwrap().queue(header, message)
     }
 
     pub fn can_process_stops(&self) -> bool {
-        self.tbo.lock().can_process_stops()
+        self.tbo.lock().unwrap().can_process_stops()
     }
 
     /// Watch a client request with the digest `digest`.
@@ -410,7 +409,7 @@ impl<S> Synchronizer<S>
         &self,
         requests: ForwardedRequestsMessage<Request<S>>,
         timeouts: &TimeoutsHandle<S>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &MemLog<State<S>, Request<S>, Reply<S>>,
     ) {
         let phase = TimeoutPhase::TimedOutOnce(Instant::now());
 
@@ -431,7 +430,7 @@ impl<S> Synchronizer<S>
         batch_digest: Digest,
         requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         timeouts: &TimeoutsHandle<S>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &MemLog<State<S>, Request<S>, Reply<S>>,
     ) -> Vec<Digest> {
         let mut digests = Vec::with_capacity(requests.len());
 
@@ -469,7 +468,7 @@ impl<S> Synchronizer<S>
 
     fn add_stopped_requests(
         &self,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &MemLog<State<S>, Request<S>, Reply<S>>,
     ) {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
@@ -530,14 +529,14 @@ impl<S> Synchronizer<S>
     pub fn install_view(&self, view: ViewInfo) {
         // FIXME: is the following line necessary?
         //self.phase = ProtoPhase::Init;
-        let mut guard = self.tbo.lock();
+        let mut guard = self.tbo.lock().unwrap();
 
         guard.install_view(view);
     }
 
     /// Check if we can process new view change messages.
     pub fn poll(&self) -> SynchronizerPollStatus<Request<S>> {
-        let mut tbo_guard = self.tbo.lock();
+        let mut tbo_guard = self.tbo.lock().unwrap();
         match *self.phase.borrow() {
             _ if !tbo_guard.get_queue => SynchronizerPollStatus::Recv,
             ProtoPhase::Init => {
@@ -579,7 +578,7 @@ impl<S> Synchronizer<S>
         header: Header,
         message: ViewChangeMessage<Request<S>>,
         timeouts: &TimeoutsHandle<S>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &MemLog<State<S>, Request<S>, Reply<S>>,
         consensus: &mut Consensus<S>,
         node: &Node<S::Data>,
     ) -> SynchronizerStatus {
@@ -587,21 +586,21 @@ impl<S> Synchronizer<S>
             ProtoPhase::Init => {
                 match message.kind() {
                     ViewChangeMessageKind::Stop(_) => {
-                        let mut guard = self.tbo.lock();
+                        let mut guard = self.tbo.lock().unwrap();
 
                         guard.queue_stop(header, message);
 
                         return SynchronizerStatus::Nil;
                     }
                     ViewChangeMessageKind::StopData(_) => {
-                        let mut guard = self.tbo.lock();
+                        let mut guard = self.tbo.lock().unwrap();
 
                         guard.queue_stop_data(header, message);
 
                         return SynchronizerStatus::Nil;
                     }
                     ViewChangeMessageKind::Sync(_) => {
-                        let mut guard = self.tbo.lock();
+                        let mut guard = self.tbo.lock().unwrap();
 
                         guard.queue_sync(header, message);
 
@@ -616,7 +615,7 @@ impl<S> Synchronizer<S>
 
                 let i = match message.kind() {
                     ViewChangeMessageKind::Stop(_) if msg_seq != next_seq => {
-                        let mut guard = self.tbo.lock();
+                        let mut guard = self.tbo.lock().unwrap();
 
                         guard.queue_stop(header, message);
 
@@ -628,14 +627,14 @@ impl<S> Synchronizer<S>
                     }
                     ViewChangeMessageKind::Stop(_) => i + 1,
                     ViewChangeMessageKind::StopData(_) => {
-                        let mut guard = self.tbo.lock();
+                        let mut guard = self.tbo.lock().unwrap();
 
                         guard.queue_stop_data(header, message);
 
                         return stop_status!(self, i);
                     }
                     ViewChangeMessageKind::Sync(_) => {
-                        let mut guard = self.tbo.lock();
+                        let mut guard = self.tbo.lock().unwrap();
 
                         guard.queue_sync(header, message);
 
@@ -687,6 +686,7 @@ impl<S> Synchronizer<S>
                     let message = SystemMessage::ViewChange(ViewChangeMessage::new(
                         current_view.sequence_number(),
                         ViewChangeMessageKind::StopData(collect),
+
                     ));
 
                     node.send_signed(message, current_view.leader());
@@ -702,11 +702,11 @@ impl<S> Synchronizer<S>
                 let seq = current_view.sequence_number();
 
                 // reject STOP-DATA messages if we are not the leader
-                let mut collects_guard = self.collects.lock();
+                let mut collects_guard = self.collects.lock().unwrap();
 
                 let i = match message.kind() {
                     ViewChangeMessageKind::Stop(_) => {
-                        let mut guard = self.tbo.lock();
+                        let mut guard = self.tbo.lock().unwrap();
 
                         guard.queue_stop(header, message);
 
@@ -714,7 +714,7 @@ impl<S> Synchronizer<S>
                     }
                     ViewChangeMessageKind::StopData(_) if msg_seq != seq => {
                         if current_view.peek(msg_seq).leader() == node.id() {
-                            let mut guard = self.tbo.lock();
+                            let mut guard = self.tbo.lock().unwrap();
 
                             guard.queue_stop_data(header, message);
                         }
@@ -729,7 +729,7 @@ impl<S> Synchronizer<S>
                     }
                     ViewChangeMessageKind::StopData(_) => i + 1,
                     ViewChangeMessageKind::Sync(_) => {
-                        let mut guard = self.tbo.lock();
+                        let mut guard = self.tbo.lock().unwrap();
                         guard.queue_sync(header, message);
 
                         return SynchronizerStatus::Running;
@@ -818,21 +818,21 @@ impl<S> Synchronizer<S>
                 // reject SYNC messages if these were not sent by the leader
                 let (proposed, collects) = match message.kind() {
                     ViewChangeMessageKind::Stop(_) => {
-                        let mut guard = self.tbo.lock();
+                        let mut guard = self.tbo.lock().unwrap();
 
                         guard.queue_stop(header, message);
 
                         return SynchronizerStatus::Running;
                     }
                     ViewChangeMessageKind::StopData(_) => {
-                        let mut guard = self.tbo.lock();
+                        let mut guard = self.tbo.lock().unwrap();
 
                         guard.queue_stop_data(header, message);
 
                         return SynchronizerStatus::Running;
                     }
                     ViewChangeMessageKind::Sync(_) if msg_seq != seq => {
-                        let mut guard = self.tbo.lock();
+                        let mut guard = self.tbo.lock().unwrap();
 
                         guard.queue_sync(header, message);
 
@@ -875,7 +875,7 @@ impl<S> Synchronizer<S>
                     sound,
                     proposed,
                 };
-                let mut collects_guard = self.collects.lock();
+                let mut collects_guard = self.collects.lock().unwrap();
 
                 finalize_view_change!(
                     self,
@@ -896,7 +896,7 @@ impl<S> Synchronizer<S>
     /// Resume the view change protocol after running the CST protocol.
     pub fn resume_view_change(
         &self,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &MemLog<State<S>, Request<S>, Reply<S>>,
         consensus: &mut Consensus<S>,
         node: &Node<S::Data>,
     ) -> Option<()> {
@@ -904,7 +904,8 @@ impl<S> Synchronizer<S>
             .finalize_state
             .borrow_mut()
             .take()?;
-        let mut lock_guard = self.collects.lock();
+        let mut lock_guard = self.collects.lock().unwrap();
+
         finalize_view_change!(
             self,
             state,
@@ -984,7 +985,7 @@ impl<S> Synchronizer<S>
         &self,
         timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
         node: &Node<S::Data>,
-        log: &Log<State<S>, Request<S>, Reply<S>>
+        log: &MemLog<State<S>, Request<S>, Reply<S>>
     ) {
         match (&*self.phase.borrow(), &timed_out) {
             // we have received STOP messages from peer nodes,
@@ -1006,7 +1007,7 @@ impl<S> Synchronizer<S>
             _ => {
                 // clear state from previous views
                 self.stopped.borrow_mut().clear();
-                self.collects.lock().clear();
+                self.collects.lock().unwrap().clear();
                 self.phase.replace(ProtoPhase::Stopping2(0));
             }
         };
@@ -1036,7 +1037,7 @@ impl<S> Synchronizer<S>
         &self,
         timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         node: &Node<S::Data>,
-        log: &Log<State<S>, Request<S>, Reply<S>>
+        log: &MemLog<State<S>, Request<S>, Reply<S>>
     ) {
         let message = SystemMessage::ForwardedRequests(ForwardedRequestsMessage::new(
             timed_out,
@@ -1048,7 +1049,8 @@ impl<S> Synchronizer<S>
     /// Returns some information regarding the current view, such as
     /// the number of faulty replicas the system can tolerate.
     pub fn view(&self) -> ViewInfo {
-        self.tbo.lock().view.clone()
+        self.tbo.lock().unwrap()
+            .view.clone()
     }
 
     fn next_timeout(&self) -> SeqNo {
@@ -1122,7 +1124,7 @@ impl<S> Synchronizer<S>
         state: FinalizeState<Request<S>>,
         _proof: Option<&Proof<Request<S>>>,
         _normalized_collects: Vec<Option<&CollectData<Request<S>>>>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &MemLog<State<S>, Request<S>, Reply<S>>,
     ) -> FinalizeStatus<Request<S>> {
         if let ProtoPhase::Syncing = *self.phase.borrow() {
             //
@@ -1144,7 +1146,7 @@ impl<S> Synchronizer<S>
     fn finalize(
         &self,
         FinalizeState { curr_cid, proposed, sound }: FinalizeState<Request<S>>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &MemLog<State<S>, Request<S>, Reply<S>>,
         consensus: &mut Consensus<S>,
         node: &Node<S::Data>,
     ) -> SynchronizerStatus {
@@ -1192,7 +1194,7 @@ impl<S> Synchronizer<S>
 
         // skip queued messages from the current view change
         // and update proto phase
-        self.tbo.lock().next_instance_queue();
+        self.tbo.lock().unwrap().next_instance_queue();
         self.phase.replace(ProtoPhase::Init);
 
         // resume normal phase

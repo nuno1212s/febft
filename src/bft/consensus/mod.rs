@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use ::log::{debug, error, warn};
@@ -13,7 +13,6 @@ use either::{
     Right,
 };
 use intmap::IntMap;
-use parking_lot::{Mutex, MutexGuard};
 
 use crate::bft::communication::{
     Node,
@@ -21,7 +20,7 @@ use crate::bft::communication::{
 };
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, Message, ObserveEventKind, RequestMessage, SerializedMessage, StoredMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage};
 use crate::bft::communication::serialize::DigestData;
-use crate::bft::consensus::log::Log;
+use crate::bft::consensus::log::MemLog;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
@@ -44,6 +43,7 @@ use crate::bft::threadpool;
 use crate::bft::timeouts::TimeoutsHandle;
 
 pub mod log;
+pub mod follower_consensus;
 
 /// Represents the status of calling `poll()` on a `Consensus`.
 pub enum ConsensusPollStatus<O> {
@@ -79,7 +79,7 @@ impl<O> Debug for ConsensusPollStatus<O> {
 
 /// Represents a queue of messages to be ordered in a consensus instance.
 ///
-/// Because of the asynchrony of the Internet, messages may arrive out of
+/// Because of the asynchronicity of the Internet, messages may arrive out of
 /// context, e.g. for the same consensus instance, a `PRE-PREPARE` reaches
 /// a node after a `PREPARE`. A `TboQueue` arranges these messages to be
 /// processed in the correct order.
@@ -157,7 +157,7 @@ impl<O> TboQueue<O> {
     }
 }
 
-/// Repreents the current phase of the consensus protocol.
+/// Represents the current phase of the consensus protocol.
 #[derive(Debug, Copy, Clone)]
 enum ProtoPhase {
     /// Start of a new consensus instance.
@@ -179,8 +179,6 @@ enum ProtoPhase {
 /// Contains the state of an active consensus instance, as well
 /// as future instances.
 pub struct Consensus<S: Service> {
-    // can be smaller than the config's max batch size,
-    // but never longer
     batch_size: usize,
     node_id: NodeId,
     phase: ProtoPhase,
@@ -308,7 +306,7 @@ impl<S> Consensus<S>
         requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         synchronizer: &Synchronizer<S>,
         node: &Node<S::Data>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &MemLog<State<S>, Request<S>, Reply<S>>,
     ) {
         //debug!("Phase {:?}", self.phase);
 
@@ -366,7 +364,7 @@ impl<S> Consensus<S>
         &mut self,
         digest: Digest,
         synchronizer: &Synchronizer<S>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &MemLog<State<S>, Request<S>, Reply<S>>,
         node: &Node<S::Data>,
     ) {
         // update phase
@@ -411,7 +409,7 @@ impl<S> Consensus<S>
     }
 
     /// Check if we can process new consensus messages.
-    pub fn poll(&mut self, log: &Log<State<S>, Request<S>, Reply<S>>) -> ConsensusPollStatus<Request<S>> {
+    pub fn poll(&mut self, log: &MemLog<State<S>, Request<S>, Reply<S>>) -> ConsensusPollStatus<Request<S>> {
         match self.phase {
             ProtoPhase::Init if self.tbo.get_queue => {
                 log.batch_meta().lock().consensus_start_time = Utc::now();
@@ -524,19 +522,21 @@ impl<S> Consensus<S>
         self.tbo.curr_seq = seq;
         self.tbo.get_queue = true;
         self.phase = ProtoPhase::Init;
+        
+        {
+            let mut guard = self.consensus_lock.lock().unwrap();
 
-        let mut guard = self.consensus_lock.lock();
+            let prev_view = (*guard).1;
 
-        let prev_view = (*guard).1;
-
-        *guard = (self.curr_seq, prev_view);
+            *guard = (self.curr_seq, prev_view);
+        }
 
         self.consensus_guard.store(false, Ordering::SeqCst);
         // FIXME: do we need to clear the missing requests buffers?
     }
 
     fn take_speculative_commits(&self) -> IntMap<StoredSerializedSystemMessage<S::Data>> {
-        let mut map = self.speculative_commits.lock();
+        let mut map = self.speculative_commits.lock().unwrap();
         std::mem::replace(&mut *map, IntMap::new())
     }
 
@@ -547,7 +547,7 @@ impl<S> Consensus<S>
         message: ConsensusMessage<Request<S>>,
         timeouts: &TimeoutsHandle<S>,
         synchronizer: &Arc<Synchronizer<S>>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &MemLog<State<S>, Request<S>, Reply<S>>,
         node: &Node<S::Data>,
     ) -> ConsensusStatus<'a> {
         // FIXME: make sure a replica doesn't vote twice
@@ -680,7 +680,7 @@ impl<S> Consensus<S>
 
                         let stored = StoredMessage::new(header, serialized);
 
-                        let mut map = speculative_commits.lock();
+                        let mut map = speculative_commits.lock().unwrap();
                         map.insert(peer_id.into(), stored);
                     }
                 });
@@ -955,7 +955,7 @@ fn request_batch_received<S>(
     requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
     timeouts: &TimeoutsHandle<S>,
     synchronizer: &Arc<Synchronizer<S>>,
-    log: &Log<State<S>, Request<S>, Reply<S>>,
+    log: &MemLog<State<S>, Request<S>, Reply<S>>,
 ) -> Vec<Digest>
     where
         S: Service + Send + 'static,

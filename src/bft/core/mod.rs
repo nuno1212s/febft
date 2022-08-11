@@ -2,6 +2,7 @@
 
 pub mod client;
 pub mod server;
+pub mod follower;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};

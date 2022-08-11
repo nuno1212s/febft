@@ -147,7 +147,7 @@ pub struct Header {
     pub(crate) length: u64,
     // the digest of the serialized payload
     pub(crate) digest: [u8; Digest::LENGTH],
-    // sign(hash(le(version) + le(from) + le(to) + le(nonce) + le(length) + hash(serialize(payload))))
+    // sign(hash(le(from) + le(to) + le(nonce) + hash(serialize(payload))))
     pub(crate) signature: [u8; Signature::LENGTH],
 }
 
@@ -237,10 +237,15 @@ impl<S, O, P> Debug for Message<S, O, P> where S: Send, O: Send, P: Send {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub enum SystemMessage<S, O, P> {
-    // TODO: ReadRequest,
+    //Requests that do not need to be logged nor ordered. Notice that
+    //The actual request instance is not different from the ordered requests,
+    //It is up to the developer of the particular services to use
+    //These operations responsibly
+    UnOrderedRequest(RequestMessage<O>),
     Request(RequestMessage<O>),
     Reply(ReplyMessage<P>),
     Consensus(ConsensusMessage<O>),
+    FwdConsensus(FwdConsensusMessage<O>),
     ///Collaborative state transfer messages
     Cst(CstMessage<S, O>),
     ViewChange(ViewChangeMessage<O>),
@@ -252,6 +257,9 @@ pub enum SystemMessage<S, O, P> {
 impl<S, O, P> Debug for SystemMessage<S, O, P> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            SystemMessage::UnOrderedRequest(req) => {
+                write!(f, "Unordered request")
+            }
             SystemMessage::Request(rq) => {
                 write!(f, "Request")
             }
@@ -283,6 +291,7 @@ impl<S, O, P> Debug for SystemMessage<S, O, P> {
             SystemMessage::ObserverMessage(message) => {
                 write!(f, "observer message")
             }
+            SystemMessage::FwdConsensus() => {}
         }
     }
 }
@@ -431,6 +440,24 @@ pub struct ReplyMessage<P> {
     session_id: SeqNo,
     operation_id: SeqNo,
     payload: P,
+}
+
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct FwdConsensusMessage<O> {
+    header: Header,
+    consensus_msg: ConsensusMessage<O>
+}
+
+impl<O> FwdConsensusMessage<O> {
+
+    pub fn new(header: Header, msg: ConsensusMessage<O>) -> Self {
+        Self {
+            header,
+            consensus_msg: msg
+        }
+    }
+
 }
 
 /// Represents a message from the consensus sub-protocol.
