@@ -22,7 +22,7 @@ use crate::bft::timeouts::TimeoutsHandle;
 ///Handles taking requests from the client pools and storing the requests in the log,
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
-pub struct RqProcessor<S: Service + 'static> {
+pub struct Proposer<S: Service + 'static> {
     batch_channel: (ChannelSyncTx<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
                     ChannelSyncRx<Vec<StoredMessage<RequestMessage<Request<S>>>>>),
     node_ref: Arc<Node<S::Data>>,
@@ -46,7 +46,7 @@ const TIMEOUT: Duration = Duration::from_micros(10);
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
 
-impl<S: Service> RqProcessor<S> {
+impl<S: Service> Proposer<S> {
     pub fn new(node: Arc<Node<S::Data>>, sync: Arc<Synchronizer<S>>,
                log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
                timeouts: Arc<TimeoutsHandle<S>>,
@@ -123,6 +123,8 @@ impl<S: Service> RqProcessor<S> {
                     //debug!("{:?} // Received batch of {} messages from clients, processing them, is_leader? {}",
                     //    self.node_ref.id(), messages.len(), is_leader);
 
+                    //TODO: Handle timing out requests
+
                     if let Some(messages) = opt_msgs {
                         collected_per_batch_total += messages.len() as u64;
                         collections += 1;
@@ -196,6 +198,7 @@ impl<S: Service> RqProcessor<S> {
                     //Lets first deal with unordered requests since it should be much quicker and easier
                     self.propose_unordered(&mut currently_accumulated_unordered, &mut last_unordered_batch);
 
+                    //Now let's deal with ordered requests
                     if is_leader && !currently_accumulated.is_empty() {
                         let current_batch_size = currently_accumulated.len();
 
@@ -289,6 +292,9 @@ impl<S: Service> RqProcessor<S> {
             }).unwrap()
     }
 
+    /// Attempt to propose an unordered request batch
+    /// Fails if the batch is not large enough or the timeout
+    /// Has not yet occurred
     fn propose_unordered(&self,
                          currently_unordered_batch: &mut Vec<StoredMessage<RequestMessage<S::Data>>>,
                          last_unordered_batch: &mut Instant) {
