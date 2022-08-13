@@ -9,6 +9,7 @@ use crate::bft::communication::message::{Message, ObserveEventKind, ObserverMess
 use crate::bft::communication::NodeId;
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::core::client::{Client, ClientData};
+use crate::bft::ordering::Orderable;
 
 ///Callback to when the replicas send their notifications
 ///When a new observe event is received, this function will be executed
@@ -108,7 +109,7 @@ impl ObserverClient {
                                             (ObserveEventKind::Prepare(seq), ObserveEventKind::Prepare(seq2)) if seq == seq2 => {}
                                             (ObserveEventKind::Commit(seq), ObserveEventKind::Commit(seq2)) if seq == seq2 => {}
                                             (ObserveEventKind::Executed(seq), ObserveEventKind::Executed(seq2)) if seq == seq2 => {}
-                                            (ObserveEventKind::NormalPhase((view, seq)), ObserveEventKind::NormalPhase((view2, seq2))) if seq == seq2 && view == view2 => {}
+                                            (ObserveEventKind::NormalPhase((view, seq)), ObserveEventKind::NormalPhase((view2, seq2))) if seq == seq2 && view.sequence_number() == view2.sequence_number() => {}
                                             (ObserveEventKind::ViewChangePhase, ObserveEventKind::ViewChangePhase) => {}
                                             (ObserveEventKind::CollabStateTransfer, ObserveEventKind::CollabStateTransfer) => {}
                                             (_, _) => {

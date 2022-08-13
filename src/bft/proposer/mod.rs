@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+
+pub mod follower_proposer;
+
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -9,36 +12,43 @@ use crate::bft::communication::{channel, Node, NodeId};
 use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, ObserverMessage, RequestMessage, StoredMessage, SystemMessage};
 use crate::bft::communication::message::Message::System;
+use crate::bft::consensus::ConsensusGuard;
 
 use crate::bft::threadpool;
 use crate::bft::consensus::log::MemLog;
-use crate::bft::core::server::{ViewInfo};
+
 use crate::bft::core::server::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UnorderedBatch};
-use crate::bft::ordering::{Orderable, SeqNo};
-use crate::bft::sync::Synchronizer;
+use crate::bft::ordering::{Orderable};
 use crate::bft::timeouts::TimeoutsHandle;
+
+use super::sync::AbstractSynchronizer;
+use super::sync::replica_sync::Synchronizer;
+
+
+pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
 
 ///Handles taking requests from the client pools and storing the requests in the log,
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
 pub struct Proposer<S: Service + 'static> {
-    batch_channel: (ChannelSyncTx<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
-                    ChannelSyncRx<Vec<StoredMessage<RequestMessage<Request<S>>>>>),
+    batch_channel: (ChannelSyncTx<BatchType<S>>,
+                    ChannelSyncRx<BatchType<S>>),
     node_ref: Arc<Node<S::Data>>,
     synchronizer: Arc<Synchronizer<S>>,
     timeouts: Arc<TimeoutsHandle<S>>,
     log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
     //For unordered request execution
     executor_handle: ExecutorHandle<S>,
-    consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
-    consensus_guard: Arc<AtomicBool>,
-    observer_handle: ObserverHandle,
+    consensus_guard: ConsensusGuard,
     cancelled: AtomicBool,
     //The target
     target_global_batch_size: usize,
     //Time limit for generating a batch with target_global_batch_size size
     global_batch_time_limit: u128,
+    
+    //Observer related stuff
+    observer_handle: ObserverHandle,
 }
 
 const TIMEOUT: Duration = Duration::from_micros(10);
@@ -47,12 +57,12 @@ const TIMEOUT: Duration = Duration::from_micros(10);
 const BATCH_CHANNEL_SIZE: usize = 128;
 
 impl<S: Service> Proposer<S> {
-    pub fn new(node: Arc<Node<S::Data>>, sync: Arc<Synchronizer<S>>,
+    pub fn new(node: Arc<Node<S::Data>>,
+               sync: Arc<Synchronizer<S>>,
                log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
                timeouts: Arc<TimeoutsHandle<S>>,
                executor_handle: ExecutorHandle<S>,
-               consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
-               consensus_guard: Arc<AtomicBool>,
+               consensus_guard: ConsensusGuard,
                target_global_batch_size: usize,
                global_batch_time_limit: u128,
                observer_handle: ObserverHandle, ) -> Arc<Self> {
@@ -65,7 +75,6 @@ impl<S: Service> Proposer<S> {
             timeouts,
             log,
             cancelled: AtomicBool::new(false),
-            consensus_lock,
             consensus_guard,
             target_global_batch_size,
             global_batch_time_limit,
@@ -74,7 +83,7 @@ impl<S: Service> Proposer<S> {
         })
     }
 
-    pub fn receiver_channel(&self) -> &ChannelSyncRx<Vec<StoredMessage<RequestMessage<Request<S>>>>> {
+    pub fn receiver_channel(&self) -> &ChannelSyncRx<BatchType<S>> {
         &self.batch_channel.1
     }
 
@@ -215,12 +224,12 @@ impl<S: Service> Proposer<S> {
                         }
 
                         //Attempt to propose new batch
-                        match self.consensus_guard.compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed) {
+                        match self.consensus_guard.consensus_guard().compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed) {
                             Ok(_) => {
                                 last_proposed_batch = Instant::now();
 
                                 batches_made += 1;
-                                let guard = self.consensus_lock.lock().unwrap();
+                                let guard = self.consensus_guard.consensus_info().lock().unwrap();
 
                                 let (seq, view) = *guard;
 
@@ -296,7 +305,7 @@ impl<S: Service> Proposer<S> {
     /// Fails if the batch is not large enough or the timeout
     /// Has not yet occurred
     fn propose_unordered(&self,
-                         currently_unordered_batch: &mut Vec<StoredMessage<RequestMessage<S::Data>>>,
+                         currently_unordered_batch: &mut Vec<StoredMessage<RequestMessage<Request<S>>>>,
                          last_unordered_batch: &mut Instant) {
 
         if !currently_unordered_batch.is_empty() {
@@ -334,7 +343,7 @@ impl<S: Service> Proposer<S> {
                         unordered_batch.add(header.from(),
                                             message.session_id(),
                                             message.sequence_number(),
-                                            message.operation());
+                                            message.into_inner_operation());
                     }
 
                     if let Err(err) = self.executor_handle.queue_update_unordered(unordered_batch) {

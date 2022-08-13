@@ -1,7 +1,7 @@
 //! Contains the server side core protocol logic of `febft`.
 
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use chrono::DateTime;
@@ -17,18 +17,14 @@ use crate::bft::communication::{
     NodeConfig,
     NodeId,
 };
-use crate::bft::communication::message::{ForwardedRequestsMessage, Header, Message, ObserveEventKind, RequestMessage, StoredMessage, SystemMessage};
-use crate::bft::consensus::{
-    Consensus,
-    ConsensusPollStatus,
-    ConsensusStatus,
-};
+use crate::bft::communication::message::{ForwardedRequestsMessage, Header, Message, ObserveEventKind, RequestMessage, StoredMessage, SystemMessage, ConsensusMessage};
+use crate::bft::consensus::replica_consensus::Consensus;
+use crate::bft::consensus::{ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::consensus::log::{
     Info,
     MemLog,
 };
 use crate::bft::core::server::client_replier::Replier;
-use crate::bft::core::server::client_rq_handling::RqProcessor;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::core::server::rq_finalizer::{RqFinalizer, RqFinalizerHandle};
 use crate::bft::cst::{
@@ -50,10 +46,12 @@ use crate::bft::ordering::{
     Orderable,
     SeqNo,
 };
+use crate::bft::persistentdb::KVDB;
+use crate::bft::proposer::Proposer;
+use crate::bft::sync::replica_sync::Synchronizer;
 use crate::bft::sync::{
-    Synchronizer,
     SynchronizerPollStatus,
-    SynchronizerStatus,
+    SynchronizerStatus, AbstractSynchronizer,
 };
 use crate::bft::timeouts::{
     TimeoutKind,
@@ -65,7 +63,6 @@ use super::SystemParams;
 
 pub mod observer;
 
-pub mod client_rq_handling;
 pub mod rq_finalizer;
 pub mod client_replier;
 pub mod follower_handling;
@@ -140,9 +137,16 @@ pub struct Replica<S: Service + 'static> {
     executor: ExecutorHandle<S>,
     synchronizer: Arc<Synchronizer<S>>,
     consensus: Consensus<S>,
+    //The guard for the consensus.
+    //Set to true when there is a consensus running, false when it's ready to receive
+    //A new pre-prepare message
+    consensus_guard: ConsensusGuard,
+    // Check if unordered requests can be proposed.
+    // This can only occur when we are in the normal phase of the state machine
+    unordered_rq_guard: Arc<AtomicBool>,
     cst: CollabStateTransfer<S>,
     log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
-    client_rqs: Arc<RqProcessor<S>>,
+    proposer: Arc<Proposer<S>>,
     node: Arc<Node<S::Data>>,
     rq_finalizer: RqFinalizerHandle<S>,
     //A handle to the observer worker thread
@@ -154,6 +158,9 @@ pub struct Replica<S: Service + 'static> {
 pub struct ReplicaConfig<S> {
     /// The application logic.
     pub service: S,
+
+    //TODO: These two values should be loaded from storage
+
     /// The sequence number for the current view.
     pub view: SeqNo,
     /// Next sequence number attributed to a request by
@@ -189,26 +196,30 @@ impl<S> Replica<S>
         let per_pool_batch_sleep = node_config.batch_sleep_micros;
         let per_pool_batch_size = node_config.batch_size;
 
-        // system params
+        let log_node_id = node_config.id.clone();
         let n = node_config.n;
         let f = node_config.f;
-        let view = ViewInfo::new(view, n, f)?;
 
-        let log_node_id = node_config.id.clone();
+        let db = KVDB::new(node_config.db_path)?;
 
-        let db = DB::open(&Options::default(), node_config.db_path).unwrap();
+        let (node, rogue) = Node::bootstrap(node_config).await?;
 
         // TODO: get log from persistent storage
         // connect to peer nodes
-        let (node, rogue) = Node::bootstrap(node_config).await?;
-
         let observer_handle = observer::start_observers(node.send_node());
 
-        let mut log = MemLog::new(log_node_id, global_batch_size, observer_handle.clone());
+        let mut log = MemLog::new(log_node_id,
+                                  global_batch_size, Some(observer_handle.clone()),
+                                  db);
+
+        // system params
+        //TODO: Load view from persistent storage
+        let view = ViewInfo::new(view, n, f)?;
 
         let node_clone = node.clone();
 
-        let reply_handle = Replier::new(node.id(), node.send_node(), log.clone());
+        let reply_handle = Replier::new(node.id(),
+                                        node.send_node(), log.clone());
 
         // start executor
         let executor = Executor::new(
@@ -216,7 +227,7 @@ impl<S> Replica<S>
             log.clone(),
             service,
             node.send_node(),
-            observer_handle.clone(),
+            Some(observer_handle.clone()),
         )?;
 
         // start timeouts handler
@@ -238,9 +249,9 @@ impl<S> Replica<S>
             log.clone(),
             executor.clone());
 
-        let consensus_info = Arc::new(Mutex::new((next_consensus_seq, view)));
+        let consensus = Consensus::new(next_consensus_seq, view, node.id(), global_batch_size, observer_handle.clone());
 
-        let consensus_guard = Arc::new(AtomicBool::new(false));
+        let consensus_guard = consensus.consensus_guard().clone();
 
         //Initialize replica data with the initialized variables from above
         let mut replica = Replica {
@@ -248,23 +259,24 @@ impl<S> Replica<S>
             phase_stack: None,
             cst: CollabStateTransfer::new(CST_BASE_DUR),
             synchronizer: synchronizer.clone(),
-            consensus: Consensus::new(next_consensus_seq, node.id(), global_batch_size, consensus_info.clone(),
-                                      consensus_guard.clone(), observer_handle.clone()),
+            consensus,
+            consensus_guard: consensus_guard.clone(),
             timeouts: timeouts.clone(),
             node,
             log: log.clone(),
-            client_rqs: RqProcessor::new(node_clone, synchronizer, log, timeouts,
-                                         executor.clone(),
-                                         consensus_info.clone(),
-                                         consensus_guard.clone(), global_batch_size,
-                                         batch_timeout, observer_handle.clone(),),
+            proposer: Proposer::new(node_clone, synchronizer, log, timeouts,
+                                    executor.clone(),
+                                    consensus_guard,
+                                    global_batch_size,
+                                    batch_timeout, observer_handle.clone(), ),
             executor,
             rq_finalizer,
             observer_handle: observer_handle.clone(),
+            unordered_rq_guard: Arc::new(Default::default())
         };
 
         //Start receiving and processing client requests
-        replica.client_rqs.clone().start();
+        replica.proposer.clone().start();
 
         // handle rogue messages
         for message in rogue {
@@ -285,11 +297,10 @@ impl<S> Replica<S>
                         SystemMessage::ViewChange(_) => warn!("Rogue view change message detected"),
                         // FIXME: handle rogue forwarded requests messages
                         SystemMessage::ForwardedRequests(_) => warn!("Rogue forwarded requests message detected"),
-                        SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected")
+                        SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
+                        SystemMessage::UnOrderedRequest(_) => warn!("Rogue unordered request message"),
+                        SystemMessage::FwdConsensus(_) => warn!("Rogue fwd consensus message observed."),
                     }
-                }
-                Message::RequestBatch(time, batch) => {
-                    replica.requests_received(time, batch);
                 }
                 // ignore other messages for now
                 _ => (),
@@ -354,6 +365,10 @@ impl<S> Replica<S>
 
                     let current_seq = self.consensus.sequence_number();
 
+                    //Mark the consensus as available, since we are changing to the normal phase
+                    //And are therefore ready to receive pre-prepares (if are are the leaders)
+                    self.consensus_guard.consensus_guard().store(false, Ordering::SeqCst);
+
                     ObserveEventKind::NormalPhase((current_view, current_seq))
                 }
             };
@@ -367,9 +382,6 @@ impl<S> Replica<S>
         let message = self.node.receive_from_replicas().unwrap();
 
         match message {
-            Message::RequestBatch(time, batch) => {
-                self.requests_received(time, batch);
-            }
             Message::System(header, message) => {
                 match message {
                     SystemMessage::ForwardedRequests(requests) => {
@@ -383,6 +395,9 @@ impl<S> Replica<S>
                     SystemMessage::Consensus(message) => {
                         self.consensus.queue(header, message);
                     }
+                    SystemMessage::FwdConsensus(fwdConsensus) => {
+                        //Replicas do not received forwarded consensus messages.
+                    },
                     SystemMessage::ViewChange(message) => {
                         self.synchronizer.queue(header, message);
                     }
@@ -458,7 +473,8 @@ impl<S> Replica<S>
                     // FIXME: handle rogue reply messages
                     // Should never
                     SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
-                    SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected")
+                    SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
+                    SystemMessage::UnOrderedRequest(_) => warn!("Rogue unordered request message detected"),
                 }
             }
             Message::Timeout(timeout_kind) => {
@@ -487,6 +503,7 @@ impl<S> Replica<S>
             SynchronizerPollStatus::ResumeViewChange => {
                 self.synchronizer.resume_view_change(
                     &self.log,
+                    &self.timeouts,
                     &mut self.consensus,
                     &self.node,
                 );
@@ -497,14 +514,14 @@ impl<S> Replica<S>
         };
 
         match message {
-            Message::RequestBatch(time, batch) => {
-                self.requests_received(time, batch);
-            }
             Message::System(header, message) => {
                 match message {
                     SystemMessage::Consensus(message) => {
                         self.consensus.queue(header, message);
                     }
+                    SystemMessage::FwdConsensus(_) => {
+                        //Live replicas don't accept forwarded consensus messages
+                    },
                     SystemMessage::ForwardedRequests(requests) => {
                         self.forwarded_requests_received(requests);
                     }
@@ -562,7 +579,8 @@ impl<S> Replica<S>
                     }
                     // FIXME: handle rogue reply messages
                     SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
-                    SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected")
+                    SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
+                    SystemMessage::UnOrderedRequest(_) => todo!(),
                 }
             }
             //////// XXX XXX XXX XXX
@@ -611,14 +629,10 @@ impl<S> Replica<S>
                 Message::System(h, SystemMessage::Consensus(m))
             }
             ConsensusPollStatus::TryProposeAndRecv => {
-                debug!("{:?} // Polled propose and recv.", self.id());
-
                 self.consensus.advance_init_phase();
 
                 //Receive the PrePrepare message from the client rq handler thread
                 let replicas = self.node.receive_from_replicas()?;
-
-                //debug!("{:?} // Received from replicas. Took {:?}", self.id(), Instant::now().duration_since(start));
 
                 replicas
             }
@@ -627,9 +641,6 @@ impl<S> Replica<S>
         debug!("{:?} // Processing message {:?}", self.id(), message);
 
         match message {
-            Message::RequestBatch(time, batch) => {
-                self.requests_received(time, batch);
-            }
             Message::System(header, message) => {
                 match message {
                     SystemMessage::ForwardedRequests(requests) => {
@@ -672,75 +683,15 @@ impl<S> Replica<S>
                         }
                     }
                     SystemMessage::Consensus(message) => {
-                        let seq = self.consensus.sequence_number();
-
-                        debug!("{:?} // Processing consensus message {:?} ", self.id(), message);
-
-                        let start = Instant::now();
-
-                        let status = self.consensus.process_message(
-                            header,
-                            message,
-                            &self.timeouts,
-                            &self.synchronizer,
-                            &self.log,
-                            &self.node,
-                        );
-
-                        match status {
-                            // if deciding, nothing to do
-                            ConsensusStatus::Deciding => {}
-                            // FIXME: implement this
-                            ConsensusStatus::VotedTwice(_) => todo!(),
-                            // reached agreement, execute requests
-                            //
-                            // FIXME: execution layer needs to receive the id
-                            // attributed by the consensus layer to each op,
-                            // to execute in order
-                            ConsensusStatus::Decided(batch_digest, digests) => {
-                                // for digest in digests.iter() {
-                                //     self.synchronizer.unwatch_request(digest);
-                                // }
-
-                                let new_meta = BatchMeta::new();
-                                let meta = std::mem::replace(&mut *self.log.batch_meta().lock(), new_meta);
-
-                                let (info, batch) = self.log.finalize_batch(seq, batch_digest, digests)?;
-
-                                //Send the finalized batch to the rq finalizer
-                                //So everything can be removed from the correct logs and
-                                //Given to the service thread to execute
-                                //self.rq_finalizer.queue_finalize(info, meta, rqs);
-                                match info {
-                                    Info::Nil => self.executor.queue_update(
-                                        meta,
-                                        batch,
-                                    ),
-                                    // execute and begin local checkpoint
-                                    Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
-                                        meta,
-                                        batch,
-                                    ),
-                                }.unwrap();
-
-                                self.consensus.next_instance(&self.synchronizer);
-                            }
-                        }
-
-                        // we processed a consensus message,
-                        // signal the consensus layer of this event
-                        self.consensus.signal();
-
-                        debug!("{:?} // Done processing consensus message. Took {:?}", self.id(), Instant::now().duration_since(start));
-
-                        // yield execution since `signal()`
-                        // will probably force a value from the
-                        // TBO queue in the consensus layer
-                        // std::hint::spin_loop();
+                        self.adv_consensus(header, message)?;
+                    }
+                    SystemMessage::FwdConsensus(message) => {
+                        warn!("Replicas cannot process forwarded consensus messages! They must receive the preprepare messages straight from leaders!");
                     }
                     // FIXME: handle rogue reply messages
                     SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
-                    SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected")
+                    SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
+                    SystemMessage::UnOrderedRequest(_) => todo!(),
                 }
             }
             Message::Timeout(timeout_kind) => {
@@ -751,6 +702,76 @@ impl<S> Replica<S>
             }
         }
 
+        Ok(())
+    }
+
+    fn adv_consensus(&mut self, header: Header, message: ConsensusMessage<Request<S>>) -> Result<()> {
+
+        let seq = self.consensus.sequence_number();
+
+        debug!("{:?} // Processing consensus message {:?} ", self.id(), message);
+
+        let start = Instant::now();
+
+        let status = self.consensus.process_message(
+            header,
+            message,
+            &self.timeouts,
+            &self.synchronizer,
+            &self.log,
+            &self.node,
+        );
+
+        match status {
+            // if deciding, nothing to do
+            ConsensusStatus::Deciding => {}
+            // FIXME: implement this
+            ConsensusStatus::VotedTwice(_) => todo!(),
+            // reached agreement, execute requests
+            //
+            // FIXME: execution layer needs to receive the id
+            // attributed by the consensus layer to each op,
+            // to execute in order
+            ConsensusStatus::Decided(batch_digest, digests) => {
+                // for digest in digests.iter() {
+                //     self.synchronizer.unwatch_request(digest);
+                // }
+
+                let new_meta = BatchMeta::new();
+                let meta = std::mem::replace(&mut *self.log.batch_meta().lock(), new_meta);
+
+                let (info, batch) = self.log.finalize_batch(seq, batch_digest, digests)?;
+
+                //Send the finalized batch to the rq finalizer
+                //So everything can be removed from the correct logs and
+                //Given to the service thread to execute
+                //self.rq_finalizer.queue_finalize(info, meta, rqs);
+                match info {
+                    Info::Nil => self.executor.queue_update(
+                        meta,
+                        batch,
+                    ),
+                    // execute and begin local checkpoint
+                    Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
+                        meta,
+                        batch,
+                    ),
+                }.unwrap();
+
+                self.consensus.next_instance(&self.synchronizer);
+            }
+        }
+
+        // we processed a consensus message,
+        // signal the consensus layer of this event
+        self.consensus.signal();
+
+        debug!("{:?} // Done processing consensus message. Took {:?}", self.id(), Instant::now().duration_since(start));
+
+        // yield execution since `signal()`
+        // will probably force a value from the
+        // TBO queue in the consensus layer
+        // std::hint::spin_loop();
         Ok(())
     }
 

@@ -593,7 +593,7 @@ impl<D> Node<D>
             });
         }
 
-        let mut rogue = Vec::new();
+        let rogue = Vec::new();
 
         while node.node_handling.replica_count() < 4 {
 

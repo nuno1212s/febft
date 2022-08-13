@@ -19,6 +19,7 @@ pub mod prng;
 pub mod core;
 pub mod sync;
 pub mod cst;
+pub mod proposer;
 pub mod persistentdb;
 
 use std::ops::Drop;

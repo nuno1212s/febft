@@ -26,6 +26,7 @@ use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
 use crate::bft::executable::{Request, UpdateBatch};
 use crate::bft::ordering::{Orderable, SeqNo};
+use crate::bft::persistentdb::KVDB;
 
 pub mod persistent;
 
@@ -472,7 +473,7 @@ impl<O: Clone> DecisionLog<O> {
 pub struct MemLog<S, O, P> {
     node_id: NodeId,
 
-    db_obj: DB,
+    db_obj: KVDB,
 
     //This item will only be accessed by the replica request thread
     curr_seq: Cell<SeqNo>,
@@ -520,7 +521,7 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
     ///
     /// The value `batch_size` represents the maximum number of
     /// client requests to queue before executing a consensus instance.
-    pub fn new(node: NodeId, batch_size: usize, observer: ObserverHandle, db: DB) -> Arc<Self> {
+    pub fn new(node: NodeId, batch_size: usize, observer: Option<ObserverHandle>, db: KVDB) -> Arc<Self> {
         Arc::new(Self {
             node_id: node,
             batch_size,
@@ -534,7 +535,7 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
             checkpoint: RefCell::new(CheckpointState::None),
             meta: Arc::new(Mutex::new(BatchMeta::new())),
             _marker: PhantomData,
-            observer: Some(observer),
+            observer,
             db_obj: db,
         })
     }

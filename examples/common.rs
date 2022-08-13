@@ -88,7 +88,6 @@ pub fn debug_msg(m: Message<f32, Action, f32>) -> &'static str {
         },
         Message::ExecutionFinishedWithAppstate(_) => "ExA",
         Message::Timeout(_) => "Tim",
-        Message::RequestBatch(_, _) => "RqB",
     }
 }
 

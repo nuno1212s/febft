@@ -206,8 +206,6 @@ pub enum Message<S, O, P> where S: Send, O: Send, P: Send {
     ExecutionFinishedWithAppstate(S),
     /// We received a timeout from the timeouts layer.
     Timeout(TimeoutKind),
-    //We received a request batch
-    RequestBatch(DateTime<Utc>, Vec<StoredMessage<RequestMessage<O>>>),
 }
 
 impl<S, O, P> Debug for Message<S, O, P> where S: Send, O: Send, P: Send {
@@ -221,9 +219,6 @@ impl<S, O, P> Debug for Message<S, O, P> where S: Send, O: Send, P: Send {
             }
             Message::Timeout(_) => {
                 write!(f, "timeout")
-            }
-            Message::RequestBatch(_, _) => {
-                write!(f, "rq batch")
             }
         }
     }
@@ -291,7 +286,9 @@ impl<S, O, P> Debug for SystemMessage<S, O, P> {
             SystemMessage::ObserverMessage(message) => {
                 write!(f, "observer message")
             }
-            SystemMessage::FwdConsensus() => {}
+            SystemMessage::FwdConsensus(_) => {
+                write!(f, "Fwd consensus message")
+            }
         }
     }
 }
@@ -346,15 +343,10 @@ impl<O> ViewChangeMessage<O> {
     }
 
     /// Takes the collects embedded in this view change message, if they are available.
-    pub fn take_collects(&mut self) -> Option<LeaderCollects<O>> {
-        let kind = std::mem::replace(
-            &mut self.kind,
-            ViewChangeMessageKind::Sync(LeaderCollects::empty()),
-        );
-        match kind {
+    pub fn take_collects(self) -> Option<LeaderCollects<O>> {
+        match self.kind {
             ViewChangeMessageKind::Sync(collects) => Some(collects),
             _ => {
-                self.kind = kind;
                 None
             }
         }
@@ -456,6 +448,14 @@ impl<O> FwdConsensusMessage<O> {
             header,
             consensus_msg: msg
         }
+    }
+
+    pub fn consensus(&self) -> &ConsensusMessage<O> {
+        &self.consensus_msg
+    }
+
+    pub fn into_inner(self) -> (Header, ConsensusMessage<O>){
+        (self.header, self.consensus_msg)
     }
 
 }
@@ -1071,9 +1071,6 @@ impl<S: Send, O: Send, P: Send> Message<S, O, P> {
                     .wrapped(ErrorKind::CommunicationMessage),
             Message::Timeout(_) =>
                 Err("Expected System found Timeout")
-                    .wrapped(ErrorKind::CommunicationMessage),
-            Message::RequestBatch(_, _) =>
-                Err("Expected System found RequestBatch")
                     .wrapped(ErrorKind::CommunicationMessage),
         }
     }

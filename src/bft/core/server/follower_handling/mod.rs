@@ -1,20 +1,20 @@
 use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
-use crate::bft::communication::message::{ConsensusMessage, FwdConsensusMessage, Header, Message, SystemMessage};
+use crate::bft::communication::message::{ConsensusMessage, FwdConsensusMessage, Header, SystemMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::communication::{NodeId, SendNode};
 use crate::bft::core::server::ViewInfo;
 use crate::bft::executable::{Request, Service};
 
-///The message type of the channel
+/// The message type of the channel
 pub type ChannelMsg<S: Service> = ConsensusMessage<Request<S>>;
 
-///Store information of the current followers of the quorum
+/// Store information of the current followers of the quorum
 /// This information will be used to calculate which replicas have to send the
 /// Information to what followers
 ///
 /// This routing is only relevant to the Preprepare requests, all other requests
 /// Can be broadcast from each replica as they are very small and therefore
 /// don't have any effects on performance
-struct FollowersFollowing<S: Service> {
+struct FollowersFollowing<S: Service + 'static> {
     own_id: NodeId,
     followers: Vec<NodeId>,
     send_node: SendNode<S::Data>,
@@ -27,12 +27,12 @@ struct FollowerHandle<S: Service> {
 
 impl<S: Service> FollowersFollowing<S> {
 
-    ///Handle when we have received a preprepare message
-    fn handle_preprepare_msg_rcvd(&mut self, view: ViewInfo, header: Header, pre_prepare: ConsensusMessage<Request<S>>) {
-        if view.leader() == self.own_id {
-            //Leaders don't send pre_prepares to followers in order to save bandwidth
-            return;
-        }
+    /// Calculate which followers we have to send the messages to
+    /// according to the disposition of the quorum and followers
+    ///
+    /// (This is only needed for the preprepare message, all others use
+    /// multicast)
+    fn targets(&self, view: &ViewInfo) -> Vec<NodeId> {
 
         //How many replicas are not the leader?
         let available_replicas = view.params().n() - 1;
@@ -60,9 +60,9 @@ impl<S: Service> FollowersFollowing<S> {
             //Taking all of this into account
             let followers_for_replica = (replicas_per_follower * followers) / available_replicas;
 
-            let first_follower = temp_id.id() % self.followers.len();
+            let first_follower = temp_id.id() % (self.followers.len() as u32);
 
-            let last_follower = first_follower + followers_for_replica;
+            let last_follower = first_follower + followers_for_replica as u32;
 
             let mut targetted_followers = Vec::with_capacity((last_follower - first_follower) as usize);
 
@@ -70,33 +70,68 @@ impl<S: Service> FollowersFollowing<S> {
                 targetted_followers.push(self.followers[i as usize]);
             }
 
-            //TODO:
-            // Forward the message
-            let message = SystemMessage::FwdConsensus(FwdConsensusMessage::new(header, pre_prepare));
+            targetted_followers
 
-            self.send_node.broadcast(message, targetted_followers.iter());
         } else {
             //TODO: How to handle layouts when there are more replicas than followers?
+            todo!()
         }
     }
 
-    ///Handle us having sent a prepare message (notice how pre prepare are handled on reception
+    /// Handle when we have received a preprepare message
+    fn handle_preprepare_msg_rcvd(&mut self, view: &ViewInfo, header: Header, pre_prepare: ConsensusMessage<Request<S>>) {
+        if view.leader() == self.own_id {
+            //Leaders don't send pre_prepares to followers in order to save bandwidth
+            return;
+        }
+
+        let message = SystemMessage::FwdConsensus(FwdConsensusMessage::new(header, pre_prepare));
+
+        let targets = self.targets(view);
+
+        self.send_node.broadcast(message, targets.into_iter());
+    }
+
+    /// Handle us having sent a prepare message (notice how pre prepare are handled on reception
     /// and prepare/commit are handled on sending, this is because we don't want the leader
     /// to have to send the pre prepare to all followers but since these messages are very small,
     /// it's fine for all replicas to broadcast it to followers)
     fn handle_prepare_msg(&mut self, prepare: ConsensusMessage<Request<S>>) {
         let message = SystemMessage::Consensus(prepare);
 
-        self.send_node.broadcast(message, self.followers.iter());
+        self.send_node.broadcast(message, self.followers.iter().copied());
     }
 
-    ///Handle us having sent a commit message (notice how pre prepare are handled on reception
+    /// Handle us having sent a commit message (notice how pre prepare are handled on reception
     /// and prepare/commit are handled on sending, this is because we don't want the leader
     /// to have to send the pre prepare to all followers but since these messages are very small,
     /// it's fine for all replicas to broadcast it to followers)
     fn handle_commit_msg(&mut self, commit: ConsensusMessage<Request<S>>) {
         let message = SystemMessage::Consensus(commit);
 
-        self.send_node.broadcast(message, self.followers.iter());
+        self.send_node.broadcast(message, self.followers.iter().copied());
     }
+
+    ///
+    fn handle_sync_msg(&mut self, msg: ViewChangeMessage<Request<S>>) {
+        match msg.kind() {
+            ViewChangeMessageKind::Stop(_) => {
+
+            }
+            ViewChangeMessageKind::StopData(_) => {
+                //Followers don't need these messages (only the leader of the quorum needs them)
+
+                return;
+            }
+            ViewChangeMessageKind::Sync(_) => {
+                //Sync msgs are weird
+                //They are sort of like pre prepare messages so it would be nice for us to
+                //send them like we do preprepare msgs
+            }
+        }
+        let message = SystemMessage::ViewChange(msg);
+
+        self.send_node.broadcast(message, self.followers.iter().copied());
+    }
+
 }

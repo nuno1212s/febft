@@ -25,6 +25,8 @@
 //! in a typical system setup, you would probably employ different backend
 //! libraries performing identical duties.
 
+extern crate core;
+
 #[cfg(feature = "expose_impl")]
 pub mod bft;
 

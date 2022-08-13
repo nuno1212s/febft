@@ -117,7 +117,7 @@ pub trait Service: Send {
 
     /// Process an unordered client request, and produce a matching reply
     /// Cannot alter the application state
-    fn unordered_execution(&self, state: State<Self>, request: Request<Self>) -> Reply<Self>;
+    fn unordered_execution(&self, state: &State<Self>, request: Request<Self>) -> Reply<Self>;
 
     /// Much like [`unordered_execution()`], but processes a batch of requests.
     ///
@@ -131,7 +131,7 @@ pub trait Service: Send {
     ///     unimplemented!()
     /// }
     /// ```
-    fn unordered_batched_execution(&self, state: State<Self>, requests: UpdateBatch<Request<Self>>) -> BatchReplies<Reply<Self>> {
+    fn unordered_batched_execution(&self, state:& State<Self>, requests: UnorderedBatch<Request<Self>>) -> BatchReplies<Reply<Self>> {
         let mut reply_batch = BatchReplies::with_capacity(requests.len());
 
         for unordered_req in requests.into_inner() {
@@ -194,7 +194,7 @@ pub struct Executor<S: Service + 'static> {
     log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
     reply_worker: ReplyHandle<S>,
     send_node: SendNode<S::Data>,
-    observer_handle: ObserverHandle,
+    observer_handle: Option<ObserverHandle>,
 }
 
 /// Represents a handle to the client request executor.
@@ -260,7 +260,7 @@ impl<S> Executor<S>
         log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
         mut service: S,
         send_node: SendNode<S::Data>,
-        observer: ObserverHandle,
+        observer: Option<ObserverHandle>,
     ) -> Result<ExecutorHandle<S>> {
         let (e_tx, e_rx) = channel::new_bounded_sync(EXECUTING_BUFFER);
 
@@ -344,12 +344,13 @@ impl<S> Executor<S>
 
         {
             if let Some(seq) = seq {
-                //Do not notify of unordered events
-                let observe_event = ObserveEventKind::Executed(seq);
+                if let Some(observer_handle) = &self.observer_handle {
+                    //Do not notify of unordered events
+                    let observe_event = MessageType::Event(ObserveEventKind::Executed(seq));
 
-                if let Err(err) =
-                self.observer_handle.tx().send(MessageType::Event(ObserveEventKind::Executed(seq))) {
-                    error!("{:?}", err);
+                    if let Err(err) = observer_handle.tx().send(observe_event) {
+                        error!("{:?}", err);
+                    }
                 }
             }
         }
