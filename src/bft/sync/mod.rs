@@ -71,9 +71,10 @@ macro_rules! finalize_view_change {
         $self:expr,
         $state:expr,
         $proof:expr,
+        $collects_guard:expr,
         $normalized_collects:expr,
-        $timeouts:expr,
         $log:expr,
+        $timeouts:expr,
         $consensus:expr,
         $node:expr $(,)?
     ) => {{
@@ -805,14 +806,16 @@ where
                     sound,
                     proposed,
                 };
+                let mut collects_guard = self.collects.lock().unwrap();
 
                 finalize_view_change!(
                     self,
                     state,
                     proof,
+                    collects_guard,
                     normalized_collects,
-                    timeouts,
                     log,
+                    timeouts,
                     consensus,
                     node,
                 )
@@ -835,7 +838,17 @@ where
 
         let mut lock_guard = self.collects.lock().unwrap();
 
-        finalize_view_change!(self, state, None, lock_guard, timeouts, log, consensus, node,);
+        finalize_view_change!(
+            self,
+            state,
+            None,
+            lock_guard,
+            Vec::new(),
+            log,
+            timeouts,
+            consensus,
+            node,
+        );
 
         Some(())
     }
