@@ -40,7 +40,7 @@ pub struct ReplicaSynchronizer<S: Service> {
     _phantom: PhantomData<S>,
 }
 
-impl<S: Service> ReplicaSynchronizer<S> {
+impl<S: Service + 'static> ReplicaSynchronizer<S> {
     pub fn new(timeout_dur: Duration) -> Self {
         Self {
             watching_timeouts: AtomicBool::new(false),

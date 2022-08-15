@@ -542,7 +542,7 @@ where
                 }
 
                 if i == current_view.params().quorum() {
-                    match self.accessory {
+                    match &self.accessory {
                         SynchronizerAccessory::Replica(rep) => {
                             rep.handle_stopping_quorum(self, &current_view, log, timeouts, node)
                         }
@@ -559,7 +559,7 @@ where
                 SynchronizerStatus::Running
             }
             ProtoPhase::StoppingData(i) => {
-                match self.accessory {
+                match &self.accessory {
                     SynchronizerAccessory::Follower(_) => {
                         //Since a follower can never be a leader (as he isn't a part of the
                         // quorum, he can never be in this state)
@@ -1048,7 +1048,7 @@ pub enum SynchronizerAccessory<S: Service> {
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-pub(super) fn sound<'a, O>(
+fn sound<'a, O>(
     curr_view: ViewInfo,
     normalized_collects: &[Option<&'a CollectData<O>>],
 ) -> Sound {
@@ -1094,7 +1094,7 @@ pub(super) fn sound<'a, O>(
     Sound::Unbound(unbound(curr_view, normalized_collects))
 }
 
-pub(super) fn binds<O>(
+fn binds<O>(
     curr_view: ViewInfo,
     ts: SeqNo,
     value: &Digest,
@@ -1108,7 +1108,7 @@ pub(super) fn binds<O>(
     }
 }
 
-pub(super) fn unbound<O>(
+fn unbound<O>(
     curr_view: ViewInfo,
     normalized_collects: &[Option<&CollectData<O>>],
 ) -> bool {
@@ -1147,7 +1147,7 @@ pub(super) fn unbound<O>(
 //
 // therefore, our code *should* be correct :)
 
-pub(super) fn quorum_highest<O>(
+fn quorum_highest<O>(
     curr_view: ViewInfo,
     ts: SeqNo,
     value: &Digest,
@@ -1186,7 +1186,7 @@ pub(super) fn quorum_highest<O>(
     appears && count >= curr_view.params().quorum()
 }
 
-pub(super) fn certified_value<O>(
+fn certified_value<O>(
     curr_view: ViewInfo,
     ts: SeqNo,
     value: &Digest,
@@ -1209,7 +1209,7 @@ pub(super) fn certified_value<O>(
     count > curr_view.params().f()
 }
 
-pub(super) fn collect_data<'a, O: 'a>(
+fn collect_data<'a, O: 'a>(
     collects: impl Iterator<Item = &'a StoredMessage<ViewChangeMessage<O>>>,
 ) -> impl Iterator<Item = &'a CollectData<O>> {
     collects.filter_map(|stored| match stored.message().kind() {
@@ -1218,7 +1218,7 @@ pub(super) fn collect_data<'a, O: 'a>(
     })
 }
 
-pub(super) fn normalized_collects<'a, O: 'a>(
+fn normalized_collects<'a, O: 'a>(
     in_exec: SeqNo,
     collects: impl Iterator<Item = &'a CollectData<O>>,
 ) -> impl Iterator<Item = Option<&'a CollectData<O>>> {
@@ -1231,7 +1231,7 @@ pub(super) fn normalized_collects<'a, O: 'a>(
     })
 }
 
-pub(super) fn signed_collects<S>(
+fn signed_collects<S>(
     node: &Node<S::Data>,
     collects: Vec<StoredMessage<ViewChangeMessage<Request<S>>>>,
 ) -> Vec<StoredMessage<ViewChangeMessage<Request<S>>>>
@@ -1247,7 +1247,7 @@ where
         .collect()
 }
 
-pub(super) fn validate_signature<'a, S, M>(
+fn validate_signature<'a, S, M>(
     node: &'a Node<S::Data>,
     stored: &'a StoredMessage<M>,
 ) -> bool
@@ -1270,7 +1270,7 @@ where
     wm.is_valid(Some(key))
 }
 
-pub(super) fn highest_proof<'a, S, I>(
+fn highest_proof<'a, S, I>(
     view: ViewInfo,
     node: &Node<S::Data>,
     collects: I,

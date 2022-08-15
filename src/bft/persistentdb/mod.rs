@@ -1,4 +1,5 @@
-use ::rocksdb::{DB, DBWithThreadMode, MultiThreaded, Options, SingleThreaded};
+use std::path::Path;
+
 use crate::bft::error::*;
 use crate::bft::persistentdb::rocksdb::RocksKVDB;
 
@@ -9,7 +10,7 @@ pub struct KVDB {
 }
 
 impl KVDB {
-    pub fn new<T>(db_path: T) -> Result<Self> where T: AsRef<str> {
+    pub fn new<T>(db_path: T) -> Result<Self> where T: AsRef<Path> {
         Ok(Self {
             inner: RocksKVDB::new(db_path)?
         })

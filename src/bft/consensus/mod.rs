@@ -240,9 +240,9 @@ pub trait AbstractConsensus<S: Service> {
 
 ///Base consensus state machine implementation
 pub struct Consensus<S: Service> {
-    pub(super) node_id: NodeId,
-    pub(super) phase: ProtoPhase,
-    pub(super) tbo: TboQueue<Request<S>>,
+    node_id: NodeId,
+    phase: ProtoPhase,
+    tbo: TboQueue<Request<S>>,
 
     current: Vec<Digest>,
     current_digest: Digest,
@@ -307,11 +307,7 @@ impl<S: Service + 'static> Consensus<S> {
         }
     }
 
-    pub fn new_follower(
-        node_id: NodeId,
-        next_seq_num: SeqNo,
-        batch_size: usize,
-    ) -> Self {
+    pub fn new_follower(node_id: NodeId, next_seq_num: SeqNo, batch_size: usize) -> Self {
         Self {
             node_id,
             phase: ProtoPhase::Init,
@@ -330,7 +326,7 @@ impl<S: Service + 'static> Consensus<S> {
 
     ///Get the consensus guard, only available on replicas
     pub fn consensus_guard(&self) -> Option<&ConsensusGuard> {
-        match self.acessory {
+        match &self.acessory {
             ConsensusAccessory::Replica(rep) => Some(rep.consensus_guard()),
             _ => None,
         }
@@ -362,11 +358,13 @@ impl<S: Service + 'static> Consensus<S> {
                 )
             }
             ProtoPhase::Init => ConsensusPollStatus::Recv,
-            ProtoPhase::PreparingRequests => match &mut self.acessory {
+            ProtoPhase::PreparingRequests => match &self.acessory {
                 ConsensusAccessory::Follower => {
                     unreachable!();
                 }
-                ConsensusAccessory::Replica(rep) => rep.handle_poll_preparing_requests(self, log),
+                ConsensusAccessory::Replica(_) => {
+                    Self::handle_poll_preparing_requests(self, log)
+                }
             },
             ProtoPhase::PrePreparing if self.tbo.get_queue => {
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.pre_prepares)
@@ -425,10 +423,10 @@ impl<S: Service + 'static> Consensus<S> {
         self.phase = ProtoPhase::Init;
         // FIXME: do we need to clear the missing requests buffers?
 
-        match &mut self.acessory {
+        match &self.acessory {
             ConsensusAccessory::Follower => {}
-            ConsensusAccessory::Replica(replica_consensus) => {
-                replica_consensus.handle_next_instance(self);
+            ConsensusAccessory::Replica(_) => {
+                Self::handle_installed_seq_num(self);
             }
         }
     }
@@ -447,10 +445,10 @@ impl<S: Service + 'static> Consensus<S> {
 
         self.tbo.next_instance_queue();
 
-        match &mut self.acessory {
+        match &self.acessory {
             ConsensusAccessory::Follower => {}
-            ConsensusAccessory::Replica(rep) => {
-                rep.handle_next_instance(self);
+            ConsensusAccessory::Replica(_) => {
+                Self::handle_next_instance(self);
             }
         }
     }
@@ -482,8 +480,8 @@ impl<S: Service + 'static> Consensus<S> {
     ) {
         match self.acessory {
             ConsensusAccessory::Follower => {}
-            ConsensusAccessory::Replica(rep) => {
-                rep.handle_finalize_view_change(synchronizer);
+            ConsensusAccessory::Replica(_) => {
+                Self::handle_finalize_view_change(self, synchronizer);
             }
         }
 
@@ -597,10 +595,10 @@ impl<S: Service + 'static> Consensus<S> {
                     meta_guard.pre_prepare_received_time = pre_prepare_received_time;
                 }
 
-                match &mut self.acessory {
+                match &self.acessory {
                     ConsensusAccessory::Follower => {}
-                    ConsensusAccessory::Replica(replica_consensus) => {
-                        replica_consensus.handle_preprepare_sucessfull(self, &view, node);
+                    ConsensusAccessory::Replica(_) => {
+                        Self::handle_preprepare_sucessfull(self, &view, node);
                     }
                 }
 
@@ -710,20 +708,20 @@ impl<S: Service + 'static> Consensus<S> {
                 self.phase = if i == curr_view.params().quorum() {
                     log.batch_meta().lock().commit_sent_time = Utc::now();
 
-                    match &mut self.acessory {
+                    match &self.acessory {
                         ConsensusAccessory::Follower => {}
-                        ConsensusAccessory::Replica(replica_consensus) => {
-                            replica_consensus.handle_preparing_quorum(self, &curr_view, log, node);
+                        ConsensusAccessory::Replica(_) => {
+                            Self::handle_preparing_quorum(self, &curr_view, log, node);
                         }
                     }
 
                     //We set at 0 since we broadcast the messages above, meaning we will also receive the message.
                     ProtoPhase::Committing(0)
                 } else {
-                    match &mut self.acessory {
+                    match &self.acessory {
                         ConsensusAccessory::Follower => {}
-                        ConsensusAccessory::Replica(rep) => {
-                            rep.handle_preparing_no_quorum(self, &curr_view, log, node)
+                        ConsensusAccessory::Replica(_) => {
+                            Self::handle_preparing_no_quorum(self, &curr_view, log, node);
                         }
                     }
 
@@ -804,18 +802,22 @@ impl<S: Service + 'static> Consensus<S> {
 
                     log.batch_meta().lock().consensus_decision_time = Utc::now();
 
-                    match self.acessory {
+                    match &self.acessory {
                         ConsensusAccessory::Follower => {}
-                        ConsensusAccessory::Replica(rep) => rep.handle_committing_quorum(self),
+                        ConsensusAccessory::Replica(_) => {
+                            Self::handle_committing_quorum(self);
+                        }
                     }
 
                     ConsensusStatus::Decided(batch_digest, &self.current[..self.batch_size])
                 } else {
                     self.phase = ProtoPhase::Committing(i);
 
-                    match self.acessory {
+                    match &self.acessory {
                         ConsensusAccessory::Follower => {}
-                        ConsensusAccessory::Replica(rep) => rep.handle_committing_no_quorum(self),
+                        ConsensusAccessory::Replica(_) => {
+                            Self::handle_committing_no_quorum(self);
+                        }
                     }
 
                     ConsensusStatus::Deciding

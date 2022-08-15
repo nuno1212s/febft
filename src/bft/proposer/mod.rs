@@ -171,7 +171,7 @@ impl<S: Service> Proposer<S> {
                                         SystemMessage::UnOrderedRequest(req) => {
                                             currently_accumulated_unordered.push(StoredMessage::new(header, req));
                                         }
-                                        SystemMessage::Reply(rep) => {
+                                        SystemMessage::Reply(_) => {
                                             warn!("Received system reply msg")
                                         }
                                         SystemMessage::ObserverMessage(msg) => {
@@ -349,6 +349,8 @@ impl<S: Service> Proposer<S> {
                 //swap in the new vec and take the previous one to the threadpool
                 std::mem::swap(currently_unordered_batch, &mut new_accumulated_vec);
 
+                let executor_handle = self.executor_handle.clone();
+
                 threadpool::execute(move || {
                     let mut unordered_batch =
                         UnorderedBatch::new_with_cap(new_accumulated_vec.len());
@@ -364,7 +366,7 @@ impl<S: Service> Proposer<S> {
                         );
                     }
 
-                    if let Err(err) = self.executor_handle.queue_update_unordered(unordered_batch) {
+                    if let Err(err) = executor_handle.queue_update_unordered(unordered_batch) {
                         error!(
                             "Error while proposing unordered batch of requests: {:?}",
                             err

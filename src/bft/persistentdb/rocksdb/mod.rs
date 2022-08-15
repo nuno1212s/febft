@@ -81,7 +81,8 @@ impl RocksKVDB {
             iterator.set_mode(IteratorMode::From(end.as_ref(), Direction::Reverse));
         }
 
-        Ok(iterator)
+        todo!()
+        //Ok(iterator)
     }
 
 

@@ -44,7 +44,7 @@ struct FollowerHandle<S: Service> {
     tx: ChannelSyncTx<ChannelMsg<S>>,
 }
 
-impl<S: Service> FollowersFollowing<S> {
+impl<S: Service + 'static> FollowersFollowing<S> {
     /// Starts the follower handling thread and returns a cloneable handle that
     /// can be used to deliver messages to it.
     pub fn init_follower_handling(id: NodeId, node: &Arc<Node<S::Data>>) -> FollowerHandle<S> {
@@ -56,6 +56,13 @@ impl<S: Service> FollowersFollowing<S> {
             send_node: node.send_node(),
             rx,
         };
+
+        std::thread::Builder::new().name(format!("Follower Handling Thread for node {:?}", id))
+        .spawn(move || {    
+
+            follower_handling.run();
+
+        }).expect("Failed to launch follower handling thread!");
 
         FollowerHandle { tx }
     }
