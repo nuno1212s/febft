@@ -1,30 +1,32 @@
-
 pub mod follower_proposer;
 
-use std::sync::Arc;
+use log::{error, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use log::{error, warn};
 
-use chrono::{DateTime, Utc};
-use crate::bft::communication::{channel, Node, NodeId};
 use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
-use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, ObserverMessage, RequestMessage, StoredMessage, SystemMessage};
 use crate::bft::communication::message::Message::System;
+use crate::bft::communication::message::{
+    ConsensusMessage, ConsensusMessageKind, Header, ObserverMessage, RequestMessage, StoredMessage,
+    SystemMessage,
+};
+use crate::bft::communication::{channel, Node, NodeId};
 use crate::bft::consensus::ConsensusGuard;
+use chrono::{DateTime, Utc};
 
-use crate::bft::threadpool;
 use crate::bft::consensus::log::MemLog;
+use crate::bft::threadpool;
 
 use crate::bft::core::server::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UnorderedBatch};
-use crate::bft::ordering::{Orderable};
+use crate::bft::ordering::Orderable;
 use crate::bft::timeouts::TimeoutsHandle;
 
-use super::sync::AbstractSynchronizer;
-use super::sync::replica_sync::Synchronizer;
-
+use super::core::server::ViewInfo;
+use super::ordering::SeqNo;
+use super::sync::{Synchronizer, AbstractSynchronizer};
 
 pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
 
@@ -32,8 +34,7 @@ pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
 pub struct Proposer<S: Service + 'static> {
-    batch_channel: (ChannelSyncTx<BatchType<S>>,
-                    ChannelSyncRx<BatchType<S>>),
+    batch_channel: (ChannelSyncTx<BatchType<S>>, ChannelSyncRx<BatchType<S>>),
     node_ref: Arc<Node<S::Data>>,
     synchronizer: Arc<Synchronizer<S>>,
     timeouts: Arc<TimeoutsHandle<S>>,
@@ -46,7 +47,7 @@ pub struct Proposer<S: Service + 'static> {
     target_global_batch_size: usize,
     //Time limit for generating a batch with target_global_batch_size size
     global_batch_time_limit: u128,
-    
+
     //Observer related stuff
     observer_handle: ObserverHandle,
 }
@@ -57,15 +58,17 @@ const TIMEOUT: Duration = Duration::from_micros(10);
 const BATCH_CHANNEL_SIZE: usize = 128;
 
 impl<S: Service> Proposer<S> {
-    pub fn new(node: Arc<Node<S::Data>>,
-               sync: Arc<Synchronizer<S>>,
-               log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
-               timeouts: Arc<TimeoutsHandle<S>>,
-               executor_handle: ExecutorHandle<S>,
-               consensus_guard: ConsensusGuard,
-               target_global_batch_size: usize,
-               global_batch_time_limit: u128,
-               observer_handle: ObserverHandle, ) -> Arc<Self> {
+    pub fn new(
+        node: Arc<Node<S::Data>>,
+        sync: Arc<Synchronizer<S>>,
+        log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
+        timeouts: Arc<TimeoutsHandle<S>>,
+        executor_handle: ExecutorHandle<S>,
+        consensus_guard: ConsensusGuard,
+        target_global_batch_size: usize,
+        global_batch_time_limit: u128,
+        observer_handle: ObserverHandle,
+    ) -> Arc<Self> {
         let (channel_tx, channel_rx) = channel::new_bounded_sync(BATCH_CHANNEL_SIZE);
 
         Arc::new(Self {
@@ -266,17 +269,8 @@ impl<S: Service> Proposer<S> {
                                     None
                                 };
 
-
-                                let message = SystemMessage::Consensus(ConsensusMessage::new(
-                                    seq,
-                                    view.sequence_number(),
-                                    ConsensusMessageKind::PrePrepare(currently_accumulated),
-                                ));
-
-                                let targets = NodeId::targets(0..view.params().n());
-
-                                self.node_ref.broadcast(message, targets);
-
+                                self.propose(seq, &view, currently_accumulated);
+                                
                                 currently_accumulated = next_batch.unwrap_or(Vec::with_capacity(self.node_ref.batch_size() * 2));
 
                                 //Stats
@@ -301,18 +295,40 @@ impl<S: Service> Proposer<S> {
             }).unwrap()
     }
 
+
+    /// Proposes a new batch.
+    fn propose(
+        &self,
+        seq: SeqNo,
+        view: &ViewInfo,
+        currently_accumulated: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+    ) {
+        let message = SystemMessage::Consensus(ConsensusMessage::new(
+            seq,
+            view.sequence_number(),
+            ConsensusMessageKind::PrePrepare(currently_accumulated),
+        ));
+
+        let targets = NodeId::targets(0..view.params().n());
+
+        self.node_ref.broadcast(message, targets);
+    }
+
     /// Attempt to propose an unordered request batch
     /// Fails if the batch is not large enough or the timeout
     /// Has not yet occurred
-    fn propose_unordered(&self,
-                         currently_unordered_batch: &mut Vec<StoredMessage<RequestMessage<Request<S>>>>,
-                         last_unordered_batch: &mut Instant) {
-
+    fn propose_unordered(
+        &self,
+        currently_unordered_batch: &mut Vec<StoredMessage<RequestMessage<Request<S>>>>,
+        last_unordered_batch: &mut Instant,
+    ) {
         if !currently_unordered_batch.is_empty() {
             let current_batch_size = currently_unordered_batch.len();
 
             let should_exec = if current_batch_size < self.target_global_batch_size {
-                let micros_since_last_batch = Instant::now().duration_since(*last_unordered_batch).as_micros();
+                let micros_since_last_batch = Instant::now()
+                    .duration_since(*last_unordered_batch)
+                    .as_micros();
 
                 if micros_since_last_batch <= self.global_batch_time_limit {
                     //Don't execute yet since we don't have the size and haven't timed
@@ -327,7 +343,6 @@ impl<S: Service> Proposer<S> {
             };
 
             if should_exec {
-
                 let mut new_accumulated_vec = Vec::with_capacity(self.target_global_batch_size * 2);
 
                 std::mem::swap(last_unordered_batch, &mut Instant::now());
@@ -335,19 +350,25 @@ impl<S: Service> Proposer<S> {
                 std::mem::swap(currently_unordered_batch, &mut new_accumulated_vec);
 
                 threadpool::execute(move || {
-                    let mut unordered_batch = UnorderedBatch::new_with_cap(new_accumulated_vec.len());
+                    let mut unordered_batch =
+                        UnorderedBatch::new_with_cap(new_accumulated_vec.len());
 
                     for request in new_accumulated_vec {
                         let (header, message) = request.into_inner();
 
-                        unordered_batch.add(header.from(),
-                                            message.session_id(),
-                                            message.sequence_number(),
-                                            message.into_inner_operation());
+                        unordered_batch.add(
+                            header.from(),
+                            message.session_id(),
+                            message.sequence_number(),
+                            message.into_inner_operation(),
+                        );
                     }
 
                     if let Err(err) = self.executor_handle.queue_update_unordered(unordered_batch) {
-                        error!("Error while proposing unordered batch of requests: {:?}", err);
+                        error!(
+                            "Error while proposing unordered batch of requests: {:?}",
+                            err
+                        );
                     }
                 });
             }
@@ -358,17 +379,19 @@ impl<S: Service> Proposer<S> {
         self.cancelled.store(true, Ordering::Relaxed);
     }
 
-    fn requests_received(&self, t: DateTime<Utc>, reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
+    fn requests_received(
+        &self,
+        t: DateTime<Utc>,
+        reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+    ) {
         for (h, r) in reqs.into_iter().map(StoredMessage::into_inner) {
             self.request_received(h, SystemMessage::Request(r))
         }
     }
 
     fn request_received(&self, h: Header, r: SystemMessage<State<S>, Request<S>, Reply<S>>) {
-        self.synchronizer.watch_request(
-            h.unique_digest(),
-            &self.timeouts,
-        );
+        self.synchronizer
+            .watch_request(h.unique_digest(), &self.timeouts);
 
         // This was replaced with a batched log instead of a per message log to save hashing ops
         // self.log.insert(h, r);

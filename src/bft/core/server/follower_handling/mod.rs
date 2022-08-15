@@ -1,11 +1,24 @@
-use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
-use crate::bft::communication::message::{ConsensusMessage, FwdConsensusMessage, Header, SystemMessage, ViewChangeMessage, ViewChangeMessageKind};
-use crate::bft::communication::{NodeId, SendNode};
+use std::ops::Deref;
+use std::sync::Arc;
+
+use crate::bft::communication::channel::{self, ChannelSyncRx, ChannelSyncTx};
+use crate::bft::communication::message::{
+    ConsensusMessage, FwdConsensusMessage, Header, SystemMessage, ViewChangeMessage,
+    ViewChangeMessageKind,
+};
+use crate::bft::communication::{Node, NodeId, SendNode};
 use crate::bft::core::server::ViewInfo;
 use crate::bft::executable::{Request, Service};
 
 /// The message type of the channel
 pub type ChannelMsg<S: Service> = ConsensusMessage<Request<S>>;
+
+pub enum FollowerEvent<S: Service> {
+    //This can't be the best way, it envolves cloning a potentially massive
+    //Message, which hampers performance
+    Received(ConsensusMessage<Request<S>>),
+    Sent(ConsensusMessage<Request<S>>),
+}
 
 /// Store information of the current followers of the quorum
 /// This information will be used to calculate which replicas have to send the
@@ -18,14 +31,44 @@ struct FollowersFollowing<S: Service + 'static> {
     own_id: NodeId,
     followers: Vec<NodeId>,
     send_node: SendNode<S::Data>,
-    rx: ChannelSyncRx<ChannelMsg<S>>
+    rx: ChannelSyncRx<ChannelMsg<S>>,
 }
 
+
+/// A handle to the follower handling thread
+/// 
+/// Allows us to pass the thread notifications on what is happening so it
+/// can handle the events properly
+#[derive(Clone)]
 struct FollowerHandle<S: Service> {
     tx: ChannelSyncTx<ChannelMsg<S>>,
 }
 
 impl<S: Service> FollowersFollowing<S> {
+    /// Starts the follower handling thread and returns a cloneable handle that
+    /// can be used to deliver messages to it.
+    pub fn init_follower_handling(id: NodeId, node: &Arc<Node<S::Data>>) -> FollowerHandle<S> {
+        let (tx, rx) = channel::new_bounded_sync(1024);
+
+        let follower_handling = Self {
+            own_id: id,
+            followers: Vec::new(),
+            send_node: node.send_node(),
+            rx,
+        };
+
+        FollowerHandle { tx }
+    }
+
+    fn run(self) {
+        loop {
+            let message = self.rx.recv().unwrap();
+
+
+
+
+        }
+    }
 
     /// Calculate which followers we have to send the messages to
     /// according to the disposition of the quorum and followers
@@ -33,7 +76,6 @@ impl<S: Service> FollowersFollowing<S> {
     /// (This is only needed for the preprepare message, all others use
     /// multicast)
     fn targets(&self, view: &ViewInfo) -> Vec<NodeId> {
-
         //How many replicas are not the leader?
         let available_replicas = view.params().n() - 1;
 
@@ -64,14 +106,14 @@ impl<S: Service> FollowersFollowing<S> {
 
             let last_follower = first_follower + followers_for_replica as u32;
 
-            let mut targetted_followers = Vec::with_capacity((last_follower - first_follower) as usize);
+            let mut targetted_followers =
+                Vec::with_capacity((last_follower - first_follower) as usize);
 
             for i in first_follower..=last_follower {
                 targetted_followers.push(self.followers[i as usize]);
             }
 
             targetted_followers
-
         } else {
             //TODO: How to handle layouts when there are more replicas than followers?
             todo!()
@@ -79,7 +121,12 @@ impl<S: Service> FollowersFollowing<S> {
     }
 
     /// Handle when we have received a preprepare message
-    fn handle_preprepare_msg_rcvd(&mut self, view: &ViewInfo, header: Header, pre_prepare: ConsensusMessage<Request<S>>) {
+    fn handle_preprepare_msg_rcvd(
+        &mut self,
+        view: &ViewInfo,
+        header: Header,
+        pre_prepare: ConsensusMessage<Request<S>>,
+    ) {
         if view.leader() == self.own_id {
             //Leaders don't send pre_prepares to followers in order to save bandwidth
             return;
@@ -99,7 +146,8 @@ impl<S: Service> FollowersFollowing<S> {
     fn handle_prepare_msg(&mut self, prepare: ConsensusMessage<Request<S>>) {
         let message = SystemMessage::Consensus(prepare);
 
-        self.send_node.broadcast(message, self.followers.iter().copied());
+        self.send_node
+            .broadcast(message, self.followers.iter().copied());
     }
 
     /// Handle us having sent a commit message (notice how pre prepare are handled on reception
@@ -109,15 +157,14 @@ impl<S: Service> FollowersFollowing<S> {
     fn handle_commit_msg(&mut self, commit: ConsensusMessage<Request<S>>) {
         let message = SystemMessage::Consensus(commit);
 
-        self.send_node.broadcast(message, self.followers.iter().copied());
+        self.send_node
+            .broadcast(message, self.followers.iter().copied());
     }
 
     ///
     fn handle_sync_msg(&mut self, msg: ViewChangeMessage<Request<S>>) {
         match msg.kind() {
-            ViewChangeMessageKind::Stop(_) => {
-
-            }
+            ViewChangeMessageKind::Stop(_) => {}
             ViewChangeMessageKind::StopData(_) => {
                 //Followers don't need these messages (only the leader of the quorum needs them)
 
@@ -131,7 +178,15 @@ impl<S: Service> FollowersFollowing<S> {
         }
         let message = SystemMessage::ViewChange(msg);
 
-        self.send_node.broadcast(message, self.followers.iter().copied());
+        self.send_node
+            .broadcast(message, self.followers.iter().copied());
     }
+}
 
+impl<S: Service> Deref for FollowerHandle<S> {
+    type Target = ChannelSyncTx<ChannelMsg<S>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.tx
+    }
 }

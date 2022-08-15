@@ -1,71 +1,42 @@
 //! Contains the server side core protocol logic of `febft`.
 
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc};
 use std::time::{Duration, Instant};
 
-use chrono::DateTime;
 use chrono::offset::Utc;
+use chrono::DateTime;
 use log::{debug, warn};
-use rocksdb::{DB, Options};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 
 use crate::bft::benchmarks::BatchMeta;
-use crate::bft::communication::{
-    Node,
-    NodeConfig,
-    NodeId,
+use crate::bft::communication::message::{
+    ConsensusMessage, ForwardedRequestsMessage, Header, Message, ObserveEventKind, RequestMessage,
+    StoredMessage, SystemMessage,
 };
-use crate::bft::communication::message::{ForwardedRequestsMessage, Header, Message, ObserveEventKind, RequestMessage, StoredMessage, SystemMessage, ConsensusMessage};
-use crate::bft::consensus::replica_consensus::Consensus;
-use crate::bft::consensus::{ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
-use crate::bft::consensus::log::{
-    Info,
-    MemLog,
-};
+use crate::bft::communication::{Node, NodeConfig, NodeId};
+use crate::bft::consensus::log::{Info, MemLog};
+use crate::bft::consensus::{ConsensusGuard, ConsensusPollStatus, ConsensusStatus, Consensus};
 use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::core::server::rq_finalizer::{RqFinalizer, RqFinalizerHandle};
-use crate::bft::cst::{
-    CollabStateTransfer,
-    CstProgress,
-    CstStatus,
-    install_recovery_state,
-};
+use crate::bft::cst::{install_recovery_state, CollabStateTransfer, CstProgress, CstStatus};
 use crate::bft::error::*;
-use crate::bft::executable::{
-    Executor,
-    ExecutorHandle,
-    Reply,
-    Request,
-    Service,
-    State,
-};
-use crate::bft::ordering::{
-    Orderable,
-    SeqNo,
-};
+use crate::bft::executable::{Executor, ExecutorHandle, Reply, Request, Service, State};
+use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::persistentdb::KVDB;
 use crate::bft::proposer::Proposer;
-use crate::bft::sync::replica_sync::Synchronizer;
-use crate::bft::sync::{
-    SynchronizerPollStatus,
-    SynchronizerStatus, AbstractSynchronizer,
-};
-use crate::bft::timeouts::{
-    TimeoutKind,
-    Timeouts,
-    TimeoutsHandle,
-};
+use crate::bft::sync::{AbstractSynchronizer, SynchronizerPollStatus, SynchronizerStatus, Synchronizer};
+use crate::bft::timeouts::{TimeoutKind, Timeouts, TimeoutsHandle};
 
 use super::SystemParams;
 
 pub mod observer;
 
-pub mod rq_finalizer;
 pub mod client_replier;
 pub mod follower_handling;
+pub mod rq_finalizer;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub(crate) enum ReplicaPhase {
@@ -160,7 +131,6 @@ pub struct ReplicaConfig<S> {
     pub service: S,
 
     //TODO: These two values should be loaded from storage
-
     /// The sequence number for the current view.
     pub view: SeqNo,
     /// Next sequence number attributed to a request by
@@ -175,11 +145,11 @@ pub struct ReplicaConfig<S> {
 }
 
 impl<S> Replica<S>
-    where
-        S: Service + Send + 'static,
-        State<S>: Send + Clone + 'static,
-        Request<S>: Send + Clone + 'static,
-        Reply<S>: Send + 'static,
+where
+    S: Service + Send + 'static,
+    State<S>: Send + Clone + 'static,
+    Request<S>: Send + Clone + 'static,
+    Reply<S>: Send + 'static,
 {
     /// Bootstrap a replica in `febft`.
     pub async fn bootstrap(cfg: ReplicaConfig<S>) -> Result<Self> {
@@ -208,9 +178,12 @@ impl<S> Replica<S>
         // connect to peer nodes
         let observer_handle = observer::start_observers(node.send_node());
 
-        let mut log = MemLog::new(log_node_id,
-                                  global_batch_size, Some(observer_handle.clone()),
-                                  db);
+        let mut log = MemLog::new(
+            log_node_id,
+            global_batch_size,
+            Some(observer_handle.clone()),
+            db,
+        );
 
         // system params
         //TODO: Load view from persistent storage
@@ -218,8 +191,7 @@ impl<S> Replica<S>
 
         let node_clone = node.clone();
 
-        let reply_handle = Replier::new(node.id(),
-                                        node.send_node(), log.clone());
+        let reply_handle = Replier::new(node.id(), node.send_node(), log.clone());
 
         // start executor
         let executor = Executor::new(
@@ -231,9 +203,7 @@ impl<S> Replica<S>
         )?;
 
         // start timeouts handler
-        let timeouts = Timeouts::new(
-            Arc::clone(node.loopback_channel()),
-        );
+        let timeouts = Timeouts::new(Arc::clone(node.loopback_channel()));
 
         // TODO:
         // - client req timeout base dur configure param
@@ -242,16 +212,20 @@ impl<S> Replica<S>
         const CST_BASE_DUR: Duration = Duration::from_secs(30);
         const REQ_BASE_DUR: Duration = Duration::from_secs(2 * 60);
 
-        let synchronizer = Synchronizer::new(REQ_BASE_DUR, view);
+        let synchronizer = Synchronizer::new_replica(view, REQ_BASE_DUR);
 
-        let rq_finalizer = RqFinalizer::new(
+        let rq_finalizer = RqFinalizer::new(node.id(), log.clone(), executor.clone());
+
+        let consensus = Consensus::new_replica(
             node.id(),
-            log.clone(),
-            executor.clone());
+            view,
+            next_consensus_seq,
+            global_batch_size,
+            observer_handle.clone(),
+        );
 
-        let consensus = Consensus::new(next_consensus_seq, view, node.id(), global_batch_size, observer_handle.clone());
-
-        let consensus_guard = consensus.consensus_guard().clone();
+        //We can unwrap since it's guaranteed that this consensus is of a replica type
+        let consensus_guard = consensus.consensus_guard().unwrap().clone();
 
         //Initialize replica data with the initialized variables from above
         let mut replica = Replica {
@@ -264,15 +238,21 @@ impl<S> Replica<S>
             timeouts: timeouts.clone(),
             node,
             log: log.clone(),
-            proposer: Proposer::new(node_clone, synchronizer, log, timeouts,
-                                    executor.clone(),
-                                    consensus_guard,
-                                    global_batch_size,
-                                    batch_timeout, observer_handle.clone(), ),
+            proposer: Proposer::new(
+                node_clone,
+                synchronizer,
+                log,
+                timeouts,
+                executor.clone(),
+                consensus_guard,
+                global_batch_size,
+                batch_timeout,
+                observer_handle.clone(),
+            ),
             executor,
             rq_finalizer,
             observer_handle: observer_handle.clone(),
-            unordered_rq_guard: Arc::new(Default::default())
+            unordered_rq_guard: Arc::new(Default::default()),
         };
 
         //Start receiving and processing client requests
@@ -296,10 +276,18 @@ impl<S> Replica<S>
                         // FIXME: handle rogue view change messages
                         SystemMessage::ViewChange(_) => warn!("Rogue view change message detected"),
                         // FIXME: handle rogue forwarded requests messages
-                        SystemMessage::ForwardedRequests(_) => warn!("Rogue forwarded requests message detected"),
-                        SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
-                        SystemMessage::UnOrderedRequest(_) => warn!("Rogue unordered request message"),
-                        SystemMessage::FwdConsensus(_) => warn!("Rogue fwd consensus message observed."),
+                        SystemMessage::ForwardedRequests(_) => {
+                            warn!("Rogue forwarded requests message detected")
+                        }
+                        SystemMessage::ObserverMessage(_) => {
+                            warn!("Rogue observer message detected")
+                        }
+                        SystemMessage::UnOrderedRequest(_) => {
+                            warn!("Rogue unordered request message")
+                        }
+                        SystemMessage::FwdConsensus(_) => {
+                            warn!("Rogue fwd consensus message observed.")
+                        }
                     }
                 }
                 // ignore other messages for now
@@ -309,12 +297,32 @@ impl<S> Replica<S>
 
         println!("{:?} // Started replica.", replica.id());
 
-        println!("{:?} // Per Pool Batch size: {}", replica.id(), per_pool_batch_size);
-        println!("{:?} // Per pool batch sleep: {}", replica.id(), per_pool_batch_sleep);
-        println!("{:?} // Per pool batch timeout: {}", replica.id(), per_pool_batch_timeout);
+        println!(
+            "{:?} // Per Pool Batch size: {}",
+            replica.id(),
+            per_pool_batch_size
+        );
+        println!(
+            "{:?} // Per pool batch sleep: {}",
+            replica.id(),
+            per_pool_batch_sleep
+        );
+        println!(
+            "{:?} // Per pool batch timeout: {}",
+            replica.id(),
+            per_pool_batch_timeout
+        );
 
-        println!("{:?} // Global batch size: {}", replica.id(), global_batch_size);
-        println!("{:?} // Global batch timeout: {}", replica.id(), batch_timeout);
+        println!(
+            "{:?} // Global batch size: {}",
+            replica.id(),
+            global_batch_size
+        );
+        println!(
+            "{:?} // Global batch timeout: {}",
+            replica.id(),
+            batch_timeout
+        );
 
         Ok(replica)
     }
@@ -326,7 +334,6 @@ impl<S> Replica<S>
 
     /// The main loop of a replica.
     pub fn run(&mut self) -> Result<()> {
-
         // TODO: exit condition?
         loop {
             match self.phase {
@@ -353,27 +360,43 @@ impl<S> Replica<S>
         if self.phase != old_phase {
             //If the phase is the same, then we got nothing to do as no states have changed
 
-            let to_send = match (old_phase, self.phase) {
-                (_, ReplicaPhase::RetrievingState) => {
-                    ObserveEventKind::CollabStateTransfer
+            match (&old_phase, &self.phase) {
+                (ReplicaPhase::NormalPhase, _) => {
+                    //We want to stop the proposer from trying to propose any requests while we are performing
+                    //Other operations.
+                    self.consensus_guard.consensus_guard().store(true, Ordering::SeqCst);
+                },
+                (_, ReplicaPhase::NormalPhase) => {
+                    //Mark the consensus as available, since we are changing to the normal phase
+                    //And are therefore ready to receive pre-prepares (if are are the leaders)
+                    self.consensus_guard.consensus_guard().store(false, Ordering::SeqCst);
                 }
-                (_, ReplicaPhase::SyncPhase) => {
-                    ObserveEventKind::ViewChangePhase
-                }
+                (_, _) => {}
+            }
+
+            /*
+            Observe event stuff
+            @{
+             */
+            let to_send = match (&old_phase, &self.phase) {
+                (_, ReplicaPhase::RetrievingState) => ObserveEventKind::CollabStateTransfer,
+                (_, ReplicaPhase::SyncPhase) => ObserveEventKind::ViewChangePhase,
                 (_, ReplicaPhase::NormalPhase) => {
                     let current_view = self.synchronizer.view();
 
                     let current_seq = self.consensus.sequence_number();
 
-                    //Mark the consensus as available, since we are changing to the normal phase
-                    //And are therefore ready to receive pre-prepares (if are are the leaders)
-                    self.consensus_guard.consensus_guard().store(false, Ordering::SeqCst);
-
                     ObserveEventKind::NormalPhase((current_view, current_seq))
                 }
             };
 
-            self.observer_handle.tx().send(MessageType::Event(to_send)).expect("Failed to notify observer thread");
+            self.observer_handle
+                .tx()
+                .send(MessageType::Event(to_send))
+                .expect("Failed to notify observer thread");
+            /*
+            }@
+                 */
         }
     }
 
@@ -397,7 +420,7 @@ impl<S> Replica<S>
                     }
                     SystemMessage::FwdConsensus(fwdConsensus) => {
                         //Replicas do not received forwarded consensus messages.
-                    },
+                    }
                     SystemMessage::ViewChange(message) => {
                         self.synchronizer.queue(header, message);
                     }
@@ -420,9 +443,8 @@ impl<S> Replica<S>
                                     &mut self.consensus,
                                 )?;
 
-                                let next_phase = self.phase_stack
-                                    .take()
-                                    .unwrap_or(ReplicaPhase::NormalPhase);
+                                let next_phase =
+                                    self.phase_stack.take().unwrap_or(ReplicaPhase::NormalPhase);
 
                                 self.switch_phase(next_phase);
                             }
@@ -474,7 +496,9 @@ impl<S> Replica<S>
                     // Should never
                     SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
                     SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
-                    SystemMessage::UnOrderedRequest(_) => warn!("Rogue unordered request message detected"),
+                    SystemMessage::UnOrderedRequest(_) => {
+                        warn!("Rogue unordered request message detected")
+                    }
                 }
             }
             Message::Timeout(timeout_kind) => {
@@ -494,9 +518,7 @@ impl<S> Replica<S>
 
         // retrieve a view change message to be processed
         let message = match self.synchronizer.poll() {
-            SynchronizerPollStatus::Recv => {
-                self.node.receive_from_replicas()?
-            }
+            SynchronizerPollStatus::Recv => self.node.receive_from_replicas()?,
             SynchronizerPollStatus::NextMessage(h, m) => {
                 Message::System(h, SystemMessage::ViewChange(m))
             }
@@ -521,7 +543,7 @@ impl<S> Replica<S>
                     }
                     SystemMessage::FwdConsensus(_) => {
                         //Live replicas don't accept forwarded consensus messages
-                    },
+                    }
                     SystemMessage::ForwardedRequests(requests) => {
                         self.forwarded_requests_received(requests);
                     }
@@ -539,7 +561,9 @@ impl<S> Replica<S>
                         match status {
                             CstStatus::Nil => (),
                             // should not happen...
-                            _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+                            _ => {
+                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer)
+                            }
                         }
                     }
                     SystemMessage::ViewChange(message) => {
@@ -556,7 +580,6 @@ impl<S> Replica<S>
                             SynchronizerStatus::Nil => return Ok(false),
                             SynchronizerStatus::Running => (),
                             SynchronizerStatus::NewView => {
-
                                 //Our current view has been updated and we have no more state operations
                                 //to perform. This happens if we are a correct replica and therefore do not need
                                 //To update our state or if we are a replica that was incorrect and whose state has
@@ -574,7 +597,9 @@ impl<S> Replica<S>
                                 self.phase_stack = Some(ReplicaPhase::SyncPhase);
                             }
                             // should not happen...
-                            _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+                            _ => {
+                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer)
+                            }
                         }
                     }
                     // FIXME: handle rogue reply messages
@@ -622,9 +647,7 @@ impl<S> Replica<S>
         let leader = self.synchronizer.view().leader() == self.id();
 
         let message = match polled_message {
-            ConsensusPollStatus::Recv => {
-                self.node.receive_from_replicas()?
-            }
+            ConsensusPollStatus::Recv => self.node.receive_from_replicas()?,
             ConsensusPollStatus::NextMessage(h, m) => {
                 Message::System(h, SystemMessage::Consensus(m))
             }
@@ -660,7 +683,9 @@ impl<S> Replica<S>
                         match status {
                             CstStatus::Nil => (),
                             // should not happen...
-                            _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+                            _ => {
+                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer)
+                            }
                         }
                     }
                     SystemMessage::ViewChange(message) => {
@@ -677,9 +702,13 @@ impl<S> Replica<S>
 
                         match status {
                             SynchronizerStatus::Nil => (),
-                            SynchronizerStatus::Running => self.switch_phase(ReplicaPhase::SyncPhase),
+                            SynchronizerStatus::Running => {
+                                self.switch_phase(ReplicaPhase::SyncPhase)
+                            }
                             // should not happen...
-                            _ => return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer),
+                            _ => {
+                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer)
+                            }
                         }
                     }
                     SystemMessage::Consensus(message) => {
@@ -705,19 +734,26 @@ impl<S> Replica<S>
         Ok(())
     }
 
-    fn adv_consensus(&mut self, header: Header, message: ConsensusMessage<Request<S>>) -> Result<()> {
-
+    fn adv_consensus(
+        &mut self,
+        header: Header,
+        message: ConsensusMessage<Request<S>>,
+    ) -> Result<()> {
         let seq = self.consensus.sequence_number();
 
-        debug!("{:?} // Processing consensus message {:?} ", self.id(), message);
+        debug!(
+            "{:?} // Processing consensus message {:?} ",
+            self.id(),
+            message
+        );
 
         let start = Instant::now();
 
         let status = self.consensus.process_message(
             header,
             message,
-            &self.timeouts,
             &self.synchronizer,
+            &self.timeouts,
             &self.log,
             &self.node,
         );
@@ -747,18 +783,15 @@ impl<S> Replica<S>
                 //Given to the service thread to execute
                 //self.rq_finalizer.queue_finalize(info, meta, rqs);
                 match info {
-                    Info::Nil => self.executor.queue_update(
-                        meta,
-                        batch,
-                    ),
+                    Info::Nil => self.executor.queue_update(meta, batch),
                     // execute and begin local checkpoint
-                    Info::BeginCheckpoint => self.executor.queue_update_and_get_appstate(
-                        meta,
-                        batch,
-                    ),
-                }.unwrap();
+                    Info::BeginCheckpoint => {
+                        self.executor.queue_update_and_get_appstate(meta, batch)
+                    }
+                }
+                .unwrap();
 
-                self.consensus.next_instance(&self.synchronizer);
+                self.consensus.next_instance();
             }
         }
 
@@ -766,7 +799,11 @@ impl<S> Replica<S>
         // signal the consensus layer of this event
         self.consensus.signal();
 
-        debug!("{:?} // Done processing consensus message. Took {:?}", self.id(), Instant::now().duration_since(start));
+        debug!(
+            "{:?} // Done processing consensus message. Took {:?}",
+            self.id(),
+            Instant::now().duration_since(start)
+        );
 
         // yield execution since `signal()`
         // will probably force a value from the
@@ -775,10 +812,7 @@ impl<S> Replica<S>
         Ok(())
     }
 
-    fn execution_finished_with_appstate(
-        &mut self,
-        appstate: State<S>,
-    ) -> Result<()> {
+    fn execution_finished_with_appstate(&mut self, appstate: State<S>) -> Result<()> {
         self.log.finalize_checkpoint(appstate)?;
         if self.cst.needs_checkpoint() {
             // status should return CstStatus::Nil,
@@ -795,15 +829,9 @@ impl<S> Replica<S>
         Ok(())
     }
 
-    fn forwarded_requests_received(
-        &mut self,
-        requests: ForwardedRequestsMessage<Request<S>>,
-    ) {
-        self.synchronizer.watch_forwarded_requests(
-            requests,
-            &self.timeouts,
-            &mut self.log,
-        );
+    fn forwarded_requests_received(&mut self, requests: ForwardedRequestsMessage<Request<S>>) {
+        self.synchronizer
+            .watch_forwarded_requests(requests, &self.timeouts, &mut self.log);
     }
 
     fn timeout_received(&mut self, timeout_kind: TimeoutKind) {
@@ -865,7 +893,11 @@ impl<S> Replica<S>
         }
     }
 
-    fn requests_received(&self, t: DateTime<Utc>, reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
+    fn requests_received(
+        &self,
+        t: DateTime<Utc>,
+        reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+    ) {
         let mut batch_meta = self.log.batch_meta().lock();
 
         batch_meta.reception_time = t;
@@ -879,10 +911,8 @@ impl<S> Replica<S>
     }
 
     fn request_received(&self, h: Header, r: SystemMessage<State<S>, Request<S>, Reply<S>>) {
-        self.synchronizer.watch_request(
-            h.unique_digest(),
-            &self.timeouts,
-        );
+        self.synchronizer
+            .watch_request(h.unique_digest(), &self.timeouts);
         self.log.insert(h, r);
     }
 }

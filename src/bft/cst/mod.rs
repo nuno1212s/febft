@@ -481,6 +481,8 @@ where
         timeouts.timeout(self.curr_timeout, TimeoutKind::Cst(cst_seq));
         self.phase = ProtoPhase::ReceivingState(0);
 
+        //TODO: Maybe attempt to use followers to rebuild state and avoid
+        // Overloading the replicas
         let message = SystemMessage::Cst(CstMessage::new(cst_seq, CstMessageKind::RequestState));
         let targets = NodeId::targets(0..synchronizer.view().params().n());
         node.broadcast(message, targets);
