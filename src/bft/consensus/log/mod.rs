@@ -1,6 +1,5 @@
 //! A module to manage the `febft` message log.
 
-use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 
@@ -10,7 +9,6 @@ use std::sync::Arc;
 use intmap::IntMap;
 use log::debug;
 use parking_lot::{Mutex};
-use rocksdb::DB;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +23,7 @@ use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
 use crate::bft::executable::{Request, UpdateBatch};
+use crate::bft::globals::ReadOnly;
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::persistentdb::KVDB;
 
@@ -96,6 +95,13 @@ impl<S> Checkpoint<S> {
     pub fn into_inner(self) -> (SeqNo, S) {
         (self.seq, self.appstate)
     }
+}
+
+pub struct ActiveDecisionLog<O> {
+    last_exec: Option<SeqNo>,
+    pre_prepares: Vec<StoredMessage<ConsensusMessage<O>>>,
+    prepares: Vec<StoredMessage<ConsensusMessage<O>>>,
+    commits: Vec<StoredMessage<ConsensusMessage<O>>>,
 }
 
 /// Subset of a `Log`, containing only consensus messages.
@@ -495,6 +501,8 @@ pub struct MemLog<S, O, P> {
     request_batches: ConcurrentHashMap<Digest, Vec<StoredMessage<RequestMessage<O>>>>,
     //This will only be accessed from the replica request thread so we can wrap it
     //In a simple cell
+
+    //Stores all of the performed requests concatenated
     decided: RefCell<Vec<O>>,
     checkpoint: RefCell<CheckpointState<S>>,
     //Some stuff for statistics.
@@ -583,7 +591,7 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
             CheckpointState::Complete(checkpoint) => {
                 Ok(RecoveryState::new(
                     view,
-                    checkpoint.clone(),
+                    *checkpoint.clone(),
                     self.decided.borrow().clone(),
                     self.declog.borrow().clone(),
                 ))
@@ -809,10 +817,10 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
             CheckpointState::Partial { ref seq } | CheckpointState::PartialWithEarlier { ref seq, .. } => {
                 let seq = *seq;
 
-                self.checkpoint.replace(CheckpointState::Complete(Checkpoint {
+                self.checkpoint.replace(CheckpointState::Complete(Arc::new(Checkpoint {
                     seq,
                     appstate,
-                }));
+                })));
 
                 self.decided.borrow_mut().clear();
                 //

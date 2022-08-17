@@ -2,9 +2,8 @@
 
 use std::collections::BTreeSet;
 use std::future::Future;
-use std::io::Read;
-use std::ops::Deref;
-use std::pin::Pin;
+use std::{ops::Deref};
+use std::{io::Read, pin::Pin};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::task::{Context, Poll, Waker};
@@ -13,20 +12,21 @@ use std::time::Duration;
 use futures::StreamExt;
 use futures_timer::Delay;
 use intmap::IntMap;
-use log::{error, info, warn};
+use log::{error};
 
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::{Node, NodeConfig, NodeId, SendNode};
-use crate::bft::communication::message::{ObserveEventKind, Message, RequestMessage, SystemMessage};
+use crate::bft::communication::message::{Message, RequestMessage, SystemMessage};
 use crate::bft::communication::serialize::SharedData;
-use crate::bft::core::client::observing::ObserverClient;
+use crate::bft::core::client::observing_client::ObserverClient;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
 
 use super::SystemParams;
 
-pub mod observing;
+pub mod observing_client;
+pub mod unordered_client;
 
 macro_rules! certain {
     ($some:expr) => {
@@ -63,7 +63,7 @@ struct ClientData<D> where D: SharedData + 'static {
     //We only want to have a single observer client for any and all sessions that the user
     //May have, so we keep this reference in here
     observer: Arc<Mutex<Option<ObserverClient>>>,
-    observer_ready: Mutex<Option<observing::Ready>>,
+    observer_ready: Mutex<Option<observing_client::Ready>>,
 }
 
 /// Represents a client node in `febft`.

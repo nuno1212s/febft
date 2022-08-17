@@ -25,6 +25,7 @@ use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::timeouts::{TimeoutKind, TimeoutsHandle};
 
 use super::consensus::AbstractConsensus;
+use super::globals::ReadOnly;
 use super::sync::AbstractSynchronizer;
 
 enum ProtoPhase<S, O> {

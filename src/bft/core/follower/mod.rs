@@ -97,9 +97,9 @@ impl<S: Service + 'static> Follower<S> {
         let seq_num = SeqNo::ZERO;
         let seq_view = SeqNo::ZERO;
 
-        let view = ViewInfo::new(SeqNo::ZERO, n, f)?;
+        let view = ViewInfo::new(seq_view, n, f)?;
 
-        let mut log = MemLog::new(log_node_id, global_batch_size, None, db);
+        let log = MemLog::new(log_node_id, global_batch_size, None, db);
 
         let (node, rogue) = Node::bootstrap(node_config).await?;
 
@@ -111,6 +111,7 @@ impl<S: Service + 'static> Follower<S> {
         let consensus = Consensus::new_follower(node.id(), seq_num, global_batch_size);
 
         const CST_BASE_DUR: Duration = Duration::from_secs(30);
+        
         let cst = CollabStateTransfer::new(CST_BASE_DUR);
 
         let synchronizer = Synchronizer::new_follower(view);

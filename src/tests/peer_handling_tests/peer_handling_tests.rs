@@ -10,6 +10,9 @@ pub mod peer_handling_tests {
     const CLIENT_COUNT: u32 = 100;
     const BATCH_SIZE: usize = 64;
     const REQUESTS_PER_CLI: usize = 10000;
+    const CLIENT_PER_POOL: usize = 100;
+    const BATCH_TIMEOUT_MICROS: u64 = 1000;
+    const BATCH_SLEEP_MICROS: u64 = 1000;
 
     struct Message {
         seq: usize,
@@ -24,7 +27,7 @@ pub mod peer_handling_tests {
 
         let own_id = NodeId(1001);
 
-        let peers = Arc::new(NodePeers::new(own_id, FIRST_CLI, BATCH_SIZE));
+        let peers = Arc::new(NodePeers::new(own_id, FIRST_CLI, BATCH_SIZE, CLIENT_PER_POOL, BATCH_TIMEOUT_MICROS, BATCH_SLEEP_MICROS));
 
         for cli_id in 0..CLIENT_COUNT {
             let client_id = NodeId(cli_id);
@@ -56,7 +59,7 @@ pub mod peer_handling_tests {
         let mut received = 0;
 
         while received < REQUESTS_PER_CLI * CLIENT_COUNT as usize {
-            let vec = peers.receive_from_replicas().unwrap();
+            let vec = peers.receive_from_clients(None).unwrap();
 
             received += vec.len();
 
