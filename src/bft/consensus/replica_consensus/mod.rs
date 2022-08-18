@@ -33,7 +33,7 @@ use crate::bft::{
 use crate::bft::ordering::tbo_pop_message;
 
 use super::{
-    log::MemLog, AbstractConsensus, Consensus, ConsensusAccessory, ConsensusGuard,
+    log::Log, AbstractConsensus, Consensus, ConsensusAccessory, ConsensusGuard,
     ConsensusPollStatus, ProtoPhase,
 };
 
@@ -70,6 +70,7 @@ impl<S: Service + 'static> Consensus<S> {
 
         let seq = self.sequence_number();
         let view_seq = view.sequence_number();
+        let quorum = view.quorum_members().clone();
 
         let sign_detached = node.sign_detached();
         let current_digest = self.current_digest.clone();
@@ -155,7 +156,7 @@ impl<S: Service + 'static> Consensus<S> {
     pub(super) fn handle_preparing_no_quorum(
         &mut self,
         _curr_view: &ViewInfo,
-        _log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        _log: &Log<State<S>, Request<S>, Reply<S>>,
         _node: &Node<S::Data>,
     ) {
     }
@@ -163,7 +164,7 @@ impl<S: Service + 'static> Consensus<S> {
     pub(super) fn handle_preparing_quorum(
         &mut self,
         curr_view: &ViewInfo,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
         node: &Node<S::Data>,
     ) {
         let seq = self.sequence_number();
@@ -294,7 +295,7 @@ impl<S: Service + 'static> Consensus<S> {
 
     pub(super) fn handle_poll_preparing_requests(
         &mut self,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> ConsensusPollStatus<Request<S>> {
         match &mut self.acessory {
             ConsensusAccessory::Replica(rep) => {

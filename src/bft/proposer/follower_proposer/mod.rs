@@ -1,6 +1,6 @@
 use std::sync::{Arc, atomic::AtomicBool};
 
-use crate::bft::{communication::{message::{StoredMessage, RequestMessage}, channel::{ChannelSyncTx, ChannelSyncRx, self}, Node}, executable::{Service, State, Request, Reply, ExecutorHandle}, consensus::log::MemLog};
+use crate::bft::{communication::{message::{StoredMessage, RequestMessage}, channel::{ChannelSyncTx, ChannelSyncRx, self}, Node}, executable::{Service, State, Request, Reply, ExecutorHandle}, consensus::log::Log};
 
 
 pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
@@ -9,7 +9,7 @@ pub struct FollowerProposer<S: Service + 'static> {
 
     batch_channel: (ChannelSyncTx<BatchType<S>>, ChannelSyncRx<BatchType<S>>),
     
-    log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
+    log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
     //For request execution
     executor_handle: ExecutorHandle<S>,
     cancelled: AtomicBool,
@@ -30,7 +30,7 @@ const BATCH_CHANNEL_SIZE: usize = 128;
 impl<S: Service + 'static> FollowerProposer<S> {
     
     pub fn new(node: Arc<Node<S::Data>>,
-        log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
+        log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
         executor: ExecutorHandle<S>,
         target_global_batch_size: usize,
         global_batch_time_limit: u128,) -> Arc<Self> {

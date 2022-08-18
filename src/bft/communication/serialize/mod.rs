@@ -8,9 +8,11 @@
 
 use std::io::{Read, Write};
 
-use crate::bft::error::*;
-use crate::bft::crypto::hash::{Context, Digest};
 use crate::bft::communication::message::SystemMessage;
+use crate::bft::crypto::hash::{Context, Digest};
+use crate::bft::error::*;
+
+use super::message::ConsensusMessage;
 
 /// Marker trait containing the types used by the application,
 /// as well as routines to serialize the application data.
@@ -19,7 +21,7 @@ use crate::bft::communication::message::SystemMessage;
 /// to communicate with each other.
 /// This data type must be Send since it will be sent across
 /// threads for processing and follow up reception
-pub trait SharedData : Send {
+pub trait SharedData: Send {
     /// The application state, which is mutated by client
     /// requests.
     type State: Send + Clone;
@@ -32,13 +34,35 @@ pub trait SharedData : Send {
     /// in the BFT system.
     type Reply: Send + Clone;
 
+    /// Serialize a consensus message for storing in the persistent store.
+    /// Because of memory restrictions we can't wrap the message in a system message at that
+    /// point, so because this is a subset of serialize_message, it can even be used in the serialize
+    /// message
+    fn serialize_consensus_message<W>(w: W, m: &ConsensusMessage<Self::Request>) -> Result<()>
+    where
+        W: Write;
+
+
+    /// Deserialize a consensus message for storing in the persistent store
+    /// Because of memory restrictions we can't wrap the message in a system message at that
+    /// point, so because this is a subset of serialize_message, it can even be used in the serialize
+    /// message
+    fn deserialize_consensus_message<R>(r: R) -> Result<ConsensusMessage<Self::Request>>
+    where
+        R: Read;
+
     /// Serialize a wire message into the writer `W`.
-    fn serialize_message<W>(w: W, m: &SystemMessage<Self::State, Self::Request, Self::Reply>) -> Result<()>
+    fn serialize_message<W>(
+        w: W,
+        m: &SystemMessage<Self::State, Self::Request, Self::Reply>,
+    ) -> Result<()>
     where
         W: Write;
 
     /// Deserialize a wire message from a reader `R`.
-    fn deserialize_message<R>(r: R) -> Result<SystemMessage<Self::State, Self::Request, Self::Reply>>
+    fn deserialize_message<R>(
+        r: R,
+    ) -> Result<SystemMessage<Self::State, Self::Request, Self::Reply>>
     where
         R: Read;
 

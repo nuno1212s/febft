@@ -12,20 +12,21 @@ use super::{
     collections,
     communication::{
         message::{
-            ConsensusMessageKind, ForwardedRequestsMessage, FwdConsensusMessage, Header,
-            RequestMessage, StoredMessage, SystemMessage, ViewChangeMessage, ViewChangeMessageKind,
-            WireMessage,
+            ConsensusMessage, ConsensusMessageKind, ForwardedRequestsMessage, FwdConsensusMessage,
+            Header, RequestMessage, StoredMessage, SystemMessage, ViewChangeMessage,
+            ViewChangeMessageKind, WireMessage,
         },
         serialize::{Buf, DigestData},
         Node, NodeId,
     },
     consensus::{
-        log::{CollectData, MemLog, Proof, ViewDecisionPair},
+        log::{CollectData, Log, Proof, ViewDecisionPair},
         Consensus,
     },
     core::server::ViewInfo,
     crypto::hash::Digest,
     executable::{Reply, Request, Service, State},
+    globals::ReadOnly,
     ordering::{tbo_advance_message_queue, tbo_pop_message, tbo_queue_message, Orderable, SeqNo},
     prng,
     timeouts::TimeoutsHandle,
@@ -437,7 +438,7 @@ where
         header: Header,
         message: ViewChangeMessage<Request<S>>,
         timeouts: &TimeoutsHandle<S>,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
         consensus: &mut Consensus<S>,
         node: &Node<S::Data>,
     ) -> SynchronizerStatus {
@@ -630,7 +631,7 @@ where
                         // - broadcast SYNC msg with collected
                         //   STOP-DATA proofs so other replicas
                         //   can repeat the leader's computation
-                        let proof = Self::highest_proof(&*collects_guard, current_view, node);
+                        let proof = Self::highest_proof(&*collects_guard, &current_view, node);
 
                         let curr_cid = proof
                             .map(|p| p.pre_prepare().message().sequence_number())
@@ -640,7 +641,7 @@ where
                         let normalized_collects: Vec<Option<&CollectData<Request<S>>>> =
                             Self::normalized_collects(&*collects_guard, curr_cid).collect();
 
-                        let sound = sound(current_view, &normalized_collects);
+                        let sound = sound(&current_view, &normalized_collects);
                         if !sound.test() {
                             // FIXME: BFT-SMaRt doesn't do anything if `sound`
                             // evaluates to false; do we keep the same behavior,
@@ -780,7 +781,7 @@ where
                 // STOP-DATA phase of Mod-SMaRt
                 let signed: Vec<_> = signed_collects::<S>(node, collects);
 
-                let proof = highest_proof::<S, _>(current_view, node, signed.iter());
+                let proof = highest_proof::<S, _>(&current_view, node, signed.iter());
 
                 let curr_cid = proof
                     .map(|p| p.pre_prepare().message().sequence_number())
@@ -790,7 +791,7 @@ where
                 let normalized_collects: Vec<_> =
                     { normalized_collects(curr_cid, collect_data(signed.iter())).collect() };
 
-                let sound = sound(current_view, &normalized_collects);
+                let sound = sound(&current_view, &normalized_collects);
 
                 if !sound.test() {
                     // FIXME: BFT-SMaRt doesn't do anything if `sound`
@@ -829,7 +830,7 @@ where
     /// Resume the view change protocol after running the CST protocol.
     pub fn resume_view_change(
         &self,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
         timeouts: &TimeoutsHandle<S>,
         consensus: &mut Consensus<S>,
         node: &Node<S::Data>,
@@ -861,7 +862,7 @@ where
         &self,
         timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
         node: &Node<S::Data>,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) {
         match (&*self.phase.borrow(), &timed_out) {
             // we have received STOP messages from peer nodes,
@@ -903,7 +904,7 @@ where
         state: FinalizeState<Request<S>>,
         _proof: Option<&Proof<Request<S>>>,
         _normalized_collects: Vec<Option<&CollectData<Request<S>>>>,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> FinalizeStatus<Request<S>> {
         if let ProtoPhase::Syncing = *self.phase.borrow() {
             //
@@ -932,7 +933,7 @@ where
     fn finalize(
         &self,
         state: FinalizeState<Request<S>>,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
         timeouts: &TimeoutsHandle<S>,
         consensus: &mut Consensus<S>,
         node: &Node<S::Data>,
@@ -969,18 +970,15 @@ where
     /// proposed, they won't timeout
     pub fn watch_request_batch(
         &self,
-        batch_digest: Digest,
-        requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+        preprepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
         timeouts: &TimeoutsHandle<S>,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> Vec<Digest> {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
-                rep.watch_request_batch(batch_digest, requests, timeouts, log)
+                rep.watch_request_batch(preprepare, timeouts, log)
             }
-            SynchronizerAccessory::Follower(fol) => {
-                fol.watch_request_batch(batch_digest, requests, log)
-            }
+            SynchronizerAccessory::Follower(fol) => fol.watch_request_batch(preprepare, log),
         }
     }
 
@@ -988,7 +986,7 @@ where
         &self,
         requests: ForwardedRequestsMessage<Request<S>>,
         timeouts: &TimeoutsHandle<S>,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
@@ -1021,10 +1019,10 @@ where
     #[inline]
     fn highest_proof<'a>(
         guard: &'a IntMap<StoredMessage<ViewChangeMessage<Request<S>>>>,
-        view: ViewInfo,
+        view: &ViewInfo,
         node: &Node<S::Data>,
     ) -> Option<&'a Proof<Request<S>>> {
-        highest_proof::<S, _>(view, node, guard.values())
+        highest_proof::<S, _>(&view, node, guard.values())
     }
 }
 
@@ -1048,10 +1046,7 @@ pub enum SynchronizerAccessory<S: Service> {
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-fn sound<'a, O>(
-    curr_view: ViewInfo,
-    normalized_collects: &[Option<&'a CollectData<O>>],
-) -> Sound {
+fn sound<'a, O>(curr_view: &ViewInfo, normalized_collects: &[Option<&'a CollectData<O>>]) -> Sound {
     // collect timestamps and values
     let mut timestamps = collections::hash_set();
     let mut values = collections::hash_set();
@@ -1085,17 +1080,17 @@ fn sound<'a, O>(
 
     for ts in timestamps {
         for value in values.iter() {
-            if binds(curr_view, ts, value, normalized_collects) {
+            if binds(&curr_view, ts, value, normalized_collects) {
                 return Sound::Bound(**value);
             }
         }
     }
 
-    Sound::Unbound(unbound(curr_view, normalized_collects))
+    Sound::Unbound(unbound(&curr_view, normalized_collects))
 }
 
 fn binds<O>(
-    curr_view: ViewInfo,
+    curr_view: &ViewInfo,
     ts: SeqNo,
     value: &Digest,
     normalized_collects: &[Option<&CollectData<O>>],
@@ -1108,10 +1103,7 @@ fn binds<O>(
     }
 }
 
-fn unbound<O>(
-    curr_view: ViewInfo,
-    normalized_collects: &[Option<&CollectData<O>>],
-) -> bool {
+fn unbound<O>(curr_view: &ViewInfo, normalized_collects: &[Option<&CollectData<O>>]) -> bool {
     if normalized_collects.len() < curr_view.params().quorum() {
         false
     } else {
@@ -1148,7 +1140,7 @@ fn unbound<O>(
 // therefore, our code *should* be correct :)
 
 fn quorum_highest<O>(
-    curr_view: ViewInfo,
+    curr_view: &ViewInfo,
     ts: SeqNo,
     value: &Digest,
     normalized_collects: &[Option<&CollectData<O>>],
@@ -1187,7 +1179,7 @@ fn quorum_highest<O>(
 }
 
 fn certified_value<O>(
-    curr_view: ViewInfo,
+    curr_view: &ViewInfo,
     ts: SeqNo,
     value: &Digest,
     normalized_collects: &[Option<&CollectData<O>>],
@@ -1247,10 +1239,7 @@ where
         .collect()
 }
 
-fn validate_signature<'a, S, M>(
-    node: &'a Node<S::Data>,
-    stored: &'a StoredMessage<M>,
-) -> bool
+fn validate_signature<'a, S, M>(node: &'a Node<S::Data>, stored: &'a StoredMessage<M>) -> bool
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
@@ -1271,7 +1260,7 @@ where
 }
 
 fn highest_proof<'a, S, I>(
-    view: ViewInfo,
+    view: &ViewInfo,
     node: &Node<S::Data>,
     collects: I,
 ) -> Option<&'a Proof<Request<S>>>

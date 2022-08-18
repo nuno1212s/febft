@@ -8,14 +8,17 @@ use std::sync::Arc;
 
 use intmap::IntMap;
 use log::debug;
-use parking_lot::{Mutex};
+use parking_lot::Mutex;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::collections;
-use crate::bft::collections::{ConcurrentHashMap};
-use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, ObserveEventKind, RequestMessage, StoredMessage, SystemMessage};
+use crate::bft::collections::ConcurrentHashMap;
+use crate::bft::communication::message::{
+    ConsensusMessage, ConsensusMessageKind, Header, ObserveEventKind, RequestMessage,
+    StoredMessage, SystemMessage,
+};
 use crate::bft::communication::NodeId;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::core::server::ViewInfo;
@@ -59,10 +62,10 @@ enum CheckpointState<S> {
         // sequence number of the last executed request
         seq: SeqNo,
         // save the earlier checkpoint, in case corruption takes place
-        earlier: Checkpoint<S>,
+        earlier: Arc<ReadOnly<Checkpoint<S>>>,
     },
     // application state received, the checkpoint state is finalized
-    Complete(Checkpoint<S>),
+    Complete(Arc<ReadOnly<Checkpoint<S>>>),
 }
 
 /// Represents a local checkpoint.
@@ -97,21 +100,18 @@ impl<S> Checkpoint<S> {
     }
 }
 
-pub struct ActiveDecisionLog<O> {
-    last_exec: Option<SeqNo>,
-    pre_prepares: Vec<StoredMessage<ConsensusMessage<O>>>,
-    prepares: Vec<StoredMessage<ConsensusMessage<O>>>,
-    commits: Vec<StoredMessage<ConsensusMessage<O>>>,
-}
-
 /// Subset of a `Log`, containing only consensus messages.
+///
+/// Cloning this decision log is actually pretty cheap (compared to the alternative of cloning
+/// all requests executed since the last checkpoint) since it only has to clone the arcs (which is one atomic operation)
+/// We can't wrap the entire vector since the decision log is actually constantly modified by the consensus
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct DecisionLog<O> {
     last_exec: Option<SeqNo>,
-    pre_prepares: Vec<StoredMessage<ConsensusMessage<O>>>,
-    prepares: Vec<StoredMessage<ConsensusMessage<O>>>,
-    commits: Vec<StoredMessage<ConsensusMessage<O>>>,
+    pre_prepares: Vec<Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>>,
+    prepares: Vec<Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>>,
+    commits: Vec<Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>>,
 }
 
 /// Represents a single decision from the `DecisionLog`.
@@ -151,7 +151,7 @@ impl WriteSet {
     /// Iterate over this `WriteSet`.
     ///
     /// Convenience method for calling `iter()` on the inner `Vec`.
-    pub fn iter(&self) -> impl Iterator<Item=&ViewDecisionPair> {
+    pub fn iter(&self) -> impl Iterator<Item = &ViewDecisionPair> {
         self.0.iter()
     }
 }
@@ -235,26 +235,26 @@ impl<O: Clone> DecisionLog<O> {
 
     /// Returns the list of `PRE-PREPARE` messages after the last checkpoint
     /// at the moment of the creation of this `DecisionLog`.
-    pub fn pre_prepares(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
+    pub fn pre_prepares(&self) -> &[Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>] {
         &self.pre_prepares[..]
     }
 
     /// Returns the list of `PREPARE` messages after the last checkpoint
     /// at the moment of the creation of this `DecisionLog`.
-    pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
+    pub fn prepares(&self) -> &[Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>] {
         &self.prepares[..]
     }
 
     /// Returns the list of `COMMIT` messages after the last checkpoint
     /// at the moment of the creation of this `DecisionLog`.
-    pub fn commits(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
+    pub fn commits(&self) -> &[Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>] {
         &self.commits[..]
     }
 
     // TODO: quorum sizes may differ when we implement reconfiguration
     pub fn collect_data(&self, view: ViewInfo) -> CollectData<O> {
         CollectData {
-            incomplete_proof: self.to_be_decided(view),
+            incomplete_proof: self.to_be_decided(view.clone()),
             last_proof: self.last_decision(view),
         }
     }
@@ -315,10 +315,7 @@ impl<O: Clone> DecisionLog<O> {
                                 ConsensusMessageKind::Prepare(d) => d.clone(),
                                 _ => unreachable!(),
                             };
-                            break 'outer Some(ViewDecisionPair(
-                                stored.message().view(),
-                                digest,
-                            ));
+                            break 'outer Some(ViewDecisionPair(stored.message().view(), digest));
                         }
                     }
                     Ordering::Less => break,
@@ -330,7 +327,11 @@ impl<O: Clone> DecisionLog<O> {
             break 'outer None;
         };
 
-        IncompleteProof { in_exec, write_set, quorum_writes }
+        IncompleteProof {
+            in_exec,
+            write_set,
+            quorum_writes,
+        }
     }
 
     /// Returns the proof of the last executed consensus
@@ -341,7 +342,7 @@ impl<O: Clone> DecisionLog<O> {
         let pre_prepare = 'outer: loop {
             for stored in self.pre_prepares.iter().rev() {
                 if stored.message().sequence_number() == last_exec {
-                    break 'outer stored.clone();
+                    break 'outer (**stored).clone();
                 }
             }
             // if nothing went wrong, this code should be unreachable,
@@ -362,7 +363,7 @@ impl<O: Clone> DecisionLog<O> {
                     } else {
                         found = true;
                         last_view = stored.message().view();
-                        buf.push(stored.clone());
+                        buf.push((**stored).clone());
                         continue;
                     }
                 }
@@ -371,13 +372,17 @@ impl<O: Clone> DecisionLog<O> {
                 if will_exit {
                     break;
                 }
-                buf.push(stored.clone());
+                buf.push((**stored).clone());
             }
             // quorum size minus one, because leader doesn't vote in the PREPARE
             // phase, since it already voted in the PRE-PREPARE phase;
             // = (N - F) - 1 = (2F + 1) - 1 = 2F
             let quorum = view.params().f() << 1;
-            if buf.len() < quorum { None } else { Some(buf) }
+            if buf.len() < quorum {
+                None
+            } else {
+                Some(buf)
+            }
         }?;
         let commits = {
             let mut buf = Vec::new();
@@ -390,7 +395,7 @@ impl<O: Clone> DecisionLog<O> {
                     } else {
                         found = true;
                         last_view = stored.message().view();
-                        buf.push(stored.clone());
+                        buf.push((**stored).clone());
                         continue;
                     }
                 }
@@ -399,13 +404,21 @@ impl<O: Clone> DecisionLog<O> {
                 if will_exit {
                     break;
                 }
-                buf.push(stored.clone());
+                buf.push((**stored).clone());
             }
             let quorum = view.params().quorum();
-            if buf.len() < quorum { None } else { Some(buf) }
+            if buf.len() < quorum {
+                None
+            } else {
+                Some(buf)
+            }
         }?;
 
-        Some(Proof { pre_prepare, prepares, commits })
+        Some(Proof {
+            pre_prepare,
+            prepares,
+            commits,
+        })
     }
 
     /// Clear incomplete proofs from the log, which match the consensus
@@ -420,9 +433,12 @@ impl<O: Clone> DecisionLog<O> {
     ) -> Option<StoredMessage<ConsensusMessage<O>>> {
         let mut scratch = Vec::with_capacity(8);
 
-        fn clear_log<M>(in_exec: SeqNo, scratch: &mut Vec<usize>, log: &mut Vec<StoredMessage<M>>)
-            where
-                M: Orderable,
+        fn clear_log<M>(
+            in_exec: SeqNo,
+            scratch: &mut Vec<usize>,
+            log: &mut Vec<Arc<ReadOnly<StoredMessage<M>>>>,
+        ) where
+            M: Orderable,
         {
             for (i, stored) in log.iter().enumerate().rev() {
                 if stored.message().sequence_number() != in_exec {
@@ -457,7 +473,7 @@ impl<O: Clone> DecisionLog<O> {
             for i in scratch.drain(..) {
                 match pre_prepare_i {
                     Some(j) if i == j => {
-                        pre_prepare = Some(self.pre_prepares.swap_remove(i));
+                        pre_prepare = Some((**self.pre_prepares.swap_remove(i)).clone());
                         pre_prepare_i = None;
                     }
                     _ => {
@@ -468,6 +484,7 @@ impl<O: Clone> DecisionLog<O> {
 
             pre_prepare
         };
+
         clear_log(in_exec, &mut scratch, &mut self.prepares);
         clear_log(in_exec, &mut scratch, &mut self.commits);
 
@@ -476,7 +493,7 @@ impl<O: Clone> DecisionLog<O> {
 }
 
 /// Represents a log of messages received by the BFT system.
-pub struct MemLog<S, O, P> {
+pub struct Log<S, O, P> {
     node_id: NodeId,
 
     db_obj: KVDB,
@@ -498,11 +515,11 @@ pub struct MemLog<S, O, P> {
     requests: ConcurrentHashMap<Digest, StoredMessage<RequestMessage<O>>>,
     //Stores just request batches. Much faster than individually storing all the requests and
     //Then having to always access them one by one
-    request_batches: ConcurrentHashMap<Digest, Vec<StoredMessage<RequestMessage<O>>>>,
+    request_batches: ConcurrentHashMap<Digest, Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>>,
     //This will only be accessed from the replica request thread so we can wrap it
     //In a simple cell
 
-    //Stores all of the performed requests concatenated
+    //Stores all of the performed requests concatenated in a vec
     decided: RefCell<Vec<O>>,
     checkpoint: RefCell<CheckpointState<S>>,
     //Some stuff for statistics.
@@ -519,17 +536,22 @@ pub struct MemLog<S, O, P> {
 /// from the other threads and actual consensus to be reached.
 /// The requests, latest_op and batch meta can be accessed and altered by both the replica request thread
 /// and the client request thread, so we protected only those fields
-unsafe impl<S, O, P> Sync for MemLog<S, O, P> {}
+unsafe impl<S, O, P> Sync for Log<S, O, P> {}
 
 // TODO:
 // - garbage collect the log
 // - save the log to persistent storage
-impl<S, O: Clone, P> MemLog<S, O, P> {
+impl<S, O: Clone, P> Log<S, O, P> {
     /// Creates a new message log.
     ///
     /// The value `batch_size` represents the maximum number of
     /// client requests to queue before executing a consensus instance.
-    pub fn new(node: NodeId, batch_size: usize, observer: Option<ObserverHandle>, db: KVDB) -> Arc<Self> {
+    pub fn new(
+        node: NodeId,
+        batch_size: usize,
+        observer: Option<ObserverHandle>,
+        db: KVDB,
+    ) -> Arc<Self> {
         Arc::new(Self {
             node_id: node,
             batch_size,
@@ -570,7 +592,8 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
         self.declog.replace(rs.declog);
 
         self.decided.replace(rs.requests);
-        self.checkpoint.replace(CheckpointState::Complete(rs.checkpoint));
+        self.checkpoint
+            .replace(CheckpointState::Complete(rs.checkpoint));
         self.curr_seq.replace(last_seq);
     }
 
@@ -583,19 +606,17 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
     // it, which can be quite expensive
     //
     pub fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<S, O>>
-        where
-            S: Clone,
-            O: Clone,
+    where
+        S: Clone,
+        O: Clone,
     {
         match &*self.checkpoint.borrow() {
-            CheckpointState::Complete(checkpoint) => {
-                Ok(RecoveryState::new(
-                    view,
-                    *checkpoint.clone(),
-                    self.decided.borrow().clone(),
-                    self.declog.borrow().clone(),
-                ))
-            }
+            CheckpointState::Complete(checkpoint) => Ok(RecoveryState::new(
+                view,
+                checkpoint.clone(),
+                self.decided.borrow().clone(),
+                self.declog.borrow().clone(),
+            )),
             _ => Err("Checkpoint to be finalized").wrapped(ErrorKind::ConsensusLog),
         }
     }
@@ -608,6 +629,24 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
         }
     */
 
+    pub fn insert_consensus(
+        &self,
+        consensus_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>,
+    ) {
+        //These messages can only be sent by replicas, so the dec_log
+        //Is only accessed by one thread.
+
+        //Wrap the message in a read only reference so we can then pass it around without having to clone it everywhere,
+        //Saving a lot of copies especially when sending things to the asynchronous logging
+        let mut dec_log = self.declog.borrow_mut();
+
+        match consensus_msg.message().kind() {
+            ConsensusMessageKind::PrePrepare(_) => dec_log.pre_prepares.push(consensus_msg),
+            ConsensusMessageKind::Prepare(_) => dec_log.prepares.push(consensus_msg),
+            ConsensusMessageKind::Commit(_) => dec_log.commits.push(consensus_msg),
+        }
+    }
+
     /// Adds a new `message` and its respective `header` to the log.
     pub fn insert(&self, header: Header, message: SystemMessage<S, O, P>) {
         match message {
@@ -617,10 +656,7 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
                 let seq_no = {
                     let latest_op_guard = self.latest_op.lock();
 
-                    latest_op_guard
-                        .get(key)
-                        .copied()
-                        .unwrap_or(SeqNo::ZERO)
+                    latest_op_guard.get(key).copied().unwrap_or(SeqNo::ZERO)
                 };
 
                 // avoid executing earlier requests twice
@@ -636,7 +672,10 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
             SystemMessage::Consensus(message) => {
                 //These messages can only be sent by replicas, so the dec_log
                 //Is only accessed by one thread.
-                let stored = StoredMessage::new(header, message);
+
+                //Wrap the message in a read only reference so we can then pass it around without having to clone it everywhere,
+                //Saving a lot of copies especially when sending things to the asynchronous logging
+                let stored = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
 
                 let mut dec_log = self.declog.borrow_mut();
 
@@ -651,18 +690,18 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
         }
     }
 
-    pub fn insert_batched(&self, batch_digest: Digest, batch: Vec<StoredMessage<RequestMessage<O>>>) {
-        self.request_batches.insert(batch_digest, batch);
+    pub fn insert_batched(&self, message: Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>) {
+        self.request_batches
+            .insert(message.header().digest().clone(), message);
     }
 
-    pub fn take_batched_requests(&self, batch_digest: &Digest) -> Option<Vec<StoredMessage<RequestMessage<O>>>> {
+    pub fn take_batched_requests(
+        &self,
+        batch_digest: &Digest,
+    ) -> Option<Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>> {
         match self.request_batches.remove(batch_digest) {
-            None => {
-                None
-            }
-            Some((digest, batch)) => {
-                Some(batch)
-            }
+            None => None,
+            Some((digest, batch)) => Some(batch),
         }
     }
 
@@ -680,8 +719,8 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
 
     /// Clone the requests corresponding to the provided list of hash digests.
     pub fn clone_requests(&self, digests: &[Digest]) -> Vec<StoredMessage<RequestMessage<O>>>
-        where
-            O: Clone,
+    where
+        O: Clone,
     {
         digests
             .iter()
@@ -696,9 +735,12 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
     ///
     /// The log may be cleared resulting from this operation. Check the enum variant of
     /// `Info`, to perform a local checkpoint when appropriate.
-    pub fn finalize_batch(&self, seq: SeqNo, batch_digest: Digest, digests: &[Digest])
-                          -> Result<(Info, UpdateBatch<O>)>
-    {
+    pub fn finalize_batch(
+        &self,
+        seq: SeqNo,
+        batch_digest: Digest,
+        digests: &[Digest],
+    ) -> Result<(Info, UpdateBatch<O>)> {
         //println!("Finalized batch of OPS seq {:?} on Node {:?}", seq, self.node_id);
 
         let mut rqs;
@@ -710,21 +752,30 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
                 rqs = Vec::with_capacity(digests.len());
 
                 for digest in digests {
-                    let message = self.requests
-                        .remove(digest)
-                        .map(|f| f.1)
-                        .ok_or(Error::simple_with_msg(ErrorKind::ConsensusLog,
-                                                      "Request not present in log when finalizing"))?;
+                    let message =
+                        self.requests
+                            .remove(digest)
+                            .map(|f| f.1)
+                            .ok_or(Error::simple_with_msg(
+                                ErrorKind::ConsensusLog,
+                                "Request not present in log when finalizing",
+                            ))?;
 
                     rqs.push(message);
                 }
             }
             Some(requests) => {
-                rqs = requests;
+                rqs = match requests.message().kind() {
+                    ConsensusMessageKind::PrePrepare(req) => req.clone(),
+                    _ => {
+                        unreachable!()
+                    }
+                };
             }
         }
 
         {
+            //TODO: Check how much we really need this
             //Encase in a scope to limit the action of the borrow
             let mut guard = self.decided.borrow_mut();
 
@@ -791,7 +842,9 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
 
         self.checkpoint.replace(match earlier {
             CheckpointState::None => CheckpointState::Partial { seq },
-            CheckpointState::Complete(earlier) => CheckpointState::PartialWithEarlier { seq, earlier },
+            CheckpointState::Complete(earlier) => {
+                CheckpointState::PartialWithEarlier { seq, earlier }
+            }
             // FIXME: this may not be an invalid state after all; we may just be generating
             // checkpoints too fast for the execution layer to keep up, delivering the
             // hash digests of the appstate
@@ -799,7 +852,10 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
         });
 
         if let Some(observer) = &self.observer {
-            observer.tx().send(MessageType::Event(ObserveEventKind::CheckpointStart(seq))).unwrap();
+            observer
+                .tx()
+                .send(MessageType::Event(ObserveEventKind::CheckpointStart(seq)))
+                .unwrap();
         }
 
         Ok(Info::BeginCheckpoint)
@@ -812,15 +868,20 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
     /// on the core server task's master channel.
     pub fn finalize_checkpoint(&self, appstate: S) -> Result<()> {
         match *self.checkpoint.borrow() {
-            CheckpointState::None => Err("No checkpoint has been initiated yet").wrapped(ErrorKind::ConsensusLog),
-            CheckpointState::Complete(_) => Err("Checkpoint already finalized").wrapped(ErrorKind::ConsensusLog),
-            CheckpointState::Partial { ref seq } | CheckpointState::PartialWithEarlier { ref seq, .. } => {
+            CheckpointState::None => {
+                Err("No checkpoint has been initiated yet").wrapped(ErrorKind::ConsensusLog)
+            }
+            CheckpointState::Complete(_) => {
+                Err("Checkpoint already finalized").wrapped(ErrorKind::ConsensusLog)
+            }
+            CheckpointState::Partial { ref seq }
+            | CheckpointState::PartialWithEarlier { ref seq, .. } => {
                 let seq = *seq;
 
-                self.checkpoint.replace(CheckpointState::Complete(Arc::new(Checkpoint {
-                    seq,
-                    appstate,
-                })));
+                self.checkpoint
+                    .replace(CheckpointState::Complete(Arc::new(ReadOnly::new(
+                        Checkpoint { seq, appstate },
+                    ))));
 
                 self.decided.borrow_mut().clear();
                 //
@@ -838,7 +899,8 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
                         // store the id of the last received pre-prepare,
                         // which corresponds to the request currently being
                         // processed
-                        self.curr_seq.replace(last_pre_prepare.message().sequence_number());
+                        self.curr_seq
+                            .replace(last_pre_prepare.message().sequence_number());
                     }
                     None => {
                         // no stored PRE-PREPARE messages, NOOP
@@ -849,7 +911,12 @@ impl<S, O: Clone, P> MemLog<S, O, P> {
                 guard.commits.clear();
 
                 if let Some(observer) = &self.observer {
-                    observer.tx().send(MessageType::Event(ObserveEventKind::CheckpointEnd(self.curr_seq.get()))).unwrap();
+                    observer
+                        .tx()
+                        .send(MessageType::Event(ObserveEventKind::CheckpointEnd(
+                            self.curr_seq.get(),
+                        )))
+                        .unwrap();
                 }
 
                 Ok(())
@@ -896,7 +963,12 @@ pub trait LogT<S, O: Clone, P> {
     ///
     /// The log may be cleared resulting from this operation. Check the enum variant of
     /// `Info`, to perform a local checkpoint when appropriate.
-    fn finalize_batch(&self, seq: SeqNo, batch_digest: Digest, digests: &[Digest]) -> Result<(Info, UpdateBatch<O>)>;
+    fn finalize_batch(
+        &self,
+        seq: SeqNo,
+        batch_digest: Digest,
+        digests: &[Digest],
+    ) -> Result<(Info, UpdateBatch<O>)>;
 
     /// Retrieves a batch of requests to be proposed during a view change.
     /// This request batch should be composed of requests that were not proposed
@@ -915,9 +987,9 @@ pub trait LogT<S, O: Clone, P> {
     // it, which can be quite expensive
     //
     fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<S, O>>
-        where
-            S: Clone,
-            O: Clone;
+    where
+        S: Clone,
+        O: Clone;
 
     fn begin_checkpoint(&self, seq: SeqNo) -> Result<Info>;
 

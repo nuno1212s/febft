@@ -6,6 +6,7 @@
 use std::cell::Cell;
 
 use std::marker::PhantomData;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use std::time::{Duration, Instant};
@@ -13,14 +14,15 @@ use std::time::{Duration, Instant};
 use crate::bft::collections::{self, ConcurrentHashMap};
 use crate::bft::communication::message::{
     ForwardedRequestsMessage, RequestMessage, StoredMessage, SystemMessage, ViewChangeMessage,
-    ViewChangeMessageKind,
+    ViewChangeMessageKind, ConsensusMessage, ConsensusMessageKind,
 };
 
 use crate::bft::communication::{Node, NodeId};
-use crate::bft::consensus::log::MemLog;
+use crate::bft::consensus::log::Log;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::executable::{Reply, Request, Service, State};
+use crate::bft::globals::ReadOnly;
 use crate::bft::ordering::{Orderable, SeqNo};
 
 use crate::bft::timeouts::TimeoutsHandle;
@@ -55,7 +57,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         &self,
         base_sync: &super::Synchronizer<S>,
         current_view: &ViewInfo,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
         timeouts: &TimeoutsHandle<S>,
         node: &Node<S::Data>,
     ) {
@@ -116,7 +118,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         &self,
         requests: ForwardedRequestsMessage<Request<S>>,
         timeouts: &TimeoutsHandle<S>,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) {
         let phase = TimeoutPhase::TimedOutOnce(Instant::now());
 
@@ -136,14 +138,17 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     /// proposed, they won't timeout
     pub fn watch_request_batch(
         &self,
-        batch_digest: Digest,
-        requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+        preprepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
         timeouts: &TimeoutsHandle<S>,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> Vec<Digest> {
-        let mut digests = Vec::with_capacity(requests.len());
 
-        let mut final_rqs = Vec::with_capacity(requests.len());
+        let requests = match preprepare.message().kind() {
+            ConsensusMessageKind::PrePrepare(req) => {req},
+            _ => {panic!()}
+        };
+
+        let mut digests = Vec::with_capacity(requests.len());
 
         //TODO: Cancel ongoing timeouts of requests that are in the batch
 
@@ -152,8 +157,6 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
             let digest = header.unique_digest();
 
             digests.push(digest);
-
-            final_rqs.push(x);
         }
 
         //It's possible that, if the latency of the client to a given replica A is smaller than the
@@ -162,12 +165,12 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         //This means that that client would not be able to process requests from that replica, which could
         //break some of the quorum properties (replica A would always be faulty for that client even if it is
         //not, so we could only tolerate f-1 faults for clients that are in that situation)
-        log.insert_batched(batch_digest, final_rqs);
+        log.insert_batched(preprepare);
 
         digests
     }
 
-    fn add_stopped_requests(&self,base_sync: &Synchronizer<S>, log: &MemLog<State<S>, Request<S>, Reply<S>>) {
+    fn add_stopped_requests(&self,base_sync: &Synchronizer<S>, log: &Log<State<S>, Request<S>, Reply<S>>) {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
         let requests = self
@@ -289,7 +292,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         base_sync: &Synchronizer<S>,
         timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         node: &Node<S::Data>,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) {
         let message = SystemMessage::ForwardedRequests(ForwardedRequestsMessage::new(timed_out));
         let targets = NodeId::targets(0..base_sync.view().params().n());

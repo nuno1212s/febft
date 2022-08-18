@@ -7,7 +7,7 @@ use crate::bft::communication::message::{RequestMessage, StoredMessage};
 use crate::bft::communication::{channel, NodeId};
 use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
 
-use crate::bft::consensus::log::{Info, MemLog, operation_key};
+use crate::bft::consensus::log::{Info, Log, operation_key};
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UpdateBatch};
 use crate::bft::ordering::{Orderable, SeqNo};
 
@@ -17,7 +17,7 @@ const REQ_BATCH_BUFF: usize = 1024;
 
 pub struct RqFinalizer<S> where S: Service {
     node_id: NodeId,
-    log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
+    log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
     executor: ExecutorHandle<S>,
     channel: ChannelSyncRx<RequestToProcess<Request<S>>>,
 }
@@ -57,7 +57,7 @@ impl<S> Clone for RqFinalizerHandle<S> where S: Service + 'static{
 
 impl<S> RqFinalizer<S> where S: Service + 'static {
     pub fn new(node: NodeId,
-               log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
+               log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
                executor_handle: ExecutorHandle<S>) ->
                RqFinalizerHandle<S> {
         let (ch_tx, ch_rx) = channel::new_bounded_sync(REQ_BATCH_BUFF);

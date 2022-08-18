@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::message::{ConsensusMessage, Header, Message, SystemMessage};
 use crate::bft::communication::{Node, NodeConfig, NodeId};
-use crate::bft::consensus::log::{Info, MemLog};
+use crate::bft::consensus::log::{Info, Log};
 use crate::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::ViewInfo;
@@ -65,7 +65,7 @@ pub struct Follower<S: Service + 'static> {
     //Synchronizer observer
     synchronizer: Arc<Synchronizer<S>>,
     //The log of messages
-    log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
+    log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
 
     node: Arc<Node<S::Data>>,
 }
@@ -91,7 +91,7 @@ impl<S: Service + 'static> Follower<S> {
         let n = node_config.n;
         let f = node_config.f;
 
-        let db = KVDB::new(node_config.db_path)?;
+        let db = KVDB::new(node_config.db_path, vec![])?;
 
         //TODO: Load these from DB
         let seq_num = SeqNo::ZERO;
@@ -99,7 +99,7 @@ impl<S: Service + 'static> Follower<S> {
 
         let view = ViewInfo::new(seq_view, n, f)?;
 
-        let log = MemLog::new(log_node_id, global_batch_size, None, db);
+        let log = Log::new(log_node_id, global_batch_size, None, db);
 
         let (node, rogue) = Node::bootstrap(node_config).await?;
 

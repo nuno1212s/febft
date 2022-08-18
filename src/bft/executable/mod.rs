@@ -13,7 +13,7 @@ use crate::bft::communication::serialize::{
     //ReplicaDurability,
     SharedData,
 };
-use crate::bft::consensus::log::MemLog;
+use crate::bft::consensus::log::Log;
 use crate::bft::core::server::client_replier::ReplyHandle;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::error::*;
@@ -191,7 +191,7 @@ pub struct Executor<S: Service + 'static> {
     service: S,
     state: State<S>,
     e_rx: ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>,
-    log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
+    log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
     reply_worker: ReplyHandle<S>,
     send_node: SendNode<S::Data>,
     observer_handle: Option<ObserverHandle>,
@@ -257,7 +257,7 @@ impl<S> Executor<S>
     /// Spawns a new service executor into the async runtime.
     pub fn new(
         reply_worker: ReplyHandle<S>,
-        log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
+        log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
         mut service: S,
         send_node: SendNode<S::Data>,
         observer: Option<ObserverHandle>,

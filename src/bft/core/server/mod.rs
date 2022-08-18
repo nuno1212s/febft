@@ -1,7 +1,7 @@
 //! Contains the server side core protocol logic of `febft`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::offset::Utc;
@@ -16,8 +16,8 @@ use crate::bft::communication::message::{
     StoredMessage, SystemMessage,
 };
 use crate::bft::communication::{Node, NodeConfig, NodeId};
-use crate::bft::consensus::log::{Info, MemLog};
-use crate::bft::consensus::{ConsensusGuard, ConsensusPollStatus, ConsensusStatus, Consensus};
+use crate::bft::consensus::log::{Info, Log};
+use crate::bft::consensus::{Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::core::server::rq_finalizer::{RqFinalizer, RqFinalizerHandle};
@@ -27,7 +27,9 @@ use crate::bft::executable::{Executor, ExecutorHandle, Reply, Request, Service, 
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::persistentdb::KVDB;
 use crate::bft::proposer::Proposer;
-use crate::bft::sync::{AbstractSynchronizer, SynchronizerPollStatus, SynchronizerStatus, Synchronizer};
+use crate::bft::sync::{
+    AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus,
+};
 use crate::bft::timeouts::{TimeoutKind, Timeouts, TimeoutsHandle};
 
 use super::SystemParams;
@@ -54,9 +56,10 @@ pub(crate) enum ReplicaPhase {
 /// This struct contains information related with an
 /// active `febft` view.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct ViewInfo {
     seq: SeqNo,
+    quorum: Vec<NodeId>,
     params: SystemParams,
 }
 
@@ -70,8 +73,13 @@ impl Orderable for ViewInfo {
 impl ViewInfo {
     /// Creates a new instance of `ViewInfo`.
     pub fn new(seq: SeqNo, n: usize, f: usize) -> Result<Self> {
+        //TODO: Make the quorum participants modifiable
         let params = SystemParams::new(n, f)?;
-        Ok(ViewInfo { seq, params })
+        Ok(ViewInfo {
+            seq,
+            quorum: NodeId::targets_u32(0..n as u32).collect(),
+            params,
+        })
     }
 
     /// Returns a copy of this node's `SystemParams`.
@@ -87,14 +95,18 @@ impl ViewInfo {
 
     /// Returns a new view with the specified sequence number.
     pub fn peek(&self, seq: SeqNo) -> ViewInfo {
-        let mut view = *self;
+        let mut view = self.clone();
         view.seq = seq;
         view
     }
 
     /// Returns the leader of the current view.
     pub fn leader(&self) -> NodeId {
-        NodeId::from(usize::from(self.seq) % self.params.n())
+        self.quorum[usize::from(self.seq) % self.params.n()]
+    }
+
+    pub fn quorum_members(&self) -> &Vec<NodeId> {
+        &self.quorum
     }
 }
 
@@ -116,7 +128,7 @@ pub struct Replica<S: Service + 'static> {
     // This can only occur when we are in the normal phase of the state machine
     unordered_rq_guard: Arc<AtomicBool>,
     cst: CollabStateTransfer<S>,
-    log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
+    log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
     proposer: Arc<Proposer<S>>,
     node: Arc<Node<S::Data>>,
     rq_finalizer: RqFinalizerHandle<S>,
@@ -170,7 +182,7 @@ where
         let n = node_config.n;
         let f = node_config.f;
 
-        let db = KVDB::new(node_config.db_path)?;
+        let db = KVDB::new(node_config.db_path, vec![])?;
 
         let (node, rogue) = Node::bootstrap(node_config).await?;
 
@@ -178,7 +190,7 @@ where
         // connect to peer nodes
         let observer_handle = observer::start_observers(node.send_node());
 
-        let mut log = MemLog::new(
+        let mut log = Log::new(
             log_node_id,
             global_batch_size,
             Some(observer_handle.clone()),
@@ -212,13 +224,13 @@ where
         const CST_BASE_DUR: Duration = Duration::from_secs(30);
         const REQ_BASE_DUR: Duration = Duration::from_secs(2 * 60);
 
-        let synchronizer = Synchronizer::new_replica(view, REQ_BASE_DUR);
+        let synchronizer = Synchronizer::new_replica(view.clone(), REQ_BASE_DUR);
 
         let rq_finalizer = RqFinalizer::new(node.id(), log.clone(), executor.clone());
 
         let consensus = Consensus::new_replica(
             node.id(),
-            view,
+            view.clone(),
             next_consensus_seq,
             global_batch_size,
             observer_handle.clone(),
@@ -364,12 +376,16 @@ where
                 (ReplicaPhase::NormalPhase, _) => {
                     //We want to stop the proposer from trying to propose any requests while we are performing
                     //Other operations.
-                    self.consensus_guard.consensus_guard().store(true, Ordering::SeqCst);
-                },
+                    self.consensus_guard
+                        .consensus_guard()
+                        .store(true, Ordering::SeqCst);
+                }
                 (_, ReplicaPhase::NormalPhase) => {
                     //Mark the consensus as available, since we are changing to the normal phase
                     //And are therefore ready to receive pre-prepares (if are are the leaders)
-                    self.consensus_guard.consensus_guard().store(false, Ordering::SeqCst);
+                    self.consensus_guard
+                        .consensus_guard()
+                        .store(false, Ordering::SeqCst);
                 }
                 (_, _) => {}
             }

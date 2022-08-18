@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::bft::collections::{self, HashMap};
 use crate::bft::communication::message::{CstMessage, CstMessageKind, Header, SystemMessage};
 use crate::bft::communication::{Node, NodeId};
-use crate::bft::consensus::log::{Checkpoint, DecisionLog, MemLog};
+use crate::bft::consensus::log::{Checkpoint, DecisionLog, Log};
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
@@ -36,11 +36,15 @@ enum ProtoPhase<S, O> {
 }
 
 /// Contains state used by a recovering node.
+/// 
+/// Cloning this is better than it was because of the read only checkpoint, 
+/// and because decision log also got a lot easier to clone, but we still have
+/// to be very careful thanks to the requests vector, which can be VERY large
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct RecoveryState<S, O> {
     pub(crate) view: ViewInfo,
-    pub(crate) checkpoint: Checkpoint<S>,
+    pub(crate) checkpoint: Arc<ReadOnly<Checkpoint<S>>>,
     // used to replay log on recovering replicas;
     // the request batches have been concatenated,
     // for memory efficiency
@@ -52,7 +56,7 @@ pub struct RecoveryState<S, O> {
 pub fn install_recovery_state<S, T, K>(
     recovery_state: RecoveryState<State<S>, Request<S>>,
     synchronizer: &Arc<T>,
-    log: &MemLog<State<S>, Request<S>, Reply<S>>,
+    log: &Log<State<S>, Request<S>, Reply<S>>,
     executor: &mut ExecutorHandle<S>,
     consensus: &mut K,
 ) -> Result<()>
@@ -67,12 +71,17 @@ where
     // TODO: maybe try to optimize this, to avoid clone(),
     // which may be quite expensive depending on the size
     // of the state and the amount of batched requests
+
+    //Because we depend on this state to operate the consensus so it's not that bad that we block 
+    //Here, since we're not currently partaking in the consensus.
+    //Also so the executor doesn't have to accept checkpoint types, which is kind of messing with the levels
+    //of the architecture, so I think we can keep it this way 
     let state = recovery_state.checkpoint.state().clone();
     let requests = recovery_state.requests.clone();
 
     // TODO: update pub/priv keys when reconfig is implemented?
 
-    synchronizer.install_view(recovery_state.view);
+    synchronizer.install_view(recovery_state.view.clone());
     consensus.install_new_phase(&recovery_state);
     executor.install_state(state, requests)?;
     log.install_state(consensus.sequence_number(), recovery_state);
@@ -84,7 +93,7 @@ impl<S, O> RecoveryState<S, O> {
     /// Creates a new `RecoveryState`.
     pub fn new(
         view: ViewInfo,
-        checkpoint: Checkpoint<S>,
+        checkpoint: Arc<ReadOnly<Checkpoint<S>>>,
         requests: Vec<O>,
         declog: DecisionLog<O>,
     ) -> Self {
@@ -97,12 +106,12 @@ impl<S, O> RecoveryState<S, O> {
     }
 
     /// Returns the view this `RecoveryState` is tracking.
-    pub fn view(&self) -> ViewInfo {
-        self.view
+    pub fn view(&self) -> &ViewInfo {
+        &self.view
     }
 
     /// Returns the local checkpoint of this recovery state.
-    pub fn checkpoint(&self) -> &Checkpoint<S> {
+    pub fn checkpoint(&self) -> &Arc<ReadOnly<Checkpoint<S>>> {
         &self.checkpoint
     }
 
@@ -222,7 +231,7 @@ where
         header: Header,
         message: CstMessage<State<S>, Request<S>>,
         synchronizer: &Arc<T>,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
         node: &Node<S::Data>,
     ) where
         T: AbstractSynchronizer<S>,
@@ -247,7 +256,7 @@ where
         progress: CstProgress<State<S>, Request<S>>,
         synchronizer: &Arc<T>,
         consensus: &K,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
         node: &Node<S::Data>,
     ) -> CstStatus<State<S>, Request<S>>
     where
@@ -444,7 +453,7 @@ where
         synchronizer: &Arc<T>,
         timeouts: &TimeoutsHandle<S>,
         node: &Node<S::Data>,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) where
         T: AbstractSynchronizer<S>,
     {
@@ -471,7 +480,7 @@ where
         synchronizer: &Arc<T>,
         timeouts: &TimeoutsHandle<S>,
         node: &Node<S::Data>,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) where
         T: AbstractSynchronizer<S>,
     {

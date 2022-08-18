@@ -16,7 +16,7 @@ use crate::bft::communication::{channel, Node, NodeId};
 use crate::bft::consensus::ConsensusGuard;
 use chrono::{DateTime, Utc};
 
-use crate::bft::consensus::log::MemLog;
+use crate::bft::consensus::log::Log;
 use crate::bft::threadpool;
 
 use crate::bft::core::server::observer::{ConnState, MessageType, ObserverHandle};
@@ -38,7 +38,7 @@ pub struct Proposer<S: Service + 'static> {
     node_ref: Arc<Node<S::Data>>,
     synchronizer: Arc<Synchronizer<S>>,
     timeouts: Arc<TimeoutsHandle<S>>,
-    log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
+    log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
     //For unordered request execution
     executor_handle: ExecutorHandle<S>,
     consensus_guard: ConsensusGuard,
@@ -61,7 +61,7 @@ impl<S: Service> Proposer<S> {
     pub fn new(
         node: Arc<Node<S::Data>>,
         sync: Arc<Synchronizer<S>>,
-        log: Arc<MemLog<State<S>, Request<S>, Reply<S>>>,
+        log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
         timeouts: Arc<TimeoutsHandle<S>>,
         executor_handle: ExecutorHandle<S>,
         consensus_guard: ConsensusGuard,
@@ -234,12 +234,12 @@ impl<S: Service> Proposer<S> {
                                 batches_made += 1;
                                 let guard = self.consensus_guard.consensus_info().lock().unwrap();
 
-                                let (seq, view) = *guard;
+                                let (seq, view) = &*guard;
 
                                 match &last_seq {
                                     None => {}
                                     Some(last_exec) => {
-                                        if *last_exec >= seq {
+                                        if *last_exec >= *seq {
                                             //We are still in the same consensus instance,
                                             //Don't produce more pre prepares
                                             continue;
@@ -247,7 +247,7 @@ impl<S: Service> Proposer<S> {
                                     }
                                 }
 
-                                last_seq = Some(seq);
+                                last_seq = Some(*seq);
 
                                 let next_batch = if currently_accumulated.len() > self.target_global_batch_size {
 
@@ -269,7 +269,7 @@ impl<S: Service> Proposer<S> {
                                     None
                                 };
 
-                                self.propose(seq, &view, currently_accumulated);
+                                self.propose(*seq, view, currently_accumulated);
                                 
                                 currently_accumulated = next_batch.unwrap_or(Vec::with_capacity(self.node_ref.batch_size() * 2));
 

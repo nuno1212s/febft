@@ -1,6 +1,6 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, sync::Arc};
 
-use crate::bft::{executable::{Service, Request, State, Reply}, crypto::hash::Digest, communication::message::{StoredMessage, RequestMessage}, consensus::log::MemLog};
+use crate::bft::{executable::{Service, Request, State, Reply}, crypto::hash::Digest, communication::message::{StoredMessage, RequestMessage, ConsensusMessage, ConsensusMessageKind}, consensus::log::Log, globals::ReadOnly};
 
 pub struct FollowerSynchronizer<S: Service> {
     _phantom: PhantomData<S>
@@ -17,13 +17,16 @@ impl<S: Service> FollowerSynchronizer<S> {
     /// proposed, they won't timeout
     pub fn watch_request_batch(
         &self,
-        batch_digest: Digest,
-        requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        preprepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> Vec<Digest> {
-        let mut digests = Vec::with_capacity(requests.len());
 
-        let mut final_rqs = Vec::with_capacity(requests.len());
+        let requests = match preprepare.message().kind() {
+            ConsensusMessageKind::PrePrepare(req) => {req},
+            _ => {panic!()}
+        };
+
+        let mut digests = Vec::with_capacity(requests.len());
 
         //TODO: Cancel ongoing timeouts of requests that are in the batch
 
@@ -32,8 +35,6 @@ impl<S: Service> FollowerSynchronizer<S> {
             let digest = header.unique_digest();
 
             digests.push(digest);
-
-            final_rqs.push(x);
         }
 
         //It's possible that, if the latency of the client to a given replica A is smaller than the
@@ -42,7 +43,7 @@ impl<S: Service> FollowerSynchronizer<S> {
         //This means that that client would not be able to process requests from that replica, which could
         //break some of the quorum properties (replica A would always be faulty for that client even if it is
         //not, so we could only tolerate f-1 faults for clients that are in that situation)
-        log.insert_batched(batch_digest, final_rqs);
+        log.insert_batched(preprepare);
 
         digests
     }

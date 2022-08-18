@@ -15,13 +15,14 @@ use crate::bft::communication::message::{
     ConsensusMessage, ConsensusMessageKind, Header, StoredMessage,
 };
 
-use self::log::MemLog;
+use self::log::Log;
 use self::replica_consensus::ReplicaConsensus;
 
 use super::communication::message::{RequestMessage, SystemMessage};
 use super::communication::{Node, NodeId};
 use super::core::server::observer::ObserverHandle;
 use super::executable::Reply;
+use super::globals::ReadOnly;
 use super::sync::{AbstractSynchronizer, Synchronizer};
 use super::timeouts::TimeoutsHandle;
 use crate::bft::core::server::ViewInfo;
@@ -246,7 +247,8 @@ pub struct Consensus<S: Service> {
 
     current: Vec<Digest>,
     current_digest: Digest,
-    batch_size: usize,
+    current_batch_size: usize,
+    
 
     acessory: ConsensusAccessory<S>,
 }
@@ -298,7 +300,7 @@ impl<S: Service + 'static> Consensus<S> {
             tbo: TboQueue::new(next_seq_num),
             current_digest: Digest::from_bytes(&[0; Digest::LENGTH][..]).unwrap(),
             current: Vec::with_capacity(batch_size),
-            batch_size: batch_size,
+            current_batch_size: batch_size,
             acessory: ConsensusAccessory::Replica(ReplicaConsensus::new(
                 view,
                 next_seq_num,
@@ -314,7 +316,7 @@ impl<S: Service + 'static> Consensus<S> {
             tbo: TboQueue::new(next_seq_num),
             current_digest: Digest::from_bytes(&[0; Digest::LENGTH][..]).unwrap(),
             current: Vec::with_capacity(batch_size),
-            batch_size: batch_size,
+            current_batch_size: batch_size,
             acessory: ConsensusAccessory::Follower,
         }
     }
@@ -344,7 +346,7 @@ impl<S: Service + 'static> Consensus<S> {
     /// Checks for messages that have been received
     pub fn poll(
         &mut self,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
     ) -> ConsensusPollStatus<Request<S>> {
         match self.phase {
             ProtoPhase::Init if self.tbo.get_queue => {
@@ -475,7 +477,7 @@ impl<S: Service + 'static> Consensus<S> {
         (header, message): (Header, ConsensusMessage<Request<S>>),
         synchronizer: &Synchronizer<S>,
         timeouts: &TimeoutsHandle<S>,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
         node: &Node<S::Data>,
     ) {
         match self.acessory {
@@ -498,7 +500,7 @@ impl<S: Service + 'static> Consensus<S> {
         message: ConsensusMessage<Request<S>>,
         synchronizer: &Synchronizer<S>,
         timeouts: &TimeoutsHandle<S>,
-        log: &MemLog<State<S>, Request<S>, Reply<S>>,
+        log: &Log<State<S>, Request<S>, Reply<S>>,
         node: &Node<S::Data>,
     ) -> ConsensusStatus<'a> {
         // FIXME: make sure a replica doesn't vote twice
@@ -530,7 +532,7 @@ impl<S: Service + 'static> Consensus<S> {
 
                 let pre_prepare_received_time = Utc::now();
 
-                match message.kind() {
+                let request_batch = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_)
                         if message.view() != view.sequence_number() =>
                     {
@@ -557,17 +559,7 @@ impl<S: Service + 'static> Consensus<S> {
                         return ConsensusStatus::Deciding;
                     }
                     ConsensusMessageKind::PrePrepare(request_batch) => {
-                        let mut digests = request_batch_received(
-                            header.digest().clone(),
-                            request_batch.clone(),
-                            timeouts,
-                            synchronizer,
-                            log,
-                        );
-
-                        self.current_digest = header.digest().clone();
-                        self.current.clear();
-                        self.current.append(&mut digests);
+                        request_batch
                     }
                     ConsensusMessageKind::Prepare(d) => {
                         debug!(
@@ -585,7 +577,23 @@ impl<S: Service + 'static> Consensus<S> {
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
                     }
-                }
+                };
+
+                //We know that from here on out we will never need to own the message again, so
+                //To prevent cloning it, wrap it into this
+                //TODO:
+                let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
+
+                let mut digests = request_batch_received(
+                    stored_msg.clone(),
+                    timeouts,
+                    synchronizer,
+                    log,
+                );
+
+                self.current_digest = header.digest().clone();
+                self.current.clear();
+                self.current.append(&mut digests);
 
                 {
                     //Update batch meta
@@ -603,7 +611,7 @@ impl<S: Service + 'static> Consensus<S> {
                 }
 
                 // add message to the log
-                log.insert(header, SystemMessage::Consensus(message));
+                log.insert_consensus(stored_msg);
 
                 //Start the count at one since the leader always agrees with his own pre-prepare message
                 self.phase = ProtoPhase::Preparing(1);
@@ -809,7 +817,7 @@ impl<S: Service + 'static> Consensus<S> {
                         }
                     }
 
-                    ConsensusStatus::Decided(batch_digest, &self.current[..self.batch_size])
+                    ConsensusStatus::Decided(batch_digest, &self.current[..self.current_batch_size])
                 } else {
                     self.phase = ProtoPhase::Committing(i);
 
@@ -857,11 +865,10 @@ where
 
 #[inline]
 fn request_batch_received<S>(
-    batch_digest: Digest,
-    requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+    preprepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
     timeouts: &TimeoutsHandle<S>,
     synchronizer: &Synchronizer<S>,
-    log: &MemLog<State<S>, Request<S>, Reply<S>>,
+    log: &Log<State<S>, Request<S>, Reply<S>>,
 ) -> Vec<Digest>
 where
     S: Service + Send + 'static,
@@ -871,10 +878,15 @@ where
 {
     let mut batch_guard = log.batch_meta().lock();
 
-    batch_guard.batch_size = requests.len();
+    batch_guard.batch_size = match preprepare.message().kind() {
+        ConsensusMessageKind::PrePrepare(req) => {
+            req.len()
+        },
+        _ => {panic!("Wrong message type provided")}
+    };
     batch_guard.reception_time = Utc::now();
 
     //Tell the synchronizer to watch this request batch
     //The synchronizer will also add the batch into the log of requests
-    synchronizer.watch_request_batch(batch_digest, requests, timeouts, log)
+    synchronizer.watch_request_batch(preprepare, timeouts, log)
 }

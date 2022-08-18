@@ -84,7 +84,7 @@ impl<T: Sync + 'static> Global<T> {
 }
 
 
-#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct ReadOnly<T> {
 
     value: T
@@ -99,6 +99,12 @@ impl<T> ReadOnly<T> {
         Self { value }
     }
 
+}
+
+impl<T> From<T> for ReadOnly<T> {
+    fn from(value: T) -> Self {
+        ReadOnly::new(value)
+    }
 }
 
 impl<T> Deref for ReadOnly<T> {
