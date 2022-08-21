@@ -19,7 +19,7 @@ impl RocksKVDB {
         let mut cfs = Vec::with_capacity(prefixes.len());
 
         for cf in prefixes {
-            let mut cf_opts = Options::default();
+            let cf_opts = Options::default();
 
             cfs.push(ColumnFamilyDescriptor::new(cf, cf_opts));
         }
@@ -57,9 +57,35 @@ impl RocksKVDB {
             .wrapped(ErrorKind::PersistentdbRocksdb)
     }
 
-    pub fn set<T>(&self, prefix: &'static str, key: T, data: T) -> Result<()>
+    pub fn get_all<T, Y>(&self, keys: T) -> Result<Vec<Result<Option<Vec<u8>>>>>
+    where
+        T: Iterator<Item = (&'static str, Y)>,
+        Y: AsRef<[u8]>,
+    {
+        let final_keys =
+            keys.map(|(prefix, key)| (self.get_handle(prefix).expect("Failed to get handle"), key));
+
+        Ok(self
+            .db
+            .multi_get_cf(final_keys)
+            .into_iter()
+            .map(|r| r.wrapped(ErrorKind::PersistentdbRocksdb))
+            .collect())
+    }
+
+    pub fn exists<T>(&self, prefix: &'static str, key: T) -> Result<bool>
     where
         T: AsRef<[u8]>,
+    {
+        let handle = self.get_handle(prefix)?;
+
+        Ok(self.db.key_may_exist_cf(handle, key))
+    }
+
+    pub fn set<T, Y>(&self, prefix: &'static str, key: T, data: Y) -> Result<()>
+    where
+        T: AsRef<[u8]>,
+        Y: AsRef<[u8]>,
     {
         let handle = self.get_handle(prefix)?;
 
@@ -68,10 +94,11 @@ impl RocksKVDB {
             .wrapped(ErrorKind::PersistentdbRocksdb)
     }
 
-    pub fn set_all<T, Y>(&self, prefix: &'static str, values: T) -> Result<()>
+    pub fn set_all<T, Y, Z>(&self, prefix: &'static str, values: T) -> Result<()>
     where
-        T: Iterator<Item = (Y, Y)>,
+        T: Iterator<Item = (Y, Z)>,
         Y: AsRef<[u8]>,
+        Z: AsRef<[u8]>,
     {
         let handle = self.get_handle(prefix)?;
 
@@ -125,14 +152,15 @@ impl RocksKVDB {
             .wrapped(ErrorKind::PersistentdbRocksdb)
     }
 
-    pub fn compact_range<T>(
+    pub fn compact_range<T, Y>(
         &self,
         prefix: &'static str,
         start: Option<T>,
-        end: Option<T>,
+        end: Option<Y>,
     ) -> Result<()>
     where
         T: AsRef<[u8]>,
+        Y: AsRef<[u8]>,
     {
         let handle = self.get_handle(prefix)?;
 
@@ -145,11 +173,11 @@ impl RocksKVDB {
         &self,
         prefix: &'static str,
         start: Option<T>,
-        end: Option<T>,
-    ) -> Result<Y>
+        end: Option<Y>,
+    ) -> Result<Box<dyn Iterator<Item = Result<(Box<[u8]>,Box<[u8]>)>> + '_>>
     where
         T: AsRef<[u8]>,
-        Y: Iterator<Item = (T, T)>,
+        Y: AsRef<[u8]>
     {
         let handle = self.get_handle(prefix)?;
 
@@ -166,15 +194,6 @@ impl RocksKVDB {
             iterator.set_mode(IteratorMode::From(end.as_ref(), Direction::Reverse));
         }
 
-        todo!()
-        //Ok(iterator)
-    }
-
-    pub fn iter_prefix<T, Y>(&self, pset_moderefix: T) -> Result<Y>
-    where
-        T: AsRef<[u8]>,
-        Y: Iterator<Item = Result<(Box<[u8]>, Box<u8>)>>,
-    {
-        todo!()
+        Ok(Box::new(iterator.map(|r| r.wrapped(ErrorKind::PersistentdbRocksdb))))
     }
 }

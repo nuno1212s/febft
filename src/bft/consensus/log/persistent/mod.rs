@@ -84,9 +84,9 @@ pub enum PersistentLogMode<S: Service> {
     /// just fill in the blanks using the state transfer algorithm
     Optimistic,
 
-    ///Perform no persistent logging to the database and rely only on the prospect that 
+    ///Perform no persistent logging to the database and rely only on the prospect that
     /// We are always able to rebuild our state from other replicas that may be online
-    None
+    None,
 }
 
 pub trait PersistentLogModeTrait: Send {
@@ -498,6 +498,7 @@ fn write_checkpoint<S: Service>(db: &KVDB, state: &State<S>, last_seq: SeqNo) ->
         u32::from(last_seq.next()).to_le_bytes(),
     )?;
 
+
     //We want the end to be the last message contained inside the checkpoint.
     //Not the current message end, which can already be far ahead of the current checkpoint,
     //Which would mean we could lose information.
@@ -505,10 +506,13 @@ fn write_checkpoint<S: Service>(db: &KVDB, state: &State<S>, last_seq: SeqNo) ->
 
     match &start {
         Some(start) => {
+
+            let start = &start[..];
+
             //Erase the logs from the previous
-            db.erase_range(CF_COMMITS, start, end)?;
-            db.erase_range(CF_PREPARES, start, end)?;
-            db.erase_range(CF_PREPREPARES, start, end)?;
+            db.erase_range(CF_COMMITS, start, &end)?;
+            db.erase_range(CF_PREPARES, start, &end)?;
+            db.erase_range(CF_PREPREPARES, start, &end)?;
         }
         _ => {
             return Err(Error::simple_with_msg(
@@ -539,16 +543,22 @@ fn read_message_for_range<S: Service>(
 
     let commits = db.iter_range(CF_COMMITS, Some(&start_key), Some(&end_key))?;
 
-    for (key, value) in preprepares {
-        messages.push(parse_message::<S>(key, value)?);
+    for res in preprepares {
+        if let Ok((key, value)) = res {
+            messages.push(parse_message::<S, Box<[u8]>>(key, value)?);
+        }
     }
 
-    for (key, value) in prepares {
-        messages.push(parse_message::<S>(key, value)?);
+    for res in prepares {
+        if let Ok((key, value)) = res {
+            messages.push(parse_message::<S, Box<[u8]>>(key, value)?);
+        }
     }
 
-    for (key, value) in commits {
-        messages.push(parse_message::<S>(key, value)?);
+    for res in commits {
+        if let Ok((key, value)) = res {
+            messages.push(parse_message::<S, Box<[u8]>>(key, value)?);
+        }
     }
 
     Ok(messages)
@@ -571,29 +581,35 @@ fn read_messages_for_seq<S: Service>(
 
     let commits = db.iter_range(CF_COMMITS, Some(&start_key), Some(&end_key))?;
 
-    for (key, value) in preprepares {
-        messages.push(parse_message::<S>(key, value)?);
+    for res in preprepares {
+        if let Ok((key, value)) = res {
+            messages.push(parse_message::<S, Box<[u8]>>(key, value)?);
+        }
     }
 
-    for (key, value) in prepares {
-        messages.push(parse_message::<S>(key, value)?);
+    for res in prepares {
+        if let Ok((key, value)) = res {
+            messages.push(parse_message::<S, Box<[u8]>>(key, value)?);
+        }
     }
 
-    for (key, value) in commits {
-        messages.push(parse_message::<S>(key, value)?);
+    for res in commits {
+        if let Ok((key, value)) = res {
+            messages.push(parse_message::<S, Box<[u8]>>(key, value)?);
+        }
     }
 
     Ok(messages)
 }
 
 ///Parse a given message from its bytes representation
-fn parse_message<S: Service>(
-    key: Vec<u8>,
-    value: Vec<u8>,
-) -> Result<StoredMessage<ConsensusMessage<Request<S>>>> {
-    let header = Header::deserialize_from(&value[..Header::LENGTH])?;
+fn parse_message<S: Service, T>(
+    key: T,
+    value: T,
+) -> Result<StoredMessage<ConsensusMessage<Request<S>>>> where T: AsRef<[u8]> {
+    let header = Header::deserialize_from(&value.as_ref()[..Header::LENGTH])?;
 
-    let message = <S::Data>::deserialize_consensus_message(&value[Header::LENGTH..])?;
+    let message = <S::Data>::deserialize_consensus_message(&value.as_ref()[Header::LENGTH..])?;
 
     Ok(StoredMessage::new(header, message))
 }
@@ -700,7 +716,7 @@ fn write_latest_view_seq(db: &KVDB, seq: SeqNo) -> Result<()> {
     db.set(CF_OTHER, LATEST_VIEW_SEQ, seq_no.to_le_bytes())
 }
 
-fn make_msg_seq(msg_seq: SeqNo, from: Option<NodeId>) -> Vec<u8> {
+pub fn make_msg_seq(msg_seq: SeqNo, from: Option<NodeId>) -> Vec<u8> {
     let msg_u32: u32 = msg_seq.into();
 
     let from_u32: u32 = if let Some(from) = from {

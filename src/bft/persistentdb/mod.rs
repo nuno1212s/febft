@@ -8,7 +8,7 @@ pub mod rocksdb;
 
 #[derive(Clone)]
 pub struct KVDB {
-    prefixes: Vec<&'static str>,
+    _prefixes: Vec<&'static str>,
     inner: Arc<RocksKVDB>,
 }
 
@@ -20,23 +20,34 @@ impl KVDB {
         let prefixes_cpy = prefixes.clone();
 
         Ok(Self {
-            prefixes,
+            _prefixes: prefixes,
             inner: Arc::new(RocksKVDB::new(db_path, prefixes_cpy)?),
         })
     }
 
+    /// Get the corresponding value of a given prefix + key combo in the database
     pub fn get<T>(&self, prefix: &'static str, key: T) -> Result<Option<Vec<u8>>>
     where
         T: AsRef<[u8]>,
     {
-        todo!()
+        self.inner.get(prefix, key)
     }
 
+    /// Get the corresponding value for a given set of keys
+    pub fn get_all<T, Y>(&self, key: T) -> Result<Vec<Result<Option<Vec<u8>>>>>
+    where
+        T: Iterator<Item = (&'static str, Y)>,
+        Y: AsRef<[u8]>,
+    {
+        self.inner.get_all(key)
+    }
+
+    ///Check if the given prefix + key combination exists in the database
     pub fn exists<T>(&self, prefix: &'static str, key: T) -> Result<bool>
     where
         T: AsRef<[u8]>,
     {
-        todo!()
+        self.inner.exists(prefix, key)
     }
 
     pub fn set<T, Y>(&self, prefix: &'static str, key: T, data: Y) -> Result<()>
@@ -44,7 +55,7 @@ impl KVDB {
         T: AsRef<[u8]>,
         Y: AsRef<[u8]>,
     {
-        todo!()
+        self.inner.set(prefix, key, data)
     }
 
     pub fn set_all<T, Y, Z>(&self, prefix: &'static str, values: T) -> Result<()>
@@ -53,14 +64,14 @@ impl KVDB {
         Y: AsRef<[u8]>,
         Z: AsRef<[u8]>,
     {
-        todo!()
+        self.inner.set_all(prefix, values)
     }
 
     pub fn erase<T>(&self, prefix: &'static str, key: T) -> Result<()>
     where
         T: AsRef<[u8]>,
     {
-        todo!()
+        self.inner.erase(prefix, key)
     }
 
     /// Delete a set of keys
@@ -68,53 +79,53 @@ impl KVDB {
     /// all the way to the intended target.
     pub fn erase_keys<T, Y>(&self, prefix: &'static str, keys: T) -> Result<()>
     where
-        T: AsRef<[Y]>,
+        T: Iterator<Item = Y>,
         Y: AsRef<[u8]>,
     {
-        todo!()
+        self.inner.erase_keys(prefix, keys)
     }
 
-    pub fn erase_range<T, Y>(&self, prefix: &'static str, start: T, end: Y) -> Result<()>
+    ///Delete a range of keys from the database
+    /// Accepts the start key and the end key
+    /// Deletes: `[start, end[` (exclusive on the end key)
+    pub fn erase_range<T>(&self, prefix: &'static str, start: T, end: T) -> Result<()>
     where
         T: AsRef<[u8]>,
-        Y: AsRef<[u8]>
     {
-        todo!()
+        self.inner.erase_range(prefix, start, end)
     }
 
-    pub fn compact_range<T, Y>(&self, prefix: &'static str, start: T, end: Y) -> Result<()>
-    where
-        T: AsRef<[u8]>,
-        Y: AsRef<[u8]>
-    {
-        todo!()
-    }
-
-    pub fn iter<T, Y>(&self, prefix: &'static str) -> Result<T>
-    where
-        Y: AsRef<[u8]>,
-        T: Iterator<Item = (Y, Y)>,
-    {
-        todo!()
-    }
-
-    pub fn iter_range<T>(
+    pub fn compact_range<T, Y>(
         &self,
         prefix: &'static str,
         start: Option<T>,
-        end: Option<T>,
-    ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>>>
+        end: Option<Y>,
+    ) -> Result<()>
     where
         T: AsRef<[u8]>,
+        Y: AsRef<[u8]>,
     {
-        todo!()
+        self.inner.compact_range(prefix, start, end)
     }
 
-    pub fn iter_prefix<T, Y>(&self, prefix: T) -> Y
+    pub fn iter(
+        &self,
+        prefix: &'static str,
+    ) -> Result<Box<dyn Iterator<Item = Result<(Box<[u8]>, Box<[u8]>)>> + '_>> {
+        self.iter_range::<Vec<u8>, Vec<u8>>(prefix, None, None)
+    }
+
+    pub fn iter_range<T, Y>(
+        &self,
+        prefix: &'static str,
+        start: Option<T>,
+        end: Option<Y>,
+    ) -> Result<Box<dyn Iterator<Item = Result<(Box<[u8]>, Box<[u8]>)>> + '_>>
     where
         T: AsRef<[u8]>,
-        Y: Iterator<Item = (T, T)>,
+        Y: AsRef<[u8]>,
     {
-        todo!()
+        self.inner.iter_range(prefix, start, end)
     }
+
 }
