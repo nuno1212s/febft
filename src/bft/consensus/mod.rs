@@ -16,6 +16,7 @@ use crate::bft::communication::message::{
 };
 
 use self::log::Log;
+use self::log::persistent::PersistentLogModeTrait;
 use self::replica_consensus::ReplicaConsensus;
 
 use super::communication::message::{RequestMessage, SystemMessage};
@@ -228,7 +229,7 @@ pub enum ConsensusStatus<'a> {
     /// the batch of requests with the given digests.
     /// The first digest is the digest of the Prepare message
     /// And therefore the entire batch digest
-    Decided(Digest, &'a [Digest]),
+    Decided(Digest, &'a [Digest], Vec<Digest>),
 }
 
 /// An abstract consensus trait.
@@ -245,9 +246,16 @@ pub struct Consensus<S: Service> {
     phase: ProtoPhase,
     tbo: TboQueue<Request<S>>,
 
+    //A vector that contains the digest of all requests contained in the batch that is currently being processed
     current: Vec<Digest>,
+    //The digest of the entire batch that is currently being processed
     current_digest: Digest,
+    //The size of batch that is currently being processed
     current_batch_size: usize,
+    //A list of digests of all consensus related messages pertaining to this
+    //Consensus instance. Used to keep track of if the persistent log has saved the messages already
+    //So the requests can be executed
+    current_messages: Vec<Digest>,
     
 
     acessory: ConsensusAccessory<S>,
@@ -300,7 +308,8 @@ impl<S: Service + 'static> Consensus<S> {
             tbo: TboQueue::new(next_seq_num),
             current_digest: Digest::from_bytes(&[0; Digest::LENGTH][..]).unwrap(),
             current: Vec::with_capacity(batch_size),
-            current_batch_size: batch_size,
+            current_batch_size: 0,
+            current_messages: Vec::new(),
             acessory: ConsensusAccessory::Replica(ReplicaConsensus::new(
                 view,
                 next_seq_num,
@@ -317,6 +326,7 @@ impl<S: Service + 'static> Consensus<S> {
             current_digest: Digest::from_bytes(&[0; Digest::LENGTH][..]).unwrap(),
             current: Vec::with_capacity(batch_size),
             current_batch_size: batch_size,
+            current_messages: Vec::new(),
             acessory: ConsensusAccessory::Follower,
         }
     }
@@ -344,10 +354,10 @@ impl<S: Service + 'static> Consensus<S> {
 
     /// Check if we can process new consensus messages.
     /// Checks for messages that have been received
-    pub fn poll(
+    pub fn poll<T>(
         &mut self,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
-    ) -> ConsensusPollStatus<Request<S>> {
+        log: &Log<S, T>,
+    ) -> ConsensusPollStatus<Request<S>> where T: PersistentLogModeTrait {
         match self.phase {
             ProtoPhase::Init if self.tbo.get_queue => {
                 extract_msg!(
@@ -457,13 +467,13 @@ impl<S: Service + 'static> Consensus<S> {
 
     /// Create a fake `PRE-PREPARE`. This is useful during the view
     /// change protocol.
-    pub fn forge_propose<T>(
+    pub fn forge_propose<K>(
         &self,
         requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
-        synchronizer: &T,
+        synchronizer: &K,
     ) -> SystemMessage<State<S>, Request<S>, Reply<S>>
     where
-        T: AbstractSynchronizer<S>,
+        K: AbstractSynchronizer<S>,
     {
         SystemMessage::Consensus(ConsensusMessage::new(
             self.sequence_number(),
@@ -472,14 +482,14 @@ impl<S: Service + 'static> Consensus<S> {
         ))
     }
 
-    pub fn finalize_view_change(
+    pub fn finalize_view_change<T>(
         &mut self,
         (header, message): (Header, ConsensusMessage<Request<S>>),
         synchronizer: &Synchronizer<S>,
         timeouts: &TimeoutsHandle<S>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<S, T>,
         node: &Node<S::Data>,
-    ) {
+    ) where T: PersistentLogModeTrait {
         match self.acessory {
             ConsensusAccessory::Follower => {}
             ConsensusAccessory::Replica(_) => {
@@ -494,15 +504,15 @@ impl<S: Service + 'static> Consensus<S> {
     }
 
     /// Process a message for a particular consensus instance.
-    pub fn process_message<'a>(
+    pub fn process_message<'a, T>(
         &'a mut self,
         header: Header,
         message: ConsensusMessage<Request<S>>,
         synchronizer: &Synchronizer<S>,
         timeouts: &TimeoutsHandle<S>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<S, T>,
         node: &Node<S::Data>,
-    ) -> ConsensusStatus<'a> {
+    ) -> ConsensusStatus<'a> where T: PersistentLogModeTrait {
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just
         // the amount of votes received
@@ -594,6 +604,9 @@ impl<S: Service + 'static> Consensus<S> {
                 self.current_digest = header.digest().clone();
                 self.current.clear();
                 self.current.append(&mut digests);
+                self.current_messages.clear();
+
+                self.current_messages.push(header.digest().clone());
 
                 {
                     //Update batch meta
@@ -614,6 +627,7 @@ impl<S: Service + 'static> Consensus<S> {
                 log.insert_consensus(stored_msg);
 
                 //Start the count at one since the leader always agrees with his own pre-prepare message
+                //So, even if we are not the leader, we count the preprepare message as a prepare message as well
                 self.phase = ProtoPhase::Preparing(1);
 
                 ConsensusStatus::Deciding
@@ -708,6 +722,10 @@ impl<S: Service + 'static> Consensus<S> {
                     }
                 };
 
+                //Add the message to the messages that must be saved before 
+                //We are able to execute the consensus instance
+                self.current_messages.push(header.digest().clone());
+
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
 
@@ -793,6 +811,10 @@ impl<S: Service + 'static> Consensus<S> {
                     }
                 };
 
+                //Add the message to the messages that must be saved before 
+                //We are able to execute the consensus instance
+                self.current_messages.push(header.digest().clone());
+
                 // add message to the log
                 log.insert(header, SystemMessage::Consensus(message));
 
@@ -817,7 +839,11 @@ impl<S: Service + 'static> Consensus<S> {
                         }
                     }
 
-                    ConsensusStatus::Decided(batch_digest, &self.current[..self.current_batch_size])
+                    let mut messages = Vec::with_capacity(self.current_messages.len());
+
+                    messages.append(&mut self.current_messages);
+
+                    ConsensusStatus::Decided(batch_digest, &self.current[..self.current_batch_size], messages)
                 } else {
                     self.phase = ProtoPhase::Committing(i);
 
@@ -864,17 +890,18 @@ where
 }
 
 #[inline]
-fn request_batch_received<S>(
+fn request_batch_received<S, T>(
     preprepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
     timeouts: &TimeoutsHandle<S>,
     synchronizer: &Synchronizer<S>,
-    log: &Log<State<S>, Request<S>, Reply<S>>,
+    log: &Log<S, T>,
 ) -> Vec<Digest>
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
     Request<S>: Send + Clone + 'static,
     Reply<S>: Send + 'static,
+    T: PersistentLogModeTrait
 {
     let mut batch_guard = log.batch_meta().lock();
 

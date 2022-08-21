@@ -25,6 +25,7 @@ use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::timeouts::{TimeoutKind, TimeoutsHandle};
 
 use super::consensus::AbstractConsensus;
+use super::consensus::log::persistent::PersistentLogModeTrait;
 use super::globals::ReadOnly;
 use super::sync::AbstractSynchronizer;
 
@@ -53,10 +54,10 @@ pub struct RecoveryState<S, O> {
 }
 
 /// Allow a replica to recover from the state received by peer nodes.
-pub fn install_recovery_state<S, T, K>(
+pub fn install_recovery_state<S, T, K, W>(
     recovery_state: RecoveryState<State<S>, Request<S>>,
     synchronizer: &Arc<T>,
-    log: &Log<State<S>, Request<S>, Reply<S>>,
+    log: &Log<S, W>,
     executor: &mut ExecutorHandle<S>,
     consensus: &mut K,
 ) -> Result<()>
@@ -67,6 +68,7 @@ where
     Reply<S>: Send + 'static,
     T: AbstractSynchronizer<S>,
     K: AbstractConsensus<S>,
+    W: PersistentLogModeTrait
 {
     // TODO: maybe try to optimize this, to avoid clone(),
     // which may be quite expensive depending on the size
@@ -226,15 +228,16 @@ where
         matches!(self.phase, ProtoPhase::WaitingCheckpoint(_, _))
     }
 
-    fn process_reply_state<T>(
+    fn process_reply_state<T, K>(
         &mut self,
         header: Header,
         message: CstMessage<State<S>, Request<S>>,
         synchronizer: &Arc<T>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<S, K>,
         node: &Node<S::Data>,
     ) where
         T: AbstractSynchronizer<S>,
+        K: PersistentLogModeTrait
     {
         let snapshot = match log.snapshot(synchronizer.view()) {
             Ok(snapshot) => snapshot,
@@ -251,17 +254,18 @@ where
     }
 
     /// Advances the state of the CST state machine.
-    pub fn process_message<T, K>(
+    pub fn process_message<T, K, W>(
         &mut self,
         progress: CstProgress<State<S>, Request<S>>,
         synchronizer: &Arc<T>,
         consensus: &K,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<S, W>,
         node: &Node<S::Data>,
     ) -> CstStatus<State<S>, Request<S>>
     where
         T: AbstractSynchronizer<S>,
         K: AbstractConsensus<S>,
+        W: PersistentLogModeTrait
     {
         match self.phase {
             ProtoPhase::WaitingCheckpoint(_, _) => {
@@ -448,14 +452,15 @@ where
 
     /// Used by a recovering node to retrieve the latest sequence number
     /// attributed to a client request by the consensus layer.
-    pub fn request_latest_consensus_seq_no<T>(
+    pub fn request_latest_consensus_seq_no<T, W>(
         &mut self,
         synchronizer: &Arc<T>,
         timeouts: &TimeoutsHandle<S>,
         node: &Node<S::Data>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<S, W>,
     ) where
         T: AbstractSynchronizer<S>,
+        W: PersistentLogModeTrait
     {
         // reset state of latest seq no. request
         self.latest_cid = SeqNo::ZERO;
@@ -475,14 +480,15 @@ where
     }
 
     /// Used by a recovering node to retrieve the latest state.
-    pub fn request_latest_state<T>(
+    pub fn request_latest_state<T, W>(
         &mut self,
         synchronizer: &Arc<T>,
         timeouts: &TimeoutsHandle<S>,
         node: &Node<S::Data>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<S, W>,
     ) where
         T: AbstractSynchronizer<S>,
+        W: PersistentLogModeTrait
     {
         // reset hashmap of received states
         self.received_states.clear();

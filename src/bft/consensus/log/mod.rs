@@ -3,11 +3,11 @@
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 
-use std::marker::PhantomData;
+use std::path::Path;
 use std::sync::Arc;
 
 use intmap::IntMap;
-use log::debug;
+use log::{debug, error};
 use parking_lot::Mutex;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
@@ -25,10 +25,12 @@ use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
-use crate::bft::executable::{Request, UpdateBatch};
+use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UpdateBatch};
 use crate::bft::globals::ReadOnly;
 use crate::bft::ordering::{Orderable, SeqNo};
-use crate::bft::persistentdb::KVDB;
+
+use self::persistent::{PersistentLog, WriteMode};
+use self::persistent::{PersistentLogMode, PersistentLogModeTrait};
 
 pub mod persistent;
 
@@ -493,38 +495,42 @@ impl<O: Clone> DecisionLog<O> {
 }
 
 /// Represents a log of messages received by the BFT system.
-pub struct Log<S, O, P> {
+pub struct Log<S: Service, T: PersistentLogModeTrait> {
     node_id: NodeId,
 
-    db_obj: KVDB,
-
     //This item will only be accessed by the replica request thread
+    //The current stored SeqNo in the checkpoint state.
+    //THIS IS NOT THE CURR_SEQ NUMBER IN THE CONSENSUS
     curr_seq: Cell<SeqNo>,
     batch_size: usize,
     //This will only be accessed by the replica processing thread since requests will only be
     //Decided by the consensus protocol, which operates completly in the replica thread
-    declog: RefCell<DecisionLog<O>>,
+    declog: RefCell<DecisionLog<Request<S>>>,
     //This item will also be accessed from both the client request thread and the
     //replica request thread. However the client request thread will always only read
     //And the replica request thread writes and reads from it
     latest_op: Mutex<IntMap<SeqNo>>,
+
     ///TODO: Implement a concurrent IntMap and replace this one with it
     //This item will be accessed from both the client request thread and the
     //Replica request thread
-    //This stores all requests
-    requests: ConcurrentHashMap<Digest, StoredMessage<RequestMessage<O>>>,
+    //This stores client requests that have not yet been put into a batch
+    requests: ConcurrentHashMap<Digest, StoredMessage<RequestMessage<Request<S>>>>,
+
     //Stores just request batches. Much faster than individually storing all the requests and
     //Then having to always access them one by one
-    request_batches: ConcurrentHashMap<Digest, Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>>,
+    request_batches:
+        ConcurrentHashMap<Digest, Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>>,
     //This will only be accessed from the replica request thread so we can wrap it
     //In a simple cell
 
     //Stores all of the performed requests concatenated in a vec
-    decided: RefCell<Vec<O>>,
-    checkpoint: RefCell<CheckpointState<S>>,
+    decided: RefCell<Vec<Request<S>>>,
+    checkpoint: RefCell<CheckpointState<State<S>>>,
     //Some stuff for statistics.
     meta: Arc<Mutex<BatchMeta>>,
-    _marker: PhantomData<P>,
+
+    persistent_log: PersistentLog<S, T>,
 
     //Observer
     observer: Option<ObserverHandle>,
@@ -536,22 +542,33 @@ pub struct Log<S, O, P> {
 /// from the other threads and actual consensus to be reached.
 /// The requests, latest_op and batch meta can be accessed and altered by both the replica request thread
 /// and the client request thread, so we protected only those fields
-unsafe impl<S, O, P> Sync for Log<S, O, P> {}
+unsafe impl<S: Service, T: PersistentLogModeTrait> Sync for Log<S, T> {}
 
 // TODO:
 // - garbage collect the log
 // - save the log to persistent storage
-impl<S, O: Clone, P> Log<S, O, P> {
+impl<S, T> Log<S, T>
+where
+    S: Service + 'static,
+    T: PersistentLogModeTrait,
+{
     /// Creates a new message log.
     ///
     /// The value `batch_size` represents the maximum number of
     /// client requests to queue before executing a consensus instance.
-    pub fn new(
+    pub fn new<K>(
         node: NodeId,
         batch_size: usize,
         observer: Option<ObserverHandle>,
-        db: KVDB,
-    ) -> Arc<Self> {
+        executor: ExecutorHandle<S>,
+        db_path: K,
+    ) -> Arc<Self>
+    where
+        K: AsRef<Path>,
+    {
+        let persistent_log =
+            PersistentLog::init_log(executor, db_path).expect("Failed to init persistent log");
+
         Arc::new(Self {
             node_id: node,
             batch_size,
@@ -564,9 +581,8 @@ impl<S, O: Clone, P> Log<S, O, P> {
             request_batches: collections::concurrent_hash_map(),
             checkpoint: RefCell::new(CheckpointState::None),
             meta: Arc::new(Mutex::new(BatchMeta::new())),
-            _marker: PhantomData,
+            persistent_log,
             observer,
-            db_obj: db,
         })
     }
 
@@ -580,12 +596,12 @@ impl<S, O: Clone, P> Log<S, O, P> {
 
     /// Returns a reference to a subset of this log, containing only
     /// consensus messages.
-    pub fn decision_log(&self) -> &RefCell<DecisionLog<O>> {
+    pub fn decision_log(&self) -> &RefCell<DecisionLog<Request<S>>> {
         &self.declog
     }
 
     /// Update the log state, received from the CST protocol.
-    pub fn install_state(&self, last_seq: SeqNo, mut rs: RecoveryState<S, O>) {
+    pub fn install_state(&self, last_seq: SeqNo, mut rs: RecoveryState<State<S>, Request<S>>) {
         // FIXME: what to do with `self.deciding`..?
 
         //Replace the log
@@ -605,11 +621,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
     // TODO: return reference to the log state, so we don't have to clone()
     // it, which can be quite expensive
     //
-    pub fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<S, O>>
-    where
-        S: Clone,
-        O: Clone,
-    {
+    pub fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<State<S>, Request<S>>> {
         match &*self.checkpoint.borrow() {
             CheckpointState::Complete(checkpoint) => Ok(RecoveryState::new(
                 view,
@@ -629,9 +641,13 @@ impl<S, O: Clone, P> Log<S, O, P> {
         }
     */
 
+    ///Insert a consensus message into the log.
+    /// We can use this method when we want to prevent a clone, as this takes
+    /// just a reference.
+    /// This is mostly used for pre prepares as they contain all the requests and are therefore very expensive to send
     pub fn insert_consensus(
         &self,
-        consensus_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>,
+        consensus_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
     ) {
         //These messages can only be sent by replicas, so the dec_log
         //Is only accessed by one thread.
@@ -641,17 +657,24 @@ impl<S, O: Clone, P> Log<S, O, P> {
         let mut dec_log = self.declog.borrow_mut();
 
         match consensus_msg.message().kind() {
-            ConsensusMessageKind::PrePrepare(_) => dec_log.pre_prepares.push(consensus_msg),
-            ConsensusMessageKind::Prepare(_) => dec_log.prepares.push(consensus_msg),
-            ConsensusMessageKind::Commit(_) => dec_log.commits.push(consensus_msg),
+            ConsensusMessageKind::PrePrepare(_) => dec_log.pre_prepares.push(consensus_msg.clone()),
+            ConsensusMessageKind::Prepare(_) => dec_log.prepares.push(consensus_msg.clone()),
+            ConsensusMessageKind::Commit(_) => dec_log.commits.push(consensus_msg.clone()),
+        }
+
+        if let Err(err) = self
+            .persistent_log
+            .queue_message(WriteMode::Async(None), consensus_msg)
+        {
+            error!("Failed to persist message {:?}", err);
         }
     }
 
     /// Adds a new `message` and its respective `header` to the log.
-    pub fn insert(&self, header: Header, message: SystemMessage<S, O, P>) {
+    pub fn insert(&self, header: Header, message: SystemMessage<State<S>, Request<S>, Reply<S>>) {
         match message {
             SystemMessage::Request(message) => {
-                let key = operation_key::<O>(&header, &message);
+                let key = operation_key::<Request<S>>(&header, &message);
 
                 let seq_no = {
                     let latest_op_guard = self.latest_op.lock();
@@ -677,6 +700,8 @@ impl<S, O: Clone, P> Log<S, O, P> {
                 //Saving a lot of copies especially when sending things to the asynchronous logging
                 let stored = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
 
+                let stored_2 = stored.clone();
+
                 let mut dec_log = self.declog.borrow_mut();
 
                 match stored.message().kind() {
@@ -684,21 +709,38 @@ impl<S, O: Clone, P> Log<S, O, P> {
                     ConsensusMessageKind::Prepare(_) => dec_log.prepares.push(stored),
                     ConsensusMessageKind::Commit(_) => dec_log.commits.push(stored),
                 }
+
+                if let Err(err) = self
+                    .persistent_log
+                    .queue_message(WriteMode::Async(None), stored_2)
+                {
+                    error!("Failed to persist message {:?}", err);
+                }
             }
             // rest are not handled by the log
             _ => (),
         }
     }
 
-    pub fn insert_batched(&self, message: Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>) {
+    pub fn insert_batched(
+        &self,
+        message: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+    ) {
         self.request_batches
-            .insert(message.header().digest().clone(), message);
+            .insert(message.header().digest().clone(), message.clone());
+
+        if let Err(err) = self
+            .persistent_log
+            .queue_message(WriteMode::Async(None), message)
+        {
+            error!("Failed to persist message {:?}", err);
+        }
     }
 
     pub fn take_batched_requests(
         &self,
         batch_digest: &Digest,
-    ) -> Option<Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>> {
+    ) -> Option<Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>> {
         match self.request_batches.remove(batch_digest) {
             None => None,
             Some((digest, batch)) => Some(batch),
@@ -706,22 +748,24 @@ impl<S, O: Clone, P> Log<S, O, P> {
     }
 
     /// Retrieves a batch of requests to be proposed during a view change.
-    pub fn view_change_propose(&self) -> Vec<StoredMessage<RequestMessage<O>>> {
+    pub fn view_change_propose(&self) -> Vec<StoredMessage<RequestMessage<Request<S>>>> {
         todo!()
 
         //COLLECT ALL REQUESTS FROM THE MAP
     }
 
     /// Checks if this `Log` has a particular request with the given `digest`.
+    ///
+    /// If this request is only contained within a batch, this will not return correctly
     pub fn has_request(&self, digest: &Digest) -> bool {
         self.requests.contains_key(digest)
     }
 
     /// Clone the requests corresponding to the provided list of hash digests.
-    pub fn clone_requests(&self, digests: &[Digest]) -> Vec<StoredMessage<RequestMessage<O>>>
-    where
-        O: Clone,
-    {
+    pub fn clone_requests(
+        &self,
+        digests: &[Digest],
+    ) -> Vec<StoredMessage<RequestMessage<Request<S>>>> {
         digests
             .iter()
             .flat_map(|d| self.requests.get(d))
@@ -735,12 +779,18 @@ impl<S, O: Clone, P> Log<S, O, P> {
     ///
     /// The log may be cleared resulting from this operation. Check the enum variant of
     /// `Info`, to perform a local checkpoint when appropriate.
+    ///
+    /// Returns a [`Option::None`] when we are running in Strict mode, indicating the
+    /// batch request has been put in the execution queue, waiting for all of the messages
+    /// to be persisted  
     pub fn finalize_batch(
         &self,
         seq: SeqNo,
         batch_digest: Digest,
         digests: &[Digest],
-    ) -> Result<(Info, UpdateBatch<O>)> {
+        needed_messages: Vec<Digest>,
+        meta: BatchMeta,
+    ) -> Result<Option<(Info, UpdateBatch<Request<S>>, BatchMeta)>> {
         //println!("Finalized batch of OPS seq {:?} on Node {:?}", seq, self.node_id);
 
         let mut rqs;
@@ -791,7 +841,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
         for x in rqs {
             let (header, message) = x.into_inner();
 
-            let key = operation_key::<O>(&header, &message);
+            let key = operation_key::<Request<S>>(&header, &message);
 
             // let seq_no = latest_op_guard
             //     .get(key)
@@ -826,6 +876,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
         let last_seq_no_u32 = u32::from(last_seq_no);
 
         let info = if last_seq_no_u32 > 0 && last_seq_no_u32 % PERIOD == 0 {
+            //We check that % == 0 so we don't start multiple checkpoints
             self.begin_checkpoint(last_seq_no)?
         } else {
             Info::Nil
@@ -834,7 +885,17 @@ impl<S, O: Clone, P> Log<S, O, P> {
         // the last executed sequence number
         dec_log_guard.last_exec = Some(seq);
 
-        Ok((info, batch))
+        match self.persistent_log.kind() {
+            PersistentLogMode::Strict(backlog) => {
+                backlog.queue_batch(((info, batch, meta), needed_messages))?;
+
+                Ok(None)
+            }
+            _ => {
+                //In other modes, we can just go straight to the execution phase
+                Ok(Some((info, batch, meta)))
+            }
+        }
     }
 
     fn begin_checkpoint(&self, seq: SeqNo) -> Result<Info> {
@@ -866,7 +927,7 @@ impl<S, O: Clone, P> Log<S, O, P> {
     /// This method should only be called when `finalize_request()` reports
     /// `Info::BeginCheckpoint`, and the requested application state is received
     /// on the core server task's master channel.
-    pub fn finalize_checkpoint(&self, appstate: S) -> Result<()> {
+    pub fn finalize_checkpoint(&self, final_seq: SeqNo, appstate: State<S>) -> Result<()> {
         match *self.checkpoint.borrow() {
             CheckpointState::None => {
                 Err("No checkpoint has been initiated yet").wrapped(ErrorKind::ConsensusLog)
@@ -876,39 +937,101 @@ impl<S, O: Clone, P> Log<S, O, P> {
             }
             CheckpointState::Partial { ref seq }
             | CheckpointState::PartialWithEarlier { ref seq, .. } => {
-                let seq = *seq;
-
                 self.checkpoint
                     .replace(CheckpointState::Complete(Arc::new(ReadOnly::new(
-                        Checkpoint { seq, appstate },
+                        Checkpoint {
+                            seq: final_seq,
+                            appstate,
+                        },
                     ))));
 
-                self.decided.borrow_mut().clear();
-                //
-                // NOTE: workaround bug where when we clear the log,
-                // we remove the PRE-PREPARE of an on-going request
-                //
-                // FIXME: the log should not be cleared until a request is over
-                //
-                let mut guard = self.declog.borrow_mut();
+                let mut decided_request_count: usize = 0;
 
-                match guard.pre_prepares.pop() {
-                    Some(last_pre_prepare) => {
-                        guard.pre_prepares.clear();
+                //Clear the log of messages up to final_seq.
+                //Messages ahead of final_seq will not be removed as they are not included in the
+                //Checkpoint and therefore must be logged.
+                {
+                    let mut guard = self.declog.borrow_mut();
 
+                    let mut new_preprepares = Vec::new();
+                    let mut new_prepares = Vec::new();
+                    let mut new_commits = Vec::new();
+
+                    for ele in &guard.pre_prepares {
+                        if ele.message().sequence_number() <= final_seq {
+                            //Mark the requests contained in this message for removal
+                            decided_request_count += match ele.message().kind() {
+                                ConsensusMessageKind::PrePrepare(messages) => messages.len(),
+                                _ => 0,
+                            };
+
+
+                            continue;
+                        }
+
+                        new_preprepares.push(ele.clone());
+                    }
+
+                    for ele in &guard.prepares {
+                        if ele.message().sequence_number() <= final_seq {
+                            continue;
+                        }
+
+                        new_prepares.push(ele.clone());
+                    }
+
+                    for ele in &guard.commits {
+                        if ele.message().sequence_number() <= final_seq {
+                            continue;
+                        }
+
+                        new_commits.push(ele.clone());
+                    }
+
+                    guard.pre_prepares = new_preprepares;
+                    guard.prepares = new_prepares;
+                    guard.commits = new_commits;
+
+                    if let Some(last_sq) = guard.pre_prepares.last() {
                         // store the id of the last received pre-prepare,
                         // which corresponds to the request currently being
                         // processed
-                        self.curr_seq
-                            .replace(last_pre_prepare.message().sequence_number());
-                    }
-                    None => {
-                        // no stored PRE-PREPARE messages, NOOP
+                        self.curr_seq.replace(last_sq.message().sequence_number());
+                    } else {
+                        self.curr_seq.replace(final_seq);
                     }
                 }
 
-                guard.prepares.clear();
-                guard.commits.clear();
+                //Clear the decided requests log
+                {
+                    let mut decided = self.decided.borrow_mut();
+
+                    if decided_request_count < decided.len() {
+
+                        let mut new_decided = Vec::with_capacity(decided.len() - decided_request_count);
+
+                        let to_keep = decided.len() - decided_request_count;
+
+                        for _ in 0..to_keep {
+                            let rq_to_keep = decided.pop().unwrap();
+
+                            new_decided.push(rq_to_keep);
+                        }
+
+                        //Get the requests in the correct order as we have inverted the order with the previous operation
+                        new_decided.reverse();
+
+                        drop(decided);
+
+                        self.decided.replace(new_decided);
+
+                    } else if decided_request_count == decided.len() {
+                        decided.clear();
+                    } else {
+                        //We can't have more decided requests than decided requests LOL
+                        unreachable!()
+                    }
+                }
 
                 if let Some(observer) = &self.observer {
                     observer
@@ -933,70 +1056,4 @@ pub fn operation_key<O>(header: &Header, message: &RequestMessage<O>) -> u64 {
 
     // therefore this is safe, and will not delete any bits
     client_id | (session_id << 32)
-}
-
-pub trait LogT<S, O: Clone, P> {
-    fn latest_op(&self) -> &Mutex<IntMap<SeqNo>>;
-
-    fn batch_meta(&self) -> &Arc<Mutex<BatchMeta>>;
-
-    /// Adds a new `message` and its respective `header` to the log.
-    fn insert(&self, header: Header, message: SystemMessage<S, O, P>);
-
-    /// Checks if this `Log` has a particular request with the given `digest`.
-    fn has_request(&self, digest: &Digest) -> bool;
-
-    /// Clone the requests corresponding to the provided list of hash digests.
-    fn clone_requests(&self, digest: &[Digest]) -> Vec<StoredMessage<RequestMessage<O>>>;
-
-    ///Insert a batched group of operations into the log.
-    /// This batch comes from the pre-prepare operations sent by the leader
-    fn insert_batched(&self, batch_digest: Digest, batch: Vec<StoredMessage<RequestMessage<O>>>);
-
-    ///Take batched requests from the log.
-    ///This returns the batch of requests corresponding the given digest
-    fn take_batched(&self, batch_digest: &Digest) -> Option<Vec<StoredMessage<RequestMessage<O>>>>;
-
-    /// Finalize a batch of client requests decided on the consensus instance
-    /// with sequence number `seq`, retrieving the payload associated with their
-    /// given digests `digests`.
-    ///
-    /// The log may be cleared resulting from this operation. Check the enum variant of
-    /// `Info`, to perform a local checkpoint when appropriate.
-    fn finalize_batch(
-        &self,
-        seq: SeqNo,
-        batch_digest: Digest,
-        digests: &[Digest],
-    ) -> Result<(Info, UpdateBatch<O>)>;
-
-    /// Retrieves a batch of requests to be proposed during a view change.
-    /// This request batch should be composed of requests that were not proposed
-    /// by the leader and that should be proposed.
-    fn view_change_propose(&self) -> Vec<StoredMessage<RequestMessage<O>>>;
-
-    /// Update the log state, received from the CST protocol.
-    fn install_state(&self, last_seq: SeqNo, rs: RecoveryState<S, O>);
-
-    /// Take a snapshot of the log, used to recover a replica.
-    ///
-    /// This method may fail if we are waiting for the latest application
-    /// state to be returned by the execution layer.
-    //
-    // TODO: return reference to the log state, so we don't have to clone()
-    // it, which can be quite expensive
-    //
-    fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<S, O>>
-    where
-        S: Clone,
-        O: Clone;
-
-    fn begin_checkpoint(&self, seq: SeqNo) -> Result<Info>;
-
-    /// End the state of an on-going checkpoint.
-    ///
-    /// This method should only be called when `finalize_request()` reports
-    /// `Info::BeginCheckpoint`, and the requested application state is received
-    /// on the core server task's master channel.
-    fn finalize_checkpoint(&self, appstate: S) -> Result<()>;
 }

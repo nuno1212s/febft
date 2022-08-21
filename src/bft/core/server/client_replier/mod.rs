@@ -12,7 +12,6 @@ pub struct Replier<S> where S: Service + 'static {
     node_id: NodeId,
     channel:  ChannelSyncRx<RepliesType<Reply<S>>>,
     send_node: SendNode<S::Data>,
-    log: Arc<Log<State<S>, Request<S>, Reply<S>>>
 }
 
 pub struct ReplyHandle<S> where S: Service {
@@ -49,15 +48,13 @@ impl<S> Clone for ReplyHandle<S> where S: Service {
 
 impl<S> Replier<S> where S: Service + 'static{
 
-    pub fn new(node_id: NodeId, send_node: SendNode<S::Data>,
-               log: Arc<Log<State<S>, Request<S>, Reply<S>>>) -> ReplyHandle<S> {
+    pub fn new(node_id: NodeId, send_node: SendNode<S::Data>) -> ReplyHandle<S> {
         let (ch_tx, ch_rx) = channel::new_bounded_sync(REPLY_CHANNEL_SIZE);
 
         let reply_task = Self {
             node_id,
             channel: ch_rx,
             send_node,
-            log
         };
 
         let handle = ReplyHandle::new(ch_tx);

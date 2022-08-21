@@ -34,7 +34,8 @@ fn main() {
         .parse()
         .unwrap();
     let conf = InitConfig {
-        async_threads: num_cpus::get(),
+        async_threads: 4,
+        threadpool_threads: 4,
     };
     let _guard = unsafe { init(conf).unwrap() };
     rt::block_on(async_main(NodeId::from(id)));
@@ -66,7 +67,7 @@ async fn async_main(id: NodeId) {
         .build();
 
     let mut node = {
-        let peers: Vec<_> = NodeId::targets(0..4).collect();
+        let peers : Vec<_> = NodeId::targets(0..4).collect();
         let addrs= map! {
             peers[0] => addr!("cop01" => ip!(id, peers[0])),
             peers[1] => addr!("cop02" => ip!(id, peers[1])),
@@ -78,7 +79,6 @@ async fn async_main(id: NodeId) {
             id,
             sk,
             addrs,
-            public_keys,
         );
         println!("Bootstrapping...");
         let (node, rogue) = fut.await.unwrap();

@@ -203,7 +203,7 @@ pub enum Message<S, O, P> where S: Send, O: Send, P: Send {
     /// the application state.
     ///
     /// This is useful for local checkpoints.
-    ExecutionFinishedWithAppstate(S),
+    ExecutionFinishedWithAppstate((SeqNo, S)),
     /// We received a timeout from the timeouts layer.
     Timeout(TimeoutKind),
 }

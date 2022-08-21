@@ -5,20 +5,23 @@ use std::time::{Duration, Instant};
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::message::{ConsensusMessage, Header, Message, SystemMessage};
 use crate::bft::communication::{Node, NodeConfig, NodeId};
+use crate::bft::consensus::log::persistent::PersistentLogModeTrait;
 use crate::bft::consensus::log::{Info, Log};
 use crate::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::cst::{install_recovery_state, CollabStateTransfer, CstProgress, CstStatus};
 use crate::bft::error::*;
-use crate::bft::executable::{Executor, ExecutorHandle, Reply, Request, Service, State};
+use crate::bft::executable::{
+    Executor, ExecutorHandle, FollowerReplier, Reply, Request, Service, State,
+};
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::persistentdb::KVDB;
 use crate::bft::proposer::follower_proposer::FollowerProposer;
 use crate::bft::sync::{
     AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus,
 };
-use crate::bft::timeouts::{Timeouts, TimeoutsHandle, TimeoutKind};
+use crate::bft::timeouts::{TimeoutKind, Timeouts, TimeoutsHandle};
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum FollowerPhase {
@@ -44,7 +47,7 @@ pub enum FollowerPhase {
 ///
 /// They might also be used to loosen the load on the quorum replicas when we need a
 /// State transfer as they can request the last checkpoint from these replicas.
-pub struct Follower<S: Service + 'static> {
+pub struct Follower<S: Service + 'static, T: PersistentLogModeTrait> {
     //The current phase of the follower
     phase: FollowerPhase,
     phase_stack: Option<FollowerPhase>,
@@ -61,27 +64,30 @@ pub struct Follower<S: Service + 'static> {
     //Other replicas
     timeouts: Arc<TimeoutsHandle<S>>,
     //The proposer, which in this case wil
-    proposer: Arc<FollowerProposer<S>>,
+    proposer: Arc<FollowerProposer<S, T>>,
     //Synchronizer observer
     synchronizer: Arc<Synchronizer<S>>,
     //The log of messages
-    log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
+    log: Arc<Log<S, T>>,
 
     node: Arc<Node<S::Data>>,
 }
 
-pub struct FollowerConfig<S> {
+pub struct FollowerConfig<S: Service, T: PersistentLogModeTrait> {
     pub service: S,
+
+    pub log_mode: T,
 
     pub global_batch_size: usize,
     pub batch_timeout: u128,
     pub node: NodeConfig,
 }
 
-impl<S: Service + 'static> Follower<S> {
-    pub async fn new(cfg: FollowerConfig<S>) -> Result<Self> {
+impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
+    pub async fn new(cfg: FollowerConfig<S, T>) -> Result<Self> {
         let FollowerConfig {
             service,
+            log_mode,
             global_batch_size,
             batch_timeout,
             node: node_config,
@@ -91,7 +97,15 @@ impl<S: Service + 'static> Follower<S> {
         let n = node_config.n;
         let f = node_config.f;
 
-        let db = KVDB::new(node_config.db_path, vec![])?;
+        let db_path = node_config.db_path;
+
+        let (node, rogue) = Node::bootstrap(node_config).await?;
+
+        let reply_handle = Replier::new(node.id(), node.send_node());
+
+        // start executor
+        let executor =
+            Executor::<S, FollowerReplier>::new(reply_handle, service, node.send_node(), None)?;
 
         //TODO: Load these from DB
         let seq_num = SeqNo::ZERO;
@@ -99,19 +113,18 @@ impl<S: Service + 'static> Follower<S> {
 
         let view = ViewInfo::new(seq_view, n, f)?;
 
-        let log = Log::new(log_node_id, global_batch_size, None, db);
-
-        let (node, rogue) = Node::bootstrap(node_config).await?;
-
-        let reply_handle = Replier::new(node.id(), node.send_node(), log.clone());
-
-        // start executor
-        let executor = Executor::new(reply_handle, log.clone(), service, node.send_node(), None)?;
+        let log = Log::new(
+            log_node_id,
+            global_batch_size,
+            None,
+            executor.clone(),
+            db_path,
+        );
 
         let consensus = Consensus::new_follower(node.id(), seq_num, global_batch_size);
 
         const CST_BASE_DUR: Duration = Duration::from_secs(30);
-        
+
         let cst = CollabStateTransfer::new(CST_BASE_DUR);
 
         let synchronizer = Synchronizer::new_follower(view);
@@ -260,8 +273,8 @@ impl<S: Service + 'static> Follower<S> {
             Message::Timeout(timeout_kind) => {
                 self.timeout_received(timeout_kind);
             }
-            Message::ExecutionFinishedWithAppstate(appstate) => {
-                self.execution_finished_with_appstate(appstate)?;
+            Message::ExecutionFinishedWithAppstate((seq, appstate)) => {
+                self.execution_finished_with_appstate(seq, appstate)?;
             }
         }
 
@@ -378,8 +391,8 @@ impl<S: Service + 'static> Follower<S> {
             Message::Timeout(timeout_kind) => {
                 self.timeout_received(timeout_kind);
             }
-            Message::ExecutionFinishedWithAppstate(appstate) => {
-                self.execution_finished_with_appstate(appstate)?;
+            Message::ExecutionFinishedWithAppstate((seq, appstate)) => {
+                self.execution_finished_with_appstate(seq, appstate)?;
             }
         }
 
@@ -534,7 +547,7 @@ impl<S: Service + 'static> Follower<S> {
             // FIXME: execution layer needs to receive the id
             // attributed by the consensus layer to each op,
             // to execute in order
-            ConsensusStatus::Decided(batch_digest, digests) => {
+            ConsensusStatus::Decided(batch_digest, digests, messages) => {
                 // for digest in digests.iter() {
                 //     self.synchronizer.unwatch_request(digest);
                 // }
@@ -542,20 +555,20 @@ impl<S: Service + 'static> Follower<S> {
                 let new_meta = BatchMeta::new();
                 let meta = std::mem::replace(&mut *self.log.batch_meta().lock(), new_meta);
 
-                let (info, batch) = self.log.finalize_batch(seq, batch_digest, digests)?;
-
-                //Send the finalized batch to the rq finalizer
-                //So everything can be removed from the correct logs and
-                //Given to the service thread to execute
-                //self.rq_finalizer.queue_finalize(info, meta, rqs);
-                match info {
-                    Info::Nil => self.executor.queue_update(meta, batch),
-                    // execute and begin local checkpoint
-                    Info::BeginCheckpoint => {
-                        self.executor.queue_update_and_get_appstate(meta, batch)
+                if let Some((info, batch, meta)) = self.log.finalize_batch(seq, batch_digest, digests, messages, meta)? {
+                    //Send the finalized batch to the rq finalizer
+                    //So everything can be removed from the correct logs and
+                    //Given to the service thread to execute
+                    //self.rq_finalizer.queue_finalize(info, meta, rqs);
+                    match info {
+                        Info::Nil => self.executor.queue_update(meta, batch),
+                        // execute and begin local checkpoint
+                        Info::BeginCheckpoint => {
+                            self.executor.queue_update_and_get_appstate(meta, batch)
+                        }
                     }
+                    .unwrap();
                 }
-                .unwrap();
 
                 self.consensus.next_instance();
             }
@@ -578,8 +591,10 @@ impl<S: Service + 'static> Follower<S> {
         Ok(())
     }
 
-    fn execution_finished_with_appstate(&mut self, appstate: State<S>) -> Result<()> {
-        self.log.finalize_checkpoint(appstate)?;
+    ///Receive a state delivered by the execution layer.
+    /// Also must receive the sequence number of the last consensus instance executed in that state.
+    fn execution_finished_with_appstate(&mut self, seq: SeqNo, appstate: State<S>) -> Result<()> {
+        self.log.finalize_checkpoint(seq, appstate)?;
 
         if self.cst.needs_checkpoint() {
             // status should return CstStatus::Nil,

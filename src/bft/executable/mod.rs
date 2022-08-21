@@ -2,22 +2,23 @@
 
 // XXX: maybe `Box<(BatchMeta, UpdateBatch<O>)>`
 
-use std::sync::{Arc};
 use log::error;
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 use crate::bft::benchmarks::BatchMeta;
-use crate::bft::communication::{channel, NodeId, SendNode};
 use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::{Message, ObserveEventKind, ReplyMessage, SystemMessage};
-use crate::bft::communication::serialize::{
-    //ReplicaDurability,
-    SharedData,
-};
+use crate::bft::communication::serialize::SharedData;
+use crate::bft::communication::{channel, NodeId, SendNode};
 use crate::bft::consensus::log::Log;
 use crate::bft::core::server::client_replier::ReplyHandle;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
+
+use super::consensus::log::persistent::PersistentLogModeTrait;
+use super::ordering::Orderable;
 
 /// Represents a single client update request, to be executed.
 #[derive(Clone)]
@@ -36,7 +37,6 @@ pub struct UpdateReply<P> {
     operation_id: SeqNo,
     payload: P,
 }
-
 
 /// Storage for a batch of client update requests to be executed.
 #[derive(Clone)]
@@ -72,7 +72,6 @@ enum ExecutionRequest<S, O> {
     // read the state of the service
     Read(NodeId),
 }
-
 
 /* NOTE: unused
 
@@ -131,7 +130,11 @@ pub trait Service: Send {
     ///     unimplemented!()
     /// }
     /// ```
-    fn unordered_batched_execution(&self, state:& State<Self>, requests: UnorderedBatch<Request<Self>>) -> BatchReplies<Reply<Self>> {
+    fn unordered_batched_execution(
+        &self,
+        state: &State<Self>,
+        requests: UnorderedBatch<Request<Self>>,
+    ) -> BatchReplies<Reply<Self>> {
         let mut reply_batch = BatchReplies::with_capacity(requests.len());
 
         for unordered_req in requests.into_inner() {
@@ -145,11 +148,7 @@ pub trait Service: Send {
 
     /// Process a user request, producing a matching reply,
     /// meanwhile updating the application state.
-    fn update(
-        &mut self,
-        state: &mut State<Self>,
-        request: Request<Self>,
-    ) -> Reply<Self>;
+    fn update(&mut self, state: &mut State<Self>, request: Request<Self>) -> Reply<Self>;
 
     /// Much like `update()`, but processes a batch of requests.
     ///
@@ -185,176 +184,39 @@ pub trait Service: Send {
 
 const EXECUTING_BUFFER: usize = 8096;
 
-/// Stateful data of the task responsible for executing
-/// client requests.
-pub struct Executor<S: Service + 'static> {
-    service: S,
-    state: State<S>,
-    e_rx: ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>,
-    log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
-    reply_worker: ReplyHandle<S>,
-    send_node: SendNode<S::Data>,
-    observer_handle: Option<ObserverHandle>,
+pub trait ExecutorReplier: Send {
+    fn execution_finished<S: Service>(
+        node: SendNode<S::Data>,
+        seq: Option<SeqNo>,
+        batch: BatchReplies<Reply<S>>,
+    );
 }
 
-/// Represents a handle to the client request executor.
-pub struct ExecutorHandle<S: Service> {
-    e_tx: ChannelSyncTx<ExecutionRequest<State<S>, Request<S>>>,
-}
+pub struct FollowerReplier;
 
-impl<S: Service> ExecutorHandle<S>
-    where
-        S: Service + Send + 'static,
-        Request<S>: Send + 'static,
-        Reply<S>: Send + 'static,
-{
-    /// Sets the current state of the execution layer to the given value.
-    pub fn install_state(&self, state: State<S>, after: Vec<Request<S>>) -> Result<()> {
-        self.e_tx.send(ExecutionRequest::InstallState(state, after))
-            .simple(ErrorKind::Executable)
-    }
+impl ExecutorReplier for FollowerReplier {
+    fn execution_finished<S: Service>(
+        node: SendNode<<S as Service>::Data>,
+        seq: Option<SeqNo>,
+        batch: BatchReplies<Reply<S>>,
+    ) {
+        if let None = seq {
+            //Followers only deliver replies to the unordered requests, since it's not part of the quorum
+            // And the requests it executes are only forwarded to it
 
-    /// Queues a batch of requests `batch` for execution.
-    pub fn queue_update(&self, meta: BatchMeta, batch: UpdateBatch<Request<S>>) -> Result<()> {
-        self.e_tx.send(ExecutionRequest::Update(meta, batch))
-            .simple(ErrorKind::Executable)
-    }
-
-    /// Queues a batch of unordered requests for execution
-    pub fn queue_update_unordered(&self, requests: UnorderedBatch<Request<S>>) -> Result<()> {
-        self.e_tx.send(ExecutionRequest::ExecuteUnordered(requests))
-            .simple(ErrorKind::Executable)
-    }
-
-    /// Same as `queue_update()`, additionally reporting the serialized
-    /// application state.
-    ///
-    /// This is useful during local checkpoints.
-    pub fn queue_update_and_get_appstate(
-        &self,
-        meta: BatchMeta,
-        batch: UpdateBatch<Request<S>>,
-    ) -> Result<()> {
-        self.e_tx.send(ExecutionRequest::UpdateAndGetAppstate(meta, batch))
-            .simple(ErrorKind::Executable)
-    }
-}
-
-impl<S: Service> Clone for ExecutorHandle<S> {
-    fn clone(&self) -> Self {
-        let e_tx = self.e_tx.clone();
-        Self { e_tx }
-    }
-}
-
-impl<S> Executor<S>
-    where
-        S: Service + Send + 'static,
-        State<S>: Send + Clone + 'static,
-        Request<S>: Send + 'static,
-        Reply<S>: Send + 'static,
-{
-    /// Spawns a new service executor into the async runtime.
-    pub fn new(
-        reply_worker: ReplyHandle<S>,
-        log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
-        mut service: S,
-        send_node: SendNode<S::Data>,
-        observer: Option<ObserverHandle>,
-    ) -> Result<ExecutorHandle<S>> {
-        let (e_tx, e_rx) = channel::new_bounded_sync(EXECUTING_BUFFER);
-
-        let state = service.initial_state()?;
-
-        let id = send_node.id();
-
-        let mut exec = Executor {
-            e_rx,
-            service,
-            state,
-            reply_worker,
-            log,
-            send_node,
-            observer_handle: observer,
-        };
-
-        // this thread is responsible for actually executing
-        // requests, avoiding blocking the async runtime
-        //
-        // FIXME: maybe use threadpool to execute instead
-        // FIXME: serialize data on exit
-
-        std::thread::Builder::new().name(format!("{:?} // Executor thread", id)).spawn(move || {
-            while let Ok(exec_req) = exec.e_rx.recv() {
-                match exec_req {
-                    ExecutionRequest::InstallState(checkpoint, after) => {
-                        exec.state = checkpoint;
-                        for req in after {
-                            exec.service.update(&mut exec.state, req);
-                        }
-                    }
-                    ExecutionRequest::Update(meta, batch) => {
-                        let seq_no = batch.seq_no.clone();
-
-                        let reply_batch = exec.service.update_batch(&mut exec.state, batch, meta);
-
-                        // deliver replies
-                        exec.execution_finished(Some(seq_no), reply_batch);
-                    }
-                    ExecutionRequest::UpdateAndGetAppstate(meta, batch) => {
-                        let seq_no = batch.seq_no.clone();
-
-                        let reply_batch = exec.service.update_batch(&mut exec.state, batch, meta);
-
-                        // deliver checkpoint state to the replica
-                        exec.deliver_checkpoint_state();
-
-                        // deliver replies
-                        exec.execution_finished(Some(seq_no), reply_batch);
-                    }
-                    ExecutionRequest::Read(_peer_id) => {
-                        todo!()
-                    }
-                    ExecutionRequest::ExecuteUnordered(batch) => {
-                        let reply_batch = exec.service.unordered_batched_execution(&exec.state, batch);
-
-                        exec.execution_finished(None, reply_batch);
-                    }
-                }
-            }
-        }).expect("Failed to start executor thread");
-
-        Ok(ExecutorHandle { e_tx })
-    }
-
-    fn deliver_checkpoint_state(&self) {
-        let cloned_state = self.state.clone();
-
-        let mut system_tx = self.send_node.loopback_channel().clone();
-
-        let m = Message::ExecutionFinishedWithAppstate(cloned_state);
-
-        if let Err(err) = system_tx.push_request_sync(m) {
-            error!("{:?} // FAILED TO DELIVER CHECKPOINT STATE", self.send_node.id());
-        };
-    }
-
-    fn execution_finished(&mut self, seq: Option<SeqNo>, batch: BatchReplies<Reply<S>>) {
-        let mut send_node = self.send_node.clone();
-
-        {
-            if let Some(seq) = seq {
-                if let Some(observer_handle) = &self.observer_handle {
-                    //Do not notify of unordered events
-                    let observe_event = MessageType::Event(ObserveEventKind::Executed(seq));
-
-                    if let Err(err) = observer_handle.tx().send(observe_event) {
-                        error!("{:?}", err);
-                    }
-                }
-            }
+            ReplicaReplier::execution_finished::<S>(node, seq, batch);
         }
+    }
+}
 
+pub struct ReplicaReplier;
+
+impl ExecutorReplier for ReplicaReplier {
+    fn execution_finished<S: Service>(
+        mut send_node: SendNode<<S as Service>::Data>,
+        seq: Option<SeqNo>,
+        batch: BatchReplies<Reply<S>>,
+    ) {
         crate::bft::threadpool::execute(move || {
             let mut batch = batch.into_inner();
 
@@ -378,11 +240,8 @@ impl<S> Executor<S>
 
                 // store previous reply message and peer id,
                 // for the next iteration
-                let message = SystemMessage::Reply(ReplyMessage::new(
-                    session_id,
-                    operation_id,
-                    payload,
-                ));
+                let message =
+                    SystemMessage::Reply(ReplyMessage::new(session_id, operation_id, payload));
 
                 curr_send = Some((message, peer_id));
             }
@@ -397,7 +256,196 @@ impl<S> Executor<S>
                 unreachable!();
             }
         });
+    }
+}
 
+/// Stateful data of the task responsible for executing
+/// client requests.
+pub struct Executor<S: Service + 'static, T: ExecutorReplier> {
+    service: S,
+    state: State<S>,
+    e_rx: ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>,
+    reply_worker: ReplyHandle<S>,
+    send_node: SendNode<S::Data>,
+    observer_handle: Option<ObserverHandle>,
+
+    p: PhantomData<T>,
+}
+
+/// Represents a handle to the client request executor.
+pub struct ExecutorHandle<S: Service> {
+    e_tx: ChannelSyncTx<ExecutionRequest<State<S>, Request<S>>>,
+}
+
+impl<S: Service> ExecutorHandle<S>
+where
+    S: Service + Send + 'static,
+    Request<S>: Send + 'static,
+    Reply<S>: Send + 'static,
+{
+    /// Sets the current state of the execution layer to the given value.
+    pub fn install_state(&self, state: State<S>, after: Vec<Request<S>>) -> Result<()> {
+        self.e_tx
+            .send(ExecutionRequest::InstallState(state, after))
+            .simple(ErrorKind::Executable)
+    }
+
+    /// Queues a batch of requests `batch` for execution.
+    pub fn queue_update(&self, meta: BatchMeta, batch: UpdateBatch<Request<S>>) -> Result<()> {
+        self.e_tx
+            .send(ExecutionRequest::Update(meta, batch))
+            .simple(ErrorKind::Executable)
+    }
+
+    /// Queues a batch of unordered requests for execution
+    pub fn queue_update_unordered(&self, requests: UnorderedBatch<Request<S>>) -> Result<()> {
+        self.e_tx
+            .send(ExecutionRequest::ExecuteUnordered(requests))
+            .simple(ErrorKind::Executable)
+    }
+
+    /// Same as `queue_update()`, additionally reporting the serialized
+    /// application state.
+    ///
+    /// This is useful during local checkpoints.
+    pub fn queue_update_and_get_appstate(
+        &self,
+        meta: BatchMeta,
+        batch: UpdateBatch<Request<S>>,
+    ) -> Result<()> {
+        self.e_tx
+            .send(ExecutionRequest::UpdateAndGetAppstate(meta, batch))
+            .simple(ErrorKind::Executable)
+    }
+}
+
+impl<S: Service> Clone for ExecutorHandle<S> {
+    fn clone(&self) -> Self {
+        let e_tx = self.e_tx.clone();
+        Self { e_tx }
+    }
+}
+
+impl<S, T> Executor<S, T>
+where
+    S: Service + Send + 'static,
+    State<S>: Send + Clone + 'static,
+    Request<S>: Send + 'static,
+    Reply<S>: Send + 'static,
+    T: ExecutorReplier + 'static,
+{
+    /// Spawns a new service executor into the async runtime.
+    pub fn new(
+        reply_worker: ReplyHandle<S>,
+        mut service: S,
+        send_node: SendNode<S::Data>,
+        observer: Option<ObserverHandle>,
+    ) -> Result<ExecutorHandle<S>> {
+        let (e_tx, e_rx) = channel::new_bounded_sync(EXECUTING_BUFFER);
+
+        let state = service.initial_state()?;
+
+        let id = send_node.id();
+
+        let mut exec: Executor<S, T> = Executor {
+            e_rx,
+            service,
+            state,
+            reply_worker,
+            send_node,
+            observer_handle: observer,
+            p: Default::default(),
+        };
+
+        // this thread is responsible for actually executing
+        // requests, avoiding blocking the async runtime
+        //
+        // FIXME: maybe use threadpool to execute instead
+        // FIXME: serialize data on exit
+
+        std::thread::Builder::new()
+            .name(format!("{:?} // Executor thread", id))
+            .spawn(move || {
+                while let Ok(exec_req) = exec.e_rx.recv() {
+                    match exec_req {
+                        ExecutionRequest::InstallState(checkpoint, after) => {
+                            exec.state = checkpoint;
+                            for req in after {
+                                exec.service.update(&mut exec.state, req);
+                            }
+                        }
+                        ExecutionRequest::Update(meta, batch) => {
+                            let seq_no = batch.seq_no.clone();
+
+                            let reply_batch =
+                                exec.service.update_batch(&mut exec.state, batch, meta);
+
+                            // deliver replies
+                            exec.execution_finished(Some(seq_no), reply_batch);
+                        }
+                        ExecutionRequest::UpdateAndGetAppstate(meta, batch) => {
+                            let seq_no = batch.seq_no.clone();
+
+                            let reply_batch =
+                                exec.service.update_batch(&mut exec.state, batch, meta);
+
+                            // deliver checkpoint state to the replica
+                            exec.deliver_checkpoint_state(seq_no);
+
+                            // deliver replies
+                            exec.execution_finished(Some(seq_no), reply_batch);
+                        }
+                        ExecutionRequest::Read(_peer_id) => {
+                            todo!()
+                        }
+                        ExecutionRequest::ExecuteUnordered(batch) => {
+                            let reply_batch =
+                                exec.service.unordered_batched_execution(&exec.state, batch);
+
+                            exec.execution_finished(None, reply_batch);
+                        }
+                    }
+                }
+            })
+            .expect("Failed to start executor thread");
+
+        Ok(ExecutorHandle { e_tx })
+    }
+
+    ///Clones the current state and delivers it to the application
+    /// Takes a sequence number, which corresponds to the last executed consensus instance before we performed the checkpoint
+    fn deliver_checkpoint_state(&self, seq: SeqNo) {
+        let cloned_state = self.state.clone();
+
+        let mut system_tx = self.send_node.loopback_channel().clone();
+
+        let m = Message::ExecutionFinishedWithAppstate((seq, cloned_state));
+
+        if let Err(err) = system_tx.push_request_sync(m) {
+            error!(
+                "{:?} // FAILED TO DELIVER CHECKPOINT STATE",
+                self.send_node.id()
+            );
+        };
+    }
+
+    fn execution_finished(&self, seq: Option<SeqNo>, batch: BatchReplies<Reply<S>>) {
+        let mut send_node = self.send_node.clone();
+
+        {
+            if let Some(seq) = seq {
+                if let Some(observer_handle) = &self.observer_handle {
+                    //Do not notify of unordered events
+                    let observe_event = MessageType::Event(ObserveEventKind::Executed(seq));
+
+                    if let Err(err) = observer_handle.tx().send(observe_event) {
+                        error!("{:?}", err);
+                    }
+                }
+            }
+        }
+
+        T::execution_finished::<S>(send_node, seq, batch);
         //self.reply_worker.send(batch).unwrap();
     }
 }
@@ -405,16 +453,27 @@ impl<S> Executor<S>
 impl<O> UpdateBatch<O> {
     /// Returns a new, empty batch of requests.
     pub fn new(seq_no: SeqNo) -> Self {
-        Self { seq_no, inner: Vec::new() }
+        Self {
+            seq_no,
+            inner: Vec::new(),
+        }
     }
 
     pub fn new_with_cap(seq_no: SeqNo, capacity: usize) -> Self {
-        Self { seq_no, inner: Vec::with_capacity(capacity) }
+        Self {
+            seq_no,
+            inner: Vec::with_capacity(capacity),
+        }
     }
 
     /// Adds a new update request to the batch.
     pub fn add(&mut self, from: NodeId, session_id: SeqNo, operation_id: SeqNo, operation: O) {
-        self.inner.push(Update { from, session_id, operation_id, operation });
+        self.inner.push(Update {
+            from,
+            session_id,
+            operation_id,
+            operation,
+        });
     }
 
     /// Returns the inner storage.
@@ -425,6 +484,12 @@ impl<O> UpdateBatch<O> {
     /// Returns the length of the batch.
     pub fn len(&self) -> usize {
         self.inner.len()
+    }
+}
+
+impl<O> Orderable for UpdateBatch<O> {
+    fn sequence_number(&self) -> SeqNo {
+        self.seq_no
     }
 }
 
@@ -435,12 +500,19 @@ impl<O> UnorderedBatch<O> {
     }
 
     pub fn new_with_cap(capacity: usize) -> Self {
-        Self { inner: Vec::with_capacity(capacity) }
+        Self {
+            inner: Vec::with_capacity(capacity),
+        }
     }
 
     /// Adds a new update request to the batch.
     pub fn add(&mut self, from: NodeId, session_id: SeqNo, operation_id: SeqNo, operation: O) {
-        self.inner.push(Update { from, session_id, operation_id, operation });
+        self.inner.push(Update {
+            from,
+            session_id,
+            operation_id,
+            operation,
+        });
     }
 
     /// Returns the inner storage.
@@ -454,7 +526,6 @@ impl<O> UnorderedBatch<O> {
     }
 }
 
-
 impl<O> AsRef<[Update<O>]> for UpdateBatch<O> {
     fn as_ref(&self) -> &[Update<O>] {
         &self.inner[..]
@@ -464,7 +535,12 @@ impl<O> AsRef<[Update<O>]> for UpdateBatch<O> {
 impl<O> Update<O> {
     /// Returns the inner types stored in this `Update`.
     pub fn into_inner(self) -> (NodeId, SeqNo, SeqNo, O) {
-        (self.from, self.session_id, self.operation_id, self.operation)
+        (
+            self.from,
+            self.session_id,
+            self.operation_id,
+            self.operation,
+        )
     }
 
     /// Returns a reference to this operation in this `Update`.
@@ -483,19 +559,25 @@ impl<P> BatchReplies<P> {
 
     /// Returns a new, empty batch of replies, with the given capacity.
     pub fn with_capacity(n: usize) -> Self {
-        Self { inner: Vec::with_capacity(n) }
+        Self {
+            inner: Vec::with_capacity(n),
+        }
     }
 
     /// Adds a new update reply to the batch.
     pub fn add(&mut self, to: NodeId, session_id: SeqNo, operation_id: SeqNo, payload: P) {
-        self.inner.push(UpdateReply { to, session_id, operation_id, payload });
+        self.inner.push(UpdateReply {
+            to,
+            session_id,
+            operation_id,
+            payload,
+        });
     }
 
     /// Returns the inner storage.
     pub fn into_inner(self) -> Vec<UpdateReply<P>> {
         self.inner
     }
-
 
     /// Returns the length of the batch.
     pub fn len(&self) -> usize {

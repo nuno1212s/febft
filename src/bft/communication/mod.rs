@@ -24,7 +24,6 @@ use futures::io::{
 };
 use futures_timer::Delay;
 use intmap::IntMap;
-use log::kv::Source;
 use tracing::{debug, instrument, error};
 use parking_lot::{RwLock};
 
@@ -315,7 +314,7 @@ pub struct NodeConfig {
     ///Statistics for communications
     pub comm_stats: Option<Arc<CommStats>>,
     ///Path for the db file
-    pub db_path: &'static str
+    pub db_path: &'static str,
 }
 
 // max no. of messages allowed in the channel
@@ -439,7 +438,7 @@ impl<D> Node<D>
                 .wrapped(ErrorKind::Communication);
         }
 
-        ///Initialize the client facing server
+        //Initialize the client facing server
         let client_listener = Self::setup_client_facing_socket(id, &cfg).await?;
 
         let replica_listener = Self::setup_replica_facing_socket(id, &cfg).await?;
@@ -760,10 +759,10 @@ impl<D> Node<D>
     #[inline]
     fn send_impl(
         message: SystemMessage<D::State, D::Request, D::Reply>,
-        mut send_to: SendTo<D>,
+        send_to: SendTo<D>,
         my_id: NodeId,
         target: NodeId,
-        first_cli: NodeId,
+        _first_cli: NodeId,
         nonce: u64,
         comm_stats: Option<(Arc<CommStats>, Instant)>,
     ) {
@@ -928,7 +927,7 @@ impl<D> Node<D>
         mut messages: IntMap<StoredSerializedSystemMessage<D>>,
         my_send_to: Option<SerializedSendTo<D>>,
         other_send_tos: SerializedSendTos<D>,
-        first_client: NodeId,
+        _first_client: NodeId,
         comm_stats: Option<(Arc<CommStats>, Instant)>,
     ) {
         threadpool::execute(move || {
@@ -965,7 +964,7 @@ impl<D> Node<D>
             }
 
             // send to others
-            for mut send_to in other_send_tos {
+            for send_to in other_send_tos {
                 let id = match &send_to {
                     SerializedSendTo::Peers { id, .. } => *id,
                     _ => unreachable!(),

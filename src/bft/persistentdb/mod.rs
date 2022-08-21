@@ -56,7 +56,7 @@ impl KVDB {
         todo!()
     }
 
-    pub fn delete<T>(&self, prefix: &'static str, key: T) -> Result<()>
+    pub fn erase<T>(&self, prefix: &'static str, key: T) -> Result<()>
     where
         T: AsRef<[u8]>,
     {

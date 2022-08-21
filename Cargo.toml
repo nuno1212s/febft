@@ -13,6 +13,7 @@ readme = "README.md"
 [features]
 # Consult the crate documentation for more details on the features.
 default = [
+    "expose_impl",
     "async_runtime_async_std",
     "threadpool_crossbeam",
     "socket_tokio_tcp",
@@ -127,6 +128,8 @@ log = "0.4.14"
 env_logger = "0.8"
 tracing = "0.1.32"
 tracing-subscriber = { version = "0.3.11", features = ["fmt"] }
+
+thiserror="1.0.32"
 
 # https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.release]

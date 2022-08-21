@@ -1,13 +1,14 @@
 pub mod consensus_backlog;
 
 use std::convert::TryInto;
-use std::marker::PhantomData;
 
+use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
 
 use log::error;
 
+use crate::bft::communication::channel;
 use crate::bft::communication::channel::ChannelSyncRx;
 use crate::bft::communication::message::ConsensusMessage;
 use crate::bft::communication::message::ConsensusMessageKind;
@@ -18,7 +19,7 @@ use crate::bft::communication::serialize::SharedData;
 
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
-use crate::bft::cst::install_recovery_state;
+
 use crate::bft::error::*;
 use crate::bft::executable::ExecutorHandle;
 use crate::bft::globals::ReadOnly;
@@ -30,6 +31,7 @@ use crate::bft::{
     persistentdb::KVDB,
 };
 
+use self::consensus_backlog::ConsensusBackLogHandle;
 use self::consensus_backlog::ConsensusBacklog;
 
 use super::Checkpoint;
@@ -52,18 +54,20 @@ pub const CF_COMMITS: &str = "commits";
 ///The general type for a callback.
 /// Callbacks are optional and can be used when you want to
 /// execute a function when the logger stops finishes the computation
-pub type CallbackType = Box<dyn FnOnce(Result<ResponseMsg>)>;
+pub type CallbackType = Box<dyn FnOnce(Result<ResponseMsg>) + Send>;
 
+#[derive(Clone)]
 pub enum PersistentLogMode<S: Service> {
     ///The strict log mode is meant to indicate that the consensus can only be finalized and the
     /// requests executed when the replica has all the information persistently stored.
     ///
     /// This allows for all replicas to crash and still be able to recover from their own stored
-    /// local state, meaning we can always recover
+    /// local state, meaning we can always recover without losing any piece of replied to information
+    /// So we have the guarantee that once a request has been replied to, it will never be lost (given f byzantine faults).
     ///
     /// Performance will be dependent on the speed of the datastore as the consensus will only move to the
     /// executing phase once all requests have been successfully stored.
-    Strict(ConsensusBacklog<S>),
+    Strict(ConsensusBackLogHandle<S>),
 
     ///Optimistic mode relies a lot more on the assumptions that are made by the BFT algorithm in order
     /// to maximize the performance.
@@ -79,59 +83,39 @@ pub enum PersistentLogMode<S: Service> {
     /// other replicas of the system, which would degrade performance. We can take our incomplete state and
     /// just fill in the blanks using the state transfer algorithm
     Optimistic,
+
+    ///Perform no persistent logging to the database and rely only on the prospect that 
+    /// We are always able to rebuild our state from other replicas that may be online
+    None
 }
 
-/// Messages that are sent to the logging thread to log specific requests
-pub type ChannelMsg<S> = (Message<S>, Option<CallbackType>);
-
-pub type InstallState<S> = (
-    SeqNo,
-    Arc<ReadOnly<Checkpoint<State<S>>>>,
-    DecisionLog<Request<S>>,
-);
-
-pub enum Message<S: Service> {
-    //Persist a new view into the persistent storage
-    View(ViewInfo),
-
-    //Persist a new sequence number as the consensus instance has been committed and is therefore ready to be persisted
-    Committed(SeqNo),
-
-    //Persist a given message into storage
-    Message(Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>),
-
-    //Persist a given state into storage.
-    Checkpoint(Arc<ReadOnly<Checkpoint<State<S>>>>),
-
-    //Remove all associated stored messages for this given seq number
-    Invalidate(SeqNo),
-
-    //Install a recovery state received from CST
-    InstallState(InstallState<S>),
+pub trait PersistentLogModeTrait: Send {
+    fn init_persistent_log<S>(executor: ExecutorHandle<S>) -> PersistentLogMode<S>
+    where
+        S: Service + 'static;
 }
 
-pub type ResponseMsg = ResponseMessage;
+///Strict log mode initializer
+pub struct StrictPersistentLog {}
 
-pub enum ResponseMessage {
-    ///Notify that we have persisted the view with the given sequence number
-    ViewPersisted(SeqNo),
+impl PersistentLogModeTrait for StrictPersistentLog {
+    fn init_persistent_log<S>(executor: ExecutorHandle<S>) -> PersistentLogMode<S>
+    where
+        S: Service + 'static,
+    {
+        let handle = ConsensusBacklog::init_backlog(executor);
 
-    ///Notifies that we have persisted the sequence number that has been persisted (Only the actual sequence number)
-    /// Not related to actually persisting messages
-    CommittedPersisted(SeqNo),
+        PersistentLogMode::Strict(handle)
+    }
+}
 
-    ///Notifies that a message with a given SeqNo and a given unique identifier for the message
-    /// TODO: Decide this unique identifier
-    WroteMessage(SeqNo, Digest),
+///Optimistic log mode intializer
+pub struct OptimisticPersistentLog {}
 
-    //
-    InstalledState(SeqNo),
-
-    /// Notifies that all messages relating to the given sequence number have been destroyed
-    InvalidationPersisted(SeqNo),
-
-    /// Notifies that the given checkpoint was persisted into the database
-    Checkpointed(SeqNo),
+impl PersistentLogModeTrait for OptimisticPersistentLog {
+    fn init_persistent_log<S: Service>(_: ExecutorHandle<S>) -> PersistentLogMode<S> {
+        PersistentLogMode::Optimistic
+    }
 }
 
 ///How should the data be written and response delivered?
@@ -147,34 +131,96 @@ pub enum WriteMode {
     Sync,
 }
 
-pub struct PersistentLog<S: Service> {
+#[derive(Clone)]
+///TODO: Handle sequence numbers that loop the u32 range.
+/// This is the main reference to the persistent log, used to push data to it
+pub struct PersistentLog<S: Service, T>
+where
+    T: PersistentLogModeTrait,
+{
     ///The persistency mode for this log
     persistency_mode: PersistentLogMode<S>,
 
+    //Handle to send the work to the worker thread
     tx: ChannelSyncTx<ChannelMsg<S>>,
 
     ///The persistent KV-DB to be used
     db: KVDB,
+
+    p: PhantomData<T>,
 }
 
-impl<S: Service> PersistentLog<S> {
-    pub fn init_log<T>(log_mode: PersistentLogMode<S>, db_path: T) -> Result<()>
+///We can do this thanks to two primitives
+unsafe impl<S, T> Sync for PersistentLog<S, T>
+where
+    S: Service,
+    T: PersistentLogModeTrait,
+{
+}
+
+impl<S: Service + 'static, T> PersistentLog<S, T>
+where
+    T: PersistentLogModeTrait,
+{
+    pub fn init_log<K>(executor: ExecutorHandle<S>, db_path: K) -> Result<Self>
     where
-        T: AsRef<Path>,
+        K: AsRef<Path>,
     {
         let prefixes = vec![CF_OTHER, CF_PREPREPARES, CF_PREPARES, CF_COMMITS];
 
+        let log_mode = T::init_persistent_log(executor);
+
+        let mut response_txs = vec![];
+
+        match &log_mode {
+            PersistentLogMode::Strict(handle) => response_txs.push(handle.logger_tx().clone()),
+            _ => {}
+        }
+
         let kvdb = KVDB::new(db_path, prefixes)?;
 
-        Ok(())
+        let (tx, rx) = channel::new_bounded_sync(1024);
+
+        let worker = PersistentLogWorker {
+            request_rx: rx,
+            response_txs,
+            db: kvdb.clone(),
+        };
+
+        //TODO: Start worker
+
+        Ok(Self {
+            persistency_mode: log_mode,
+            tx,
+            db: kvdb,
+            p: Default::default(),
+        })
+    }
+
+    pub fn kind(&self) -> &PersistentLogMode<S> {
+        &self.persistency_mode
     }
 
     pub fn queue_committed(&self, write_mode: WriteMode, seq: SeqNo) -> Result<()> {
-        todo!()
+        match write_mode {
+            WriteMode::Async(callback) => {
+                self.tx.send((Message::Committed(seq), callback));
+
+                todo!()
+            }
+            WriteMode::Sync => write_latest_seq(&self.db, seq),
+        }
     }
 
-    pub fn queue_view_number(&self, write_mode: WriteMode, view_seq: SeqNo) -> Result<()> {
-        todo!()
+    pub fn queue_view_number(&self, write_mode: WriteMode, view_seq: ViewInfo) -> Result<()> {
+        match write_mode {
+            WriteMode::Async(callback) => {
+                self.tx.send((Message::View(view_seq), callback));
+
+                todo!()
+            }
+            WriteMode::Sync => write_latest_view_seq(&self.db, view_seq.sequence_number()),
+        }
     }
 
     pub fn queue_message(
@@ -218,6 +264,7 @@ impl<S: Service> PersistentLog<S> {
     }
 }
 
+///A worker for the persistent logging
 pub struct PersistentLogWorker<S: Service> {
     request_rx: ChannelSyncRx<ChannelMsg<S>>,
 
@@ -239,19 +286,34 @@ impl<S: Service> PersistentLogWorker<S> {
 
             let response = self.exec_req(request);
 
-            
+            if let Some(callback) = callback {
+                (callback)(response);
+            } else {
+                match response {
+                    Ok(response) => {
+                        for ele in &self.response_txs {
+                            if let Err(err) = ele.send(response.clone()) {
+                                error!("Failed to deliver response to log. {:?}", err);
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        error!("Failed to execute persistent log request because {:?}", err);
+                    }
+                }
+            }
         }
     }
 
     fn exec_req(&self, message: Message<S>) -> Result<ResponseMsg> {
         Ok(match message {
             Message::View(view) => {
-                update_latest_view_seq(&self.db, view.sequence_number())?;
+                write_latest_view_seq(&self.db, view.sequence_number())?;
 
                 ResponseMsg::ViewPersisted(view.sequence_number())
             }
             Message::Committed(seq) => {
-                update_latest_seq(&self.db, seq)?;
+                write_latest_seq(&self.db, seq)?;
 
                 ResponseMsg::CommittedPersisted(seq)
             }
@@ -281,9 +343,65 @@ impl<S: Service> PersistentLogWorker<S> {
     }
 }
 
+/// Messages that are sent to the logging thread to log specific requests
+pub type ChannelMsg<S> = (Message<S>, Option<CallbackType>);
+
+/// The type of the installed state information
+pub type InstallState<S> = (
+    SeqNo,
+    Arc<ReadOnly<Checkpoint<State<S>>>>,
+    DecisionLog<Request<S>>,
+);
+
+pub enum Message<S: Service> {
+    //Persist a new view into the persistent storage
+    View(ViewInfo),
+
+    //Persist a new sequence number as the consensus instance has been committed and is therefore ready to be persisted
+    Committed(SeqNo),
+
+    //Persist a given message into storage
+    Message(Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>),
+
+    //Persist a given state into storage.
+    Checkpoint(Arc<ReadOnly<Checkpoint<State<S>>>>),
+
+    //Remove all associated stored messages for this given seq number
+    Invalidate(SeqNo),
+
+    //Install a recovery state received from CST
+    InstallState(InstallState<S>),
+}
+
+pub type ResponseMsg = ResponseMessage;
+
+#[derive(Clone)]
+pub enum ResponseMessage {
+    ///Notify that we have persisted the view with the given sequence number
+    ViewPersisted(SeqNo),
+
+    ///Notifies that we have persisted the sequence number that has been persisted (Only the actual sequence number)
+    /// Not related to actually persisting messages
+    CommittedPersisted(SeqNo),
+
+    ///Notifies that a message with a given SeqNo and a given unique identifier for the message
+    /// TODO: Decide this unique identifier
+    WroteMessage(SeqNo, Digest),
+
+    //
+    InstalledState(SeqNo),
+
+    /// Notifies that all messages relating to the given sequence number have been destroyed
+    InvalidationPersisted(SeqNo),
+
+    /// Notifies that the given checkpoint was persisted into the database
+    Checkpointed(SeqNo),
+}
+
+///Write a state provided by the CST protocol into the persistent DB
 fn write_state<S: Service>(db: &KVDB, (view, checkpoint, dec_log): InstallState<S>) -> Result<()> {
     //Update the view number to the current view number
-    update_latest_view_seq(db, view)?;
+    write_latest_view_seq(db, view)?;
 
     //Write the received checkpoint into persistent storage and delete all existing
     //Messages that were stored as they will be replaced by the new log
@@ -304,6 +422,7 @@ fn write_state<S: Service>(db: &KVDB, (view, checkpoint, dec_log): InstallState<
     Ok(())
 }
 
+///Read the latest state from the persistent DB
 fn read_latest_state<S: Service>(db: &KVDB) -> Result<Option<InstallState<S>>> {
     let view = read_latest_view_seq(db)?;
 
@@ -337,13 +456,14 @@ fn read_latest_state<S: Service>(db: &KVDB) -> Result<Option<InstallState<S>>> {
     }
 
     let checkpoint = Arc::new(ReadOnly::new(Checkpoint {
-        seq: last_seq,
+        seq: first_seq,
         appstate: state.unwrap(),
     }));
 
     Ok(Some((view.unwrap(), checkpoint, dec_log)))
 }
 
+///Read the latest checkpoint stored in persistent storage
 fn read_latest_checkpoint<S: Service>(db: &KVDB) -> Result<Option<State<S>>> {
     let checkpoint = db.get(CF_OTHER, LATEST_STATE)?;
 
@@ -356,6 +476,9 @@ fn read_latest_checkpoint<S: Service>(db: &KVDB) -> Result<Option<State<S>>> {
     }
 }
 
+///Write a checkpoint to persistent storage.
+/// Deletes all previous messages from the log as they no longer pertain to the current checkpoint.
+/// Sets the first seq to the seq number of the last message the state contains
 fn write_checkpoint<S: Service>(db: &KVDB, state: &State<S>, last_seq: SeqNo) -> Result<()> {
     let mut buf = Vec::new();
 
@@ -366,9 +489,21 @@ fn write_checkpoint<S: Service>(db: &KVDB, state: &State<S>, last_seq: SeqNo) ->
     //Only remove the previous operations after persisting the checkpoint,
     //To assert no information can be lost
     let start = db.get(CF_OTHER, FIRST_SEQ)?;
+
+    //Update the first seq number, oficially making all of the previous messages useless
+    //And ready to be deleted
+    db.set(
+        CF_OTHER,
+        FIRST_SEQ,
+        u32::from(last_seq.next()).to_le_bytes(),
+    )?;
+
+    //We want the end to be the last message contained inside the checkpoint.
+    //Not the current message end, which can already be far ahead of the current checkpoint,
+    //Which would mean we could lose information.
     let end = u32::from(last_seq).to_le_bytes();
 
-    match (&start) {
+    match &start {
         Some(start) => {
             //Erase the logs from the previous
             db.erase_range(CF_COMMITS, start, end)?;
@@ -382,8 +517,6 @@ fn write_checkpoint<S: Service>(db: &KVDB, state: &State<S>, last_seq: SeqNo) ->
             ));
         }
     }
-
-    db.erase_keys(CF_OTHER, [LATEST_SEQ, FIRST_SEQ])?;
 
     Ok(())
 }
@@ -421,6 +554,7 @@ fn read_message_for_range<S: Service>(
     Ok(messages)
 }
 
+///Read all the messages for a given consensus instance
 fn read_messages_for_seq<S: Service>(
     db: &KVDB,
     msg_seq: SeqNo,
@@ -452,6 +586,7 @@ fn read_messages_for_seq<S: Service>(
     Ok(messages)
 }
 
+///Parse a given message from its bytes representation
 fn parse_message<S: Service>(
     key: Vec<u8>,
     value: Vec<u8>,
@@ -463,6 +598,7 @@ fn parse_message<S: Service>(
     Ok(StoredMessage::new(header, message))
 }
 
+///Write the given message into the keystore
 fn write_message<S: Service>(
     db: &KVDB,
     message: &StoredMessage<ConsensusMessage<Request<S>>>,
@@ -486,6 +622,7 @@ fn write_message<S: Service>(
     Ok(())
 }
 
+///Delete all msgs relating to a given sequence number
 fn delete_all_msgs_for_seq<S: Service>(db: &KVDB, msg_seq: SeqNo) -> Result<()> {
     let start_key = make_msg_seq(msg_seq, None);
 
@@ -524,7 +661,7 @@ fn read_latest_seq(db: &KVDB) -> Result<Option<SeqNo>> {
     }
 }
 
-fn update_latest_seq(db: &KVDB, seq: SeqNo) -> Result<()> {
+fn write_latest_seq(db: &KVDB, seq: SeqNo) -> Result<()> {
     let seq_no: u32 = seq.into();
 
     if !db.exists(CF_OTHER, FIRST_SEQ)? {
@@ -557,7 +694,7 @@ fn read_seq_from_vec(data: Vec<u8>) -> Result<SeqNo> {
     Ok(seq.into())
 }
 
-fn update_latest_view_seq(db: &KVDB, seq: SeqNo) -> Result<()> {
+fn write_latest_view_seq(db: &KVDB, seq: SeqNo) -> Result<()> {
     let seq_no: u32 = seq.into();
 
     db.set(CF_OTHER, LATEST_VIEW_SEQ, seq_no.to_le_bytes())

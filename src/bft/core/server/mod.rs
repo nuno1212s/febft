@@ -1,5 +1,6 @@
 //! Contains the server side core protocol logic of `febft`.
 
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -16,6 +17,7 @@ use crate::bft::communication::message::{
     StoredMessage, SystemMessage,
 };
 use crate::bft::communication::{Node, NodeConfig, NodeId};
+use crate::bft::consensus::log::persistent::PersistentLogModeTrait;
 use crate::bft::consensus::log::{Info, Log};
 use crate::bft::consensus::{Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::core::server::client_replier::Replier;
@@ -23,7 +25,9 @@ use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::core::server::rq_finalizer::{RqFinalizer, RqFinalizerHandle};
 use crate::bft::cst::{install_recovery_state, CollabStateTransfer, CstProgress, CstStatus};
 use crate::bft::error::*;
-use crate::bft::executable::{Executor, ExecutorHandle, Reply, Request, Service, State};
+use crate::bft::executable::{
+    Executor, ExecutorHandle, ReplicaReplier, Reply, Request, Service, State,
+};
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::persistentdb::KVDB;
 use crate::bft::proposer::Proposer;
@@ -111,7 +115,7 @@ impl ViewInfo {
 }
 
 /// Represents a replica in `febft`.
-pub struct Replica<S: Service + 'static> {
+pub struct Replica<S: Service + 'static, T: PersistentLogModeTrait> {
     phase: ReplicaPhase,
     // this value is primarily used to switch from
     // state transfer back to a view change
@@ -128,8 +132,8 @@ pub struct Replica<S: Service + 'static> {
     // This can only occur when we are in the normal phase of the state machine
     unordered_rq_guard: Arc<AtomicBool>,
     cst: CollabStateTransfer<S>,
-    log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
-    proposer: Arc<Proposer<S>>,
+    log: Arc<Log<S, T>>,
+    proposer: Arc<Proposer<S, T>>,
     node: Arc<Node<S::Data>>,
     rq_finalizer: RqFinalizerHandle<S>,
     //A handle to the observer worker thread
@@ -138,7 +142,7 @@ pub struct Replica<S: Service + 'static> {
 
 /// Represents a configuration used to bootstrap a `Replica`.
 // TODO: load files from persistent storage
-pub struct ReplicaConfig<S> {
+pub struct ReplicaConfig<S: Service, T: PersistentLogModeTrait> {
     /// The application logic.
     pub service: S,
 
@@ -152,19 +156,22 @@ pub struct ReplicaConfig<S> {
     pub global_batch_size: usize,
     ///The time limit for creating that batch, in micro seconds
     pub batch_timeout: u128,
+    ///The logging mode
+    pub log_mode: PhantomData<T>,
     /// Check out the docs on `NodeConfig`.
     pub node: NodeConfig,
 }
 
-impl<S> Replica<S>
+impl<S, T> Replica<S, T>
 where
     S: Service + Send + 'static,
     State<S>: Send + Clone + 'static,
     Request<S>: Send + Clone + 'static,
     Reply<S>: Send + 'static,
+    T: PersistentLogModeTrait + 'static,
 {
     /// Bootstrap a replica in `febft`.
-    pub async fn bootstrap(cfg: ReplicaConfig<S>) -> Result<Self> {
+    pub async fn bootstrap(cfg: ReplicaConfig<S, T>) -> Result<Self> {
         let ReplicaConfig {
             next_consensus_seq,
             global_batch_size,
@@ -172,6 +179,7 @@ where
             node: node_config,
             service,
             view,
+            log_mode,
         } = cfg;
 
         let per_pool_batch_timeout = node_config.batch_timeout_micros;
@@ -182,7 +190,7 @@ where
         let n = node_config.n;
         let f = node_config.f;
 
-        let db = KVDB::new(node_config.db_path, vec![])?;
+        let db_path = node_config.db_path;
 
         let (node, rogue) = Node::bootstrap(node_config).await?;
 
@@ -190,11 +198,22 @@ where
         // connect to peer nodes
         let observer_handle = observer::start_observers(node.send_node());
 
+        let reply_handle = Replier::new(node.id(), node.send_node());
+
+        // start executor
+        let executor = Executor::<S, ReplicaReplier>::new(
+            reply_handle,
+            service,
+            node.send_node(),
+            Some(observer_handle.clone()),
+        )?;
+
         let mut log = Log::new(
             log_node_id,
             global_batch_size,
             Some(observer_handle.clone()),
-            db,
+            executor.clone(),
+            db_path,
         );
 
         // system params
@@ -202,17 +221,6 @@ where
         let view = ViewInfo::new(view, n, f)?;
 
         let node_clone = node.clone();
-
-        let reply_handle = Replier::new(node.id(), node.send_node(), log.clone());
-
-        // start executor
-        let executor = Executor::new(
-            reply_handle,
-            log.clone(),
-            service,
-            node.send_node(),
-            Some(observer_handle.clone()),
-        )?;
 
         // start timeouts handler
         let timeouts = Timeouts::new(Arc::clone(node.loopback_channel()));
@@ -633,8 +641,8 @@ where
             Message::Timeout(timeout_kind) => {
                 self.timeout_received(timeout_kind);
             }
-            Message::ExecutionFinishedWithAppstate(appstate) => {
-                self.execution_finished_with_appstate(appstate)?;
+            Message::ExecutionFinishedWithAppstate((seq, appstate)) => {
+                self.execution_finished_with_appstate(seq, appstate)?;
             }
         }
 
@@ -742,8 +750,8 @@ where
             Message::Timeout(timeout_kind) => {
                 self.timeout_received(timeout_kind);
             }
-            Message::ExecutionFinishedWithAppstate(appstate) => {
-                self.execution_finished_with_appstate(appstate)?;
+            Message::ExecutionFinishedWithAppstate((seq, appstate)) => {
+                self.execution_finished_with_appstate(seq, appstate)?;
             }
         }
 
@@ -784,7 +792,7 @@ where
             // FIXME: execution layer needs to receive the id
             // attributed by the consensus layer to each op,
             // to execute in order
-            ConsensusStatus::Decided(batch_digest, digests) => {
+            ConsensusStatus::Decided(batch_digest, digests, needed_messages) => {
                 // for digest in digests.iter() {
                 //     self.synchronizer.unwatch_request(digest);
                 // }
@@ -792,20 +800,22 @@ where
                 let new_meta = BatchMeta::new();
                 let meta = std::mem::replace(&mut *self.log.batch_meta().lock(), new_meta);
 
-                let (info, batch) = self.log.finalize_batch(seq, batch_digest, digests)?;
-
-                //Send the finalized batch to the rq finalizer
-                //So everything can be removed from the correct logs and
-                //Given to the service thread to execute
-                //self.rq_finalizer.queue_finalize(info, meta, rqs);
-                match info {
-                    Info::Nil => self.executor.queue_update(meta, batch),
-                    // execute and begin local checkpoint
-                    Info::BeginCheckpoint => {
-                        self.executor.queue_update_and_get_appstate(meta, batch)
+                if let Some((info, batch, meta)) = 
+                self.log.finalize_batch(seq, batch_digest, digests, needed_messages, meta)?
+                {
+                    //Send the finalized batch to the rq finalizer
+                    //So everything can be removed from the correct logs and
+                    //Given to the service thread to execute
+                    //self.rq_finalizer.queue_finalize(info, meta, rqs);
+                    match info {
+                        Info::Nil => self.executor.queue_update(meta, batch),
+                        // execute and begin local checkpoint
+                        Info::BeginCheckpoint => {
+                            self.executor.queue_update_and_get_appstate(meta, batch)
+                        }
                     }
+                    .unwrap();
                 }
-                .unwrap();
 
                 self.consensus.next_instance();
             }
@@ -828,8 +838,8 @@ where
         Ok(())
     }
 
-    fn execution_finished_with_appstate(&mut self, appstate: State<S>) -> Result<()> {
-        self.log.finalize_checkpoint(appstate)?;
+    fn execution_finished_with_appstate(&mut self, seq: SeqNo, appstate: State<S>) -> Result<()> {
+        self.log.finalize_checkpoint(seq,appstate)?;
         if self.cst.needs_checkpoint() {
             // status should return CstStatus::Nil,
             // which does not need to be handled

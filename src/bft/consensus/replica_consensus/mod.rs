@@ -33,7 +33,7 @@ use crate::bft::{
 use crate::bft::ordering::tbo_pop_message;
 
 use super::{
-    log::Log, AbstractConsensus, Consensus, ConsensusAccessory, ConsensusGuard,
+    log::{Log, persistent::PersistentLogModeTrait}, AbstractConsensus, Consensus, ConsensusAccessory, ConsensusGuard,
     ConsensusPollStatus, ProtoPhase,
 };
 
@@ -153,20 +153,20 @@ impl<S: Service + 'static> Consensus<S> {
         }
     }
 
-    pub(super) fn handle_preparing_no_quorum(
+    pub(super) fn handle_preparing_no_quorum<T>(
         &mut self,
         _curr_view: &ViewInfo,
-        _log: &Log<State<S>, Request<S>, Reply<S>>,
+        _log: &Log<S, T>,
         _node: &Node<S::Data>,
-    ) {
+    ) where T: PersistentLogModeTrait {
     }
 
-    pub(super) fn handle_preparing_quorum(
+    pub(super) fn handle_preparing_quorum<T>(
         &mut self,
         curr_view: &ViewInfo,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<S, T>,
         node: &Node<S::Data>,
-    ) {
+    ) where T: PersistentLogModeTrait {
         let seq = self.sequence_number();
         let node_id = self.node_id;
 
@@ -293,10 +293,10 @@ impl<S: Service + 'static> Consensus<S> {
         }
     }
 
-    pub(super) fn handle_poll_preparing_requests(
+    pub(super) fn handle_poll_preparing_requests<T>(
         &mut self,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
-    ) -> ConsensusPollStatus<Request<S>> {
+        log: &Log<S, T>,
+    ) -> ConsensusPollStatus<Request<S>> where T: PersistentLogModeTrait {
         match &mut self.acessory {
             ConsensusAccessory::Replica(rep) => {
                 let iterator = rep

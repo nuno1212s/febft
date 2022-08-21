@@ -19,6 +19,7 @@ use crate::bft::communication::message::{
 
 use crate::bft::communication::{Node, NodeId};
 use crate::bft::consensus::log::Log;
+use crate::bft::consensus::log::persistent::PersistentLogModeTrait;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::executable::{Reply, Request, Service, State};
@@ -53,14 +54,14 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         }
     }
 
-    pub(super) fn handle_stopping_quorum(
+    pub(super) fn handle_stopping_quorum<T>(
         &self,
         base_sync: &super::Synchronizer<S>,
         current_view: &ViewInfo,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        log: &Log<S, T>,
         timeouts: &TimeoutsHandle<S>,
         node: &Node<S::Data>,
-    ) {
+    ) where T: PersistentLogModeTrait {
         // NOTE:
         // - add requests from STOP into client requests
         //   in the log, to be ordered
@@ -114,12 +115,12 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
 
     /// Watch a group of client requests that we received from a
     /// forwarded requests system message.
-    pub fn watch_forwarded_requests(
+    pub fn watch_forwarded_requests<T>(
         &self,
         requests: ForwardedRequestsMessage<Request<S>>,
         timeouts: &TimeoutsHandle<S>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
-    ) {
+        log: &Log<S, T>,
+    ) where T: PersistentLogModeTrait{
         let phase = TimeoutPhase::TimedOutOnce(Instant::now());
 
         let requests = requests
@@ -136,12 +137,12 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     ///Watch a batch of requests received from a Pre prepare message sent by the leader
     /// In reality we won't watch, more like the contrary, since the requests were already
     /// proposed, they won't timeout
-    pub fn watch_request_batch(
+    pub fn watch_request_batch<T>(
         &self,
         preprepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
         timeouts: &TimeoutsHandle<S>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
-    ) -> Vec<Digest> {
+        log: &Log<S, T>,
+    ) -> Vec<Digest> where T: PersistentLogModeTrait {
 
         let requests = match preprepare.message().kind() {
             ConsensusMessageKind::PrePrepare(req) => {req},
@@ -170,7 +171,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         digests
     }
 
-    fn add_stopped_requests(&self,base_sync: &Synchronizer<S>, log: &Log<State<S>, Request<S>, Reply<S>>) {
+    fn add_stopped_requests<T>(&self,base_sync: &Synchronizer<S>, log: &Log<S, T>) where T: PersistentLogModeTrait {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
         let requests = self
@@ -287,13 +288,13 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
 
     /// Forward the requests that timed out, `timed_out`, to all the nodes in the
     /// current view.
-    pub fn forward_requests(
+    pub fn forward_requests<T>(
         &self,
         base_sync: &Synchronizer<S>,
         timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         node: &Node<S::Data>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
-    ) {
+        log: &Log<S, T>,
+    ) where T: PersistentLogModeTrait {
         let message = SystemMessage::ForwardedRequests(ForwardedRequestsMessage::new(timed_out));
         let targets = NodeId::targets(0..base_sync.view().params().n());
         node.broadcast(message, targets);

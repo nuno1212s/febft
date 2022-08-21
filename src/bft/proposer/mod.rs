@@ -24,6 +24,7 @@ use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, Uno
 use crate::bft::ordering::Orderable;
 use crate::bft::timeouts::TimeoutsHandle;
 
+use super::consensus::log::persistent::PersistentLogModeTrait;
 use super::core::server::ViewInfo;
 use super::ordering::SeqNo;
 use super::sync::{Synchronizer, AbstractSynchronizer};
@@ -33,12 +34,12 @@ pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
 ///Handles taking requests from the client pools and storing the requests in the log,
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
-pub struct Proposer<S: Service + 'static> {
+pub struct Proposer<S: Service + 'static, T> where T: PersistentLogModeTrait{
     batch_channel: (ChannelSyncTx<BatchType<S>>, ChannelSyncRx<BatchType<S>>),
     node_ref: Arc<Node<S::Data>>,
     synchronizer: Arc<Synchronizer<S>>,
     timeouts: Arc<TimeoutsHandle<S>>,
-    log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
+    log: Arc<Log<S, T>>,
     //For unordered request execution
     executor_handle: ExecutorHandle<S>,
     consensus_guard: ConsensusGuard,
@@ -57,11 +58,11 @@ const TIMEOUT: Duration = Duration::from_micros(10);
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
 
-impl<S: Service> Proposer<S> {
+impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
     pub fn new(
         node: Arc<Node<S::Data>>,
         sync: Arc<Synchronizer<S>>,
-        log: Arc<Log<State<S>, Request<S>, Reply<S>>>,
+        log: Arc<Log<S, T>>,
         timeouts: Arc<TimeoutsHandle<S>>,
         executor_handle: ExecutorHandle<S>,
         consensus_guard: ConsensusGuard,
