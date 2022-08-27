@@ -237,6 +237,7 @@ pub enum SystemMessage<S, O, P> {
     //It is up to the developer of the particular services to use
     //These operations responsibly
     UnOrderedRequest(RequestMessage<O>),
+    UnOrderedReply(ReplyMessage<P>),
     Request(RequestMessage<O>),
     Reply(ReplyMessage<P>),
     Consensus(ConsensusMessage<O>),
@@ -254,6 +255,9 @@ impl<S, O, P> Debug for SystemMessage<S, O, P> {
         match self {
             SystemMessage::UnOrderedRequest(req) => {
                 write!(f, "Unordered request")
+            }
+            SystemMessage::UnOrderedReply(_) => {
+                write!(f, "Unordered reply")
             }
             SystemMessage::Request(rq) => {
                 write!(f, "Request")
@@ -438,26 +442,26 @@ pub struct ReplyMessage<P> {
 #[derive(Clone)]
 pub struct FwdConsensusMessage<O> {
     header: Header,
-    consensus_msg: ConsensusMessage<O>
+    consensus_msg: ConsensusMessage<O>,
 }
 
 impl<O> FwdConsensusMessage<O> {
-
     pub fn new(header: Header, msg: ConsensusMessage<O>) -> Self {
         Self {
             header,
-            consensus_msg: msg
+            consensus_msg: msg,
         }
     }
+
+    pub fn header(&self) -> &Header { &self.header }
 
     pub fn consensus(&self) -> &ConsensusMessage<O> {
         &self.consensus_msg
     }
 
-    pub fn into_inner(self) -> (Header, ConsensusMessage<O>){
+    pub fn into_inner(self) -> (Header, ConsensusMessage<O>) {
         (self.header, self.consensus_msg)
     }
-
 }
 
 /// Represents a message from the consensus sub-protocol.

@@ -20,21 +20,24 @@ use crate::bft::{
         Node, NodeId,
     },
     core::server::{
+        follower_handling::{FollowerEvent, FollowerHandle},
         observer::{MessageType, ObserverHandle},
         ViewInfo,
     },
     crypto::hash::Digest,
     executable::{Reply, Request, Service, State},
+    globals::ReadOnly,
     ordering::{Orderable, SeqNo},
-    sync::AbstractSynchronizer,
+    sync::{AbstractSynchronizer, Synchronizer},
     threadpool,
 };
 
 use crate::bft::ordering::tbo_pop_message;
 
 use super::{
-    log::{Log, persistent::PersistentLogModeTrait}, AbstractConsensus, Consensus, ConsensusAccessory, ConsensusGuard,
-    ConsensusPollStatus, ProtoPhase,
+    log::{persistent::PersistentLogModeTrait, Log},
+    AbstractConsensus, Consensus, ConsensusAccessory, ConsensusGuard, ConsensusPollStatus,
+    ProtoPhase,
 };
 
 macro_rules! extract_msg {
@@ -62,10 +65,16 @@ pub struct ReplicaConsensus<S: Service> {
     speculative_commits: Arc<Mutex<IntMap<StoredSerializedSystemMessage<S::Data>>>>,
     consensus_guard: ConsensusGuard,
     observer_handle: ObserverHandle,
+    follower_handle: Option<FollowerHandle<S>>,
 }
 
 impl<S: Service + 'static> Consensus<S> {
-    pub(super) fn handle_preprepare_sucessfull(&mut self, view: &ViewInfo, node: &Node<S::Data>) {
+    pub(super) fn handle_preprepare_sucessfull(
+        &mut self,
+        view: ViewInfo,
+        msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+        node: &Node<S::Data>,
+    ) {
         let my_id = self.node_id;
 
         let seq = self.sequence_number();
@@ -84,7 +93,6 @@ impl<S: Service + 'static> Consensus<S> {
                 // which involve potentially expensive signing ops
                 //Speculate in another thread.
                 threadpool::execute(move || {
-
                     // create COMMIT
                     let message = SystemMessage::Consensus(ConsensusMessage::new(
                         seq,
@@ -140,6 +148,15 @@ impl<S: Service + 'static> Consensus<S> {
                     node.broadcast(message, targets);
                 }
 
+                //Notify the followers
+                if let Some(follower_handle) = &rep.follower_handle {
+                    if let Err(err) =
+                        follower_handle.send(FollowerEvent::ReceivedConsensusMsg(view, msg))
+                    {
+                        error!("{:?}", err);
+                    }
+                }
+
                 //Notify the observers
                 if let Err(err) = rep
                     .observer_handle
@@ -155,27 +172,45 @@ impl<S: Service + 'static> Consensus<S> {
 
     pub(super) fn handle_preparing_no_quorum<T>(
         &mut self,
-        _curr_view: &ViewInfo,
+        curr_view: ViewInfo,
+        preparing_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
         _log: &Log<S, T>,
         _node: &Node<S::Data>,
-    ) where T: PersistentLogModeTrait {
+    ) where
+        T: PersistentLogModeTrait,
+    {
+        match &self.acessory {
+            ConsensusAccessory::Replica(rep) => {
+                if let Some(follower_handle) = &rep.follower_handle {
+                    if let Err(err) = follower_handle.send(FollowerEvent::ReceivedConsensusMsg(
+                        curr_view,
+                        preparing_msg,
+                    )) {
+                        error!("{:?}", err);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     pub(super) fn handle_preparing_quorum<T>(
         &mut self,
-        curr_view: &ViewInfo,
+        curr_view: ViewInfo,
+        preparing_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
         log: &Log<S, T>,
         node: &Node<S::Data>,
-    ) where T: PersistentLogModeTrait {
+    ) where
+        T: PersistentLogModeTrait,
+    {
         let seq = self.sequence_number();
         let node_id = self.node_id;
 
         match &mut self.acessory {
             ConsensusAccessory::Replica(rep) => {
-
                 let speculative_commits = rep.take_speculative_commits();
 
-                if valid_spec_commits::<S>(&speculative_commits, node_id, seq, curr_view) {
+                if valid_spec_commits::<S>(&speculative_commits, node_id, seq, &curr_view) {
                     for (_, msg) in speculative_commits.iter() {
                         debug!("{:?} // Broadcasting speculative commit message {:?} (total of {} messages) to {} targets",
                      node_id, msg.message().original(), speculative_commits.len(), curr_view.params().n());
@@ -202,12 +237,21 @@ impl<S: Service + 'static> Consensus<S> {
 
                 log.batch_meta().lock().commit_sent_time = Utc::now();
 
-                if let Err(err) =
-                    rep.observer_handle
-                        .tx()
-                        .send(MessageType::Event(ObserveEventKind::Commit(
-                            seq,
-                        )))
+                //Follower notifications
+                if let Some(follower_handle) = &rep.follower_handle {
+                    if let Err(err) = follower_handle.send(FollowerEvent::ReceivedConsensusMsg(
+                        curr_view,
+                        preparing_msg,
+                    )) {
+                        error!("{:?}", err);
+                    }
+                }
+
+                //Observer notifications
+                if let Err(err) = rep
+                    .observer_handle
+                    .tx()
+                    .send(MessageType::Event(ObserveEventKind::Commit(seq)))
                 {
                     error!("{:?}", err);
                 }
@@ -216,11 +260,42 @@ impl<S: Service + 'static> Consensus<S> {
         }
     }
 
-    pub(super) fn handle_committing_no_quorum(&mut self) {}
-
-    pub(super) fn handle_committing_quorum(&mut self) {
+    pub(super) fn handle_committing_no_quorum(
+        &mut self,
+        curr_view: ViewInfo,
+        commit_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+    ) {
         match &self.acessory {
             ConsensusAccessory::Replica(rep) => {
+                //Notify followers of the received message
+                if let Some(follower_handle) = &rep.follower_handle {
+                    if let Err(err) = follower_handle
+                        .send(FollowerEvent::ReceivedConsensusMsg(curr_view, commit_msg))
+                    {
+                        error!("{:?}", err);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn handle_committing_quorum(
+        &mut self,
+        view_info: ViewInfo,
+        commit_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+    ) {
+        match &self.acessory {
+            ConsensusAccessory::Replica(rep) => {
+                //Notify follower of the received message
+                if let Some(follower_handle) = &rep.follower_handle {
+                    if let Err(err) = follower_handle
+                        .send(FollowerEvent::ReceivedConsensusMsg(view_info, commit_msg))
+                    {
+                        error!("{:?}", err);
+                    }
+                }
+
                 if let Err(_) =
                     rep.observer_handle
                         .tx()
@@ -296,7 +371,10 @@ impl<S: Service + 'static> Consensus<S> {
     pub(super) fn handle_poll_preparing_requests<T>(
         &mut self,
         log: &Log<S, T>,
-    ) -> ConsensusPollStatus<Request<S>> where T: PersistentLogModeTrait {
+    ) -> ConsensusPollStatus<Request<S>>
+    where
+        T: PersistentLogModeTrait,
+    {
         match &mut self.acessory {
             ConsensusAccessory::Replica(rep) => {
                 let iterator = rep
@@ -329,7 +407,12 @@ impl<S: Service + 'static> Consensus<S> {
 }
 
 impl<S: Service + 'static> ReplicaConsensus<S> {
-    pub(super) fn new(view: ViewInfo, next_seq: SeqNo, observer_handle: ObserverHandle) -> Self {
+    pub(super) fn new(
+        view: ViewInfo,
+        next_seq: SeqNo,
+        observer_handle: ObserverHandle,
+        follower_handle: Option<FollowerHandle<S>>,
+    ) -> Self {
         Self {
             missing_requests: VecDeque::new(),
             missing_swapbuf: Vec::new(),
@@ -339,6 +422,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
                 consensus_guard: Arc::new(AtomicBool::new(false)),
             },
             observer_handle,
+            follower_handle,
         }
     }
 
@@ -350,7 +434,6 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         let mut map = self.speculative_commits.lock().unwrap();
         std::mem::replace(&mut *map, IntMap::new())
     }
-
 }
 
 #[inline]

@@ -20,6 +20,7 @@ use crate::bft::communication::message::{
     StoredMessage, SystemMessage,
 };
 use crate::bft::communication::NodeId;
+use crate::bft::communication::serialize::SharedData;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
@@ -153,7 +154,7 @@ impl WriteSet {
     /// Iterate over this `WriteSet`.
     ///
     /// Convenience method for calling `iter()` on the inner `Vec`.
-    pub fn iter(&self) -> impl Iterator<Item = &ViewDecisionPair> {
+    pub fn iter(&self) -> impl Iterator<Item=&ViewDecisionPair> {
         self.0.iter()
     }
 }
@@ -520,7 +521,7 @@ pub struct Log<S: Service, T: PersistentLogModeTrait> {
     //Stores just request batches. Much faster than individually storing all the requests and
     //Then having to always access them one by one
     request_batches:
-        ConcurrentHashMap<Digest, Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>>,
+    ConcurrentHashMap<Digest, Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>>,
     //This will only be accessed from the replica request thread so we can wrap it
     //In a simple cell
 
@@ -548,9 +549,9 @@ unsafe impl<S: Service, T: PersistentLogModeTrait> Sync for Log<S, T> {}
 // - garbage collect the log
 // - save the log to persistent storage
 impl<S, T> Log<S, T>
-where
-    S: Service + 'static,
-    T: PersistentLogModeTrait,
+    where
+        S: Service + 'static,
+        T: PersistentLogModeTrait,
 {
     /// Creates a new message log.
     ///
@@ -563,8 +564,8 @@ where
         executor: ExecutorHandle<S>,
         db_path: K,
     ) -> Arc<Self>
-    where
-        K: AsRef<Path>,
+        where
+            K: AsRef<Path>,
     {
         let persistent_log =
             PersistentLog::init_log(executor, db_path).expect("Failed to init persistent log");
@@ -613,14 +614,47 @@ where
         self.curr_seq.replace(last_seq);
     }
 
+    /// Read the current state, if existent, from the persistent storage
+    ///
+    /// FIXME: The view initialization might have to be changed if we want to introduce reconfiguration
+    pub fn read_current_state(&self, n: usize, f: usize) -> Result<Option<RecoveryState<State<S>, Request<S>>>> {
+        let option = self.persistent_log.read_state()?;
+
+        if let Some(state) = option {
+            let view_seq = ViewInfo::new(state.0, n, f)?;
+
+            let mut requests = Vec::new();
+
+            for request in state.2.pre_prepares() {
+                let pre_prepare_rqs = match request.message().kind() {
+                    ConsensusMessageKind::PrePrepare(requests) => {
+                        requests.clone()
+                    }
+                    ConsensusMessageKind::Prepare(_) => { unreachable!() }
+                    ConsensusMessageKind::Commit(_) => { unreachable!()}
+                };
+
+                for request in pre_prepare_rqs {
+                    requests.push(request.into_inner().1.into_inner_operation());
+                }
+            }
+
+            Ok(Some(RecoveryState {
+                view: view_seq,
+                checkpoint: state.1,
+                requests,
+                declog: state.2,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Take a snapshot of the log, used to recover a replica.
     ///
     /// This method may fail if we are waiting for the latest application
     /// state to be returned by the execution layer.
-    //
-    // TODO: return reference to the log state, so we don't have to clone()
-    // it, which can be quite expensive
-    //
+    ///
     pub fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<State<S>, Request<S>>> {
         match &*self.checkpoint.borrow() {
             CheckpointState::Complete(checkpoint) => Ok(RecoveryState::new(
@@ -885,17 +919,7 @@ where
         // the last executed sequence number
         dec_log_guard.last_exec = Some(seq);
 
-        match self.persistent_log.kind() {
-            PersistentLogMode::Strict(backlog) => {
-                backlog.queue_batch(((info, batch, meta), needed_messages))?;
-
-                Ok(None)
-            }
-            _ => {
-                //In other modes, we can just go straight to the execution phase
-                Ok(Some((info, batch, meta)))
-            }
-        }
+        self.persistent_log.queue_batch(((info, batch, meta), needed_messages))
     }
 
     fn begin_checkpoint(&self, seq: SeqNo) -> Result<Info> {
@@ -1007,7 +1031,6 @@ where
                     let mut decided = self.decided.borrow_mut();
 
                     if decided_request_count < decided.len() {
-
                         let mut new_decided = Vec::with_capacity(decided.len() - decided_request_count);
 
                         let to_keep = decided.len() - decided_request_count;
@@ -1024,7 +1047,6 @@ where
                         drop(decided);
 
                         self.decided.replace(new_decided);
-
                     } else if decided_request_count == decided.len() {
                         decided.clear();
                     } else {

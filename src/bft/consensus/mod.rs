@@ -21,6 +21,7 @@ use self::replica_consensus::ReplicaConsensus;
 
 use super::communication::message::{RequestMessage, SystemMessage};
 use super::communication::{Node, NodeId};
+use super::core::server::follower_handling::FollowerHandle;
 use super::core::server::observer::ObserverHandle;
 use super::executable::Reply;
 use super::globals::ReadOnly;
@@ -301,6 +302,7 @@ impl<S: Service + 'static> Consensus<S> {
         next_seq_num: SeqNo,
         batch_size: usize,
         observer_handle: ObserverHandle,
+        follower_handle: Option<FollowerHandle<S>>
     ) -> Self {
         Self {
             node_id,
@@ -314,6 +316,7 @@ impl<S: Service + 'static> Consensus<S> {
                 view,
                 next_seq_num,
                 observer_handle,
+                follower_handle
             )),
         }
     }
@@ -616,15 +619,16 @@ impl<S: Service + 'static> Consensus<S> {
                     meta_guard.pre_prepare_received_time = pre_prepare_received_time;
                 }
 
+
+                // add message to the log
+                log.insert_consensus(stored_msg.clone());
+
                 match &self.acessory {
                     ConsensusAccessory::Follower => {}
                     ConsensusAccessory::Replica(_) => {
-                        Self::handle_preprepare_sucessfull(self, &view, node);
+                        Self::handle_preprepare_sucessfull(self, view, stored_msg, node);
                     }
                 }
-
-                // add message to the log
-                log.insert_consensus(stored_msg);
 
                 //Start the count at one since the leader always agrees with his own pre-prepare message
                 //So, even if we are not the leader, we count the preprepare message as a prepare message as well
@@ -722,12 +726,14 @@ impl<S: Service + 'static> Consensus<S> {
                     }
                 };
 
+                let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
+
                 //Add the message to the messages that must be saved before 
                 //We are able to execute the consensus instance
-                self.current_messages.push(header.digest().clone());
+                self.current_messages.push(stored_msg.header().digest().clone());
 
                 // add message to the log
-                log.insert(header, SystemMessage::Consensus(message));
+                log.insert_consensus(stored_msg.clone());
 
                 // check if we have gathered enough votes,
                 // and transition to a new phase
@@ -737,7 +743,7 @@ impl<S: Service + 'static> Consensus<S> {
                     match &self.acessory {
                         ConsensusAccessory::Follower => {}
                         ConsensusAccessory::Replica(_) => {
-                            Self::handle_preparing_quorum(self, &curr_view, log, node);
+                            Self::handle_preparing_quorum(self, curr_view, stored_msg, log, node);
                         }
                     }
 
@@ -747,7 +753,7 @@ impl<S: Service + 'static> Consensus<S> {
                     match &self.acessory {
                         ConsensusAccessory::Follower => {}
                         ConsensusAccessory::Replica(_) => {
-                            Self::handle_preparing_no_quorum(self, &curr_view, log, node);
+                            Self::handle_preparing_no_quorum(self, curr_view, stored_msg, log, node);
                         }
                     }
 
@@ -758,6 +764,7 @@ impl<S: Service + 'static> Consensus<S> {
             }
             ProtoPhase::Committing(i) => {
                 let batch_digest;
+                let curr_view = synchronizer.view();
 
                 // queue message if we're not committing
                 // or in the same seq as the message
@@ -780,11 +787,11 @@ impl<S: Service + 'static> Consensus<S> {
                         return ConsensusStatus::Deciding;
                     }
                     ConsensusMessageKind::Commit(d)
-                        if message.view() != synchronizer.view().sequence_number() =>
+                        if message.view() != curr_view.sequence_number() =>
                     {
                         // drop msg in a different view
                         debug!("{:?} // Dropped commit message {:?} because of view {:?} vs {:?} (ours)",
-                            self.node_id, d, message.view(), synchronizer.view().sequence_number());
+                            self.node_id, d, message.view(), curr_view.sequence_number());
 
                         return ConsensusStatus::Deciding;
                     }
@@ -811,12 +818,14 @@ impl<S: Service + 'static> Consensus<S> {
                     }
                 };
 
+                let stored_message = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
+
                 //Add the message to the messages that must be saved before 
                 //We are able to execute the consensus instance
-                self.current_messages.push(header.digest().clone());
+                self.current_messages.push(stored_message.header().digest().clone());
 
                 // add message to the log
-                log.insert(header, SystemMessage::Consensus(message));
+                log.insert_batched(stored_message.clone());
 
                 if i == 1 {
                     //Log the first received commit message
@@ -835,12 +844,14 @@ impl<S: Service + 'static> Consensus<S> {
                     match &self.acessory {
                         ConsensusAccessory::Follower => {}
                         ConsensusAccessory::Replica(_) => {
-                            Self::handle_committing_quorum(self);
+                            Self::handle_committing_quorum(self, curr_view, stored_message);
                         }
                     }
 
                     let mut messages = Vec::with_capacity(self.current_messages.len());
 
+                    //clear our local current messages vec and return the messages we need to wait for 
+                    //To the necessary place
                     messages.append(&mut self.current_messages);
 
                     ConsensusStatus::Decided(batch_digest, &self.current[..self.current_batch_size], messages)
@@ -850,7 +861,7 @@ impl<S: Service + 'static> Consensus<S> {
                     match &self.acessory {
                         ConsensusAccessory::Follower => {}
                         ConsensusAccessory::Replica(_) => {
-                            Self::handle_committing_no_quorum(self);
+                            Self::handle_committing_no_quorum(self, curr_view, stored_message);
                         }
                     }
 

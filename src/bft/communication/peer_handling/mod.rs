@@ -254,18 +254,19 @@ pub enum ConnectedPeer<T> where T: Send {
 }
 
 ///Handling replicas is different from handling clients
-///We want to handle the requests differently as in communication between replicas
+///We want to handle the requests differently because in communication between replicas
 ///Latency is extremely important and we have to minimize it to the least amount possible
-/// So in this implementation, we will just use a single channel with dumping capabilities (Able to remove capacity items in a couple CAS operations,
-/// making it much more efficient than just removing 1 at a time and also minimizing concurrency)
-/// for all messages
+/// So in this implementation, we will just use a single channel to receive and collect
+/// all messages
 ///
 /// FIXME: See if having a multiple channel approach with something like a select is
 /// worth the overhead of having to pool multiple channels. We may also get problems with fairness.
 /// Probably not worth it
 pub struct ReplicaHandling<T> where T: Send {
     capacity: usize,
+    //The channel we push replica sent requests into
     channel_tx_replica: ChannelSyncTx<T>,
+    //The channel used to read requests that were pushed by replicas
     channel_rx_replica: ChannelSyncRx<T>,
     connected_clients: DashMap<u32, Arc<ConnectedPeer<T>>>,
     connected_client_count: AtomicUsize,
@@ -293,14 +294,16 @@ impl<T> ReplicaHandling<T> where T: Send {
         });
 
         match self.connected_clients.insert(peer_id.id(), peer.clone()) {
-            None => {}
+            None => {
+                //Only count connected replicas when we were previously not connected to
+                //it, or we would get double counting
+                self.connected_client_count.fetch_add(1, Ordering::Relaxed);
+            }
             Some(old) => {
                 //When we insert a new channel, we want the old channel to become closed.
                 old.disconnect();
             }
         };
-
-        self.connected_client_count.fetch_add(1, Ordering::Relaxed);
 
         peer
     }

@@ -12,11 +12,8 @@ use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::cst::{install_recovery_state, CollabStateTransfer, CstProgress, CstStatus};
 use crate::bft::error::*;
-use crate::bft::executable::{
-    Executor, ExecutorHandle, FollowerReplier, Reply, Request, Service, State,
-};
+use crate::bft::executable::{Executor, ExecutorHandle, FollowerReplier, Request, Service, State};
 use crate::bft::ordering::{Orderable, SeqNo};
-use crate::bft::persistentdb::KVDB;
 use crate::bft::proposer::follower_proposer::FollowerProposer;
 use crate::bft::sync::{
     AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus,
@@ -97,21 +94,11 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
         let n = node_config.n;
         let f = node_config.f;
 
-        let db_path = node_config.db_path;
+        let db_path = node_config.db_path.clone();
 
         let (node, rogue) = Node::bootstrap(node_config).await?;
 
-        let reply_handle = Replier::new(node.id(), node.send_node());
-
-        // start executor
-        let executor =
-            Executor::<S, FollowerReplier>::new(reply_handle, service, node.send_node(), None)?;
-
-        //TODO: Load these from DB
-        let seq_num = SeqNo::ZERO;
-        let seq_view = SeqNo::ZERO;
-
-        let view = ViewInfo::new(seq_view, n, f)?;
+        let (executor, handle) = Executor::<S, FollowerReplier>::init_handle();
 
         let log = Log::new(
             log_node_id,
@@ -121,7 +108,50 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
             db_path,
         );
 
-        let consensus = Consensus::new_follower(node.id(), seq_num, global_batch_size);
+        let mut seq;
+
+        let mut view;
+
+        //Read the state from the persistent log
+        let state = if let Some(read_state) = log.read_current_state(n, f)? {
+            let last_seq = if let Some(seq) = read_state.decision_log().last_execution() {
+                seq
+            } else {
+                read_state.checkpoint().sequence_number()
+            };
+
+            seq = last_seq;
+
+            view = read_state.view().clone();
+
+            let executed_requests = read_state.requests.clone();
+
+            let state = read_state.checkpoint().state().clone();
+
+            log.install_state(last_seq, read_state);
+
+            Some((state, executed_requests))
+        } else {
+            seq = SeqNo::ZERO;
+
+            view = ViewInfo::new(SeqNo::ZERO, n, f)?;
+
+            None
+        };
+
+        let reply_handle = Replier::new(node.id(), node.send_node());
+
+        // start executor
+        Executor::<S, FollowerReplier>::new(
+            reply_handle,
+            handle,
+            service,
+            state,
+            node.send_node(),
+            None,
+        )?;
+
+        let consensus = Consensus::new_follower(node.id(), seq, global_batch_size);
 
         const CST_BASE_DUR: Duration = Duration::from_secs(30);
 
@@ -216,6 +246,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                 match message {
                     SystemMessage::Request(_) | SystemMessage::ForwardedRequests(_) => {
                         //Followers do not accept ordered requests
+                        warn!("Received ordered request while follower, cannot process so ignoring.");
                     }
                     SystemMessage::UnOrderedRequest(_) => {
                         warn!("Unordered requests should be delivered straight to the executor.")
@@ -232,7 +263,8 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                             CstStatus::Nil => (),
                             // should not happen...
                             _ => {
-                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer)
+                                return Err("Invalid state reached!")
+                                    .wrapped(ErrorKind::CoreServer);
                             }
                         }
                     }
@@ -255,7 +287,8 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                             }
                             // should not happen...
                             _ => {
-                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer)
+                                return Err("Invalid state reached!")
+                                    .wrapped(ErrorKind::CoreServer);
                             }
                         }
                     }
@@ -263,10 +296,12 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                         self.adv_consensus(header, message)?;
                     }
                     SystemMessage::FwdConsensus(message) => {
-                        warn!("Replicas cannot process forwarded consensus messages! They must receive the preprepare messages straight from leaders!");
+                        let (header, message) = message.into_inner();
+
+                        self.adv_consensus(header, message)?;
                     }
                     // FIXME: handle rogue reply messages
-                    SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
+                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
                     SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
                 }
             }
@@ -307,6 +342,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                 match message {
                     SystemMessage::ForwardedRequests(_) | SystemMessage::Request(_) => {
                         //Followers cannot process ordered requests
+                        warn!("Received ordered request while follower, cannot process so ignoring.");
                     }
                     SystemMessage::Consensus(message) => {
                         self.consensus.queue(header, message);
@@ -330,7 +366,8 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                             CstStatus::Nil => (),
                             // should not happen...
                             _ => {
-                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer)
+                                return Err("Invalid state reached!")
+                                    .wrapped(ErrorKind::CoreServer);
                             }
                         }
                     }
@@ -370,15 +407,16 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                             }
                             // should not happen...
                             _ => {
-                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer)
+                                return Err("Invalid state reached!")
+                                    .wrapped(ErrorKind::CoreServer);
                             }
                         }
                     }
                     // FIXME: handle rogue reply messages
-                    SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
+                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
                     SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
                     SystemMessage::UnOrderedRequest(_) => {
-                        warn!("Weird messages were delivered to follower")
+                        warn!("Received request while synchronizing, ignoring.")
                     }
                 }
             }
@@ -499,6 +537,9 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                     SystemMessage::UnOrderedRequest(_) => {
                         warn!("Rogue unordered request message detected")
                     }
+                    SystemMessage::UnOrderedReply(_) => {
+                        warn!("How can I receive a reply here?")
+                    }
                 }
             }
             Message::Timeout(timeout_kind) => {
@@ -555,7 +596,10 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                 let new_meta = BatchMeta::new();
                 let meta = std::mem::replace(&mut *self.log.batch_meta().lock(), new_meta);
 
-                if let Some((info, batch, meta)) = self.log.finalize_batch(seq, batch_digest, digests, messages, meta)? {
+                if let Some((info, batch, meta)) =
+                    self.log
+                        .finalize_batch(seq, batch_digest, digests, messages, meta)?
+                {
                     //Send the finalized batch to the rq finalizer
                     //So everything can be removed from the correct logs and
                     //Given to the service thread to execute

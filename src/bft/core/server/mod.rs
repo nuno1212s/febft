@@ -190,7 +190,7 @@ where
         let n = node_config.n;
         let f = node_config.f;
 
-        let db_path = node_config.db_path;
+        let db_path = node_config.db_path.clone();
 
         let (node, rogue) = Node::bootstrap(node_config).await?;
 
@@ -198,15 +198,10 @@ where
         // connect to peer nodes
         let observer_handle = observer::start_observers(node.send_node());
 
+        //CURRENTLY DISABLED, USING THREADPOOL INSTEAD
         let reply_handle = Replier::new(node.id(), node.send_node());
 
-        // start executor
-        let executor = Executor::<S, ReplicaReplier>::new(
-            reply_handle,
-            service,
-            node.send_node(),
-            Some(observer_handle.clone()),
-        )?;
+        let (executor, handle) = Executor::<S, ReplicaReplier>::init_handle();
 
         let mut log = Log::new(
             log_node_id,
@@ -216,9 +211,48 @@ where
             db_path,
         );
 
-        // system params
-        //TODO: Load view from persistent storage
-        let view = ViewInfo::new(view, n, f)?;
+        let mut seq;
+
+        let mut view;
+
+        //Read the state from the persistent log
+        let state = if let Some(read_state) = log.read_current_state(n, f)? {
+
+            let last_seq = if let Some(seq) = read_state.decision_log().last_execution() {
+                seq
+            } else {
+                read_state.checkpoint().sequence_number()
+            };
+
+            seq = last_seq;
+
+            view = read_state.view().clone();
+
+            let executed_requests = read_state.requests.clone();
+
+            let state = read_state.checkpoint().state().clone();
+
+            log.install_state(last_seq, read_state);
+
+            Some((state, executed_requests))
+        } else {
+
+            seq = SeqNo::ZERO;
+
+            view = ViewInfo::new(SeqNo::ZERO, n, f)?;
+
+            None
+        };
+
+        // start executor
+        Executor::<S, ReplicaReplier>::new(
+            reply_handle,
+            handle,
+            service,
+            state,
+            node.send_node(),
+            Some(observer_handle.clone()),
+        )?;
 
         let node_clone = node.clone();
 
@@ -242,6 +276,7 @@ where
             next_consensus_seq,
             global_batch_size,
             observer_handle.clone(),
+            None
         );
 
         //We can unwrap since it's guaranteed that this consensus is of a replica type
@@ -290,7 +325,7 @@ where
                             replica.consensus.queue(header, message);
                         }
                         // FIXME: handle rogue reply messages
-                        SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
+                        SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
                         // FIXME: handle rogue cst messages
                         SystemMessage::Cst(_) => warn!("Rogue cst message detected"),
                         // FIXME: handle rogue view change messages
@@ -442,8 +477,8 @@ where
                     SystemMessage::Consensus(message) => {
                         self.consensus.queue(header, message);
                     }
-                    SystemMessage::FwdConsensus(fwdConsensus) => {
-                        //Replicas do not received forwarded consensus messages.
+                    SystemMessage::FwdConsensus(_) => {
+                        //Replicas do not receive forwarded consensus messages.
                     }
                     SystemMessage::ViewChange(message) => {
                         self.synchronizer.queue(header, message);
@@ -518,7 +553,7 @@ where
                     }
                     // FIXME: handle rogue reply messages
                     // Should never
-                    SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
+                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
                     SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
                     SystemMessage::UnOrderedRequest(_) => {
                         warn!("Rogue unordered request message detected")
@@ -627,7 +662,7 @@ where
                         }
                     }
                     // FIXME: handle rogue reply messages
-                    SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
+                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
                     SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
                     SystemMessage::UnOrderedRequest(_) => todo!(),
                 }
@@ -742,7 +777,7 @@ where
                         warn!("Replicas cannot process forwarded consensus messages! They must receive the preprepare messages straight from leaders!");
                     }
                     // FIXME: handle rogue reply messages
-                    SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
+                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
                     SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
                     SystemMessage::UnOrderedRequest(_) => todo!(),
                 }

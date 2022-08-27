@@ -3,21 +3,23 @@ use std::sync::Arc;
 
 use crate::bft::communication::channel::{self, ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::{
-    ConsensusMessage, FwdConsensusMessage, Header, SystemMessage, ViewChangeMessage,
-    ViewChangeMessageKind,
+    ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, Header, StoredMessage,
+    SystemMessage, ViewChangeMessage, ViewChangeMessageKind,
 };
 use crate::bft::communication::{Node, NodeId, SendNode};
 use crate::bft::core::server::ViewInfo;
 use crate::bft::executable::{Request, Service};
+use crate::bft::globals::ReadOnly;
 
 /// The message type of the channel
-pub type ChannelMsg<S: Service> = ConsensusMessage<Request<S>>;
+pub type ChannelMsg<S> = FollowerEvent<S>;
 
 pub enum FollowerEvent<S: Service> {
-    //This can't be the best way, it envolves cloning a potentially massive
-    //Message, which hampers performance
-    Received(ConsensusMessage<Request<S>>),
-    Sent(ConsensusMessage<Request<S>>),
+    ReceivedConsensusMsg(
+        ViewInfo,
+        Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+    ),
+    ReceivedViewChangeMsg(Arc<ReadOnly<StoredMessage<ViewChangeMessage<Request<S>>>>>),
 }
 
 /// Store information of the current followers of the quorum
@@ -34,13 +36,12 @@ struct FollowersFollowing<S: Service + 'static> {
     rx: ChannelSyncRx<ChannelMsg<S>>,
 }
 
-
 /// A handle to the follower handling thread
-/// 
+///
 /// Allows us to pass the thread notifications on what is happening so it
 /// can handle the events properly
 #[derive(Clone)]
-struct FollowerHandle<S: Service> {
+pub struct FollowerHandle<S: Service> {
     tx: ChannelSyncTx<ChannelMsg<S>>,
 }
 
@@ -57,23 +58,43 @@ impl<S: Service + 'static> FollowersFollowing<S> {
             rx,
         };
 
-        std::thread::Builder::new().name(format!("Follower Handling Thread for node {:?}", id))
-        .spawn(move || {    
-
-            follower_handling.run();
-
-        }).expect("Failed to launch follower handling thread!");
+        Self::start_thread(follower_handling);
 
         FollowerHandle { tx }
     }
 
-    fn run(self) {
+    fn start_thread(self) {
+        std::thread::Builder::new()
+            .name(format!(
+                "Follower Handling Thread for node {:?}",
+                self.own_id
+            ))
+            .spawn(move || {
+                self.run();
+            })
+            .expect("Failed to launch follower handling thread!");
+    }
+
+    fn run(mut self) {
         loop {
             let message = self.rx.recv().unwrap();
 
+            match message {
+                FollowerEvent::ReceivedConsensusMsg(view, consensus_msg) => {
+                    match consensus_msg.message().kind() {
+                        ConsensusMessageKind::PrePrepare(_) => {
+                            self.handle_preprepare_msg_rcvd(&view, consensus_msg)
+                        }
+                        ConsensusMessageKind::Prepare(_) => self.handle_prepare_msg(consensus_msg),
+                        ConsensusMessageKind::Commit(_) => self.handle_commit_msg(consensus_msg),
+                    }
+                }
+                FollowerEvent::ReceivedViewChangeMsg(view_change_msg) => {
 
+                    self.handle_sync_msg(view_change_msg)
 
-
+                }
+            }
         }
     }
 
@@ -131,13 +152,18 @@ impl<S: Service + 'static> FollowersFollowing<S> {
     fn handle_preprepare_msg_rcvd(
         &mut self,
         view: &ViewInfo,
-        header: Header,
-        pre_prepare: ConsensusMessage<Request<S>>,
+        message: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
     ) {
         if view.leader() == self.own_id {
             //Leaders don't send pre_prepares to followers in order to save bandwidth
+            //as they already have to send the to all of the replicas
             return;
         }
+
+        //Clone the messages here in this thread so we don't slow down the consensus thread at all
+        let header = message.header().clone();
+
+        let pre_prepare = message.message().clone();
 
         let message = SystemMessage::FwdConsensus(FwdConsensusMessage::new(header, pre_prepare));
 
@@ -150,7 +176,18 @@ impl<S: Service + 'static> FollowersFollowing<S> {
     /// and prepare/commit are handled on sending, this is because we don't want the leader
     /// to have to send the pre prepare to all followers but since these messages are very small,
     /// it's fine for all replicas to broadcast it to followers)
-    fn handle_prepare_msg(&mut self, prepare: ConsensusMessage<Request<S>>) {
+    fn handle_prepare_msg(
+        &mut self,
+        prepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+    ) {
+        if prepare.header().from() != self.own_id {
+            //We only broadcast our own prepare messages, not other peoples
+            return;
+        }
+
+        //Clone the messages here in this thread so we don't slow down the consensus thread at all
+        let prepare = prepare.message().clone();
+
         let message = SystemMessage::Consensus(prepare);
 
         self.send_node
@@ -161,7 +198,17 @@ impl<S: Service + 'static> FollowersFollowing<S> {
     /// and prepare/commit are handled on sending, this is because we don't want the leader
     /// to have to send the pre prepare to all followers but since these messages are very small,
     /// it's fine for all replicas to broadcast it to followers)
-    fn handle_commit_msg(&mut self, commit: ConsensusMessage<Request<S>>) {
+    fn handle_commit_msg(
+        &mut self,
+        commit: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+    ) {
+        if commit.header().from() != self.own_id {
+            //Like with prepares, we only broadcast our own commit messages
+            return;
+        }
+
+        let commit = commit.message().clone();
+
         let message = SystemMessage::Consensus(commit);
 
         self.send_node
@@ -169,8 +216,11 @@ impl<S: Service + 'static> FollowersFollowing<S> {
     }
 
     ///
-    fn handle_sync_msg(&mut self, msg: ViewChangeMessage<Request<S>>) {
-        match msg.kind() {
+    fn handle_sync_msg(&mut self, msg: Arc<ReadOnly<StoredMessage<ViewChangeMessage<Request<S>>>>>) {
+
+        let message = msg.message();
+
+        match message.kind() {
             ViewChangeMessageKind::Stop(_) => {}
             ViewChangeMessageKind::StopData(_) => {
                 //Followers don't need these messages (only the leader of the quorum needs them)
@@ -183,11 +233,13 @@ impl<S: Service + 'static> FollowersFollowing<S> {
                 //send them like we do preprepare msgs
             }
         }
-        let message = SystemMessage::ViewChange(msg);
+
+        let message = SystemMessage::ViewChange(message.clone());
 
         self.send_node
             .broadcast(message, self.followers.iter().copied());
     }
+
 }
 
 impl<S: Service> Deref for FollowerHandle<S> {

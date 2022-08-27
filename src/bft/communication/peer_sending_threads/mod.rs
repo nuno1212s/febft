@@ -1,16 +1,20 @@
-use std::sync::Arc;
-use std::time::Instant;
-use dashmap::DashMap;
-use log::error;
 use crate::bft;
 use crate::bft::benchmarks::CommStats;
-use crate::bft::communication::channel::{ChannelAsyncRx, ChannelAsyncTx, ChannelSyncRx, ChannelSyncTx};
-use crate::bft::communication::{Node, NodeId, PeerAddr};
+use crate::bft::communication::channel::{
+    ChannelAsyncRx, ChannelAsyncTx, ChannelSyncRx, ChannelSyncTx,
+};
 use crate::bft::communication::message::WireMessage;
 use crate::bft::communication::socket::{SocketSendAsync, SocketSendSync};
+use crate::bft::communication::{Node, NodeId, PeerAddr};
+use dashmap::DashMap;
+use log::error;
+use std::sync::Arc;
+use std::time::Instant;
 
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::serialize::SharedData;
+
+use super::NodeConnector;
 
 ///Implements the behaviour where each connection has it's own dedicated thread that will handle
 ///Sending messages from it
@@ -27,18 +31,14 @@ pub enum ConnectionHandle {
 impl ConnectionHandle {
     pub fn send(&self, message: WireMessage, rq_key: Option<u64>) -> Result<(), ()> {
         let channel = match self {
-            ConnectionHandle::Sync(channel) => {
-                channel
-            }
+            ConnectionHandle::Sync(channel) => channel,
             ConnectionHandle::Async(_) => {
                 panic!("Cannot send asynchronously on synchronous channel!");
             }
         };
 
         match channel.send((message, Instant::now(), rq_key)) {
-            Ok(_) => {
-                Ok(())
-            }
+            Ok(_) => Ok(()),
             Err(error) => {
                 error!("Failed to send to the channel! {:?}", error);
 
@@ -52,15 +52,11 @@ impl ConnectionHandle {
             ConnectionHandle::Sync(_) => {
                 panic!("Cannot send synchronously on asynchronous channel");
             }
-            ConnectionHandle::Async(channel) => {
-                channel
-            }
+            ConnectionHandle::Async(channel) => channel,
         };
 
         match channel.send((message, Instant::now(), None)).await {
-            Ok(_) => {
-                Ok(())
-            }
+            Ok(_) => Ok(()),
             Err(error) => {
                 error!("Failed to send to the channel! {:?}", error);
 
@@ -75,30 +71,42 @@ impl ConnectionHandle {
     }
 }
 
-pub fn initialize_sync_sending_thread_for<D>(node: Arc<Node<D>>, peer_id: NodeId, socket: SocketSendSync,
-                                             comm_stats: Option<Arc<CommStats>>,
-                                             sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>, ) -> ConnectionHandle
-    where D: SharedData + 'static {
+pub fn initialize_sync_sending_thread_for<D>(
+    node: Arc<Node<D>>,
+    peer_id: NodeId,
+    socket: SocketSendSync,
+    comm_stats: Option<Arc<CommStats>>,
+    sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>,
+) -> ConnectionHandle
+where
+    D: SharedData + 'static,
+{
     let (tx, rx) = bft::communication::channel::new_bounded_sync(QUEUE_SPACE);
 
     std::thread::Builder::new()
         .name(format!("Peer {:?} sending thread", peer_id))
-        .spawn(move || {
-            sync_sending_thread(node, peer_id, socket, rx, comm_stats, sent_rqs)
-        }).expect(format!("Failed to start sending thread for client {:?}", peer_id).as_str());
+        .spawn(move || sync_sending_thread(node, peer_id, socket, rx, comm_stats, sent_rqs))
+        .expect(format!("Failed to start sending thread for client {:?}", peer_id).as_str());
 
     ConnectionHandle::Sync(tx)
 }
 
 ///Receives requests from the queue and sends them using the provided socket
-fn sync_sending_thread<D>(node: Arc<Node<D>>, peer_id: NodeId, mut socket: SocketSendSync, recv: ChannelSyncRx<SendMessage>,
-                          comm_stats: Option<Arc<CommStats>>,
-                          sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>, ) where D: SharedData + 'static {
+fn sync_sending_thread<D>(
+    node: Arc<Node<D>>,
+    peer_id: NodeId,
+    mut socket: SocketSendSync,
+    recv: ChannelSyncRx<SendMessage>,
+    comm_stats: Option<Arc<CommStats>>,
+    sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>,
+) where
+    D: SharedData + 'static,
+{
     loop {
         let recv_result = recv.recv();
 
         let (to_send, init_time, rq_key) = match recv_result {
-            Ok(to_send) => { to_send }
+            Ok(to_send) => to_send,
             Err(recv_err) => {
                 error!("Sending channel for client {:?} has disconnected!", peer_id);
                 break;
@@ -124,7 +132,8 @@ fn sync_sending_thread<D>(node: Arc<Node<D>>, peer_id: NodeId, mut socket: Socke
 
             let time_taken_sending = Instant::now().duration_since(before_send).as_nanos();
 
-            comm_stats.insert_message_passing_to_send_thread(to_send.header.to(), time_taken_passing);
+            comm_stats
+                .insert_message_passing_to_send_thread(to_send.header.to(), time_taken_passing);
             comm_stats.insert_message_sending_time(to_send.header.to(), time_taken_sending);
             comm_stats.register_rq_sent(to_send.header.to());
         }
@@ -145,7 +154,11 @@ fn sync_sending_thread<D>(node: Arc<Node<D>>, peer_id: NodeId, mut socket: Socke
 
     match peer_addr {
         None => {
-            error!("{:?} // Failed to find address for node {:?}", node.id(), peer_id);
+            error!(
+                "{:?} // Failed to find address for node {:?}",
+                node.id(),
+                peer_id
+            );
         }
         Some(addr) => {
             if node.id() < node.first_client_id() && peer_id < node.first_client_id() {
@@ -153,34 +166,66 @@ fn sync_sending_thread<D>(node: Arc<Node<D>>, peer_id: NodeId, mut socket: Socke
                 if let Some(addr) = &addr.replica_addr {
                     let id = node.id();
                     let first_cli = node.first_client_id();
-                    let sync_conn = Arc::clone(&node.sync_connector);
+
+                    let sync_conn = match &node.connector() {
+                        NodeConnector::Async(_) => unreachable!(),
+                        NodeConnector::Sync(conn) => conn,
+                    }
+                    .clone();
+
                     let addr = addr.clone();
 
                     //If we have the replica only IP (port) of the replicas, then we are probably a replica and
-                    node.tx_side_connect_task_sync(id, first_cli,
-                                                   peer_id, state.next_state(),
-                                                   sync_conn, addr);
+                    node.tx_side_connect_task_sync(
+                        id,
+                        first_cli,
+                        peer_id,
+                        state.next_state(),
+                        sync_conn,
+                        addr,
+                        None,
+                    );
                 } else {
-                    error!("{:?} // Failed to connect because no IP was present for replica {:?}", node.id(), peer_id);
+                    error!(
+                        "{:?} // Failed to connect because no IP was present for replica {:?}",
+                        node.id(),
+                        peer_id
+                    );
                 }
             } else {
                 let id = node.id();
                 let first_cli = node.first_client_id();
-                let sync_conn = Arc::clone(&node.sync_connector);
+                let sync_conn = match &node.connector() {
+                    NodeConnector::Async(_) => unreachable!(),
+                    NodeConnector::Sync(conn) => conn,
+                }
+                .clone();
                 let addr = addr.client_addr.clone();
 
                 //If we are not a replica connecting to a replica, we will always use the "client" ports.
-                node.tx_side_connect_task_sync(id, first_cli,
-                                               peer_id, state.next_state(),
-                                               sync_conn, addr);
+                node.tx_side_connect_task_sync(
+                    id,
+                    first_cli,
+                    peer_id,
+                    state.next_state(),
+                    sync_conn,
+                    addr,
+                    None,
+                );
             }
         }
     }
 }
 
-pub fn initialize_async_sending_task_for<D>(node: Arc<Node<D>>, peer_id: NodeId, socket: SocketSendAsync,
-                                            comm_stats: Option<Arc<CommStats>>) -> ConnectionHandle
-    where D: SharedData + 'static {
+pub fn initialize_async_sending_task_for<D>(
+    node: Arc<Node<D>>,
+    peer_id: NodeId,
+    socket: SocketSendAsync,
+    comm_stats: Option<Arc<CommStats>>,
+) -> ConnectionHandle
+where
+    D: SharedData + 'static,
+{
     let (tx, rx) = crate::bft::communication::channel::new_bounded_async(QUEUE_SPACE);
 
     rt::spawn(async_sending_task(node, peer_id, socket, rx, comm_stats));
@@ -189,13 +234,20 @@ pub fn initialize_async_sending_task_for<D>(node: Arc<Node<D>>, peer_id: NodeId,
 }
 
 ///Receives requests from the queue and sends them using the provided socket
-async fn async_sending_task<D>(node: Arc<Node<D>>, peer_id: NodeId, mut socket: SocketSendAsync, mut recv: ChannelAsyncRx<SendMessage>,
-                               comm_stats: Option<Arc<CommStats>>) where D: SharedData + 'static {
+async fn async_sending_task<D>(
+    node: Arc<Node<D>>,
+    peer_id: NodeId,
+    mut socket: SocketSendAsync,
+    mut recv: ChannelAsyncRx<SendMessage>,
+    comm_stats: Option<Arc<CommStats>>,
+) where
+    D: SharedData + 'static,
+{
     loop {
         let recv_result = recv.recv().await;
 
         let (to_send, init_time, _) = match recv_result {
-            Ok(to_send) => { to_send }
+            Ok(to_send) => to_send,
             Err(recv_err) => {
                 error!("Sending channel for client {:?} has disconnected!", peer_id);
                 break;
@@ -221,7 +273,8 @@ async fn async_sending_task<D>(node: Arc<Node<D>>, peer_id: NodeId, mut socket: 
 
             let time_taken_sending = Instant::now().duration_since(before_send).as_nanos();
 
-            comm_stats.insert_message_passing_to_send_thread(to_send.header.to(), time_taken_passing);
+            comm_stats
+                .insert_message_passing_to_send_thread(to_send.header.to(), time_taken_passing);
             comm_stats.insert_message_sending_time(to_send.header.to(), time_taken_sending);
             comm_stats.register_rq_sent(to_send.header.to());
         }
@@ -236,7 +289,11 @@ async fn async_sending_task<D>(node: Arc<Node<D>>, peer_id: NodeId, mut socket: 
 
     match addr {
         None => {
-            error!("{:?} // Failed to find address for node {:?}", node.id(), peer_id);
+            error!(
+                "{:?} // Failed to find address for node {:?}",
+                node.id(),
+                peer_id
+            );
         }
         Some(addr) => {
             if node.id() < node.first_client_id() && peer_id < node.first_client_id() {
@@ -244,26 +301,48 @@ async fn async_sending_task<D>(node: Arc<Node<D>>, peer_id: NodeId, mut socket: 
                 if let Some(addr) = &addr.replica_addr {
                     let id = node.id();
                     let first_cli = node.first_client_id();
-                    let conn = node.connector.clone();
+
+                    let conn = match &node.connector() {
+                        NodeConnector::Async(conn) => conn,
+                        NodeConnector::Sync(_) => unreachable!(),
+                    }
+                    .clone();
+
                     let addr = addr.clone();
 
                     //If we have the replica only IP (port) of the replicas, then we are probably a replica and
-                    node.tx_side_connect_task(id, first_cli,
-                                              peer_id, state.next_state(),
-                                              conn, addr).await;
+                    node.tx_side_connect_task(
+                        id,
+                        first_cli,
+                        peer_id,
+                        state.next_state(),
+                        conn,
+                        addr,
+                        None,
+                    )
+                    .await;
                 } else {
-                    error!("{:?} // Failed to connect because no IP was present for replica {:?}", node.id(), peer_id);
+                    error!(
+                        "{:?} // Failed to connect because no IP was present for replica {:?}",
+                        node.id(),
+                        peer_id
+                    );
                 }
             } else {
                 let id = node.id();
                 let first_cli = node.first_client_id();
-                let conn = node.connector.clone();
+
+                let conn = match &node.connector() {
+                    NodeConnector::Async(conn) => conn,
+                    NodeConnector::Sync(_) => unreachable!(),
+                }
+                .clone();
+
                 let addr = addr.client_addr.clone();
 
                 //If we are not a replica connecting to a replica, we will always use the "client" ports.
-                node.tx_side_connect_task(id, first_cli,
-                                          peer_id, state.next_state(),
-                                          conn, addr).await;
+                node.tx_side_connect_task(id, first_cli, peer_id, state.next_state(), conn, addr, None)
+                    .await;
             }
         }
     }

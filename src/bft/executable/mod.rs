@@ -57,7 +57,7 @@ pub struct BatchReplies<P> {
     inner: Vec<UpdateReply<P>>,
 }
 
-enum ExecutionRequest<S, O> {
+pub enum ExecutionRequest<S, O> {
     // install state from state transfer protocol
     InstallState(S, Vec<O>),
     // update the state of the service
@@ -278,10 +278,10 @@ pub struct ExecutorHandle<S: Service> {
 }
 
 impl<S: Service> ExecutorHandle<S>
-where
-    S: Service + Send + 'static,
-    Request<S>: Send + 'static,
-    Reply<S>: Send + 'static,
+    where
+        S: Service + Send + 'static,
+        Request<S>: Send + 'static,
+        Reply<S>: Send + 'static,
 {
     /// Sets the current state of the execution layer to the given value.
     pub fn install_state(&self, state: State<S>, after: Vec<Request<S>>) -> Result<()> {
@@ -327,28 +327,38 @@ impl<S: Service> Clone for ExecutorHandle<S> {
 }
 
 impl<S, T> Executor<S, T>
-where
-    S: Service + Send + 'static,
-    State<S>: Send + Clone + 'static,
-    Request<S>: Send + 'static,
-    Reply<S>: Send + 'static,
-    T: ExecutorReplier + 'static,
+    where
+        S: Service + Send + 'static,
+        State<S>: Send + Clone + 'static,
+        Request<S>: Send + 'static,
+        Reply<S>: Send + 'static,
+        T: ExecutorReplier + 'static,
 {
+    pub fn init_handle() -> (ExecutorHandle<S>, ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>) {
+        let (tx, rx) = channel::new_bounded_sync(EXECUTING_BUFFER);
+
+        (ExecutorHandle { e_tx: tx }, rx)
+    }
     /// Spawns a new service executor into the async runtime.
     pub fn new(
         reply_worker: ReplyHandle<S>,
+        handle: ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>,
         mut service: S,
+        current_state: Option<(State<S>, Vec<Request<S>>)>,
         send_node: SendNode<S::Data>,
         observer: Option<ObserverHandle>,
-    ) -> Result<ExecutorHandle<S>> {
-        let (e_tx, e_rx) = channel::new_bounded_sync(EXECUTING_BUFFER);
+    ) -> Result<()> {
 
-        let state = service.initial_state()?;
+        let (state, requests) = if let Some((state, requests)) = current_state {
+
+            (state, Some(requests))
+
+        } else {( service.initial_state()?, None )};
 
         let id = send_node.id();
 
         let mut exec: Executor<S, T> = Executor {
-            e_rx,
+            e_rx: handle,
             service,
             state,
             reply_worker,
@@ -356,6 +366,12 @@ where
             observer_handle: observer,
             p: Default::default(),
         };
+
+        if let Some(requests) = requests {
+            for request in requests {
+                exec.service.update(&mut exec.state, request);
+            }
+        }
 
         // this thread is responsible for actually executing
         // requests, avoiding blocking the async runtime
@@ -409,7 +425,7 @@ where
             })
             .expect("Failed to start executor thread");
 
-        Ok(ExecutorHandle { e_tx })
+        Ok(())
     }
 
     ///Clones the current state and delivers it to the application

@@ -24,6 +24,7 @@
 //! the user, that this is a BFT library, so software variation is encouraged;
 //! in a typical system setup, you would probably employ different backend
 //! libraries performing identical duties.
+#![feature(type_alias_impl_trait)]
 
 extern crate core;
 
