@@ -1,6 +1,6 @@
 use crate::bft::{communication::{serialize::SharedData, message::{SystemMessage, RequestMessage}, NodeId}, ordering::SeqNo};
 
-use super::{ClientType, ReplicaVotes, Client};
+use super::{ClientType, Client};
 
 
 

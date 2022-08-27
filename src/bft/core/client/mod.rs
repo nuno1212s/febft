@@ -19,7 +19,7 @@ use crate::bft::communication::{Node, NodeConfig, NodeId};
 use crate::bft::core::client::observing_client::ObserverClient;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
-use crate::bft::ordering::{SeqNo, Orderable};
+use crate::bft::ordering::{Orderable, SeqNo};
 
 use self::unordered_client::{FollowerData, UnorderedClientMode};
 
@@ -46,9 +46,16 @@ struct SentRequestInfo {
     responses_needed: usize,
 }
 
+///Represents the possible ways a client can be notified of replies that were delivered to him
 enum ClientAwaker<P> {
+    //Callbacks have to be set from the start, since they are passed along with the request when the client issues it
+    //So we always contain the callback struct
     Callback(Callback<P>),
-    Ready(Option<Ready<P>>)
+    //Requests performed asynchronously however are a bit different. There can be 2 possibilities:
+    // Client makes request, performs await (which populates the ready option) and then the responses are received and delivered to the client
+    // Client makes requests and does not immediately perform await, the responses are received and the ready is populated with the responses
+    // When the client awaits, it will see that there is already a Ready populated so it instantly delivers the payload to the client.
+    Async(Option<Ready<P>>),
 }
 
 struct Ready<P> {
@@ -86,10 +93,7 @@ where
 
     //The ready items for requests made by this client. This is what is going to be used by the message receive task
     //To call the awaiting tasks
-    ready: Vec<Mutex<IntMap<Ready<D::Reply>>>>,
-    callback_ready: Vec<Mutex<IntMap<Callback<D::Reply>>>>,
-
-    //ready: Vec<Mutex<IntMap<ClientAwaker<D::Reply>>>>,
+    ready: Vec<Mutex<IntMap<ClientAwaker<D::Reply>>>>,
 
     //We only want to have a single observer client for any and all sessions that the user
     //May have, so we keep this reference in here
@@ -147,7 +151,7 @@ impl<D: SharedData> Clone for Client<D> {
 
 struct ClientRequestFut<'a, P> {
     request_key: u64,
-    ready: &'a Mutex<IntMap<Ready<P>>>,
+    ready: &'a Mutex<IntMap<ClientAwaker<P>>>,
 }
 
 impl<'a, P> Future for ClientRequestFut<'a, P> {
@@ -160,12 +164,27 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
         self.ready
             .try_lock()
             .map(|mut ready| {
-                let request =
-                    IntMapEntry::get(self.request_key, &mut *ready).or_insert_with(|| Ready {
-                        payload: None,
-                        waker: None,
-                        timed_out: AtomicBool::new(false),
-                    });
+                let request = ready
+                    .get_mut(self.request_key)
+                    .expect("Request must be present here, how is this possible?");
+
+                let request = match request {
+                    ClientAwaker::Async(awaker) => {
+                        if let None = awaker {
+                            //If there is still no Ready inserted, insert now so it can later be fetched
+                            *awaker = Some(Ready {
+                                waker: None,
+                                payload: None,
+                                timed_out: AtomicBool::new(false),
+                            });
+                        }
+
+                        //If there was already an inserted Ready struct, then the response is probably already ready to be received
+
+                        awaker.as_mut().unwrap()
+                    }
+                    ClientAwaker::Callback(_) => unreachable!(),
+                };
 
                 if let Some(payload) = request.payload.take() {
                     //Response is ready, take it
@@ -246,10 +265,6 @@ where
                 .take(num_cpus::get())
                 .collect(),
 
-            callback_ready: std::iter::repeat_with(|| Mutex::new(IntMap::new()))
-                .take(num_cpus::get())
-                .collect(),
-
             observer: Arc::new(Mutex::new(None)),
             observer_ready: Mutex::new(None),
         });
@@ -300,7 +315,7 @@ where
         self.node.id()
     }
 
-    pub async fn update_<T>(&mut self, operation: D::Request) -> D::Reply
+    pub async fn update<T>(&mut self, operation: D::Request) -> D::Reply
     where
         T: ClientType<D>,
     {
@@ -332,6 +347,12 @@ where
         // await response
         let ready = get_ready::<D>(session_id, &*self.data);
 
+        {
+            let mut ready_stored = ready.lock().unwrap();
+
+            ready_stored.insert(request_key, ClientAwaker::Async(None));
+        }
+
         Self::start_timeout(
             self.node.clone(),
             session_id,
@@ -346,7 +367,7 @@ where
     /// on top of `febft`.
     //
     // TODO: request timeout
-    pub async fn update(&mut self, operation: D::Request) -> D::Reply {
+    /*pub async fn update(&mut self, operation: D::Request) -> D::Reply {
         let session_id = self.session_id;
         let operation_id = self.next_operation_id();
         let message =
@@ -368,7 +389,7 @@ where
         );
 
         ClientRequestFut { request_key, ready }.await
-    }
+    }*/
 
     ///Update the SMR state with the given operation
     /// The callback should be a function to execute when we receive the response to the request.
@@ -392,19 +413,6 @@ where
 
         // await response
         let request_key = get_request_key(session_id, operation_id);
-        let ready = get_ready_callback::<D>(session_id, &*self.data);
-
-        let callback = Callback {
-            to_call: callback,
-            timed_out: AtomicBool::new(false),
-        };
-
-        //Scope the mutex operations to reduce the lifetime of the guard
-        {
-            let mut ready_callback_guard = ready.lock().unwrap();
-
-            ready_callback_guard.insert(request_key, callback);
-        }
 
         //We only send the message after storing the callback to prevent us receiving the result without having
         //The callback registered, therefore losing the response
@@ -421,6 +429,20 @@ where
             let mut request_info_guard = request_info.lock().unwrap();
 
             request_info_guard.insert(request_key, sent_info);
+        }
+
+        let ready = get_ready::<D>(session_id, &*self.data);
+
+        let callback = Callback {
+            to_call: callback,
+            timed_out: AtomicBool::new(false),
+        };
+
+        //Scope the mutex operations to reduce the lifetime of the guard
+        {
+            let mut ready_callback_guard = ready.lock().unwrap();
+
+            ready_callback_guard.insert(request_key, ClientAwaker::Callback(callback));
         }
 
         self.node.broadcast(message, targets);
@@ -440,7 +462,7 @@ where
     /// So in the callback, we should not perform any heavy computations / blocking operations as that
     /// will hurt the performance of the client. If you wish to perform heavy operations, move them
     /// to other threads to prevent slowdowns
-    pub fn update_callback(
+    /*pub fn update_callback(
         &mut self,
         operation: D::Request,
         callback: Box<dyn FnOnce(D::Reply) + Send>,
@@ -480,7 +502,7 @@ where
             operation_id,
             self.data.clone(),
         );
-    }
+    }*/
 
     fn next_operation_id(&mut self) -> SeqNo {
         let id = self.operation_counter;
@@ -513,7 +535,17 @@ where
                 let request = bucket_guard.get(req_key);
 
                 if let Some(request) = request {
-                    request.timed_out.store(true, Ordering::Relaxed);
+                    match request {
+                        ClientAwaker::Callback(request) => {
+                            request.timed_out.store(true, Ordering::SeqCst)
+                        }
+                        ClientAwaker::Async(Some(ready)) => {
+                            ready.timed_out.store(true, Ordering::SeqCst)
+                        }
+                        ClientAwaker::Async(None) => {
+                            //TODO: This has to be handled (should populate the ready with an empty, but timed out ready)
+                        }
+                    }
 
                     if let Some(sent_rqs) = &node.sent_rqs {
                         let bucket = &sent_rqs[req_key as usize % sent_rqs.len()];
@@ -535,41 +567,6 @@ where
                     }
                 }
             }
-
-            {
-                let bucket = get_ready_callback::<D>(session_id, &*client_data);
-
-                let bucket_guard = bucket.lock().unwrap();
-
-                let request = bucket_guard.get(req_key);
-
-                if let Some(request) = request {
-                    request.timed_out.store(true, Ordering::Relaxed);
-
-                    if let Some(sent_rqs) = &node.sent_rqs {
-                        let bucket = &sent_rqs[req_key as usize % sent_rqs.len()];
-
-                        if bucket.contains_key(&req_key) {
-                            error!(
-                                "{:?} // Request {:?} of session {:?} was SENT and timed OUT!",
-                                node_id, rq_id, session_id
-                            );
-                        };
-                    } else {
-                        error!(
-                            "{:?} // Request {:?} of session {:?} was NOT SENT and timed OUT!",
-                            node_id, rq_id, session_id
-                        );
-                    }
-                } else {
-                    //Cleanup
-                    if let Some(sent_rqs) = &node.sent_rqs {
-                        let bucket = &sent_rqs[req_key as usize % sent_rqs.len()];
-
-                        bucket.remove(&req_key);
-                    }
-                }
-            }
         });
     }
 
@@ -584,13 +581,13 @@ where
         while let Ok(message) = node.receive_from_replicas() {
             match message {
                 Message::System(header, message) => {
-
                     match &message {
-                        SystemMessage::Reply(msg_info) | SystemMessage::UnOrderedReply(msg_info) => {
-                            
+                        SystemMessage::Reply(msg_info)
+                        | SystemMessage::UnOrderedReply(msg_info) => {
                             let session_id = msg_info.session_id();
                             let operation_id = msg_info.sequence_number();
 
+                            //Check if we have already executed the operation
                             let last_operation_id = last_operation_ids
                                 .get(session_id.into())
                                 .copied()
@@ -602,6 +599,8 @@ where
                             }
 
                             let request_key = get_request_key(session_id, operation_id);
+
+                            //Get the votes for the instance
                             let votes = IntMapEntry::get(request_key, &mut replica_votes)
                                 .or_insert_with(|| {
                                     let request_info = get_request_info(session_id, &*data);
@@ -620,21 +619,23 @@ where
                                             digests: Default::default(),
                                         }
                                     } else {
+                                        //If there is no stored information, take the safe road and require f + 1 votes
                                         ReplicaVotes {
+                                            contacted_nodes: params.n(),
                                             needed_votes_count: params.f() + 1,
                                             voted: Default::default(),
                                             digests: Default::default(),
-                                            contacted_nodes: params.n(),
                                         }
                                     }
                                 });
 
-                                //Check if replicas try to vote twice on the same consensus instance
+                            //Check if replicas try to vote twice on the same consensus instance
                             if votes.voted.contains(&header.from()) {
                                 error!(
                                     "Replica {:?} voted twice for the same request, ignoring!",
                                     header.from()
                                 );
+
                                 continue;
                             }
 
@@ -647,7 +648,7 @@ where
 
                                 votes.digests.get(header.digest()).unwrap().clone()
                             } else {
-                                //Register the newly received reply
+                                //Register the newly received reply (has not been seen yet)
                                 votes.digests.insert(header.digest().clone(), 1);
 
                                 1
@@ -662,72 +663,72 @@ where
                                 last_operation_ids.insert(session_id.into(), operation_id);
 
                                 let (_, _, payload) = match message {
-                                    SystemMessage::Reply(msg) | SystemMessage::UnOrderedReply(msg) => {
-                                        msg.into_inner()
-                                    },
+                                    SystemMessage::Reply(msg)
+                                    | SystemMessage::UnOrderedReply(msg) => msg.into_inner(),
                                     _ => {
                                         unreachable!()
                                     }
                                 };
 
-                                //Check the callbacks to see if there is something we can call
-                                //If there is
-                                {
-                                    let ready_callback =
-                                        get_ready_callback::<D>(session_id, &*data);
-
-                                    let mut ready_callback_lock = ready_callback.lock().unwrap();
-
-                                    if ready_callback_lock.contains_key(request_key) {
-                                        let callback =
-                                            ready_callback_lock.remove(request_key).unwrap();
-
-                                        //FIXME: If this callback executes heavy or blocking operations,
-                                        //This will block the receiving thread, meaning request processing
-                                        //Can be hampered.
-                                        //So to fix this, move this to a threadpool or just to another thread.
-                                        (callback.to_call)(payload);
-
-                                        if callback.timed_out.load(Ordering::Relaxed) {
-                                            error!("{:?} // Received response to timed out request {:?} on session {:?}",
-                                                node.id(), session_id, operation_id);
-                                        }
-
-                                        //The response has been successfully delivered to the callback, do not process this
-                                        //Message any further
-                                        continue;
-                                    }
-                                }
-
-                                //Check the async await
+                                //Get the wakers for this request and deliver the payload
                                 {
                                     let mut ready =
                                         get_ready::<D>(session_id, &*data).lock().unwrap();
 
-                                    let request = IntMapEntry::get(request_key, &mut *ready)
-                                        .or_insert_with(|| Ready {
-                                            payload: None,
-                                            waker: None,
-                                            timed_out: AtomicBool::new(false),
-                                        });
+                                    let request = ready.get_mut(request_key);
 
-                                    // register response
-                                    request.payload = Some(payload);
+                                    if let Some(request) = request {
+                                        match request {
+                                            ClientAwaker::Callback(_) => {
+                                                //This is impossible to fail since we are in the Some method of the request
+                                                let request = ready.remove(request_key).unwrap();
 
-                                    // try to wake up a waiting task
-                                    if let Some(waker) = request.waker.take() {
-                                        waker.wake();
-                                    }
+                                                let request = match request {
+                                                    ClientAwaker::Callback(request) => request,
+                                                    _ => unreachable!(),
+                                                };
 
-                                    if request.timed_out.load(Ordering::Relaxed) {
-                                        error!("{:?} // Received response to timed out request {:?} on session {:?}",
-                                        node.id(), session_id, operation_id);
+                                                (request.to_call)(payload);
+
+                                                if request.timed_out.load(Ordering::Relaxed) {
+                                                    error!("{:?} // Received response to timed out request {:?} on session {:?}",
+                                                            node.id(), session_id, operation_id);
+                                                }
+                                            }
+                                            ClientAwaker::Async(opt_ready) => {
+                                                if let Some(request) = opt_ready.as_mut() {
+                                                    // register response
+                                                    request.payload = Some(payload);
+
+                                                    if request.timed_out.load(Ordering::Relaxed) {
+                                                        error!("{:?} // Received response to timed out request {:?} on session {:?}",
+                                                                    node.id(), session_id, operation_id);
+                                                    }
+
+                                                    // try to wake up the waiting task
+                                                    if let Some(waker) = request.waker.take() {
+                                                        waker.wake();
+                                                    }
+                                                } else {
+                                                    let request = Ready {
+                                                        waker: None,
+                                                        payload: Some(payload),
+                                                        timed_out: AtomicBool::new(false),
+                                                    };
+
+                                                    //populate the data with the received payload
+                                                    *opt_ready = Some(request);
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        error!("Failed to get awaker for request {:?}", request_key)
                                     }
                                 }
                             }
 
-                            continue
-                        },
+                            continue;
+                        }
                         _ => {}
                     }
 
@@ -769,16 +770,8 @@ fn get_correct_vec_for<T>(session_id: SeqNo, vec: &Vec<Mutex<T>>) -> &Mutex<T> {
 fn get_ready<D: SharedData>(
     session_id: SeqNo,
     data: &ClientData<D>,
-) -> &Mutex<IntMap<Ready<D::Reply>>> {
+) -> &Mutex<IntMap<ClientAwaker<D::Reply>>> {
     get_correct_vec_for(session_id, &data.ready)
-}
-
-#[inline]
-fn get_ready_callback<D: SharedData>(
-    session_id: SeqNo,
-    data: &ClientData<D>,
-) -> &Mutex<IntMap<Callback<D::Reply>>> {
-    get_correct_vec_for(session_id, &data.callback_ready)
 }
 
 #[inline]

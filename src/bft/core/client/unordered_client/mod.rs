@@ -1,18 +1,15 @@
 use std::collections::BTreeSet;
-use std::sync::atomic::AtomicBool;
+
 use std::sync::{Arc, Mutex};
 
-use crate::bft::communication::message::{ReplyMessage, RequestMessage, SystemMessage};
-use crate::bft::communication::{Node, NodeConnector};
+use crate::bft::communication::message::{RequestMessage, SystemMessage};
+
 use crate::bft::{
     communication::{serialize::SharedData, NodeId},
     ordering::SeqNo,
 };
 
-use super::{
-    get_ready, get_ready_callback, get_request_key, Callback, Client, ClientData, ClientRequestFut,
-    ClientType, ReplicaVotes,
-};
+use super::{Client, ClientType};
 
 pub enum UnorderedClientMode {
     ///BFT Client mode
