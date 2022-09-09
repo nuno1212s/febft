@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::bft::communication::channel::{self, ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::{
-    ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, Header, StoredMessage,
+    ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, StoredMessage,
     SystemMessage, ViewChangeMessage, ViewChangeMessageKind,
 };
 use crate::bft::communication::{Node, NodeId, SendNode};

@@ -9,7 +9,7 @@ use crate::bft::communication::{channel, NodeId};
 
 use crate::bft::consensus::log::persistent::PersistentLogModeTrait;
 use crate::bft::consensus::log::{operation_key, Info, Log};
-use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UpdateBatch};
+use crate::bft::executable::{ExecutorHandle, Request, Service, UpdateBatch};
 use crate::bft::ordering::{Orderable, SeqNo};
 
 type RequestToProcess<O> = (
@@ -96,7 +96,7 @@ where
     ) -> RqFinalizerHandle<S> {
         let (ch_tx, ch_rx) = channel::new_bounded_sync(REQ_BATCH_BUFF);
 
-        let rq_finalizer = Self {
+        let _rq_finalizer = Self {
             node_id: node,
             log,
             executor: executor_handle,

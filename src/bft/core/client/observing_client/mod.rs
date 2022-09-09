@@ -9,7 +9,7 @@ use core::task::{Context, Waker};
 use log::{error, warn};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
 
@@ -91,7 +91,6 @@ impl ObserverClient {
                                         None => guard.insert(Ready {
                                             waker: None,
                                             responses_received: Default::default(),
-                                            timed_out: Default::default(),
                                         }),
                                         Some(ready) => ready,
                                     };
@@ -224,7 +223,6 @@ impl ObserverClient {
 pub struct Ready {
     waker: Option<Waker>,
     responses_received: AtomicU32,
-    timed_out: AtomicBool,
 }
 
 struct PendingObserverRequestFut<'a> {
@@ -244,7 +242,6 @@ impl<'a> Future for PendingObserverRequestFut<'a> {
                     None => ready.insert(Ready {
                         waker: None,
                         responses_received: AtomicU32::new(0),
-                        timed_out: AtomicBool::new(false),
                     }),
                     Some(ready) => ready,
                 };

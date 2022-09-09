@@ -5,6 +5,9 @@ use crate::bft::communication::channel::{ChannelMixedRx, ChannelMixedTx};
 use crate::bft::communication::message::{ObserveEventKind, ObserverMessage, SystemMessage};
 use crate::bft::communication::{NodeId, SendNode};
 use crate::bft::communication::serialize::SharedData;
+use crate::bft::ordering::SeqNo;
+
+use super::ViewInfo;
 
 pub type ObserverType = NodeId;
 
@@ -43,6 +46,8 @@ pub fn start_observers<D>(send_node: SendNode<D>) -> ObserverHandle where D: Sha
     let observer = Observers {
         registered_observers: BTreeSet::new(),
         send_node,
+        last_normal_event: None,
+        last_event: None,
         rx
     };
     
@@ -54,7 +59,9 @@ pub fn start_observers<D>(send_node: SendNode<D>) -> ObserverHandle where D: Sha
 struct Observers<D> where D: SharedData + 'static {
     registered_observers: BTreeSet<ObserverType>,
     send_node: SendNode<D>,
-    rx: ChannelMixedRx<MessageType<ObserverType>>
+    rx: ChannelMixedRx<MessageType<ObserverType>>,
+    last_normal_event: Option<(ViewInfo, SeqNo)>,
+    last_event: Option<ObserveEventKind>,
 }
 
 impl<D> Observers<D> where D: SharedData + 'static{
@@ -90,6 +97,18 @@ impl<D> Observers<D> where D: SharedData + 'static{
                                     let message = SystemMessage::ObserverMessage(ObserverMessage::ObserverRegisterResponse(res));
 
                                     self.send_node.send(message, connected_client, true);
+
+                                    if let Some((view, seq)) = &self.last_normal_event {
+                                        let message : SystemMessage<D::State, D::Request, D::Reply> = SystemMessage::ObserverMessage(ObserverMessage::ObservedValue(ObserveEventKind::NormalPhase((view.clone(), seq.clone()))));
+
+                                        self.send_node.send(message, connected_client, true);
+                                    }
+
+                                    if let Some(last_event) = &self.last_event {
+                                        let message : SystemMessage<D::State, D::Request, D::Reply> = SystemMessage::ObserverMessage(ObserverMessage::ObservedValue(last_event.clone()));
+
+                                        self.send_node.send(message, connected_client, true);
+                                    }
                                 }
                                 ConnState::Disconnected(disconnected_client) => {
                                     if !self.remove_observers(&disconnected_client) {
@@ -99,6 +118,13 @@ impl<D> Observers<D> where D: SharedData + 'static{
                             }
                         }
                         MessageType::Event(event_type) => {
+
+                            if let ObserveEventKind::NormalPhase((view, seq)) = &event_type {
+                                self.last_normal_event = Some((view.clone(), seq.clone()));
+                            }
+
+                            self.last_event = Some(event_type.clone());
+
                             //Send the observed event to the registered observers
                             let message = SystemMessage::ObserverMessage(ObserverMessage::ObservedValue(event_type));
 

@@ -13,7 +13,7 @@ use futures_timer::Delay;
 use intmap::IntMap;
 use log::error;
 
-use crate::bft::communication::message::{Message, RequestMessage, SystemMessage};
+use crate::bft::communication::message::{Message, ReplyMessage, SystemMessage};
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::{Node, NodeConfig, NodeId};
 use crate::bft::core::client::observing_client::ObserverClient;
@@ -60,17 +60,17 @@ enum ClientAwaker<P> {
 
 struct Ready<P> {
     waker: Option<Waker>,
-    payload: Option<P>,
+    payload: Option<Result<P>>,
     timed_out: AtomicBool,
 }
 
 struct Callback<P> {
-    to_call: Box<dyn FnOnce(P) + Send>,
+    to_call: Box<dyn FnOnce(Result<P>) + Send>,
     timed_out: AtomicBool,
 }
 
 impl<P> Deref for Callback<P> {
-    type Target = Box<dyn FnOnce(P) + Send>;
+    type Target = Box<dyn FnOnce(Result<P>) + Send>;
 
     fn deref(&self) -> &Self::Target {
         &self.to_call
@@ -85,7 +85,7 @@ where
     session_counter: AtomicU32,
 
     //Follower data
-    follower_data: Arc<FollowerData>,
+    follower_data: FollowerData,
 
     //Information about the requests that were sent like to how many replicas were
     //they sent, how many responses they need, etc
@@ -117,6 +117,7 @@ pub trait ClientType<D: SharedData + 'static> {
     /// Returns the iterator along with the amount of items contained within it
     fn init_targets(client: &Client<D>) -> (Self::Iter, usize);
 
+    ///How many responses does that client need to get the
     fn needed_responses(client: &Client<D>) -> usize;
 }
 
@@ -155,12 +156,12 @@ struct ClientRequestFut<'a, P> {
 }
 
 impl<'a, P> Future for ClientRequestFut<'a, P> {
-    type Output = P;
+    type Output = Result<P>;
 
     // TODO: maybe make this impl more efficient;
     // if we have a lot of requests being done in parallel,
     // the mutexes are going to have a fair bit of contention
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<P> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.ready
             .try_lock()
             .map(|mut ready| {
@@ -208,7 +209,7 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
 
 /// Represents a configuration used to bootstrap a `Client`.
 pub struct ClientConfig {
-    unordered_rq_mode: UnorderedClientMode,
+    pub unordered_rq_mode: UnorderedClientMode,
 
     /// Check out the docs on `NodeConfig`.
     pub node: NodeConfig,
@@ -255,7 +256,7 @@ where
         // create shared data
         let data = Arc::new(ClientData {
             session_counter: AtomicU32::new(0),
-            follower_data: Arc::new(FollowerData::empty(unordered_rq_mode)),
+            follower_data: FollowerData::empty(unordered_rq_mode),
 
             request_info: std::iter::repeat_with(|| Mutex::new(IntMap::new()))
                 .take(num_cpus::get())
@@ -315,7 +316,11 @@ where
         self.node.id()
     }
 
-    pub async fn update<T>(&mut self, operation: D::Request) -> D::Reply
+    /// Updates the replicated state of the application running
+    /// on top of `febft`.
+    //
+    // TODO: request timeout
+    pub async fn update<T>(&mut self, operation: D::Request) -> Result<D::Reply>
     where
         T: ClientType<D>,
     {
@@ -363,34 +368,6 @@ where
         ClientRequestFut { request_key, ready }.await
     }
 
-    /// Updates the replicated state of the application running
-    /// on top of `febft`.
-    //
-    // TODO: request timeout
-    /*pub async fn update(&mut self, operation: D::Request) -> D::Reply {
-        let session_id = self.session_id;
-        let operation_id = self.next_operation_id();
-        let message =
-            SystemMessage::Request(RequestMessage::new(session_id, operation_id, operation));
-
-        // broadcast our request to the node group
-        let targets = NodeId::targets(0..self.params.n());
-        self.node.broadcast(message, targets);
-
-        // await response
-        let request_key = get_request_key(session_id, operation_id);
-        let ready = get_ready::<D>(session_id, &*self.data);
-
-        Self::start_timeout(
-            self.node.clone(),
-            session_id,
-            operation_id,
-            self.data.clone(),
-        );
-
-        ClientRequestFut { request_key, ready }.await
-    }*/
-
     ///Update the SMR state with the given operation
     /// The callback should be a function to execute when we receive the response to the request.
     ///
@@ -398,10 +375,10 @@ where
     /// So in the callback, we should not perform any heavy computations / blocking operations as that
     /// will hurt the performance of the client. If you wish to perform heavy operations, move them
     /// to other threads to prevent slowdowns
-    pub fn update_callback_<T>(
+    pub fn update_callback<T>(
         &mut self,
         operation: D::Request,
-        callback: Box<dyn FnOnce(D::Reply) + Send>,
+        callback: Box<dyn FnOnce(Result<D::Reply>) + Send>,
     ) where
         T: ClientType<D>,
     {
@@ -422,7 +399,7 @@ where
 
         {
             let sent_info = SentRequestInfo {
-                target_count: target_count,
+                target_count,
                 responses_needed: T::needed_responses(self),
             };
 
@@ -455,55 +432,6 @@ where
         );
     }
 
-    ///Update the SMR state with the given operation
-    /// The callback should be a function to execute when we receive the response to the request.
-    ///
-    /// FIXME: This callback is going to be executed in an important thread for client performance,
-    /// So in the callback, we should not perform any heavy computations / blocking operations as that
-    /// will hurt the performance of the client. If you wish to perform heavy operations, move them
-    /// to other threads to prevent slowdowns
-    /*pub fn update_callback(
-        &mut self,
-        operation: D::Request,
-        callback: Box<dyn FnOnce(D::Reply) + Send>,
-    ) {
-        let session_id = self.session_id;
-
-        let operation_id = self.next_operation_id();
-
-        let message =
-            SystemMessage::Request(RequestMessage::new(session_id, operation_id, operation));
-
-        // await response
-        let request_key = get_request_key(session_id, operation_id);
-        let ready = get_ready_callback::<D>(session_id, &*self.data);
-
-        let callback = Callback {
-            to_call: callback,
-            timed_out: AtomicBool::new(false),
-        };
-
-        //Scope the mutex operations to reduce the lifetime of the guard
-        {
-            let mut ready_callback_guard = ready.lock().unwrap();
-
-            ready_callback_guard.insert(request_key, callback);
-        }
-
-        //We only send the message after storing the callback to prevent us receiving the result without having
-        //The callback registered, therefore losing the response
-        let targets = NodeId::targets(0..self.params.n());
-
-        self.node.broadcast(message, targets);
-
-        Self::start_timeout(
-            self.node.clone(),
-            session_id,
-            operation_id,
-            self.data.clone(),
-        );
-    }*/
-
     fn next_operation_id(&mut self) -> SeqNo {
         let id = self.operation_counter;
 
@@ -512,6 +440,8 @@ where
         id
     }
 
+    ///Start performing a timeout for a given request.
+    /// TODO: Repeat the request/do something else to fix this
     fn start_timeout(
         node: Arc<Node<D>>,
         session_id: SeqNo,
@@ -570,6 +500,165 @@ where
         });
     }
 
+    /// Create the default replica vote struct
+    fn create_replica_votes(
+        request_info: &Mutex<IntMap<SentRequestInfo>>,
+        request_key: u64,
+        params: &SystemParams,
+    ) -> ReplicaVotes {
+        let mut request_info_guard = request_info.lock().unwrap();
+
+        let rq_info = request_info_guard.remove(request_key);
+
+        if let Some(rq_info) = rq_info {
+            //If we have information about the request in question,
+            //Utilize it
+            ReplicaVotes {
+                contacted_nodes: rq_info.target_count,
+                needed_votes_count: rq_info.responses_needed,
+                voted: Default::default(),
+                digests: Default::default(),
+            }
+        } else {
+            //If there is no stored information, take the safe road and require f + 1 votes
+            ReplicaVotes {
+                contacted_nodes: params.n(),
+                needed_votes_count: params.f() + 1,
+                voted: Default::default(),
+                digests: Default::default(),
+            }
+        }
+    }
+
+    ///Deliver the reponse to the client
+    fn deliver_response(
+        node_id: NodeId,
+        request_key: u64,
+        ready: &Mutex<IntMap<ClientAwaker<D::Reply>>>,
+        message: ReplyMessage<D::Reply>,
+    ) {
+        let mut ready_lock = ready.lock().unwrap();
+
+        let request = ready_lock.get_mut(request_key);
+
+        let (session_id, operation_id, payload) = message.into_inner();
+
+        if let Some(request) = request {
+            match request {
+                ClientAwaker::Callback(_) => {
+                    //This is impossible to fail since we are in the Some method of the request
+                    let request = ready_lock.remove(request_key).unwrap();
+
+                    let request = match request {
+                        ClientAwaker::Callback(request) => request,
+                        _ => unreachable!(),
+                    };
+
+                    if request.timed_out.load(Ordering::Relaxed) {
+                        error!(
+                            "{:?} // Received response to timed out request {:?} on session {:?}",
+                            node_id, session_id, operation_id
+                        );
+                    }
+
+                    (request.to_call)(Ok(payload));
+                }
+                ClientAwaker::Async(opt_ready) => {
+                    if let Some(request) = opt_ready.as_mut() {
+                        // register response
+                        request.payload = Some(Ok(payload));
+
+                        if request.timed_out.load(Ordering::Relaxed) {
+                            error!("{:?} // Received response to timed out request {:?} on session {:?}",
+                                        node_id, session_id, operation_id);
+                        }
+
+                        // try to wake up the waiting task
+                        if let Some(waker) = request.waker.take() {
+                            waker.wake();
+                        }
+                    } else {
+                        let request = Ready {
+                            waker: None,
+                            payload: Some(Ok(payload)),
+                            timed_out: AtomicBool::new(false),
+                        };
+
+                        //populate the data with the received payload
+                        *opt_ready = Some(request);
+                    }
+                }
+            }
+        } else {
+            error!("Failed to get awaker for request {:?}", request_key)
+        }
+    }
+
+    ///Deliver an error response
+    fn deliver_error(
+        node_id: NodeId,
+        request_key: u64,
+        ready: &Mutex<IntMap<ClientAwaker<D::Reply>>>,
+        (session_id, operation_id): (SeqNo, SeqNo),
+    ) {
+        let mut ready_lock = ready.lock().unwrap();
+
+        let request = ready_lock.get_mut(request_key);
+
+        let err_msg = Err("Could not get f+1 equal responses, failed to execute the request")
+            .wrapped(ErrorKind::CoreClient);
+
+        if let Some(request) = request {
+            match request {
+                ClientAwaker::Callback(_) => {
+                    //This is impossible to fail since we are in the Some method of the request
+                    let request = ready_lock.remove(request_key).unwrap();
+
+                    let request = match request {
+                        ClientAwaker::Callback(request) => request,
+                        _ => unreachable!(),
+                    };
+
+                    if request.timed_out.load(Ordering::Relaxed) {
+                        error!(
+                            "{:?} // Received response to timed out request {:?} on session {:?}",
+                            node_id, session_id, operation_id
+                        );
+                    }
+
+                    (request.to_call)(err_msg);
+                }
+                ClientAwaker::Async(opt_ready) => {
+                    if let Some(request) = opt_ready.as_mut() {
+                        // register response
+                        request.payload = Some(err_msg);
+
+                        if request.timed_out.load(Ordering::Relaxed) {
+                            error!("{:?} // Received response to timed out request {:?} on session {:?}",
+                                    node_id, session_id, operation_id);
+                        }
+
+                        // try to wake up the waiting task
+                        if let Some(waker) = request.waker.take() {
+                            waker.wake();
+                        }
+                    } else {
+                        let request = Ready {
+                            waker: None,
+                            payload: Some(err_msg),
+                            timed_out: AtomicBool::new(false),
+                        };
+
+                        //populate the data with the received payload
+                        *opt_ready = Some(request);
+                    }
+                }
+            }
+        } else {
+            error!("Failed to get awaker for request {:?}", request_key)
+        }
+    }
+
     ///This task might become a large bottleneck with the scenario of few clients with high concurrent rqs,
     /// As the replicas will make very large batches and respond to all the sent requests in one go.
     /// This leaves this thread with a very large task to do in a very short time and it just can't keep up
@@ -605,28 +694,7 @@ where
                                 .or_insert_with(|| {
                                     let request_info = get_request_info(session_id, &*data);
 
-                                    let mut request_info_guard = request_info.lock().unwrap();
-
-                                    let rq_info = request_info_guard.remove(request_key);
-
-                                    if let Some(rq_info) = rq_info {
-                                        //If we have information about the request in question,
-                                        //Utilize it
-                                        ReplicaVotes {
-                                            contacted_nodes: rq_info.target_count,
-                                            needed_votes_count: rq_info.responses_needed,
-                                            voted: Default::default(),
-                                            digests: Default::default(),
-                                        }
-                                    } else {
-                                        //If there is no stored information, take the safe road and require f + 1 votes
-                                        ReplicaVotes {
-                                            contacted_nodes: params.n(),
-                                            needed_votes_count: params.f() + 1,
-                                            voted: Default::default(),
-                                            digests: Default::default(),
-                                        }
-                                    }
+                                    Self::create_replica_votes(request_info, request_key, &params)
                                 });
 
                             //Check if replicas try to vote twice on the same consensus instance
@@ -662,68 +730,48 @@ where
                                 last_operation_ids.remove(session_id.into());
                                 last_operation_ids.insert(session_id.into(), operation_id);
 
-                                let (_, _, payload) = match message {
-                                    SystemMessage::Reply(msg)
-                                    | SystemMessage::UnOrderedReply(msg) => msg.into_inner(),
-                                    _ => {
-                                        unreachable!()
-                                    }
-                                };
-
                                 //Get the wakers for this request and deliver the payload
-                                {
-                                    let mut ready =
-                                        get_ready::<D>(session_id, &*data).lock().unwrap();
 
-                                    let request = ready.get_mut(request_key);
+                                let ready = get_ready::<D>(session_id, &*data);
 
-                                    if let Some(request) = request {
-                                        match request {
-                                            ClientAwaker::Callback(_) => {
-                                                //This is impossible to fail since we are in the Some method of the request
-                                                let request = ready.remove(request_key).unwrap();
+                                Self::deliver_response(
+                                    node.id(),
+                                    request_key,
+                                    ready,
+                                    match message {
+                                        SystemMessage::Reply(message)
+                                        | SystemMessage::UnOrderedReply(message) => message,
+                                        _ => unreachable!(),
+                                    },
+                                );
+                            } else {
+                                //If we do not have f+1 replies yet, check if it's still possible to get those
+                                //Replies by taking a look at the target count and currently received replies count
 
-                                                let request = match request {
-                                                    ClientAwaker::Callback(request) => request,
-                                                    _ => unreachable!(),
-                                                };
+                                let mut total_count: usize = 0;
 
-                                                (request.to_call)(payload);
+                                for (_, count) in votes.digests.iter() {
+                                    total_count += count;
+                                }
 
-                                                if request.timed_out.load(Ordering::Relaxed) {
-                                                    error!("{:?} // Received response to timed out request {:?} on session {:?}",
-                                                            node.id(), session_id, operation_id);
-                                                }
-                                            }
-                                            ClientAwaker::Async(opt_ready) => {
-                                                if let Some(request) = opt_ready.as_mut() {
-                                                    // register response
-                                                    request.payload = Some(payload);
+                                if total_count >= votes.contacted_nodes {
+                                    //We already got all of our responses, so it's impossible to get f+1 equal reponses
+                                    //What we will do now is call the awakers with an Err result
+                                    replica_votes.remove(request_key);
 
-                                                    if request.timed_out.load(Ordering::Relaxed) {
-                                                        error!("{:?} // Received response to timed out request {:?} on session {:?}",
-                                                                    node.id(), session_id, operation_id);
-                                                    }
+                                    //Clean up the memory corresponding to this request
+                                    last_operation_ids.remove(session_id.into());
+                                    last_operation_ids.insert(session_id.into(), operation_id);
 
-                                                    // try to wake up the waiting task
-                                                    if let Some(waker) = request.waker.take() {
-                                                        waker.wake();
-                                                    }
-                                                } else {
-                                                    let request = Ready {
-                                                        waker: None,
-                                                        payload: Some(payload),
-                                                        timed_out: AtomicBool::new(false),
-                                                    };
+                                    //Get the wakers for this request and deliver the payload
+                                    let ready = get_ready::<D>(session_id, &*data);
 
-                                                    //populate the data with the received payload
-                                                    *opt_ready = Some(request);
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        error!("Failed to get awaker for request {:?}", request_key)
-                                    }
+                                    Self::deliver_error(
+                                        node.id(),
+                                        request_key,
+                                        ready,
+                                        (session_id, operation_id),
+                                    );
                                 }
                             }
 

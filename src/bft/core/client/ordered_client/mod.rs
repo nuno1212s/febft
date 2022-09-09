@@ -2,8 +2,6 @@ use crate::bft::{communication::{serialize::SharedData, message::{SystemMessage,
 
 use super::{ClientType, Client};
 
-
-
 pub struct Ordered;
 
 impl<D> ClientType<D> for Ordered where D: SharedData + 'static {
