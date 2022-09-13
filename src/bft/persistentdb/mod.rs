@@ -2,9 +2,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::bft::error::*;
-use crate::bft::persistentdb::rocksdb::RocksKVDB;
-
-use self::disabled::DisabledKV;
 
 #[cfg(feature = "persistent_db_rocksdb")]
 pub mod rocksdb;
@@ -14,7 +11,7 @@ pub mod disabled;
 pub struct KVDB {
     _prefixes: Vec<&'static str>,
     #[cfg(feature = "persistent_db_rocksdb")]
-    inner: Arc<RocksKVDB>,
+    inner: Arc<rocksdb::RocksKVDB>,
     //TODO: This should be an else, not just not rocksdb
     #[cfg(not(feature = "persistent_db_rocksdb"))]
     inner: DisabledKV
@@ -30,7 +27,7 @@ impl KVDB {
 
         let inner = {
             #[cfg(feature = "persistent_db_rocksdb")]
-            {Arc::new(RocksKVDB::new(db_path, prefixes_cpy)?)}
+            {Arc::new(rocksdb::RocksKVDB::new(db_path, prefixes_cpy)?)}
             #[cfg(not(feature = "persistent_db_rocksdb"))]
             {DisabledKV::new(db_path, prefixes_cpy)}
         };
