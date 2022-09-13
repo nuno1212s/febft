@@ -24,7 +24,8 @@ default = [
     "channel_mult_custom_dump",
     "crypto_signature_ring_ed25519",
     "crypto_hash_blake3_blake3",
-    "collections_randomstate_fxhash"
+    "collections_randomstate_fxhash",
+    "persistent_db_rocksdb"
 ]
 
 socket_tokio_tcp = ["tokio", "tokio-util"]
@@ -68,6 +69,12 @@ channel_custom_dump_mqueue = ["dsrust"]
 collections_randomstate_std = []
 collections_randomstate_fxhash = ["fxhash"]
 collections_randomstate_twox_hash = ["twox-hash"]
+
+# Alternatives for the persistent db type.
+# If no type of this category is presented, it will default to disabled,
+# But the default features do include rocksdb
+persistent_db_rocksdb = ["rocksdb"]
+persistent_db_disabled = []
 
 #bench = ["expose_impl", "oneshot", "futures-timer", "async-semaphore"]
 expose_impl = []
@@ -122,7 +129,7 @@ fxhash = { version = "0.2", optional = true }
 dsrust = { version = "0.1.9", git = "https://github.com/nuno1212s/DSRust", optional = true }
 #dsrust = { path = "/home/nunogneto/Documents/Development/Rust/dsrust" }
 crossbeam-channel = { version = "0.5.2", optional = true }
-rocksdb = "0.19.0"
+rocksdb = {version = "0.19.0", optional = true }
 
 log = "0.4.17"
 env_logger = "0.9.0"

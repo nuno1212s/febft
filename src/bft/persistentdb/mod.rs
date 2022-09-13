@@ -4,12 +4,20 @@ use std::sync::Arc;
 use crate::bft::error::*;
 use crate::bft::persistentdb::rocksdb::RocksKVDB;
 
+use self::disabled::DisabledKV;
+
+#[cfg(feature = "persistent_db_rocksdb")]
 pub mod rocksdb;
 
+pub mod disabled;
 #[derive(Clone)]
 pub struct KVDB {
     _prefixes: Vec<&'static str>,
+    #[cfg(feature = "persistent_db_rocksdb")]
     inner: Arc<RocksKVDB>,
+    //TODO: This should be an else, not just not rocksdb
+    #[cfg(not(feature = "persistent_db_rocksdb"))]
+    inner: DisabledKV
 }
 
 impl KVDB {
@@ -19,9 +27,17 @@ impl KVDB {
     {
         let prefixes_cpy = prefixes.clone();
 
+
+        let inner = {
+            #[cfg(feature = "persistent_db_rocksdb")]
+            {Arc::new(RocksKVDB::new(db_path, prefixes_cpy)?)}
+            #[cfg(not(feature = "persistent_db_rocksdb"))]
+            {DisabledKV::new(db_path, prefixes_cpy)}
+        };
+
         Ok(Self {
             _prefixes: prefixes,
-            inner: Arc::new(RocksKVDB::new(db_path, prefixes_cpy)?),
+            inner,
         })
     }
 
@@ -127,5 +143,4 @@ impl KVDB {
     {
         self.inner.iter_range(prefix, start, end)
     }
-
 }
