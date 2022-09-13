@@ -1,6 +1,7 @@
 use std::path::Path;
 use crate::bft::error::*;
 
+#[derive(Clone)]
 pub(crate) struct DisabledKV;
 
 impl DisabledKV {

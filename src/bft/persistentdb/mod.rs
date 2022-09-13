@@ -14,7 +14,7 @@ pub struct KVDB {
     inner: Arc<rocksdb::RocksKVDB>,
     //TODO: This should be an else, not just not rocksdb
     #[cfg(not(feature = "persistent_db_rocksdb"))]
-    inner: DisabledKV
+    inner: disabled::DisabledKV
 }
 
 impl KVDB {
