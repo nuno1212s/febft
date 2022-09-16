@@ -59,10 +59,9 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
         return Ok(None);
     }
 
-    env_logger::init();
-
+    //env_logger::init();
     let appender = FileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new("{d} - {m}{n}")))
+        .encoder(Box::new(PatternEncoder::new("{d} - {m}{n} {h({l})} ")))
         .build("./log/febft.log")
         .unwrap();
 
@@ -74,10 +73,15 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
                 .additive(false)
                 .build("app::appender", LevelFilter::Debug),
         )
-        .build(Root::builder().appender("appender").build(LevelFilter::Debug))
+        .build(
+            Root::builder()
+                .appender("appender")
+                .build(LevelFilter::Debug),
+        )
         .unwrap();
 
     let _handle = log4rs::init_config(config).unwrap();
+
     //tracing_subscriber::fmt::init();
 
     threadpool::init(c.threadpool_threads)?;
