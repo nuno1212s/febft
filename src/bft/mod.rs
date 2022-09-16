@@ -42,6 +42,9 @@ pub struct InitConfig {
     pub async_threads: usize,
     /// Number of threads used by the thread pool.
     pub threadpool_threads: usize,
+
+    ///Unique ID, used to specify the log file this replica should use
+    pub id: Option<String>
 }
 
 /// Handle to the global data.
@@ -59,11 +62,20 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
         return Ok(None);
     }
 
+    let path = match c.id {
+        Some(id) => {
+            format!("./log/febft_{}.log", id)
+        },
+        None => {
+            String::from("./log/febft.log")
+        },
+    };
+
     //env_logger::init();
     let appender = FileAppender::builder()
         .encoder(Box::new(PatternEncoder::new("{d} - {m}{n} {h({l})} ")))
-        .build("./log/febft.log")
-        .unwrap();
+        .build(path)
+        .wrapped(ErrorKind::ConsensusLog)?;
 
     let config = Config::builder()
         .appender(Appender::builder().build("appender", Box::new(appender)))
@@ -78,9 +90,9 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
                 .appender("appender")
                 .build(LevelFilter::Debug),
         )
-        .unwrap();
+        .wrapped(ErrorKind::ConsensusLog)?;
 
-    let _handle = log4rs::init_config(config).unwrap();
+    let _handle = log4rs::init_config(config).wrapped(ErrorKind::ConsensusLog)?;
 
     //tracing_subscriber::fmt::init();
 
