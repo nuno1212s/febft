@@ -52,9 +52,9 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
         return Ok(None);
     }
 
-    //env_logger::init();
+    env_logger::init();
 
-    tracing_subscriber::fmt::init();
+    //tracing_subscriber::fmt::init();
 
     threadpool::init(c.threadpool_threads)?;
     async_runtime::init(c.async_threads)?;
