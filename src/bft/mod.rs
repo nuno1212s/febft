@@ -3,29 +3,36 @@
 //! By default, it is hidden to the user, unless explicitly enabled
 //! with the feature flag `expose_impl`.
 
-pub mod benchmarks;
 pub mod async_runtime;
-pub mod communication;
+pub mod benchmarks;
 pub mod collections;
-pub mod executable;
-pub mod threadpool;
+pub mod communication;
 pub mod consensus;
-pub mod ordering;
-pub mod timeouts;
-pub mod globals;
-pub mod crypto;
-pub mod error;
-pub mod prng;
 pub mod core;
-pub mod sync;
+pub mod crypto;
 pub mod cst;
-pub mod proposer;
+pub mod error;
+pub mod executable;
+pub mod globals;
+pub mod ordering;
 pub mod persistentdb;
+pub mod prng;
+pub mod proposer;
+pub mod sync;
+pub mod threadpool;
+pub mod timeouts;
 
 use std::ops::Drop;
 
 use error::*;
 use globals::Flag;
+use log::LevelFilter;
+use log4rs::{
+    append::file::FileAppender,
+    config::{Appender, Logger, Root},
+    encode::pattern::PatternEncoder,
+    Config,
+};
 
 static INITIALIZED: Flag = Flag::new();
 
@@ -54,6 +61,23 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
 
     env_logger::init();
 
+    let appender = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new("{d} - {m}{n}")))
+        .build("./log/febft.log")
+        .unwrap();
+
+    let config = Config::builder()
+        .appender(Appender::builder().build("appender", Box::new(appender)))
+        .logger(
+            Logger::builder()
+                .appender("appender")
+                .additive(false)
+                .build("app::appender", LevelFilter::Debug),
+        )
+        .build(Root::builder().appender("appender").build(LevelFilter::Debug))
+        .unwrap();
+
+    let _handle = log4rs::init_config(config).unwrap();
     //tracing_subscriber::fmt::init();
 
     threadpool::init(c.threadpool_threads)?;
