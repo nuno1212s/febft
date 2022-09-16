@@ -26,7 +26,7 @@ use std::ops::Drop;
 
 use error::*;
 use globals::Flag;
-use log::LevelFilter;
+use log::{LevelFilter, debug};
 use log4rs::{
     append::file::FileAppender,
     config::{Appender, Logger, Root},
@@ -99,7 +99,7 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
     threadpool::init(c.threadpool_threads)?;
     async_runtime::init(c.async_threads)?;
 
-    println!("Async threads {}", c.async_threads);
+    debug!("Async threads {}, sync threads {}", c.async_threads, c.threadpool_threads);
 
     communication::socket::init()?;
     INITIALIZED.set();
