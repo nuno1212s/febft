@@ -445,10 +445,15 @@ where
             return Err("Invalid node ID").wrapped(ErrorKind::Communication);
         }
 
+        debug!("Initializing sockets.");
+
         //Initialize the client facing server
         let client_listener = Self::setup_client_facing_socket(id, &cfg).await?;
 
         let replica_listener = Self::setup_replica_facing_socket(id, &cfg).await?;
+
+
+        debug!("Initializing TLS configurations.");
 
         let async_acceptor: TlsAcceptor = cfg.async_server_config.into();
         let async_connector: TlsConnector = cfg.async_client_config.into();
@@ -469,12 +474,16 @@ where
             }
         };
 
+        debug!("Initializing client facing connections");
+
         let connector = Self::setup_connector(sync_connector, async_connector);
 
         let shared = Arc::new(NodeShared {
             my_key: cfg.sk,
             peer_keys: cfg.pk,
         });
+
+        debug!("Initializing node peer handling.");
 
         //Setup all the peer message reception handling.
         let peers = NodePeers::new(
@@ -541,6 +550,8 @@ where
         } else { None };*/
         //
 
+        debug!("Initializing node reference");
+
         let mut node = Arc::new(Node {
             id,
             rng,
@@ -556,6 +567,8 @@ where
         });
 
         let rx_node_clone = node.clone();
+
+        debug!("Initializing replica connection workers");
 
         //Setup the worker threads for receiving new connections before starting to connect to
         //other peers
@@ -581,6 +594,8 @@ where
         }
 
         let n = cfg.n;
+
+        debug!("Connect to other replicas");
 
         // tx side (connect to replica)
         if id < cfg.first_cli {
@@ -619,7 +634,7 @@ where
 
         while node.node_handling.replica_count() < cfg.n {
             //Any received messages will be handled by the connection pool buffers
-            println!(
+            debug!(
                 "Connected to {} replicas on the node {:?}",
                 node.node_handling.replica_count(),
                 node.id
@@ -628,7 +643,7 @@ where
             Delay::new(Duration::from_millis(500)).await;
         }
 
-        println!(
+        debug!(
             "Found all nodes required {}",
             node.node_handling.replica_count()
         );
