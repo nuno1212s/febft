@@ -12,8 +12,8 @@ use either::{Either, Left, Right};
 use futures::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use futures_timer::Delay;
 use intmap::IntMap;
+use log::{debug, error};
 use parking_lot::RwLock;
-use tracing::{debug, error, instrument};
 
 use rustls::{ClientConfig, ClientConnection, ServerConfig, ServerConnection, ServerName};
 
@@ -345,7 +345,7 @@ where
 
             server_addr.set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
             //TODO: Maybe add support for asynchronous listeners?
-            println!("{:?} // Binding to address (clients) {:?}", id, server_addr);
+            debug!("{:?} // Binding to address (clients) {:?}", id, server_addr);
 
             let socket = socket::bind_sync_server(server_addr).wrapped_msg(
                 ErrorKind::Communication,
@@ -378,7 +378,7 @@ where
             //Listen on all interfaces.
             server_addr.set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
 
-            println!(
+            debug!(
                 "{:?} // Binding to address (replicas) {:?}",
                 id, server_addr
             );
@@ -451,7 +451,6 @@ where
         let client_listener = Self::setup_client_facing_socket(id, &cfg).await?;
 
         let replica_listener = Self::setup_replica_facing_socket(id, &cfg).await?;
-
 
         debug!("Initializing TLS configurations.");
 
@@ -1434,7 +1433,7 @@ where
     ///Connect to all other replicas in the cluster, but without using tokio (utilizing regular
     /// synchronous APIs)
     #[inline]
-    #[instrument(skip(self, n, connector))]
+    //#[instrument(skip(self, n, connector))]
     pub fn tx_side_connect_sync(self: Arc<Self>, n: u32, connector: Arc<ClientConfig>) {
         for peer_id in NodeId::targets_u32(0..n).filter(|&id| id != self.id()) {
             let clone = self.clone();
@@ -1651,7 +1650,7 @@ where
         }
     }
 
-    #[instrument(skip(self, first_cli, nonce, connector, callback))]
+    //#[instrument(skip(self, first_cli, nonce, connector, callback))]
     async fn tx_side_connect_task(
         self: Arc<Self>,
         my_id: NodeId,
@@ -1771,7 +1770,7 @@ where
     }
 
     ///Accept connections from other nodes. Utilizes the async environment
-    #[instrument(skip(self, first_cli, listener, acceptor))]
+    //#[instrument(skip(self, first_cli, listener, acceptor))]
     async fn rx_side_accept(
         self: Arc<Self>,
         first_cli: NodeId,
@@ -1887,7 +1886,7 @@ where
     /// performs a cryptographic handshake with a peer node;
     /// header doesn't need to be signed, since we won't be
     /// storing this message in the log
-    #[instrument(skip(self, first_cli, acceptor, sock, rand))]
+    //#[instrument(skip(self, first_cli, acceptor, sock, rand))]
     async fn rx_side_establish_conn_task(
         self: Arc<Self>,
         first_cli: NodeId,
@@ -1962,7 +1961,7 @@ where
 
     /// Handles client connections, attempts to connect to the client that connected to us
     /// If we are a replica and the other client is a node
-    #[instrument(skip(self, sock))]
+    //#[instrument(skip(self, sock))]
     pub async fn handle_connected_rx(
         self: Arc<Self>,
         peer_id: NodeId,
