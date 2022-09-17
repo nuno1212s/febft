@@ -1575,24 +1575,30 @@ where
 
         let nonce = rng.next_state();
 
-        //Get the correct IP for us to address the replica
+        //Get the correct IP for us to address the node
         //If I'm a client I will always use the client facing addr
         //While if I'm a replica I'll connect to the replica addr (clients only have this addr)
         let peer_addr = if self.id >= self.first_cli {
             addr.client_addr.clone()
         } else {
-            match addr.replica_addr.as_ref() {
-                Some(addr) => addr,
-                None => {
-                    error!(
-                        "{:?} // Failed to find IP address for peer {:?}",
-                        self.id, peer_id
-                    );
+            //We are a replica, but we are connecting to a client, so 
+            //We need the client addr.
+            if peer_id >= self.first_cli {
+                addr.client_addr.clone()
+            } else {
+                match addr.replica_addr.as_ref() {
+                    Some(addr) => addr,
+                    None => {
+                        error!(
+                            "{:?} // Failed to find IP address for peer {:?}",
+                            self.id, peer_id
+                        );
 
-                    return;
+                        return;
+                    }
                 }
+                .clone()
             }
-            .clone()
         };
 
         debug!(
