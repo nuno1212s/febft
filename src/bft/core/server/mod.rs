@@ -194,7 +194,7 @@ where
 
         let db_path = node_config.db_path.clone();
 
-        debug!("Bootstrapping replica");
+        debug!("Bootstrapping replica, starting with networking");
 
         let (node, rogue) = Node::bootstrap(node_config).await?;
 
@@ -208,7 +208,7 @@ where
         let (executor, handle) = Executor::<S, ReplicaReplier>::init_handle();
 
         debug!("Initializing log");
-        let mut log = Log::new(
+        let log = Log::new(
             log_node_id,
             global_batch_size,
             Some(observer_handle.clone()),
@@ -216,9 +216,9 @@ where
             db_path,
         );
 
-        let mut seq;
+        let seq;
 
-        let mut view;
+        let view;
 
         debug!("Reading state from memory");
         //Read the state from the persistent log
