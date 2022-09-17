@@ -2164,6 +2164,8 @@ where
 
                     //Connect
                 self.clone().tx_connect_node_sync(peer_id, sync_conn, None);
+            } else {
+                debug!("{:?} // Will not attempt to connect to client because: ({} || ({} && {}))", self.id, peer_id >= self.first_cli,!self.is_connected_to_tx(peer_id), !self.is_currently_connecting_to_node(peer_id));
             }
         }
 
