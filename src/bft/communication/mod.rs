@@ -13,7 +13,7 @@ use either::{Either, Left, Right};
 use futures::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use futures_timer::Delay;
 use intmap::IntMap;
-use log::{debug, error};
+use log::{debug, error, warn};
 use parking_lot::RwLock;
 
 use rustls::{ClientConfig, ClientConnection, ServerConfig, ServerConnection, ServerName};
@@ -1549,6 +1549,11 @@ where
         callback: Option<Box<dyn FnOnce(bool)>>,
     ) {
         if !self.register_currently_connecting_to_node(peer_id) {
+            warn!(
+                "{:?} // Tried to connect to node that I'm already connecting to {:?}",
+                self.id, peer_id
+            );
+
             return;
         }
 
@@ -1576,7 +1581,18 @@ where
         let peer_addr = if self.id >= self.first_cli {
             addr.client_addr.clone()
         } else {
-            addr.replica_addr.as_ref().unwrap().clone()
+            match addr.replica_addr.as_ref() {
+                Some(addr) => addr,
+                None => {
+                    error!(
+                        "{:?} // Failed to find IP address for peer {:?}",
+                        self.id, peer_id
+                    );
+
+                    return;
+                }
+            }
+            .clone()
         };
 
         debug!(
@@ -1691,8 +1707,8 @@ where
                 }
             }
 
-            //     // sleep for `SECS` seconds and retry
-                 std::thread::sleep(Duration::from_secs(SECS));
+            // sleep for `SECS` seconds and retry
+            std::thread::sleep(Duration::from_secs(SECS));
         }
 
         debug!(
@@ -1776,6 +1792,8 @@ where
                 // success
                 self.handle_connected_tx(peer_id, final_sock);
 
+                self.unregister_currently_connecting_to_node(peer_id);
+
                 if let Some(callback) = callback {
                     callback(true);
                 }
@@ -1787,6 +1805,7 @@ where
             Delay::new(Duration::from_secs(SECS)).await;
         }
 
+        self.unregister_currently_connecting_to_node(peer_id);
         if let Some(callback) = callback {
             callback(false);
         }
@@ -1803,6 +1822,8 @@ where
         listener: SyncListener,
         acceptor: Arc<ServerConfig>,
     ) {
+        debug!("{:?} // Awaiting for new connections", my_id);
+
         loop {
             if let Ok(sock) = listener.accept() {
                 let replica_acceptor = acceptor.clone();
@@ -1833,9 +1854,9 @@ where
         listener: AsyncListener,
         acceptor: TlsAcceptor,
     ) {
-        loop {
-            debug!("{:?} // Awaiting for new connections", my_id);
+        debug!("{:?} // Awaiting for new connections", my_id);
 
+        loop {
             match listener.accept().await {
                 Ok(sock) => {
                     let rand = fastrand::u32(0..);
@@ -2014,7 +2035,7 @@ where
         // announce we have failed to connect to the peer node
     }
 
-    /// Handles client connections, attempts to connect to the client that connected to us
+    /// Handles connections asynchronously using tokio, attempts to connect to the client that connected to us
     /// If we are a replica and the other client is a node
     //#[instrument(skip(self, sock))]
     pub async fn handle_connected_rx(
@@ -2141,7 +2162,7 @@ where
         client.disconnect();
     }
 
-    /// Handles replica connections, reading from stream and pushing message into the correct queue
+    /// Handles connections synchronously, reading from stream and pushing message into the correct queue
     pub fn handle_connected_rx_sync(
         self: Arc<Self>,
         peer_id: NodeId,
@@ -2176,7 +2197,7 @@ where
                     .expect(format!("Failed to get address for client {:?}", peer_id).as_str())
                     .client_addr
                     .clone();
-                
+
                 debug!("{:?} // Received connection from client {:?}, establish TX connection on address {:?}", self.id, peer_id,
                     addr.0);
 
@@ -2187,7 +2208,8 @@ where
                     .spawn(move || {
                         //Connect
                         clone.tx_connect_node_sync(peer_id, sync_conn, None);
-                    }).expect("Failed to start connection thread.");
+                    })
+                    .expect("Failed to start connection thread.");
             } else {
                 debug!(
                     "{:?} // Will not attempt to connect to client because: ({} || ({} && {}))",
