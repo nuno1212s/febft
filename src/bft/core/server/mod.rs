@@ -170,6 +170,8 @@ where
     Reply<S>: Send + 'static,
     T: PersistentLogModeTrait + 'static,
 {
+
+
     /// Bootstrap a replica in `febft`.
     pub async fn bootstrap(cfg: ReplicaConfig<S, T>) -> Result<Self> {
         let ReplicaConfig {
@@ -192,6 +194,8 @@ where
 
         let db_path = node_config.db_path.clone();
 
+        debug!("Bootstrapping replica");
+
         let (node, rogue) = Node::bootstrap(node_config).await?;
 
         // TODO: get log from persistent storage
@@ -203,6 +207,7 @@ where
 
         let (executor, handle) = Executor::<S, ReplicaReplier>::init_handle();
 
+        debug!("Initializing log");
         let mut log = Log::new(
             log_node_id,
             global_batch_size,
@@ -215,6 +220,7 @@ where
 
         let mut view;
 
+        debug!("Reading state from memory");
         //Read the state from the persistent log
         let state = if let Some(read_state) = log.read_current_state(n, f)? {
 
@@ -244,6 +250,7 @@ where
             None
         };
 
+        debug!("Initializing executor.");
         // start executor
         Executor::<S, ReplicaReplier>::new(
             reply_handle,
@@ -256,6 +263,7 @@ where
 
         let node_clone = node.clone();
 
+        debug!("Initializing timeouts");
         // start timeouts handler
         let timeouts = Timeouts::new(Arc::clone(node.loopback_channel()));
 
@@ -269,6 +277,8 @@ where
         let synchronizer = Synchronizer::new_replica(view.clone(), REQ_BASE_DUR);
 
         let rq_finalizer = RqFinalizer::new(node.id(), log.clone(), executor.clone());
+
+        debug!("Initializing consensus");
 
         let consensus = Consensus::new_replica(
             node.id(),
@@ -350,30 +360,30 @@ where
             }
         }
 
-        println!("{:?} // Started replica.", replica.id());
+        debug!("{:?} // Started replica.", replica.id());
 
-        println!(
+        debug!(
             "{:?} // Per Pool Batch size: {}",
             replica.id(),
             per_pool_batch_size
         );
-        println!(
+        debug!(
             "{:?} // Per pool batch sleep: {}",
             replica.id(),
             per_pool_batch_sleep
         );
-        println!(
+        debug!(
             "{:?} // Per pool batch timeout: {}",
             replica.id(),
             per_pool_batch_timeout
         );
 
-        println!(
+        debug!(
             "{:?} // Global batch size: {}",
             replica.id(),
             global_batch_size
         );
-        println!(
+        debug!(
             "{:?} // Global batch timeout: {}",
             replica.id(),
             batch_timeout
