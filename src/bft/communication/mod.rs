@@ -1681,10 +1681,10 @@ where
                 }
             }
 
-            if _try >= RETRY - 1 {
-                // sleep for `SECS` seconds and retry
-                std::thread::sleep(Duration::from_secs(SECS));
-            }
+            // if _try >= RETRY - 1 {
+            //     // sleep for `SECS` seconds and retry
+            //     std::thread::sleep(Duration::from_secs(SECS));
+            // }
         }
 
         debug!(
