@@ -338,12 +338,6 @@ where
     ) -> Result<Either<SyncListener, AsyncListener>> {
         debug!("{:?} // Attempt to setup client facing socket.", id);
 
-        debug!("{:?} // addrs:", id);
-
-        for ele in cfg.addrs.keys() {
-            debug!("{}", ele);
-        }
-
         let peer_addr = cfg.addrs.get(id.into()).ok_or(Error::simple_with_msg(
             ErrorKind::Communication,
             "Failed to get client facing IP",
@@ -658,9 +652,9 @@ where
         while node.node_handling.replica_count() < cfg.n {
             //Any received messages will be handled by the connection pool buffers
             debug!(
-                "Connected to {} replicas on the node {:?}",
-                node.node_handling.replica_count(),
-                node.id
+                "{:?} // Connected to {} replicas",
+                node.id,
+                node.node_handling.replica_count()
             );
 
             Delay::new(Duration::from_millis(500)).await;
@@ -1687,11 +1681,6 @@ where
                         callback(true);
                     }
 
-                    debug!(
-                        "Ended connection attempt {} for Node {:?} from peer {:?}",
-                        _try, peer_id, my_id
-                    );
-
                     return;
                 }
                 Err(err) => {
@@ -1823,8 +1812,6 @@ where
                 let first_cli = first_cli.clone();
                 let my_id = my_id.clone();
 
-                debug!("{:?} // Received new connection", my_id);
-
                 threadpool::execute(move || {
                     rx_ref.rx_side_establish_conn_task_sync(
                         first_cli,
@@ -1915,7 +1902,7 @@ where
             let sock = if peer_id >= first_cli || my_id >= first_cli {
                 SecureSocketRecvSync::Plain(sock)
             } else {
-                if let Ok(mut tls_session) = ServerConnection::new(acceptor.clone()) {
+                if let Ok(tls_session) = ServerConnection::new(acceptor.clone()) {
                     SecureSocketRecvSync::new_tls(tls_session, sock)
                 } else {
                     error!(
