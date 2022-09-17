@@ -1446,9 +1446,12 @@ where
             let clone = self.clone();
             let connector = connector.clone();
 
-            std::thread::Builder::new().name(format!("Peer {:?} connector", peer_id)).spawn(move || {
-                Self::tx_connect_node_sync(clone, peer_id, connector, None);
-            }).expect("Failed to launch peer connection thread.");
+            std::thread::Builder::new()
+                .name(format!("Peer {:?} connector", peer_id))
+                .spawn(move || {
+                    Self::tx_connect_node_sync(clone, peer_id, connector, None);
+                })
+                .expect("Failed to launch peer connection thread.");
         }
     }
 
@@ -1530,7 +1533,6 @@ where
         connector: Arc<ClientConfig>,
         callback: Option<Box<dyn FnOnce(bool)>>,
     ) {
-
         if !self.register_currently_connecting_to_node(peer_id) {
             return;
         }
@@ -1573,13 +1575,7 @@ where
         let first_cli = self.first_client_id();
 
         self.tx_side_connect_task_sync(
-            my_id,
-            first_cli,
-            peer_id,
-            nonce,
-            connector,
-            peer_addr,
-            callback,
+            my_id, first_cli, peer_id, nonce, connector, peer_addr, callback,
         );
     }
 
@@ -1609,8 +1605,11 @@ where
         // 2) try to connect up to `RETRY` times, then announce
         // failure with a channel send op
         for _try in 0..RETRY {
-            debug!("Attempting to connect to node {:?} with addr {:?} for the {} time", peer_id, addr, _try);
-            
+            debug!(
+                "Attempting to connect to node {:?} with addr {:?} for the {} time",
+                peer_id, addr, _try
+            );
+
             match socket::connect_sync(addr) {
                 Ok(mut sock) => {
                     // create header
@@ -1650,7 +1649,6 @@ where
                         if let Ok(session) = ClientConnection::new(connector.clone(), dns_ref) {
                             SecureSocketSendSync::new_tls(session, sock)
                         } else {
-
                             error!("Failed to establish tls connection.");
 
                             break;
@@ -1668,7 +1666,10 @@ where
                         callback(true);
                     }
 
-                    debug!("Ended connection attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
+                    debug!(
+                        "Ended connection attempt {} for Node {:?} from peer {:?}",
+                        _try, peer_id, my_id
+                    );
 
                     return;
                 }
@@ -1680,11 +1681,16 @@ where
                 }
             }
 
-            // sleep for `SECS` seconds and retry
-            std::thread::sleep(Duration::from_secs(SECS));
+            if _try >= RETRY - 1 {
+                // sleep for `SECS` seconds and retry
+                std::thread::sleep(Duration::from_secs(SECS));
+            }
         }
 
-        debug!("{:?} // Failed to connect to the node {:?}", self.id, peer_id);
+        debug!(
+            "{:?} // Failed to connect to the node {:?}",
+            self.id, peer_id
+        );
 
         self.unregister_currently_connecting_to_node(peer_id);
 
@@ -2136,7 +2142,10 @@ where
         mut sock: SecureSocketRecvSync,
     ) {
         if let PeerTx::Server { .. } = &self.peer_tx {
-            if peer_id >= self.first_cli || (!self.is_connected_to_tx(peer_id) && !self.is_currently_connecting_to_node(peer_id)) {
+            if peer_id >= self.first_cli
+                || (!self.is_connected_to_tx(peer_id)
+                    && !self.is_currently_connecting_to_node(peer_id))
+            {
                 //If we are the server and the other connection is a client
                 //We want to automatically establish a tx connection as well as a
                 //rx connection
@@ -2164,10 +2173,16 @@ where
                 debug!("{:?} // Received connection from client {:?}, establish TX connection on address {:?}", self.id, peer_id,
                     addr.0);
 
-                    //Connect
+                //Connect
                 self.clone().tx_connect_node_sync(peer_id, sync_conn, None);
             } else {
-                debug!("{:?} // Will not attempt to connect to client because: ({} || ({} && {}))", self.id, peer_id >= self.first_cli,!self.is_connected_to_tx(peer_id), !self.is_currently_connecting_to_node(peer_id));
+                debug!(
+                    "{:?} // Will not attempt to connect to client because: ({} || ({} && {}))",
+                    self.id,
+                    peer_id >= self.first_cli,
+                    !self.is_connected_to_tx(peer_id),
+                    !self.is_currently_connecting_to_node(peer_id)
+                );
             }
         }
 
