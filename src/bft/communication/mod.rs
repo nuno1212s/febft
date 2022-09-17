@@ -1647,7 +1647,7 @@ where
             }
 
             // sleep for `SECS` seconds and retry
-            // std::thread::sleep(Duration::from_secs(SECS));
+            std::thread::sleep(Duration::from_secs(SECS));
         }
 
         if let Some(callback) = callback {
