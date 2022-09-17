@@ -1,9 +1,10 @@
 //! Communication primitives for `febft`, such as wire message formats.
 
+use std::collections::BTreeSet;
 use std::convert::TryFrom;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_tls::{TlsAcceptor, TlsConnector};
@@ -219,6 +220,7 @@ pub struct Node<D: SharedData + 'static> {
     rng: ThreadSafePrng,
     shared: Arc<NodeShared>,
     peer_tx: PeerTx,
+    currently_connecting: Mutex<BTreeSet<NodeId>>,
     connector: NodeConnector,
     peer_addrs: IntMap<PeerAddr>,
     comm_stats: Option<Arc<CommStats>>,
@@ -563,6 +565,7 @@ where
             comm_stats: cfg.comm_stats,
             sent_rqs,
             recv_rqs: rcv_rqs,
+            currently_connecting: Mutex::new(BTreeSet::new()),
         });
 
         let rx_node_clone = node.clone();
@@ -1361,8 +1364,12 @@ where
     }
 
     ///Check if we are currently connected to a provided node
-    pub fn is_connected_to(&self, id: NodeId) -> bool {
+    pub fn is_connected_to_rx(&self, id: NodeId) -> bool {
         self.node_handling.resolve_peer_conn(id).is_some()
+    }
+
+    pub fn is_connected_to_tx(&self, id: NodeId) -> bool {
+        self.peer_tx.find_peer(id.0 as u64).is_some()
     }
 
     //Get how many pending messages are in the requests channel
@@ -1495,6 +1502,25 @@ where
         .await;
     }
 
+    /// Check if we are already attempting to connect to a given node.
+    fn is_currently_connecting_to_node(&self, peer_id: NodeId) -> bool {
+        let guard = self.currently_connecting.lock().unwrap();
+
+        guard.contains(&peer_id)
+    }
+
+    fn register_currently_connecting_to_node(&self, peer_id: NodeId) -> bool {
+        let mut guard = self.currently_connecting.lock().unwrap();
+
+        guard.insert(peer_id)
+    }
+
+    fn unregister_currently_connecting_to_node(&self, peer_id: NodeId) -> bool {
+        let mut guard = self.currently_connecting.lock().unwrap();
+
+        guard.remove(&peer_id)
+    }
+
     ///Connect to a given node.
     /// TODO: Make this use the correct type of connections
     /// depending on what is configured.
@@ -1504,6 +1530,11 @@ where
         connector: Arc<ClientConfig>,
         callback: Option<Box<dyn FnOnce(bool)>>,
     ) {
+
+        if !self.register_currently_connecting_to_node(peer_id) {
+            return;
+        }
+
         debug!("{:?} // Connecting to the node {:?}", self.id, peer_id);
 
         let mut rng = prng::State::new();
@@ -1631,11 +1662,14 @@ where
                     // success
                     self.handle_connected_tx(peer_id, final_sock);
 
+                    self.unregister_currently_connecting_to_node(peer_id);
+
                     if let Some(callback) = callback {
                         callback(true);
                     }
 
                     debug!("Ended connection attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
+
                     return;
                 }
                 Err(err) => {
@@ -1649,6 +1683,8 @@ where
             // sleep for `SECS` seconds and retry
             std::thread::sleep(Duration::from_secs(SECS));
         }
+
+        self.unregister_currently_connecting_to_node(peer_id);
 
         if let Some(callback) = callback {
             callback(false);
@@ -2098,45 +2134,36 @@ where
         mut sock: SecureSocketRecvSync,
     ) {
         if let PeerTx::Server { .. } = &self.peer_tx {
-            if peer_id >= self.first_cli {
+            if peer_id >= self.first_cli || (!self.is_connected_to_tx(peer_id) && !self.is_currently_connecting_to_node(peer_id)) {
                 //If we are the server and the other connection is a client
                 //We want to automatically establish a tx connection as well as a
                 //rx connection
+
+                //We also want to establish connection if we are not either connected to or connecting to the given node.
 
                 // fetch client address
                 //
                 // FIXME: this line can crash the program if the user
                 // provides an invalid HashMap
+
+                let sync_conn = match self.connector.clone() {
+                    NodeConnector::Async(_) => {
+                        unreachable!()
+                    }
+                    NodeConnector::Sync(connector) => connector,
+                };
+
                 let addr = self
                     .peer_addrs
                     .get(peer_id.id() as u64)
                     .expect(format!("Failed to get address for client {:?}", peer_id).as_str())
                     .client_addr
                     .clone();
-
                 debug!("{:?} // Received connection from client {:?}, establish TX connection on address {:?}", self.id, peer_id,
                     addr.0);
 
-                // connect
-                let nonce = self.rng.next_state();
-
-                let self_cpy = self.clone();
-
-                threadpool::execute(move || {
-                    let id = self_cpy.id;
-                    let first_cli = self_cpy.first_cli;
-
-                    let sync_conn = match self_cpy.connector.clone() {
-                        NodeConnector::Async(_) => {
-                            unreachable!()
-                        }
-                        NodeConnector::Sync(connector) => connector,
-                    };
-
-                    Self::tx_side_connect_task_sync(
-                        self_cpy, id, first_cli, peer_id, nonce, sync_conn, addr, None,
-                    );
-                });
+                    //Connect
+                self.clone().tx_connect_node_sync(peer_id, sync_conn, None);
             }
         }
 
