@@ -336,7 +336,18 @@ where
         id: NodeId,
         cfg: &NodeConfig,
     ) -> Result<Either<SyncListener, AsyncListener>> {
-        let peer_addr = cfg.addrs.get(id.into()).ok_or(Error::simple_with_msg(ErrorKind::Communication, "Failed to get client facing IP"))?;
+        debug!("{:?} // Attempt to setup client facing socket.", id);
+
+        debug!("{:?} // addrs:", id);
+
+        for ele in cfg.addrs.keys() {
+            debug!("{}", ele);
+        }
+
+        let peer_addr = cfg.addrs.get(id.into()).ok_or(Error::simple_with_msg(
+            ErrorKind::Communication,
+            "Failed to get client facing IP",
+        ))?;
 
         let server_addr = &peer_addr.client_addr;
 
@@ -364,14 +375,24 @@ where
         id: NodeId,
         cfg: &NodeConfig,
     ) -> Result<Option<Either<SyncListener, AsyncListener>>> {
-        let peer_addr = cfg.addrs.get(id.into()).ok_or(Error::simple_with_msg(ErrorKind::Communication, "Failed to get replica facing IP"))?;
+        let peer_addr = cfg.addrs.get(id.into()).ok_or(Error::simple_with_msg(
+            ErrorKind::Communication,
+            "Failed to get replica facing IP",
+        ))?;
 
         //Initialize the replica<->replica facing server
         let replica_listener = if id >= cfg.first_cli {
             //Clients don't have a replica<->replica facing server
             None
         } else {
-            let replica_facing_addr = peer_addr.replica_addr.as_ref().ok_or(Error::simple_with_msg(ErrorKind::Communication, "Failed to get replica facing IP"))?;
+            let replica_facing_addr =
+                peer_addr
+                    .replica_addr
+                    .as_ref()
+                    .ok_or(Error::simple_with_msg(
+                        ErrorKind::Communication,
+                        "Failed to get replica facing IP",
+                    ))?;
 
             //TODO: Maybe add support for asynchronous listeners?
 
