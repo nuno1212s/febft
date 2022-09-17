@@ -1578,6 +1578,8 @@ where
         // 2) try to connect up to `RETRY` times, then announce
         // failure with a channel send op
         for _try in 0..RETRY {
+            debug!("Attempting to connect to node {:?} with addr {:?} for the {} time", peer_id, addr, _try);
+            
             match socket::connect_sync(addr) {
                 Ok(mut sock) => {
                     // create header
@@ -1614,9 +1616,12 @@ where
                             }
                         };
 
-                        if let Ok(mut session) = ClientConnection::new(connector.clone(), dns_ref) {
+                        if let Ok(session) = ClientConnection::new(connector.clone(), dns_ref) {
                             SecureSocketSendSync::new_tls(session, sock)
                         } else {
+
+                            error!("Failed to establish tls connection.");
+
                             break;
                         }
                     };
@@ -1630,7 +1635,7 @@ where
                         callback(true);
                     }
 
-                    //println!("Ended connection attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
+                    debug!("Ended connection attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
                     return;
                 }
                 Err(err) => {
