@@ -607,7 +607,7 @@ where
                 NodeConnector::Async(async_connector) => {
                     let node = node.clone();
 
-                    node.tx_side_connect_async(n as u32, async_connector);
+                    node.tx_side_connect_async(n as u32, async_connector).await;
                 }
                 NodeConnector::Sync(sync_connector) => {
                     let node = node.clone();
@@ -621,7 +621,7 @@ where
                 NodeConnector::Async(async_connector) => {
                     let node = node.clone();
 
-                    node.tx_side_connect_async(n as u32, async_connector);
+                    node.tx_side_connect_async(n as u32, async_connector).await;
                 }
                 NodeConnector::Sync(sync_connector) => {
                     let node = node.clone();
@@ -1597,7 +1597,7 @@ where
         callback: Option<Box<dyn FnOnce(bool)>>,
     ) {
         const SECS: u64 = 1;
-        const RETRY: usize = 3 * 60;
+        const RETRY: usize = 1;
 
         // NOTE:
         // ========
@@ -1674,8 +1674,8 @@ where
                 }
                 Err(err) => {
                     error!(
-                        "{:?} // Error on connecting to addr {:?}: {:?}",
-                        peer_id, addr, err
+                        "{:?} // Error on connecting to {:?} addr {:?}: {:?}",
+                        self.id, peer_id, addr, err
                     );
                 }
             }
@@ -1683,6 +1683,8 @@ where
             // sleep for `SECS` seconds and retry
             std::thread::sleep(Duration::from_secs(SECS));
         }
+
+        debug!("{:?} // Failed to connect to the node {:?}", self.id, peer_id);
 
         self.unregister_currently_connecting_to_node(peer_id);
 
