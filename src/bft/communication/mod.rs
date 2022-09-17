@@ -1439,9 +1439,9 @@ where
             let clone = self.clone();
             let connector = connector.clone();
 
-            threadpool::execute(move || {
+            std::thread::Builder::new().name(format!("Peer {:?} connector", peer_id)).spawn(move || {
                 Self::tx_connect_node_sync(clone, peer_id, connector, None);
-            });
+            }).expect("Failed to launch peer connection thread.");
         }
     }
 
@@ -1647,7 +1647,7 @@ where
             }
 
             // sleep for `SECS` seconds and retry
-            std::thread::sleep(Duration::from_secs(SECS));
+            // std::thread::sleep(Duration::from_secs(SECS));
         }
 
         if let Some(callback) = callback {
