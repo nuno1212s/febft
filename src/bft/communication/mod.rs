@@ -1614,7 +1614,7 @@ where
         callback: Option<Box<dyn FnOnce(bool)>>,
     ) {
         const SECS: u64 = 1;
-        const RETRY: usize = 1;
+        const RETRY: usize = 3 * 60;
 
         // NOTE:
         // ========
@@ -1702,10 +1702,8 @@ where
                 }
             }
 
-            // if _try >= RETRY - 1 {
             //     // sleep for `SECS` seconds and retry
-            //     std::thread::sleep(Duration::from_secs(SECS));
-            // }
+                 std::thread::sleep(Duration::from_secs(SECS));
         }
 
         debug!(
@@ -2191,11 +2189,18 @@ where
                     .expect(format!("Failed to get address for client {:?}", peer_id).as_str())
                     .client_addr
                     .clone();
+                
                 debug!("{:?} // Received connection from client {:?}, establish TX connection on address {:?}", self.id, peer_id,
                     addr.0);
 
-                //Connect
-                self.clone().tx_connect_node_sync(peer_id, sync_conn, None);
+                let clone = self.clone();
+
+                std::thread::Builder::new()
+                    .name(format!("Connecting thread peer {:?}", peer_id))
+                    .spawn(move || {
+                        //Connect
+                        clone.tx_connect_node_sync(peer_id, sync_conn, None);
+                    }).expect("Failed to start connection thread.");
             } else {
                 debug!(
                     "{:?} // Will not attempt to connect to client because: ({} || ({} && {}))",
