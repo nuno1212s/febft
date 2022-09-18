@@ -111,7 +111,7 @@ where
     }
 }
 
-struct Unordered;
+pub struct Unordered;
 
 impl<D> ClientType<D> for Unordered
 where
