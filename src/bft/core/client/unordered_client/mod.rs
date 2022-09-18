@@ -143,7 +143,14 @@ where
 
         let count = connected_followers.len();
 
-        (connected_followers.into_iter(), count)
+
+        if count > 0 {
+            return (connected_followers.into_iter(), count);
+        } else {
+            let connected :Vec<NodeId> = NodeId::targets(0..client.params.n()).collect();
+            
+            return (connected.into_iter(), client.params.n());
+        };
     }
 
     fn needed_responses(client: &Client<D>) -> usize {
