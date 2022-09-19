@@ -2764,6 +2764,9 @@ where
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
         rq_key: Option<u64>,
     ) {
+
+        debug!("{:?} // Sending message to {:?}", my_id, peer_id);
+
         // create wire msg
         let wm = WireMessage::new(my_id, peer_id, b, n, Some(d), sk);
 
