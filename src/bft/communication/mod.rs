@@ -1085,7 +1085,14 @@ where
             // serialize
             let mut buf: Buf = Buf::new();
 
-            let digest = <D as DigestData>::serialize_digest(&message, &mut buf).unwrap();
+            let digest = match <D as DigestData>::serialize_digest(&message, &mut buf) {
+                Ok(dig) => dig,
+                Err(err) => {
+                    error!("Failed to serialize message {:?}", err);
+
+                    panic!("Failed to serialize message");
+                },
+            };
 
             if let Some((comm_stats, _)) = &comm_stats {
                 let time_taken_signing = Instant::now()
@@ -1095,7 +1102,7 @@ where
                 //Broadcasts are always for replicas, so make this
                 comm_stats.insert_message_signing_time(NodeId::from(0u32), time_taken_signing);
             }
-            
+
             debug!("Part 0.");
 
             let rq_key = match &message {
