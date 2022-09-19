@@ -1,6 +1,6 @@
 pub mod follower_proposer;
 
-use log::{error, warn, debug};
+use log::{error, warn, debug, info};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -354,6 +354,10 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
 
                 let executor_handle = self.executor_handle.clone();
 
+                let node_id = self.node_ref.id();
+
+                info!("{:?} // Executing unordered request batch", node_id);
+
                 threadpool::execute(move || {
                     let mut unordered_batch =
                         UnorderedBatch::new_with_cap(new_accumulated_vec.len());
@@ -369,6 +373,8 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
                         );
                     }
 
+                    info!("{:?} // Queueing unordered request batch", node_id);
+                    
                     if let Err(err) = executor_handle.queue_update_unordered(unordered_batch) {
                         error!(
                             "Error while proposing unordered batch of requests: {:?}",
