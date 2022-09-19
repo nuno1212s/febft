@@ -1075,6 +1075,7 @@ where
         nonce: u64,
         comm_stats: Option<(Arc<CommStats>, Instant)>,
     ) {
+        debug!("Starting broadcast.");
         threadpool::execute(move || {
             let start_serialization = Instant::now();
 
