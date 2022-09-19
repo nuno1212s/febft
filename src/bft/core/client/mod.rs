@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use futures_timer::Delay;
 use intmap::IntMap;
-use log::{error, debug};
+use log::{error, debug, info};
 
 use crate::bft::communication::message::{Message, ReplyMessage, SystemMessage};
 use crate::bft::communication::serialize::SharedData;
@@ -686,6 +686,7 @@ where
 
                             // reply already delivered to application
                             if last_operation_id >= operation_id {
+                                info!("{:?} // Ignoring since the last op id is {:?}", node.id(), last_operation_id);
                                 continue;
                             }
 
