@@ -118,7 +118,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
                     //Only the leader will propose thing
 
                     //TODO: Maybe not use this as it can spam the lock on synchronizer?
-                    let mut is_leader = self.synchronizer.view().leader() == self.node_ref.id();
+                    let is_leader = self.synchronizer.view().leader() == self.node_ref.id();
 
                     //We do this as we don't want to get stuck waiting for requests that might never arrive
                     //Or even just waiting for any type of request. We want to minimize the amount of time the
@@ -128,9 +128,27 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
                     //Thread is in an infinite loop
                     // Receive the requests from the clients and process them
                     let opt_msgs = if is_leader {
-                        self.node_ref.try_recv_from_clients().unwrap()
+                        match self.node_ref.try_recv_from_clients() {
+                            Ok(msg) => msg,
+                            Err(err) => {
+                                error!("{:?} // Failed to receive requests from clients because {:?}", self.node_ref.id(), err);
+                                
+                                continue;
+                            },
+                        }
                     } else {
-                        Some(self.node_ref.receive_from_clients(None).unwrap())
+
+                        //TODO: Fix the existence of the possibility that unordered requests are just ignored
+                        match self.node_ref.receive_from_clients(Some(Duration::from_micros(self.global_batch_time_limit as u64)))  {
+                            Ok(msgs) => {
+                                Some(msgs)
+                            },
+                            Err(err) => {
+                                error!("{:?} // Failed to receive requests from clients because {:?}", self.node_ref.id(), err);
+
+                                continue;
+                            },
+                        }
                     };
 
                     //debug!("{:?} // Received batch of {} messages from clients, processing them, is_leader? {}",
@@ -349,6 +367,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
             if should_exec {
                 let mut new_accumulated_vec = Vec::with_capacity(self.target_global_batch_size * 2);
 
+                // Swap in the latest time at which a batch was executed
                 std::mem::swap(last_unordered_batch, &mut Instant::now());
                 //swap in the new vec and take the previous one to the threadpool
                 std::mem::swap(currently_unordered_batch, &mut new_accumulated_vec);
