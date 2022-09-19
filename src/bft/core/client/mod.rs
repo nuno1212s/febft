@@ -348,12 +348,6 @@ where
 
         let (targets_2, _) = T::init_targets(&self);
 
-        debug!("{:?} // Broadcasting requests to the following targets: ", self.node.id());
-
-        for ele in targets_2 {
-            debug!("{:?} // {:?}", self.node.id(), ele);
-        }
-
         // broadcast our request to the node group
         self.node.broadcast(message, targets);
 

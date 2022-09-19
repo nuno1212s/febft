@@ -1075,10 +1075,7 @@ where
         nonce: u64,
         comm_stats: Option<(Arc<CommStats>, Instant)>,
     ) {
-        debug!("Starting broadcast.");
-        
         threadpool::execute(move || {
-            debug!("Executed by the threadpool.");
 
             let start_serialization = Instant::now();
 
@@ -1103,8 +1100,6 @@ where
                 comm_stats.insert_message_signing_time(NodeId::from(0u32), time_taken_signing);
             }
 
-            debug!("Part 0.");
-
             let rq_key = match &message {
                 //We only care about requests, as we only want this for the client
                 SystemMessage::Request(req) => {
@@ -1114,8 +1109,6 @@ where
                 }
                 _ => None,
             };
-
-            debug!("Part 1.");
 
             // send to ourselves
             if let Some(send_to) = my_send_to {
@@ -1146,9 +1139,7 @@ where
                 }
             }
 
-            debug!("Part 2.");
             // send to others
-
             for send_to in other_send_tos {
                 let id = match &send_to {
                     SendTo::Peers { peer_id, .. } => *peer_id,
@@ -1181,7 +1172,6 @@ where
                     }
                 }
             }
-            debug!("Part 3.");
 
             // NOTE: an either enum is used, which allows
             // rustc to prove only one task gets ownership

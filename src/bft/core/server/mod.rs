@@ -29,7 +29,6 @@ use crate::bft::executable::{
     Executor, ExecutorHandle, ReplicaReplier, Reply, Request, Service, State,
 };
 use crate::bft::ordering::{Orderable, SeqNo};
-use crate::bft::persistentdb::KVDB;
 use crate::bft::proposer::Proposer;
 use crate::bft::sync::{
     AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus,
@@ -198,7 +197,6 @@ where
 
         let (node, rogue) = Node::bootstrap(node_config).await?;
 
-        // TODO: get log from persistent storage
         // connect to peer nodes
         let observer_handle = observer::start_observers(node.send_node());
 
