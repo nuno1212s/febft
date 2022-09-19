@@ -170,7 +170,8 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
                                             //to_log.push(StoredMessage::new(header, req));
                                         }
                                         SystemMessage::UnOrderedRequest(req) => {
-                                            debug!("{:?} // Received unordered request", self.node_ref.id());
+                                            debug!("{:?} // Received unordered request session {:?}, op id {:?} from {:?}", self.node_ref.id(), req.session_id(), req.sequence_number(),
+                                        header.from());
 
                                             currently_accumulated_unordered.push(StoredMessage::new(header, req));
                                         }
@@ -374,7 +375,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
                     }
 
                     info!("{:?} // Queueing unordered request batch", node_id);
-                    
+
                     if let Err(err) = executor_handle.queue_update_unordered(unordered_batch) {
                         error!(
                             "Error while proposing unordered batch of requests: {:?}",
