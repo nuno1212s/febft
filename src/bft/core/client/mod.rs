@@ -348,6 +348,8 @@ where
             request_info_guard.insert(request_key, sent_info);
         }
 
+        debug!("{:?} // Broadcasting to {} targets", self.id(), target_count);
+
         // broadcast our request to the node group
         self.node.broadcast(message, targets);
 
