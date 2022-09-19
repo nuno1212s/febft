@@ -328,7 +328,7 @@ where
         let operation_id = self.next_operation_id();
         let request_key = get_request_key(session_id, operation_id);
 
-        debug!("{:?} // Operation id is {:?}", self.id(), operation_id);
+        debug!("{:?} // Operation id is {:?}", self.node.id(), operation_id);
 
         let message = T::init_request(session_id, operation_id, operation);
 
