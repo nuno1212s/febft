@@ -1076,7 +1076,10 @@ where
         comm_stats: Option<(Arc<CommStats>, Instant)>,
     ) {
         debug!("Starting broadcast.");
+        
         threadpool::execute(move || {
+            debug!("Executed by the threadpool.");
+
             let start_serialization = Instant::now();
 
             // serialize
@@ -1103,8 +1106,10 @@ where
                 _ => None,
             };
 
+            debug!("Part 1.");
+
             // send to ourselves
-            if let Some(mut send_to) = my_send_to {
+            if let Some(send_to) = my_send_to {
                 let id = match &send_to {
                     SendTo::Me { my_id, .. } => *my_id,
                     _ => unreachable!(),
@@ -1132,9 +1137,10 @@ where
                 }
             }
 
+            debug!("Part 2.");
             // send to others
 
-            for mut send_to in other_send_tos {
+            for send_to in other_send_tos {
                 let id = match &send_to {
                     SendTo::Peers { peer_id, .. } => *peer_id,
                     _ => unreachable!(),
@@ -1166,6 +1172,7 @@ where
                     }
                 }
             }
+            debug!("Part 3.");
 
             // NOTE: an either enum is used, which allows
             // rustc to prove only one task gets ownership
