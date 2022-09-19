@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use futures_timer::Delay;
 use intmap::IntMap;
-use log::error;
+use log::{error, debug};
 
 use crate::bft::communication::message::{Message, ReplyMessage, SystemMessage};
 use crate::bft::communication::serialize::SharedData;
@@ -344,6 +344,14 @@ where
             let mut request_info_guard = request_info.lock().unwrap();
 
             request_info_guard.insert(request_key, sent_info);
+        }
+
+        let (targets_2, _) = T::init_targets(&self);
+
+        debug!("{:?} // Broadcasting requests to the following targets: ", self.node.id());
+
+        for ele in targets_2 {
+            debug!("{:?} // {:?}", self.node.id(), ele);
         }
 
         // broadcast our request to the node group

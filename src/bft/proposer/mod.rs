@@ -1,6 +1,6 @@
 pub mod follower_proposer;
 
-use log::{error, warn};
+use log::{error, warn, debug};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -126,7 +126,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
 
                     //We don't need to do this for non leader replicas, as that would cause unnecessary strain as the
                     //Thread is in an infinite loop
-                    ///Receive the requests from the clients and process them
+                    // Receive the requests from the clients and process them
                     let opt_msgs = if is_leader {
                         self.node_ref.try_recv_from_clients().unwrap()
                     } else {
@@ -170,6 +170,8 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
                                             //to_log.push(StoredMessage::new(header, req));
                                         }
                                         SystemMessage::UnOrderedRequest(req) => {
+                                            debug!("{:?} // Received unordered request", self.node_ref.id());
+
                                             currently_accumulated_unordered.push(StoredMessage::new(header, req));
                                         }
                                         SystemMessage::Reply(_) => {
