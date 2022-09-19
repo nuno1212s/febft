@@ -1095,6 +1095,8 @@ where
                 //Broadcasts are always for replicas, so make this
                 comm_stats.insert_message_signing_time(NodeId::from(0u32), time_taken_signing);
             }
+            
+            debug!("Part 0.");
 
             let rq_key = match &message {
                 //We only care about requests, as we only want this for the client
