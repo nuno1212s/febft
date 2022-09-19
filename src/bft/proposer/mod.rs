@@ -366,6 +366,8 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
                     for request in new_accumulated_vec {
                         let (header, message) = request.into_inner();
 
+                        debug!("{:?} // Adding request session {:?} with op id {:?} and sender {:?}", node_id, message.session_id(), message.sequence_number(), header.from());
+
                         unordered_batch.add(
                             header.from(),
                             message.session_id(),
