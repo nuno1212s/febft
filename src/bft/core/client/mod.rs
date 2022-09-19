@@ -346,8 +346,6 @@ where
             request_info_guard.insert(request_key, sent_info);
         }
 
-        let (targets_2, _) = T::init_targets(&self);
-
         // broadcast our request to the node group
         self.node.broadcast(message, targets);
 
@@ -678,7 +676,7 @@ where
                             let session_id = msg_info.session_id();
                             let operation_id = msg_info.sequence_number();
 
-                            debug!("Received reply to {:?} session op id {:?}", session_id, operation_id);
+                            debug!("{:?} // Received reply to {:?} session op id {:?} from {:?}", node.id(), session_id, operation_id, header.from());
 
                             //Check if we have already executed the operation
                             let last_operation_id = last_operation_ids
