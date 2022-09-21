@@ -73,7 +73,7 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
 
     //env_logger::init();
     let appender = FileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new("{d} - {m}{n} {h({l})} ")))
+        .encoder(Box::new(PatternEncoder::new("{d} - {m}{n} {l} ")))
         .build(path)
         .wrapped(ErrorKind::ConsensusLog)?;
 
