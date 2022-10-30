@@ -169,6 +169,8 @@ where
     Reply<S>: Send + 'static,
     T: PersistentLogModeTrait + 'static,
 {
+
+
     /// Bootstrap a replica in `febft`.
     pub async fn bootstrap(cfg: ReplicaConfig<S, T>) -> Result<Self> {
         let ReplicaConfig {
@@ -219,6 +221,7 @@ where
         debug!("Reading state from memory");
         //Read the state from the persistent log
         let state = if let Some(read_state) = log.read_current_state(n, f)? {
+
             let last_seq = if let Some(seq) = read_state.decision_log().last_execution() {
                 seq
             } else {
@@ -237,6 +240,7 @@ where
 
             Some((state, executed_requests))
         } else {
+
             seq = SeqNo::ZERO;
 
             view = ViewInfo::new(SeqNo::ZERO, n, f)?;
@@ -280,7 +284,7 @@ where
             next_consensus_seq,
             global_batch_size,
             observer_handle.clone(),
-            None,
+            None
         );
 
         //We can unwrap since it's guaranteed that this consensus is of a replica type
@@ -329,9 +333,7 @@ where
                             replica.consensus.queue(header, message);
                         }
                         // FIXME: handle rogue reply messages
-                        SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => {
-                            warn!("Rogue reply message detected")
-                        }
+                        SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
                         // FIXME: handle rogue cst messages
                         SystemMessage::Cst(_) => warn!("Rogue cst message detected"),
                         // FIXME: handle rogue view change messages
@@ -559,9 +561,7 @@ where
                     }
                     // FIXME: handle rogue reply messages
                     // Should never
-                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => {
-                        warn!("Rogue reply message detected")
-                    }
+                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
                     SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
                     SystemMessage::UnOrderedRequest(_) => {
                         warn!("Rogue unordered request message detected")
@@ -670,9 +670,7 @@ where
                         }
                     }
                     // FIXME: handle rogue reply messages
-                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => {
-                        warn!("Rogue reply message detected")
-                    }
+                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
                     SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
                     SystemMessage::UnOrderedRequest(_) => todo!(),
                 }
@@ -721,15 +719,12 @@ where
                 Message::System(h, SystemMessage::Consensus(m))
             }
             ConsensusPollStatus::TryProposeAndRecv => {
-                debug!("Receiving client requests. {:?}", self.id());
-                if let Ok(requests) = self.client_rqs.receiver_channel().recv_sync() {
-                    debug!("{:?} // Proposing requests {}", self.id(), requests.len());
+                self.consensus.advance_init_phase();
 
-                    //Receive the PrePrepare message from the client rq handler thread
-                    let replicas = self.node.receive_from_replicas()?;
+                //Receive the PrePrepare message from the client rq handler thread
+                let replicas = self.node.receive_from_replicas()?;
 
-                    replicas
-                }
+                replicas
             }
         };
 
@@ -790,9 +785,7 @@ where
                         warn!("Replicas cannot process forwarded consensus messages! They must receive the preprepare messages straight from leaders!");
                     }
                     // FIXME: handle rogue reply messages
-                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => {
-                        warn!("Rogue reply message detected")
-                    }
+                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
                     SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
                     SystemMessage::UnOrderedRequest(_) => todo!(),
                 }
@@ -850,9 +843,8 @@ where
                 let new_meta = BatchMeta::new();
                 let meta = std::mem::replace(&mut *self.log.batch_meta().lock(), new_meta);
 
-                if let Some((info, batch, meta)) =
-                    self.log
-                        .finalize_batch(seq, batch_digest, digests, needed_messages, meta)?
+                if let Some((info, batch, meta)) = 
+                self.log.finalize_batch(seq, batch_digest, digests, needed_messages, meta)?
                 {
                     //Send the finalized batch to the rq finalizer
                     //So everything can be removed from the correct logs and
@@ -890,7 +882,7 @@ where
     }
 
     fn execution_finished_with_appstate(&mut self, seq: SeqNo, appstate: State<S>) -> Result<()> {
-        self.log.finalize_checkpoint(seq, appstate)?;
+        self.log.finalize_checkpoint(seq,appstate)?;
         if self.cst.needs_checkpoint() {
             // status should return CstStatus::Nil,
             // which does not need to be handled
