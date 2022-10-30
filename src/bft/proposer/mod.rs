@@ -95,9 +95,14 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
     pub fn start(self: Arc<Self>) -> JoinHandle<()> {
         std::thread::Builder::new()
             .spawn(move || {
+
+                //DEBUGGING
+                
                 let mut collected_per_batch_total: u64 = 0;
                 let mut collections: u32 = 0;
                 let mut batches_made: u32 = 0;
+
+                //END DEBUGGING
 
                 //The currently accumulated requests, accumulated while we wait for the next batch to propose
                 let mut currently_accumulated = Vec::with_capacity(self.target_global_batch_size * 10);

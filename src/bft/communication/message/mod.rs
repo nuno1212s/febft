@@ -6,16 +6,9 @@ use std::io;
 use std::io::Write;
 use std::mem::MaybeUninit;
 
-use chrono::DateTime;
-use chrono::offset::Utc;
-
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
-use smallvec::{
-    SmallVec,
-    Array,
-};
 use futures::io::{
     AsyncWriteExt,
     AsyncWrite,

@@ -122,7 +122,7 @@ fn sync_sending_thread<D>(
         match to_send.write_to_sync(socket.mut_socket(), true) {
             Ok(_) => {}
             Err(error) => {
-                error!("Failed to write to socket on client {:?}", peer_id);
+                error!("Failed to write to socket on client {:?} {:?}", peer_id, error);
                 break;
             }
         }
