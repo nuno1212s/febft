@@ -93,3 +93,20 @@ The code is organized as follows:
 
 Other modules should be somewhat self explanatory, especially if you read
 the documentation generated with `cargo doc --features expose_impl` for FeBFT.
+
+# Quick glimpse on performance
+
+We will now take a quick look at the performance versus another similar BFT SMR system, BFT-SMaRt. The test we ran was the microbenchmarks asynchronous test, meant to test the peak performance of the system. 
+
+## Operations per second
+
+![ops_per_second_side_by_side_async](https://user-images.githubusercontent.com/4153112/201152436-7ea6eedb-0c48-4a00-96bb-dab625dfaa79.png)
+
+In this image we are able to see the operations per second of both BFT-SMaRt (left) and FeBFT (right). We can see that FeBFT's performance is much more stable and actually higher. This is due to many architectural factors in FeBFT, which were thought out in order to maximize performance and scalability, as well as factors related to the choice of language to implement this protocol.
+
+The average performance for FeBFT is 111552 +/- 25000. This average includes some lackluster measurements including the initialization and final steps of the program which have a lower performance than the real peak we want to test. As such the 95th percentile average is a better demonstration, in which we get 121914 operations/sec.
+BFT-SMaRt's performance averages at around 43229 +/- 28068. Again similarly to FeBFT, we took the 95th percentile average as we believe it to be the more accurate representation which is 98296 ops/sec.
+
+
+
+### For more information about FeBFT, please visit the wiki here: https://github.com/SecureSolutionsLab/febft/wiki .
