@@ -1085,7 +1085,7 @@ where
             let digest = match <D as DigestData>::serialize_digest(&message, &mut buf) {
                 Ok(dig) => dig,
                 Err(err) => {
-                    error!("Failed to serialize message {:?}", err);
+                    error!("Failed to serialize message {:?}. Message is {:?}", err, message);
 
                     panic!("Failed to serialize message");
                 },
