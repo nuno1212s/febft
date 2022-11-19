@@ -6,8 +6,19 @@ use itertools::Itertools;
 
 const ERROR_KIND_DST: &str = "error_kind.rs";
 
+const MESSAGE_CAPNP_SRC: &str = "src/bft/communication/serialize/base_serialization/messages.capnp";
+
+
 fn main() {
     generate_error_kinds();
+    
+    // recompile capnp message into rust when the source changes
+    println!("cargo:rerun-if-changed={}", MESSAGE_CAPNP_SRC);
+
+    capnpc::CompilerCommand::new()
+        .file(MESSAGE_CAPNP_SRC)
+        .run()
+        .unwrap();
 }
 
 fn generate_error_kinds() {

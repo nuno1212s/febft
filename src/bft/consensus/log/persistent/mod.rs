@@ -15,7 +15,7 @@ use crate::bft::communication::message::ConsensusMessageKind;
 use crate::bft::communication::message::Header;
 use crate::bft::communication::NodeId;
 
-use crate::bft::communication::serialize::SharedData;
+use crate::bft::communication::serialize::{SharedData, Persister};
 
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
@@ -31,7 +31,6 @@ use crate::bft::{
     persistentdb::KVDB,
 };
 use crate::bft::consensus::log::persistent::consensus_backlog::{BatchInfo, PendingBatch};
-use crate::bft::cst::RecoveryState;
 
 use self::consensus_backlog::ConsensusBackLogHandle;
 use self::consensus_backlog::ConsensusBacklog;
@@ -694,7 +693,7 @@ fn write_message<S: Service>(
 
     message.header().serialize_into(buf.as_mut_slice()).unwrap();
 
-    <S::Data>::serialize_consensus_message(&mut buf[Header::LENGTH..], message.message())?;
+    <S::Data>::serialize_consensus_message(message.message(), &mut buf[Header::LENGTH..])?;
 
     let msg_seq = message.message().sequence_number();
 
