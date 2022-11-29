@@ -74,6 +74,7 @@ pub fn initialize_sync_sending_thread_for(peer_id: NodeId, socket: SocketSendSyn
 
     std::thread::Builder::new()
         .name(format!("Peer {:?} sending thread", peer_id))
+        .stack_size(1024 * 64)
         .spawn(move || {
             sync_sending_thread(peer_id, socket, rx, comm_stats)
         }).expect(format!("Failed to start sending thread for client {:?}", peer_id).as_str());

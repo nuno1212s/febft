@@ -1677,7 +1677,9 @@ impl<D> Node<D>
 
             let cpy_peer_id = peer_id.clone();
 
-            std::thread::Builder::new().name(format!("Reception thread client {:?}", peer_id)).spawn(move || {
+            std::thread::Builder::new()
+            .stack_size(1024 * 64)
+            .name(format!("Reception thread client {:?}", peer_id)).spawn(move || {
                 self.handle_connected_rx_sync(peer_id, sock);
             }).expect(format!("Failed to create client connection thread for client {:?}", cpy_peer_id).as_str());
 
