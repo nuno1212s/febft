@@ -282,7 +282,7 @@ impl<D> Client<D>
 
         self.node.broadcast(message, targets);
 
-        self.start_timeout(session_id, operation_id, self.data.clone());
+        //self.start_timeout(session_id, operation_id, self.data.clone());
     }
 
     fn next_operation_id(&mut self) -> SeqNo {
