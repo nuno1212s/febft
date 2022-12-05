@@ -313,7 +313,7 @@ pub struct NodeConfig {
 }
 
 // max no. of messages allowed in the channel
-const NODE_CHAN_BOUND: usize = 50000;
+const NODE_CHAN_BOUND: usize = 5000;
 
 // max no. of SendTo's to inline before doing a heap alloc
 const NODE_VIEWSIZ: usize = 16;
