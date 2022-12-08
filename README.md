@@ -37,8 +37,8 @@ consult the following papers:
 * Castro, Miguel, and Barbara Liskov. "Practical Byzantine fault tolerance and proactive recovery." ACM Transactions on Computer Systems (TOCS) 20.4 (2002): 398-461.
 * Bessani, Alysson, Joao Sousa, and Eduardo EP Alchieri. "State machine replication for the masses with BFT-SMART." 2014 44th Annual IEEE/IFIP International Conference on Dependable Systems and Networks. IEEE, 2014.
 
-<!-- TODO: include link to thesis -->
-To read more about the architecture of FeBFT, you can check out my MsC thesis.
+<!-- TODO: include link to thesis 
+To read more about the architecture of FeBFT, you can check out my MsC thesis.-->
 
 # How to use this library?
 
