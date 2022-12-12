@@ -2144,54 +2144,6 @@ impl<D> Node<D>
     ) {
         self.tx_connect_node_async(peer_id, None);
 
-        /*
-        // we are a server node
-        if let PeerTx::Server { .. } = &self.peer_tx {
-            // the node whose conn we accepted is a client
-            // and we aren't connected to it yet
-            if peer_id >= self.first_cli {
-                // fetch client address
-                //
-                match self.peer_addrs.get(peer_id.id() as u64) {
-                    None => {
-                        error!(
-                            "{:?} // Failed to find peer address for tx connection for peer {:?}",
-                            self.id(),
-                            peer_id
-                        );
-                    }
-                    Some(addr) => {
-                        debug!("{:?} // Received connection from client {:?}, establish TX connection on port {:?}", self.id, peer_id,
-                            addr.client_addr.0);
-
-                        // connect
-                        let nonce = self.rng.next_state();
-
-                        let connector = match self.connector.clone() {
-                            NodeConnector::Async(connector) => connector,
-                            NodeConnector::Sync(_) => {
-                                unreachable!()
-                            }
-                        };
-
-                        rt::spawn(Self::tx_side_connect_task(
-                            self.clone(),
-                            self.id,
-                            self.first_cli,
-                            peer_id,
-                            nonce,
-                            connector,
-                            addr.client_addr.clone(),
-                            None,
-                        ));
-                    }
-                };
-            } else {
-                if let Some(conn) = self.node_handling.resolve_peer_conn(peer_id) {}
-            }
-        }
-        */
-
         //Init the per client queue and start putting the received messages into it
         debug!("{:?} // Handling connection of peer {:?}", self.id, peer_id);
 
@@ -2234,6 +2186,11 @@ impl<D> Node<D>
                 break;
             }
 
+            if header.payload_length() == 0 {
+                //IGNORE PING REQUESTS
+                continue;
+            }
+
             // deserialize payload
             let message = match D::deserialize_message(&buf[..header.payload_length()]) {
                 Ok(m) => m,
@@ -2274,59 +2231,6 @@ impl<D> Node<D>
 
         self.tx_connect_node_sync(peer_id, None);
 
-        /* if let PeerTx::Server { .. } = &self.peer_tx {
-            if peer_id >= self.first_cli
-                || (!self.is_connected_to_tx(peer_id)
-                    && !self.is_currently_connecting_to_node(peer_id))
-            {
-                //If we are the server and the other connection is a client
-                //We want to automatically establish a tx connection as well as a
-                //rx connection
-
-                //We also want to establish connection if we are not either connected to or connecting to the given node.
-
-                // fetch client address
-                //
-                // FIXME: this line can crash the program if the user
-                // provides an invalid HashMap
-
-                let sync_conn = match self.connector.clone() {
-                    NodeConnector::Async(_) => {
-                        unreachable!()
-                    }
-                    NodeConnector::Sync(connector) => connector,
-                };
-
-                let addr = self
-                    .peer_addrs
-                    .get(peer_id.id() as u64)
-                    .expect(format!("Failed to get address for client {:?}", peer_id).as_str())
-                    .client_addr
-                    .clone();
-
-                debug!("{:?} // Received connection from client {:?}, establish TX connection on address {:?}", self.id, peer_id,
-                    addr.0);
-
-                let clone = self.clone();
-
-                std::thread::Builder::new()
-                    .name(format!("Connecting thread peer {:?}", peer_id))
-                    .spawn(move || {
-                        //Connect
-                        clone.tx_connect_node_sync(peer_id, sync_conn, None);
-                    })
-                    .expect("Failed to start connection thread.");
-            } else {
-                debug!(
-                    "{:?} // Will not attempt to connect to client because: ({} || ({} && {}))",
-                    self.id,
-                    peer_id >= self.first_cli,
-                    !self.is_connected_to_tx(peer_id),
-                    !self.is_currently_connecting_to_node(peer_id)
-                );
-            }
-        }*/
-
         let client = self.node_handling.init_peer_conn(peer_id.clone());
 
         let mut buf = SmallVec::<[u8; 16384]>::new();
@@ -2364,6 +2268,11 @@ impl<D> Node<D>
                 // errors reading -> faulty connection;
                 // drop this socket
                 break;
+            }
+
+            if header.payload_length() == 0 {
+                //IGNORE PING REQUESTS
+                continue;
             }
 
             // deserialize payload
