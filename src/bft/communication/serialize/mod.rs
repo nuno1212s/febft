@@ -6,7 +6,6 @@
 //! as [Cap'n'Proto](https://capnproto.org/capnp-tool.html), but these are
 //! expected to be implemented by the user.
 
-use std::fmt::format;
 use std::io::{Read, Write};
 
 use crate::bft::communication::message::SystemMessage;
@@ -59,71 +58,6 @@ pub trait SharedData: Send {
     fn deserialize_reply<R>(r: R) -> Result<Self::Reply> where R: Read;
 }
 
-/// Marker trait containing the types used by the application,
-/// as well as routines to serialize the application data.
-///
-/// Both clients and replicas should implement this trait,
-/// to communicate with each other.
-/// This data type must be Send since it will be sent across
-/// threads for processing and follow up reception
-/* 
-pub trait SharedData: Send {
-    /// The application state, which is mutated by client
-    /// requests.
-    type State: Send + Clone;
-
-    /// Represents the requests forwarded to replicas by the
-    /// clients of the BFT system.
-    type Request: Send + Clone;
-
-    /// Represents the replies forwarded to clients by replicas
-    /// in the BFT system.
-    type Reply: Send + Clone;
-
-    /// Serialize a consensus message for storing in the persistent store.
-    /// Because of memory restrictions we can't wrap the message in a system message at that
-    /// point, so because this is a subset of serialize_message, it can even be used in the serialize
-    /// message
-    fn serialize_consensus_message<W>(w: W, m: &ConsensusMessage<Self::Request>) -> Result<()>
-    where
-        W: Write;
-
-
-    /// Deserialize a consensus message for storing in the persistent store
-    /// Because of memory restrictions we can't wrap the message in a system message at that
-    /// point, so because this is a subset of serialize_message, it can even be used in the serialize
-    /// message
-    fn deserialize_consensus_message<R>(r: R) -> Result<ConsensusMessage<Self::Request>>
-    where
-        R: Read;
-
-    /// Serialize a wire message into the writer `W`.
-    fn serialize_message<W>(
-        w: W,
-        m: &SystemMessage<Self::State, Self::Request, Self::Reply>,
-    ) -> Result<()>
-    where
-        W: Write;
-
-    /// Deserialize a wire message from a reader `R`.
-    fn deserialize_message<R>(
-        r: R,
-    ) -> Result<SystemMessage<Self::State, Self::Request, Self::Reply>>
-    where
-        R: Read;
-
-    /// Serialize the replica state into the writer `W`.
-    fn serialize_state<W>(w: W, s: &Self::State) -> Result<()>
-    where
-        W: Write;
-
-    /// Deserialize the replica state from a reader `R`.
-    fn deserialize_state<R>(r: R) -> Result<Self::State>
-    where
-        R: Read;
-}
-*/
-
 // max no. of bytes to inline before doing a heap alloc
 //const NODE_BUFSIZ: usize = 16384;
 
@@ -152,6 +86,9 @@ pub trait DigestData: SharedData {
 
 impl<D: SharedData> DigestData for D {}
 
+/// The persister trait, to add functionality to the Shared Data struct.
+/// The functionality added is ease of serialization for individual consensus messages, which 
+/// are then going to be stored in the persistent log.
 pub trait Persister: SharedData {
 
     fn serialize_consensus_message<W: Write> (

@@ -59,6 +59,7 @@ macro_rules! extract_msg {
 
 /// Contains the state of an active consensus instance, as well
 /// as future instances.
+/// Consists off consensus information that is only relevant if we are a replica, not a follower
 pub struct ReplicaConsensus<S: Service> {
     missing_requests: VecDeque<Digest>,
     missing_swapbuf: Vec<usize>,
@@ -170,6 +171,7 @@ impl<S: Service + 'static> Consensus<S> {
         }
     }
 
+    ///Handle a prepare message when we have not yet reached a consensus
     pub(super) fn handle_preparing_no_quorum<T>(
         &mut self,
         curr_view: ViewInfo,
@@ -194,6 +196,7 @@ impl<S: Service + 'static> Consensus<S> {
         }
     }
 
+    ///Handle a prepare message when we have already obtained a valid quorum of messages
     pub(super) fn handle_preparing_quorum<T>(
         &mut self,
         curr_view: ViewInfo,

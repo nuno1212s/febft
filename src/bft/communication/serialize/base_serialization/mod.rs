@@ -1,21 +1,23 @@
 use std::io::Read;
-use std::{io::Write, marker::PhantomData};
-
-use capnp::message;
-use capnp::traits::FromStructBuilder;
+use std::io::Write;
 
 use crate::bft::communication::message::{
     ConsensusMessage, ConsensusMessageKind, Header, ObserveEventKind, ObserverMessage,
     ReplyMessage, RequestMessage, StoredMessage, SystemMessage,
 };
 
-use crate::bft::consensus::Consensus;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
 use crate::bft::ordering::{Orderable, SeqNo};
 
-use super::SharedData;
+use super::{Buf, SharedData};
+
+/// This module is meant to handle the serialization of the SMR messages, to allow for the users of this library to only
+/// Have to serialize (and declare) their request, reply and state, instead of also having to do so for all message
+/// types of the SMR protocol.
+
+const DEFAULT_SERIALIZE_BUFFER_SIZE: usize = 1024;
 
 /// Serialize a wire message into the writer `W`.
 pub fn serialize_message<W, S>(
@@ -32,45 +34,52 @@ where
 
     match m {
         SystemMessage::Request(req) => {
-            let request = sys_msg.reborrow().init_request();
+            let mut request = sys_msg.reborrow().init_request();
 
-            request.set_session_id(req.session_id());
-            request.set_operation_id(req.sequence_number());
+            request.set_session_id(req.session_id().into());
+            request.set_operation_id(req.sequence_number().into());
 
-            //TODO: Do I need this reborrow? is it worth removing even?
-            let rq = request.reborrow().init_request();
+            let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_request(rq, req.operation());
+            S::serialize_request(&mut rq, req.operation());
+
+            request.set_request(&rq[..]);
         }
         SystemMessage::UnOrderedRequest(req) => {
-            let request = sys_msg.reborrow().init_unordered_request();
+            let mut request = sys_msg.reborrow().init_unordered_request();
 
-            request.set_session_id(req.session_id());
-            request.set_operation_id(req.sequence_number());
+            request.set_session_id(req.session_id().into());
+            request.set_operation_id(req.sequence_number().into());
 
-            let rq = request.reborrow().init_request();
+            let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_request(rq, req.operation());
+            S::serialize_request(&mut rq, req.operation());
+
+             request.set_request(&rq[..]);
         }
         SystemMessage::Reply(reply) => {
             let mut reply_obj = sys_msg.init_reply();
 
-            reply_obj.set_session_id(reply.session_id());
-            reply_obj.set_operation_id(reply.sequence_number());
+            reply_obj.set_session_id(reply.session_id().into());
+            reply_obj.set_operation_id(reply.sequence_number().into());
 
-            let req = reply_obj.reborrow().init_reply();
+            let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_reply(req, reply.payload());
+            S::serialize_reply(&mut rq, reply.payload());
+
+            reply_obj.set_reply(&rq[..]);
         }
         SystemMessage::UnOrderedReply(reply) => {
             let mut reply_obj = sys_msg.init_unordered_reply();
 
-            reply_obj.set_session_id(reply.session_id());
-            reply_obj.set_operation_id(reply.sequence_number());
+            reply_obj.set_session_id(reply.session_id().into());
+            reply_obj.set_operation_id(reply.sequence_number().into());
 
-            let req = reply_obj.reborrow().init_reply();
+            let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_reply(req, reply.payload());
+            S::serialize_reply(&mut rq, reply.payload());
+
+            reply_obj.set_reply(&rq[..]);
         }
         SystemMessage::Consensus(m) => {
             let mut consensus = sys_msg.init_consensus();
@@ -93,11 +102,15 @@ where
 
                         // set request
                         {
-                            let request = forwarded.reborrow().init_request().init_request();
+                            let mut request = forwarded.reborrow().init_request();
 
                             let stored_req = stored.message();
 
-                            S::serialize_request(request, stored_req.operation());
+                            let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
+
+                            S::serialize_request(&mut rq, stored_req.operation());
+
+                            request.set_request(&rq[..]);
                         }
                     }
                 }
@@ -121,7 +134,7 @@ where
                     obs_message_type.set_observer_unregister(());
                 }
                 ObserverMessage::ObservedValue(observed_value) => {
-                    let mut observer_value_msg = obs_message_type.init_observed_value();
+                    let observer_value_msg = obs_message_type.init_observed_value();
 
                     let mut value = observer_value_msg.init_value();
 
@@ -174,7 +187,7 @@ where
     capnp::serialize::write_message(w, &root).wrapped_msg(
         ErrorKind::CommunicationSerialize,
         "Failed to serialize using capnp",
-    );
+    )?;
 
     Ok(())
 }
@@ -183,7 +196,7 @@ fn deserialize_request<S>(
     req: messages_capnp::request::Reader,
 ) -> Result<RequestMessage<S::Request>>
 where
-    S: SharedData,
+    S: SharedData + ?Sized,
 {
     let session_id: SeqNo = req.get_session_id().into();
     let op_id: SeqNo = req.get_operation_id().into();
@@ -203,7 +216,7 @@ fn deserialize_unordered_request<S>(
     req: messages_capnp::unordered_request::Reader,
 ) -> Result<RequestMessage<S::Request>>
 where
-    S: SharedData,
+    S: SharedData + ?Sized,
 {
     let session_id: SeqNo = req.get_session_id().into();
     let op_id: SeqNo = req.get_operation_id().into();
@@ -221,7 +234,7 @@ where
 
 fn deserialize_reply<S>(req: messages_capnp::reply::Reader) -> Result<ReplyMessage<S::Reply>>
 where
-    S: SharedData,
+    S: SharedData + ?Sized,
 {
     let session_id: SeqNo = req.get_session_id().into();
     let op_id: SeqNo = req.get_operation_id().into();
@@ -239,7 +252,7 @@ fn deserialize_unordered_reply<S>(
     req: messages_capnp::unordered_reply::Reader,
 ) -> Result<ReplyMessage<S::Reply>>
 where
-    S: SharedData,
+    S: SharedData + ?Sized,
 {
     let session_id: SeqNo = req.get_session_id().into();
     let op_id: SeqNo = req.get_operation_id().into();
@@ -280,7 +293,7 @@ where
                     .get_request()
                     .wrapped(ErrorKind::CommunicationSerialize)?;
 
-                let parsed_request = deserialize_request(request)?;
+                let parsed_request = deserialize_request::<S>(request)?;
 
                 rqs.push(StoredMessage::new(
                     Header::deserialize_from(&header[..])?,
@@ -355,31 +368,31 @@ where
 
     match sys_which {
         messages_capnp::system::Which::Request(Ok(req)) => {
-            Ok(SystemMessage::Request(deserialize_request(req)?))
+            Ok(SystemMessage::Request(deserialize_request::<S>(req)?))
         }
         messages_capnp::system::Which::Request(Err(err)) => {
             Err(format!("{:?}", err).as_str()).wrapped(ErrorKind::CommunicationSerialize)
         }
         messages_capnp::system::Which::UnorderedRequest(Ok(req)) => Ok(
-            SystemMessage::UnOrderedRequest(deserialize_unordered_request(req)?),
+            SystemMessage::UnOrderedRequest(deserialize_unordered_request::<S>(req)?),
         ),
         messages_capnp::system::Which::UnorderedRequest(Err(err)) => {
             Err(format!("{:?}", err).as_str()).wrapped(ErrorKind::CommunicationSerialize)
         }
         messages_capnp::system::Which::Reply(Ok(req)) => {
-            Ok(SystemMessage::Reply(deserialize_reply(req)?))
+            Ok(SystemMessage::Reply(deserialize_reply::<S>(req)?))
         }
         messages_capnp::system::Which::Reply(Err(err)) => {
             Err(format!("{:?}", err).as_str()).wrapped(ErrorKind::CommunicationSerialize)
         }
         messages_capnp::system::Which::UnorderedReply(Ok(req)) => Ok(
-            SystemMessage::UnOrderedReply(deserialize_unordered_reply(req)?),
+            SystemMessage::UnOrderedReply(deserialize_unordered_reply::<S>(req)?),
         ),
         messages_capnp::system::Which::UnorderedReply(Err(err)) => {
             Err(format!("{:?}", err).as_str()).wrapped(ErrorKind::CommunicationSerialize)
         }
         messages_capnp::system::Which::Consensus(Ok(consensus_msg)) => Ok(
-            SystemMessage::Consensus(deserialize_consensus_message(consensus_msg)?),
+            SystemMessage::Consensus(deserialize_consensus_message::<S>(consensus_msg)?),
         ),
         messages_capnp::system::Which::Consensus(Err(err)) => {
             Err(format!("{:?}", err).as_str()).wrapped(ErrorKind::CommunicationSerialize)
@@ -469,19 +482,18 @@ where
 }
 
 fn serialize_consensus_message<S>(
-    consensus: messages_capnp::consensus::Builder,
+    consensus: &mut messages_capnp::consensus::Builder,
     m: &ConsensusMessage<S::Request>,
 ) -> Result<()>
 where
-    S: SharedData + ?Sized, {
-
+    S: SharedData + ?Sized,
+{
     consensus.set_seq_no(m.sequence_number().into());
     consensus.set_view(m.view().into());
     match m.kind() {
         ConsensusMessageKind::PrePrepare(requests) => {
             let mut header = [0; Header::LENGTH];
-            let mut pre_prepare_requests =
-                consensus.init_pre_prepare(requests.len() as u32);
+            let mut pre_prepare_requests = consensus.reborrow().init_pre_prepare(requests.len() as u32);
 
             for (i, stored) in requests.iter().enumerate() {
                 let mut forwarded = pre_prepare_requests.reborrow().get(i as u32);
@@ -494,11 +506,15 @@ where
 
                 // set request
                 {
-                    let request = forwarded.reborrow().init_request().init_request();
+                    let mut request = forwarded.reborrow().init_request();
 
                     let stored_req = stored.message();
 
-                    S::serialize_request(request, stored_req.operation());
+                    let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
+
+                    S::serialize_request(&mut rq, stored_req.operation());
+
+                    request.set_request(&rq[..]);
                 }
             }
         }
@@ -509,13 +525,21 @@ where
     Ok(())
 }
 
-pub fn serialize_consensus<W, S>(w: &mut W, message: &ConsensusMessage<S::Request>) -> Result<()> where W: Write, S: SharedData +?Sized {
-
+pub fn serialize_consensus<W, S>(w: &mut W, message: &ConsensusMessage<S::Request>) -> Result<()>
+where
+    W: Write,
+    S: SharedData + ?Sized,
+{
     let mut root = capnp::message::Builder::new(capnp::message::HeapAllocator::new());
 
     let mut consensus_msg: messages_capnp::consensus::Builder = root.init_root();
 
-    serialize_consensus_message::<S>(consensus_msg, message)
+    serialize_consensus_message::<S>(&mut consensus_msg, message)?;
+
+    capnp::serialize::write_message(w, &root).wrapped_msg(
+        ErrorKind::CommunicationSerialize,
+        "Failed to serialize using capnp",
+    )
 }
 
 mod messages_capnp {

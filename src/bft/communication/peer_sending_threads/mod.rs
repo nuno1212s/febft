@@ -1,18 +1,18 @@
 use crate::bft;
 use crate::bft::benchmarks::CommStats;
-use crate::bft::communication::channel::{
-    ChannelAsyncRx, ChannelAsyncTx, ChannelSyncRx, ChannelSyncTx,
-};
+use crate::bft::communication::channel::{ChannelAsyncRx, ChannelAsyncTx, ChannelSyncRx, ChannelSyncTx, RecvError, SendError};
 use crate::bft::communication::message::WireMessage;
 use crate::bft::communication::socket::{SocketSendAsync, SocketSendSync};
-use crate::bft::communication::{Node, NodeId, PeerAddr};
+use crate::bft::communication::{channel, Node, NodeId, PeerAddr};
 use dashmap::DashMap;
 use log::error;
 use std::sync::Arc;
 use std::time::Instant;
+use either::Either;
 
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::serialize::SharedData;
+use crate::bft::error::{Error, ErrorKind};
 
 use super::NodeConnector;
 
@@ -20,7 +20,14 @@ use super::NodeConnector;
 ///Sending messages from it
 const QUEUE_SPACE: usize = 128;
 
-pub type SendMessage = (WireMessage, Instant, Option<u64>);
+pub type SendMessage = SendMessageType;
+
+pub type PingResponse = Result<()>;
+
+pub enum SendMessageType {
+    Ping(Either<ChannelSyncTx<PingResponse>, ChannelAsyncTx<PingResponse>>),
+    Message(WireMessage, Instant, Option<u64>),
+}
 
 #[derive(Clone)]
 pub enum ConnectionHandle {
@@ -55,7 +62,7 @@ impl ConnectionHandle {
             ConnectionHandle::Async(channel) => channel,
         };
 
-        match channel.send((message, Instant::now(), None)).await {
+        match channel.send(Message(message, Instant::now(), None)).await {
             Ok(_) => Ok(()),
             Err(error) => {
                 error!("Failed to send to the channel! {:?}", error);
@@ -63,6 +70,60 @@ impl ConnectionHandle {
                 Err(())
             }
         }
+    }
+
+    pub fn is_active_sync(&self) -> bool {
+        let channel = match self {
+            ConnectionHandle::Sync(channel) => {
+                channel
+            }
+            ConnectionHandle::Async(_) => {
+                panic!("Cannot send asynchronously on synchronous channel!");
+            }
+        };
+
+        let (response_channel_tx, response_channel_rx) = channel::new_bounded_sync(1);
+
+        match channel.send(SendMessageType::Ping(Either::Left(response_channel_tx))) {
+            Ok(_) => { Ok(()) }
+            Err(_) => {}
+        }
+
+        match response_channel_rx.recv() {
+            Ok(Ok(())) => {
+                return true;
+            }
+            _ => {
+                return false;
+            }
+        };
+    }
+
+    pub async fn is_active_async(&self) -> bool {
+        let channel = match self {
+            ConnectionHandle::Sync(_) => {
+                panic!("Cannot send synchronously on asynchronous channel!");
+            }
+            ConnectionHandle::Async(channel) => {
+                channel
+            }
+        };
+
+        let (response_channel_tx, response_channel_rx) = channel::new_bounded_async(1);
+
+        match channel.send(SendMessageType::Ping(Either::Right(response_channel_tx))).await {
+            Ok(_) => { Ok(()) }
+            Err(_) => {}
+        }
+
+        match response_channel_rx.recv().await {
+            Ok(Ok(())) => {
+                return true;
+            }
+            _ => {
+                return false;
+            }
+        };
     }
 
     pub fn close(self) {
@@ -78,8 +139,8 @@ pub fn initialize_sync_sending_thread_for<D>(
     comm_stats: Option<Arc<CommStats>>,
     sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>,
 ) -> ConnectionHandle
-where
-    D: SharedData + 'static,
+    where
+        D: SharedData + 'static,
 {
     let (tx, rx) = bft::communication::channel::new_bounded_sync(QUEUE_SPACE);
 
@@ -105,7 +166,7 @@ fn sync_sending_thread<D>(
     loop {
         let recv_result = recv.recv();
 
-        let (to_send, init_time, rq_key) = match recv_result {
+        let to_send = match recv_result {
             Ok(to_send) => to_send,
             Err(recv_err) => {
                 error!("Sending channel for client {:?} has disconnected!", peer_id);
@@ -113,108 +174,65 @@ fn sync_sending_thread<D>(
             }
         };
 
-        let before_send = Instant::now();
-
-        // send
-        //
-        // FIXME: sending may hang forever, because of network
-        // problems; add a timeout
-        match to_send.write_to_sync(socket.mut_socket(), true) {
-            Ok(_) => {}
-            Err(error) => {
-                error!("Failed to write to socket on client {:?} {:?}", peer_id, error);
-                break;
-            }
-        }
-
-        if let Some(comm_stats) = &comm_stats {
-            let time_taken_passing = before_send.duration_since(init_time).as_nanos();
-
-            let time_taken_sending = Instant::now().duration_since(before_send).as_nanos();
-
-            comm_stats
-                .insert_message_passing_to_send_thread(to_send.header.to(), time_taken_passing);
-            comm_stats.insert_message_sending_time(to_send.header.to(), time_taken_sending);
-            comm_stats.register_rq_sent(to_send.header.to());
-        }
-
-        if let Some(sent_rqs) = &sent_rqs {
-            if let Some(rq_key) = rq_key {
-                sent_rqs[rq_key as usize % sent_rqs.len()].insert(rq_key, ());
-            }
-        }
-    }
-
-    /*
-    On disconnections we want to attempt to reconnect
-     */
-    let mut state = bft::prng::State::new();
-
-    let peer_addr = node.peer_addrs.get(peer_id.id() as u64);
-
-    match peer_addr {
-        None => {
-            error!(
-                "{:?} // Failed to find address for node {:?}",
-                node.id(),
-                peer_id
-            );
-        }
-        Some(addr) => {
-            if node.id() < node.first_client_id() && peer_id < node.first_client_id() {
-                //Both nodes are replicas, so attempt to connect to the replica
-                if let Some(addr) = &addr.replica_addr {
-                    let id = node.id();
-                    let first_cli = node.first_client_id();
-
-                    let sync_conn = match &node.connector() {
-                        NodeConnector::Async(_) => unreachable!(),
-                        NodeConnector::Sync(conn) => conn,
+        match to_send {
+            SendMessage::Ping(tx_channel) => {
+                let tx_channel = match tx_channel {
+                    Either::Left(tx_channel) => {
+                        tx_channel
                     }
-                    .clone();
+                    _ => { panic!("") }
+                };
 
-                    let addr = addr.clone();
+                let wm = WireMessage::new(node.id(), peer_id, Vec::new(), 0, None, None);
 
-                    //If we have the replica only IP (port) of the replicas, then we are probably a replica and
-                    node.tx_side_connect_task_sync(
-                        id,
-                        first_cli,
-                        peer_id,
-                        state.next_state(),
-                        sync_conn,
-                        addr,
-                        None,
-                    );
-                } else {
-                    error!(
-                        "{:?} // Failed to connect because no IP was present for replica {:?}",
-                        node.id(),
-                        peer_id
-                    );
+                match wm.write_to_sync(socket.mut_socket(), true) {
+                    Ok(_) => {
+                        tx_channel.send(Ok(())).unwrap();
+                    }
+                    Err(err) => {
+                        error!("Failed to write to socket on client {:?} {:?}", peer_id, error);
+
+                        tx_channel.send(Err(Error::wrapped(ErrorKind::CommunicationPeerSendingThreads, err))).unwrap();
+
+                        break;
+                    }
+                };
+            }
+            SendMessage::Message(to_send, init_time, rq_key) => {
+                let before_send = Instant::now();
+
+                // send
+                //
+                // FIXME: sending may hang forever, because of network
+                // problems; add a timeout
+                match to_send.write_to_sync(socket.mut_socket(), true) {
+                    Ok(_) => {}
+                    Err(error) => {
+                        error!("Failed to write to socket on client {:?} {:?}", peer_id, error);
+                        break;
+                    }
                 }
-            } else {
-                let id = node.id();
-                let first_cli = node.first_client_id();
-                let sync_conn = match &node.connector() {
-                    NodeConnector::Async(_) => unreachable!(),
-                    NodeConnector::Sync(conn) => conn,
-                }
-                .clone();
-                let addr = addr.client_addr.clone();
 
-                //If we are not a replica connecting to a replica, we will always use the "client" ports.
-                node.tx_side_connect_task_sync(
-                    id,
-                    first_cli,
-                    peer_id,
-                    state.next_state(),
-                    sync_conn,
-                    addr,
-                    None,
-                );
+                if let Some(comm_stats) = &comm_stats {
+                    let time_taken_passing = before_send.duration_since(init_time).as_nanos();
+
+                    let time_taken_sending = Instant::now().duration_since(before_send).as_nanos();
+
+                    comm_stats
+                        .insert_message_passing_to_send_thread(to_send.header.to(), time_taken_passing);
+                    comm_stats.insert_message_sending_time(to_send.header.to(), time_taken_sending);
+                    comm_stats.register_rq_sent(to_send.header.to());
+                }
+
+                if let Some(sent_rqs) = &sent_rqs {
+                    if let Some(rq_key) = rq_key {
+                        sent_rqs[rq_key as usize % sent_rqs.len()].insert(rq_key, ());
+                    }
+                }
             }
         }
     }
+
 }
 
 pub fn initialize_async_sending_task_for<D>(
@@ -223,8 +241,8 @@ pub fn initialize_async_sending_task_for<D>(
     socket: SocketSendAsync,
     comm_stats: Option<Arc<CommStats>>,
 ) -> ConnectionHandle
-where
-    D: SharedData + 'static,
+    where
+        D: SharedData + 'static,
 {
     let (tx, rx) = crate::bft::communication::channel::new_bounded_async(QUEUE_SPACE);
 
@@ -246,7 +264,7 @@ async fn async_sending_task<D>(
     loop {
         let recv_result = recv.recv().await;
 
-        let (to_send, init_time, _) = match recv_result {
+        let to_send = match recv_result {
             Ok(to_send) => to_send,
             Err(recv_err) => {
                 error!("Sending channel for client {:?} has disconnected!", peer_id);
@@ -254,95 +272,58 @@ async fn async_sending_task<D>(
             }
         };
 
-        let before_send = Instant::now();
+        match to_send {
+            SendMessage::Ping(tx_channel) => {
 
-        // send
-        //
-        // FIXME: sending may hang forever, because of network
-        // problems; add a timeout
-        match to_send.write_to(socket.mut_socket(), true).await {
-            Ok(_) => {}
-            Err(error) => {
-                error!("Failed to write to socket on client {:?}", peer_id);
-                break;
-            }
-        }
+                let tx_channel = match tx_channel { Either::Right(tx_channel) => {
+                    tx_channel
+                }
+                _ => {
+                    panic!("Wrong channel for ping");
+                }};
 
-        if let Some(comm_stats) = &comm_stats {
-            let time_taken_passing = before_send.duration_since(init_time).as_nanos();
+                let wm = WireMessage::new(node.id(), peer_id, Vec::new(), 0, None, None);
 
-            let time_taken_sending = Instant::now().duration_since(before_send).as_nanos();
-
-            comm_stats
-                .insert_message_passing_to_send_thread(to_send.header.to(), time_taken_passing);
-            comm_stats.insert_message_sending_time(to_send.header.to(), time_taken_sending);
-            comm_stats.register_rq_sent(to_send.header.to());
-        }
-    }
-
-    /*
-    On disconnections we want to attempt to reconnect
-     */
-    let mut state = bft::prng::State::new();
-
-    let addr = node.peer_addrs.get(peer_id.id() as u64);
-
-    match addr {
-        None => {
-            error!(
-                "{:?} // Failed to find address for node {:?}",
-                node.id(),
-                peer_id
-            );
-        }
-        Some(addr) => {
-            if node.id() < node.first_client_id() && peer_id < node.first_client_id() {
-                //Both nodes are replicas, so attempt to connect to the replica
-                if let Some(addr) = &addr.replica_addr {
-                    let id = node.id();
-                    let first_cli = node.first_client_id();
-
-                    let conn = match &node.connector() {
-                        NodeConnector::Async(conn) => conn,
-                        NodeConnector::Sync(_) => unreachable!(),
+                match wm.write_to(socket.mut_socket(), true).await {
+                    Ok(_) => {
+                        tx_channel.send(Ok(())).await.unwrap();
                     }
-                    .clone();
+                    Err(err) => {
+                        error!("Failed to write to socket on client {:?} {:?}", peer_id, error);
 
-                    let addr = addr.clone();
+                        tx_channel.send(Err(Error::wrapped(ErrorKind::CommunicationPeerSendingThreads, err)))
+                            .await.unwrap();
 
-                    //If we have the replica only IP (port) of the replicas, then we are probably a replica and
-                    node.tx_side_connect_task(
-                        id,
-                        first_cli,
-                        peer_id,
-                        state.next_state(),
-                        conn,
-                        addr,
-                        None,
-                    )
-                    .await;
-                } else {
-                    error!(
-                        "{:?} // Failed to connect because no IP was present for replica {:?}",
-                        node.id(),
-                        peer_id
-                    );
+                        break;
+                    }
+                };
+            }
+
+            SendMessage::Message(to_send, init_time, _) => {
+                let before_send = Instant::now();
+
+                // send
+                //
+                // FIXME: sending may hang forever, because of network
+                // problems; add a timeout
+                match to_send.write_to(socket.mut_socket(), true).await {
+                    Ok(_) => {}
+                    Err(error) => {
+                        error!("Failed to write to socket on client {:?}", peer_id);
+                        break;
+                    }
                 }
-            } else {
-                let id = node.id();
-                let first_cli = node.first_client_id();
 
-                let conn = match &node.connector() {
-                    NodeConnector::Async(conn) => conn,
-                    NodeConnector::Sync(_) => unreachable!(),
+                if let Some(comm_stats) = &comm_stats {
+                    let time_taken_passing = before_send.duration_since(init_time).as_nanos();
+
+                    let time_taken_sending = Instant::now().duration_since(before_send).as_nanos();
+
+                    comm_stats
+                        .insert_message_passing_to_send_thread(to_send.header.to(), time_taken_passing);
+                    comm_stats.insert_message_sending_time(to_send.header.to(), time_taken_sending);
+                    comm_stats.register_rq_sent(to_send.header.to());
                 }
-                .clone();
-
-                let addr = addr.client_addr.clone();
-
-                //If we are not a replica connecting to a replica, we will always use the "client" ports.
-                node.tx_side_connect_task(id, first_cli, peer_id, state.next_state(), conn, addr, None)
-                    .await;
             }
         }
     }
