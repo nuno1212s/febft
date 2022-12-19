@@ -6,7 +6,7 @@ use itertools::Itertools;
 
 const ERROR_KIND_DST: &str = "error_kind.rs";
 
-const MESSAGE_CAPNP_SRC: &str = "src/bft/communication/serialize/base_serialization/messages.capnp";
+const MESSAGE_CAPNP_SRC: &str = "src/bft/communication/serialize/serialization_primitives/messages.capnp";
 
 
 fn main() {

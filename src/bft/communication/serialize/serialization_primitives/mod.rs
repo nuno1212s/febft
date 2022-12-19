@@ -546,6 +546,6 @@ mod messages_capnp {
     #![allow(unused)]
     include!(concat!(
         env!("OUT_DIR"),
-        "/src/bft/communication/serialize/base_serialization/messages_capnp.rs"
+        "/src/bft/communication/serialize/serialization_primitives/messages_capnp.rs"
     ));
 }

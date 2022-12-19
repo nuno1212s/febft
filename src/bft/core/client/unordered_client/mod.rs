@@ -105,7 +105,7 @@ where
 
         self.node
             .clone()
-            .tx_connect_node_sync(node_id, Arc::clone(connector), Some(callback));
+            .tx_connect_node_sync(node_id, Some(callback));
 
         Ok(())
     }

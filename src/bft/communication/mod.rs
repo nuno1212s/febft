@@ -127,7 +127,7 @@ impl From<NodeId> for u32 {
 // TODO: maybe researh cleaner way to share the connections
 // hashmap between two async tasks on the client
 #[derive(Clone)]
-enum PeerTx {
+pub enum PeerTx {
     // NOTE: comments below are invalid because of the changes we made to
     // the research branch; we now share a `SendNode` with the execution
     // layer, to allow faster reply delivery!
@@ -188,12 +188,12 @@ impl PeerTx {
     pub fn disconnect_peer(&self, peer_id: u64) -> Option<ConnectionHandle> {
         match self {
             PeerTx::Client { connected, .. } => {
-                connected.remove(peer_id).map(|(u, v)| {
+                connected.remove(&peer_id).map(|(u, v)| {
                     v
                 })
             }
             PeerTx::Server { connected, .. } => {
-                connected.remove(peer_id).map(|(u, v)| {
+                connected.remove(&peer_id).map(|(u, v)| {
                     v
                 })
             }
@@ -1287,6 +1287,7 @@ impl<D> Node<D>
                 let s = SerializedSendTo::Peers {
                     id,
                     our_id: my_id,
+                    peer_tx: peer_tx.clone(),
                     sock,
                     //Get the RX channel for the peer to mark as DCed if it fails
                     tx,
@@ -1342,7 +1343,7 @@ impl<D> Node<D>
 
                         sock.close();
 
-                        tx_peers.disconnect_peer(id);
+                        tx_peers.disconnect_peer(id.into());
 
                         continue;
                     }
@@ -1357,6 +1358,7 @@ impl<D> Node<D>
                     //Get the RX channel for the peer to mark as DCed if it fails
                     tx: rx_conn,
                     shared: shared.map(|sh| Arc::clone(sh)),
+                    peer_tx: tx_peers.clone(),
                 };
 
                 others.push(s);
@@ -1399,6 +1401,7 @@ impl<D> Node<D>
                 peer_id,
                 my_id,
                 tx: cli,
+                peer_tx: peer_tx.clone(),
             })
         }
     }
@@ -1471,9 +1474,7 @@ impl<D> Node<D>
             let clone = self.clone();
             let connector = connector.clone();
 
-            rt::spawn(async move {
-                Self::tx_connect_node_async(clone, peer_id, None).await;
-            });
+            rt::spawn(Self::tx_connect_node_async(clone, peer_id, None));
         }
     }
 
@@ -1489,7 +1490,7 @@ impl<D> Node<D>
             std::thread::Builder::new()
                 .name(format!("Peer {:?} connector", peer_id))
                 .spawn(move || {
-                    Self::tx_connect_node_sync(clone, peer_id, connector, None);
+                    Self::tx_connect_node_sync(clone, peer_id, None);
                 })
                 .expect("Failed to launch peer connection thread.");
         }
@@ -1521,7 +1522,7 @@ impl<D> Node<D>
     pub async fn tx_connect_node_async(
         self: Arc<Self>,
         peer_id: NodeId,
-        callback: Option<Box<dyn FnOnce(bool)>>,
+        callback: Option<Box<dyn FnOnce(bool) + Send>>,
     ) {
         if !self.register_currently_connecting_to_node(peer_id) {
             warn!(
@@ -1533,7 +1534,7 @@ impl<D> Node<D>
         }
 
         if self.is_connected_to_tx(peer_id) {
-            let connection_handle = self.peer_tx.find_peer(peer_id);
+            let connection_handle = self.peer_tx.find_peer(peer_id.into());
 
             if let Some(connection) = connection_handle {
                 if connection.is_active_async().await {
@@ -1541,7 +1542,7 @@ impl<D> Node<D>
                 }
             }
 
-            self.peer_tx.disconnect_peer(peer_id);
+            self.peer_tx.disconnect_peer(peer_id.into());
         }
 
         debug!("{:?} // Connecting to the node {:?}", self.id, peer_id);
@@ -1598,10 +1599,10 @@ impl<D> Node<D>
         let my_id = self.id();
         let first_cli = self.first_client_id();
 
-        let connector = match self.connector {
+        let connector = match &self.connector {
             NodeConnector::Async(connector) => { connector }
             NodeConnector::Sync(_) => { panic!("Failed, trying to use sync connector in async mode") }
-        };
+        }.clone();
 
         self.tx_side_connect_task(
             my_id, first_cli, peer_id, nonce, connector, peer_addr, callback,
@@ -1616,7 +1617,7 @@ impl<D> Node<D>
     pub fn tx_connect_node_sync(
         self: Arc<Self>,
         peer_id: NodeId,
-        callback: Option<Box<dyn FnOnce(bool)>>,
+        callback: Option<Box<dyn FnOnce(bool) + Send>>,
     ) {
         if !self.register_currently_connecting_to_node(peer_id) {
             warn!(
@@ -1628,7 +1629,7 @@ impl<D> Node<D>
         }
 
         if self.is_connected_to_tx(peer_id) {
-            let connection_handle = self.peer_tx.find_peer(peer_id);
+            let connection_handle = self.peer_tx.find_peer(peer_id.into());
 
             if let Some(connection) = connection_handle {
                 if connection.is_active_sync() {
@@ -1636,7 +1637,7 @@ impl<D> Node<D>
                 }
             }
 
-            self.peer_tx.disconnect_peer(peer_id);
+            self.peer_tx.disconnect_peer(peer_id.into());
         }
 
         debug!("{:?} // Connecting to the node {:?}", self.id, peer_id);
@@ -1693,14 +1694,14 @@ impl<D> Node<D>
         let my_id = self.id();
         let first_cli = self.first_client_id();
 
-        let connector = match self.connector {
+        let connector = match &self.connector {
             NodeConnector::Async(_) => {
                 panic!("Failed using async connector in sync mode");
             }
             NodeConnector::Sync(connector) => {
                 connector
             }
-        };
+        }.clone();
 
         self.tx_side_connect_task_sync(
             my_id, first_cli, peer_id, nonce, connector, peer_addr, callback,
@@ -1718,7 +1719,7 @@ impl<D> Node<D>
         nonce: u64,
         connector: Arc<ClientConfig>,
         (addr, hostname): (SocketAddr, String),
-        callback: Option<Box<dyn FnOnce(bool)>>,
+        callback: Option<Box<dyn FnOnce(bool) + Send>>,
     ) {
         const SECS: u64 = 1;
         const RETRY: usize = 3 * 60;
@@ -2142,7 +2143,7 @@ impl<D> Node<D>
         peer_id: NodeId,
         mut sock: SecureSocketRecvAsync,
     ) {
-        self.tx_connect_node_async(peer_id, None);
+        self.clone().tx_connect_node_async(peer_id, None);
 
         //Init the per client queue and start putting the received messages into it
         debug!("{:?} // Handling connection of peer {:?}", self.id, peer_id);
@@ -2229,7 +2230,7 @@ impl<D> Node<D>
         mut sock: SecureSocketRecvSync,
     ) {
 
-        self.tx_connect_node_sync(peer_id, None);
+        self.clone().tx_connect_node_sync(peer_id, None);
 
         let client = self.node_handling.init_peer_conn(peer_id.clone());
 
@@ -2556,7 +2557,7 @@ pub enum SendTo<D: SharedData> {
         // shared data
         shared: Option<Arc<NodeShared>>,
         // handle to the registry of connected tx peers
-        peer_tx: &PeerTx,
+        peer_tx: PeerTx,
         // handle to socket
         sock: ConnectionHandle,
         // a handle to the message channel of the corresponding client
@@ -2577,7 +2578,7 @@ pub enum SerializedSendTo<D: SharedData> {
         //Our own ID
         our_id: NodeId,
         // handle to the registry of connected tx peers
-        peer_tx: &PeerTx,
+        peer_tx: PeerTx,
         // handle to socket
         sock: ConnectionHandle,
         // a handle to the message channel of the corresponding client
@@ -2645,7 +2646,7 @@ impl<D> SendTo<D>
 
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Left((n, d, b)) = m {
-                    Self::peers_sync(flush, my_id, peer_id, n, d, b, key, peer_tx, sock, rq_key);
+                    Self::peers_sync(flush, my_id, peer_id, n, d, b, key, &peer_tx, sock, rq_key);
                 } else {
                     // optimize code path
                     unreachable!()
@@ -2699,7 +2700,7 @@ impl<D> SendTo<D>
 
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
                 if let Left((n, d, b)) = m {
-                    Self::peers(flush, my_id, peer_id, n, d, b, key, peer_tx, sock).await;
+                    Self::peers(flush, my_id, peer_id, n, d, b, key, &peer_tx, sock).await;
                 } else {
                     // optimize code path
                     unreachable!()
@@ -2764,7 +2765,7 @@ impl<D> SendTo<D>
             Err(_) => {
                 conn_handle.close();
 
-                peer_tx.disconnect_peer(peer_id);
+                peer_tx.disconnect_peer(peer_id.into());
             }
         }
     }
@@ -2788,7 +2789,7 @@ impl<D> SendTo<D>
             Ok(_) => {}
             Err(_) => {
                 conn_handle.close();
-                peer_tx.disconnect_peer(peer_id);
+                peer_tx.disconnect_peer(peer_id.into());
             }
         }
     }
@@ -2831,7 +2832,7 @@ impl<D> SerializedSendTo<D>
                     }
                 }
 
-                Self::peers_sync(id, h, m, peer_tx, sock, tx);
+                Self::peers_sync(id, h, m, &peer_tx, sock, tx);
             }
         }
     }
@@ -2868,7 +2869,7 @@ impl<D> SerializedSendTo<D>
                     ConnectionHandle::Async(_) => {}
                 }
 
-                Self::peers(id, h, m, peer_tx, sock, tx).await;
+                Self::peers(id, h, m, &peer_tx, sock, tx).await;
             }
         }
     }
@@ -2920,7 +2921,7 @@ impl<D> SerializedSendTo<D>
             Err(_) => {
                 conn_handle.close();
 
-                peer_tx.disconnect_peer(peer_tx);
+                peer_tx.disconnect_peer(peer_id.into());
             }
         }
     }
@@ -2944,7 +2945,7 @@ impl<D> SerializedSendTo<D>
             Err(_) => {
                 conn_handle.close();
 
-                peer_tx.disconnect_peer(peer_tx);
+                peer_tx.disconnect_peer(peer_id.into());
             }
         }
     }

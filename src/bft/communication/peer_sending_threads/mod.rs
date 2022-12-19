@@ -2,8 +2,9 @@ use crate::bft;
 use crate::bft::benchmarks::CommStats;
 use crate::bft::communication::channel::{ChannelAsyncRx, ChannelAsyncTx, ChannelSyncRx, ChannelSyncTx, RecvError, SendError};
 use crate::bft::communication::message::WireMessage;
-use crate::bft::communication::socket::{SocketSendAsync, SocketSendSync};
+use crate::bft::communication::socket::{SecureSocketSendAsync, SecureSocketSendSync, SocketSendAsync, SocketSendSync};
 use crate::bft::communication::{channel, Node, NodeId, PeerAddr};
+use crate::bft::error::*;
 use dashmap::DashMap;
 use log::error;
 use std::sync::Arc;
@@ -12,7 +13,6 @@ use either::Either;
 
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::serialize::SharedData;
-use crate::bft::error::{Error, ErrorKind};
 
 use super::NodeConnector;
 
@@ -36,7 +36,7 @@ pub enum ConnectionHandle {
 }
 
 impl ConnectionHandle {
-    pub fn send(&self, message: WireMessage, rq_key: Option<u64>) -> Result<(), ()> {
+    pub fn send(&self, message: WireMessage, rq_key: Option<u64>) -> Result<()> {
         let channel = match self {
             ConnectionHandle::Sync(channel) => channel,
             ConnectionHandle::Async(_) => {
@@ -44,30 +44,30 @@ impl ConnectionHandle {
             }
         };
 
-        match channel.send((message, Instant::now(), rq_key)) {
+        match channel.send(SendMessageType::Message(message, Instant::now(), rq_key)) {
             Ok(_) => Ok(()),
             Err(error) => {
                 error!("Failed to send to the channel! {:?}", error);
 
-                Err(())
+                Err(Error::wrapped(ErrorKind::CommunicationPeerSendingThreads, error))
             }
         }
     }
 
-    pub async fn async_send(&mut self, message: WireMessage) -> Result<(), ()> {
-        let channel = match self {
+    pub async fn async_send(&mut self, message: WireMessage) -> Result<()> {
+        let mut channel = match self {
             ConnectionHandle::Sync(_) => {
                 panic!("Cannot send synchronously on asynchronous channel");
             }
-            ConnectionHandle::Async(channel) => channel,
+            ConnectionHandle::Async(channel) => channel.clone(),
         };
 
-        match channel.send(Message(message, Instant::now(), None)).await {
+        match channel.send(SendMessageType::Message(message, Instant::now(), None)).await {
             Ok(_) => Ok(()),
             Err(error) => {
                 error!("Failed to send to the channel! {:?}", error);
 
-                Err(())
+                Err(Error::wrapped(ErrorKind::CommunicationPeerSendingThreads, error))
             }
         }
     }
@@ -82,11 +82,16 @@ impl ConnectionHandle {
             }
         };
 
-        let (response_channel_tx, response_channel_rx) = channel::new_bounded_sync(1);
+        let (response_channel_tx, response_channel_rx)
+            = channel::new_bounded_sync(1);
 
         match channel.send(SendMessageType::Ping(Either::Left(response_channel_tx))) {
-            Ok(_) => { Ok(()) }
-            Err(_) => {}
+            Ok(_) => {}
+            Err(err) => {
+                error!("Failed to send message to queue {:?}", err);
+
+                return false;
+            }
         }
 
         match response_channel_rx.recv() {
@@ -100,20 +105,24 @@ impl ConnectionHandle {
     }
 
     pub async fn is_active_async(&self) -> bool {
-        let channel = match self {
+        let mut channel = match self {
             ConnectionHandle::Sync(_) => {
                 panic!("Cannot send synchronously on asynchronous channel!");
             }
             ConnectionHandle::Async(channel) => {
-                channel
+                channel.clone()
             }
         };
 
-        let (response_channel_tx, response_channel_rx) = channel::new_bounded_async(1);
+        let (response_channel_tx, mut response_channel_rx) = channel::new_bounded_async(1);
 
         match channel.send(SendMessageType::Ping(Either::Right(response_channel_tx))).await {
-            Ok(_) => { Ok(()) }
-            Err(_) => {}
+            Ok(_) => {}
+            Err(err) => {
+                error!("Failed to send message to queue {:?}", err);
+
+                return false;
+            }
         }
 
         match response_channel_rx.recv().await {
@@ -183,20 +192,7 @@ fn sync_sending_thread<D>(
                     _ => { panic!("") }
                 };
 
-                let wm = WireMessage::new(node.id(), peer_id, Vec::new(), 0, None, None);
-
-                match wm.write_to_sync(socket.mut_socket(), true) {
-                    Ok(_) => {
-                        tx_channel.send(Ok(())).unwrap();
-                    }
-                    Err(err) => {
-                        error!("Failed to write to socket on client {:?} {:?}", peer_id, error);
-
-                        tx_channel.send(Err(Error::wrapped(ErrorKind::CommunicationPeerSendingThreads, err))).unwrap();
-
-                        break;
-                    }
-                };
+                ping_sync(&node, peer_id, socket.mut_socket(), tx_channel);
             }
             SendMessage::Message(to_send, init_time, rq_key) => {
                 let before_send = Instant::now();
@@ -232,7 +228,6 @@ fn sync_sending_thread<D>(
             }
         }
     }
-
 }
 
 pub fn initialize_async_sending_task_for<D>(
@@ -250,6 +245,7 @@ pub fn initialize_async_sending_task_for<D>(
 
     ConnectionHandle::Async(tx)
 }
+
 
 ///Receives requests from the queue and sends them using the provided socket
 async fn async_sending_task<D>(
@@ -274,31 +270,17 @@ async fn async_sending_task<D>(
 
         match to_send {
             SendMessage::Ping(tx_channel) => {
-
-                let tx_channel = match tx_channel { Either::Right(tx_channel) => {
-                    tx_channel
-                }
-                _ => {
-                    panic!("Wrong channel for ping");
-                }};
-
-                let wm = WireMessage::new(node.id(), peer_id, Vec::new(), 0, None, None);
-
-                match wm.write_to(socket.mut_socket(), true).await {
-                    Ok(_) => {
-                        tx_channel.send(Ok(())).await.unwrap();
+                let mut tx_channel = match tx_channel {
+                    Either::Right(tx_channel) => {
+                        tx_channel
                     }
-                    Err(err) => {
-                        error!("Failed to write to socket on client {:?} {:?}", peer_id, error);
-
-                        tx_channel.send(Err(Error::wrapped(ErrorKind::CommunicationPeerSendingThreads, err)))
-                            .await.unwrap();
-
-                        break;
+                    _ => {
+                        panic!("Wrong channel for ping");
                     }
                 };
-            }
 
+                ping_async(&node, peer_id, socket.mut_socket(), tx_channel).await;
+            }
             SendMessage::Message(to_send, init_time, _) => {
                 let before_send = Instant::now();
 
@@ -327,4 +309,53 @@ async fn async_sending_task<D>(
             }
         }
     }
+}
+
+/// Ping the synchronous channel to see if it is active
+fn ping_sync<D>(node: &Arc<Node<D>>,
+                peer_id: NodeId,
+                mut socket: &mut SecureSocketSendSync,
+                mut tx_channel: ChannelSyncTx<PingResponse>) -> Result<()>
+    where D: SharedData + 'static {
+    let wm = WireMessage::new(node.id(), peer_id, Vec::new(), 0, None, None);
+
+    match wm.write_to_sync(socket, true) {
+        Ok(_) => {
+            tx_channel.send(Ok(())).unwrap();
+
+            return Ok(());
+        }
+        Err(err) => {
+            error!("Failed to write to socket on client {:?} {:?}", peer_id, err);
+
+            tx_channel.send(Err(Error::wrapped(ErrorKind::CommunicationPeerSendingThreads, err))).unwrap();
+
+            return Err(Error::simple(ErrorKind::CommunicationPeerSendingThreads));
+        }
+    };
+}
+
+///Ping the asynchronous channel to see if it is active
+async fn ping_async<D>(node: &Arc<Node<D>>,
+                       peer_id: NodeId,
+                       socket: &mut SecureSocketSendAsync,
+                       mut tx_channel: ChannelAsyncTx<PingResponse>, ) -> Result<()>
+    where D: SharedData + 'static {
+    let wm = WireMessage::new(node.id(), peer_id, Vec::new(), 0, None, None);
+
+    match wm.write_to(socket, true).await {
+        Ok(_) => {
+            tx_channel.send(Ok(())).await.unwrap();
+
+            return Ok(());
+        }
+        Err(err) => {
+            error!("Failed to write to socket on client {:?} {:?}", peer_id, err);
+
+            tx_channel.send(Err(Error::wrapped(ErrorKind::CommunicationPeerSendingThreads, err)))
+                .await.unwrap();
+
+            return Err(Error::simple(ErrorKind::CommunicationPeerSendingThreads));
+        }
+    };
 }
