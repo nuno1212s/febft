@@ -1,10 +1,10 @@
 use std::ops::Deref;
-use std::sync::Arc;
+
 use crate::bft::communication::{channel, NodeId, SendNode};
 use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::{ReplyMessage, SystemMessage};
-use crate::bft::consensus::log::Log;
-use crate::bft::executable::{Reply, Request, Service, State, BatchReplies};
+
+use crate::bft::executable::{Reply, Service, BatchReplies};
 
 type RepliesType<S> = BatchReplies<S>;
 

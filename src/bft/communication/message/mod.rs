@@ -248,16 +248,16 @@ pub enum SystemMessage<S, O, P> {
 impl<S, O, P> Debug for SystemMessage<S, O, P> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            SystemMessage::UnOrderedRequest(req) => {
+            SystemMessage::UnOrderedRequest(_req) => {
                 write!(f, "Unordered request")
             }
             SystemMessage::UnOrderedReply(_) => {
                 write!(f, "Unordered reply")
             }
-            SystemMessage::Request(rq) => {
+            SystemMessage::Request(_rq) => {
                 write!(f, "Request")
             }
-            SystemMessage::Reply(re) => {
+            SystemMessage::Reply(_re) => {
                 write!(f, "Reply")
             }
             SystemMessage::Consensus(cs) => {
@@ -273,16 +273,16 @@ impl<S, O, P> Debug for SystemMessage<S, O, P> {
                     }
                 }
             }
-            SystemMessage::Cst(cst) => {
+            SystemMessage::Cst(_cst) => {
                 write!(f, "Cst")
             }
-            SystemMessage::ViewChange(vchange) => {
+            SystemMessage::ViewChange(_vchange) => {
                 write!(f, "view change")
             }
-            SystemMessage::ForwardedRequests(fr) => {
+            SystemMessage::ForwardedRequests(_fr) => {
                 write!(f, "forwarded requests")
             }
-            SystemMessage::ObserverMessage(message) => {
+            SystemMessage::ObserverMessage(_message) => {
                 write!(f, "observer message")
             }
             SystemMessage::FwdConsensus(_) => {

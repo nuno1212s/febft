@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Mutex};
 
 use crate::bft::communication::message::{RequestMessage, SystemMessage};
 use crate::bft::communication::NodeConnector;
@@ -73,7 +73,7 @@ where
             }
         }
 
-        let connector = match self.node.connector() {
+        let _connector = match self.node.connector() {
             //NodeConnector::Async(_) => todo!(),
             NodeConnector::Sync(connector) => connector,
             _ => {

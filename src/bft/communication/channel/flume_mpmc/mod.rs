@@ -1,6 +1,6 @@
 use std::pin::Pin;
 use std::future::Future;
-use std::ops::Deref;
+
 use std::task::{Poll, Context};
 use std::time::Duration;
 use flume::RecvTimeoutError;

@@ -5,7 +5,7 @@ use crate::bft::error::*;
 pub(crate) struct DisabledKV;
 
 impl DisabledKV {
-    pub fn new<T>(db_location: T, prefixes: Vec<&'static str>) -> Result<Self>
+    pub fn new<T>(_db_location: T, _prefixes: Vec<&'static str>) -> Result<Self>
     where
         T: AsRef<Path>,
     {
@@ -13,14 +13,14 @@ impl DisabledKV {
     }
 
 
-    pub fn get<T>(&self, prefix: &'static str, key: T) -> Result<Option<Vec<u8>>>
+    pub fn get<T>(&self, _prefix: &'static str, _key: T) -> Result<Option<Vec<u8>>>
     where
         T: AsRef<[u8]>,
     {
         Ok(None)
     }
 
-    pub fn get_all<T, Y>(&self, keys: T) -> Result<Vec<Result<Option<Vec<u8>>>>>
+    pub fn get_all<T, Y>(&self, _keys: T) -> Result<Vec<Result<Option<Vec<u8>>>>>
     where
         T: Iterator<Item = (&'static str, Y)>,
         Y: AsRef<[u8]>,
@@ -28,14 +28,14 @@ impl DisabledKV {
         Ok(vec![])
     }
 
-    pub fn exists<T>(&self, prefix: &'static str, key: T) -> Result<bool>
+    pub fn exists<T>(&self, _prefix: &'static str, _key: T) -> Result<bool>
     where
         T: AsRef<[u8]>,
     {
         Ok(false)
     }
 
-    pub fn set<T, Y>(&self, prefix: &'static str, key: T, data: Y) -> Result<()>
+    pub fn set<T, Y>(&self, _prefix: &'static str, _key: T, _data: Y) -> Result<()>
     where
         T: AsRef<[u8]>,
         Y: AsRef<[u8]>,
@@ -43,7 +43,7 @@ impl DisabledKV {
         Ok(())
     }
 
-    pub fn set_all<T, Y, Z>(&self, prefix: &'static str, values: T) -> Result<()>
+    pub fn set_all<T, Y, Z>(&self, _prefix: &'static str, _values: T) -> Result<()>
     where
         T: Iterator<Item = (Y, Z)>,
         Y: AsRef<[u8]>,
@@ -52,7 +52,7 @@ impl DisabledKV {
         Ok(())
     }
 
-    pub fn erase<T>(&self, prefix: &'static str, key: T) -> Result<()>
+    pub fn erase<T>(&self, _prefix: &'static str, _key: T) -> Result<()>
     where
         T: AsRef<[u8]>,
     {
@@ -62,7 +62,7 @@ impl DisabledKV {
     /// Delete a set of keys
     /// Accepts an [`&[&[u8]]`], in any possible form, as long as it can be dereferenced
     /// all the way to the intended target.
-    pub fn erase_keys<T, Y>(&self, prefix: &'static str, keys: T) -> Result<()>
+    pub fn erase_keys<T, Y>(&self, _prefix: &'static str, _keys: T) -> Result<()>
     where
         T: Iterator<Item = Y>,
         Y: AsRef<[u8]>,
@@ -70,7 +70,7 @@ impl DisabledKV {
         Ok(())
     }
 
-    pub fn erase_range<T>(&self, prefix: &'static str, start: T, end: T) -> Result<()>
+    pub fn erase_range<T>(&self, _prefix: &'static str, _start: T, _end: T) -> Result<()>
     where
         T: AsRef<[u8]>,
     {
@@ -79,9 +79,9 @@ impl DisabledKV {
 
     pub fn compact_range<T, Y>(
         &self,
-        prefix: &'static str,
-        start: Option<T>,
-        end: Option<Y>,
+        _prefix: &'static str,
+        _start: Option<T>,
+        _end: Option<Y>,
     ) -> Result<()>
     where
         T: AsRef<[u8]>,
@@ -92,9 +92,9 @@ impl DisabledKV {
 
     pub fn iter_range<T, Y>(
         &self,
-        prefix: &'static str,
-        start: Option<T>,
-        end: Option<Y>,
+        _prefix: &'static str,
+        _start: Option<T>,
+        _end: Option<Y>,
     ) -> Result<Box<dyn Iterator<Item = Result<(Box<[u8]>,Box<[u8]>)>> + '_>>
     where
         T: AsRef<[u8]>,

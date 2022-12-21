@@ -179,8 +179,8 @@ where
             batch_timeout,
             node: node_config,
             service,
-            view,
-            log_mode,
+            view: _,
+            log_mode: _,
         } = cfg;
 
         let per_pool_batch_timeout = node_config.batch_timeout_micros;
@@ -714,7 +714,7 @@ where
         // `TboQueue`, in the consensus module.
         let polled_message = self.consensus.poll(&self.log);
 
-        let leader = self.synchronizer.view().leader() == self.id();
+        let _leader = self.synchronizer.view().leader() == self.id();
 
         let message = match polled_message {
             ConsensusPollStatus::Recv => self.node.receive_from_replicas()?,
@@ -784,7 +784,7 @@ where
                     SystemMessage::Consensus(message) => {
                         self.adv_consensus(header, message)?;
                     }
-                    SystemMessage::FwdConsensus(message) => {
+                    SystemMessage::FwdConsensus(_message) => {
                         warn!("Replicas cannot process forwarded consensus messages! They must receive the preprepare messages straight from leaders!");
                     }
                     // FIXME: handle rogue reply messages

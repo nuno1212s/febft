@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use crate::bft::{executable::{Service, Request, State, Reply}, crypto::hash::Digest, communication::message::{StoredMessage, RequestMessage, ConsensusMessage, ConsensusMessageKind}, consensus::log::{Log, persistent::PersistentLogModeTrait}, globals::ReadOnly};
+use crate::bft::{executable::{Service, Request}, crypto::hash::Digest, communication::message::{StoredMessage, ConsensusMessage, ConsensusMessageKind}, consensus::log::{Log, persistent::PersistentLogModeTrait}, globals::ReadOnly};
 
 pub struct FollowerSynchronizer<S: Service> {
     _phantom: PhantomData<S>

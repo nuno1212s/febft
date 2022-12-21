@@ -189,7 +189,7 @@ impl<S: Service + 'static, T> PersistentLog<S, T>
 
         let (tx, rx) = channel::new_bounded_sync(1024);
 
-        let worker = PersistentLogWorker {
+        let _worker = PersistentLogWorker {
             request_rx: rx,
             response_txs,
             db: kvdb.clone(),
@@ -674,7 +674,7 @@ fn read_messages_for_seq<S: Service>(
 
 ///Parse a given message from its bytes representation
 fn parse_message<S: Service, T>(
-    key: T,
+    _key: T,
     value: T,
 ) -> Result<StoredMessage<ConsensusMessage<Request<S>>>> where T: AsRef<[u8]> {
     let header = Header::deserialize_from(&value.as_ref()[..Header::LENGTH])?;

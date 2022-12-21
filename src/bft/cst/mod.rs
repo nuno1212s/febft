@@ -457,7 +457,7 @@ where
         synchronizer: &Arc<T>,
         timeouts: &TimeoutsHandle<S>,
         node: &Node<S::Data>,
-        log: &Log<S, W>,
+        _log: &Log<S, W>,
     ) where
         T: AbstractSynchronizer<S>,
         W: PersistentLogModeTrait
@@ -485,7 +485,7 @@ where
         synchronizer: &Arc<T>,
         timeouts: &TimeoutsHandle<S>,
         node: &Node<S::Data>,
-        log: &Log<S, W>,
+        _log: &Log<S, W>,
     ) where
         T: AbstractSynchronizer<S>,
         W: PersistentLogModeTrait

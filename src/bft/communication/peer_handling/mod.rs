@@ -433,9 +433,9 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
         let mut clone_queue = connected_client.clone();
 
         {
-            let mut guard = self.client_pools.lock().unwrap();
+            let guard = self.client_pools.lock().unwrap();
 
-            for (pool_id, pool) in &*guard {
+            for (_pool_id, pool) in &*guard {
                 match pool.attempt_to_add(clone_queue) {
                     Ok(_) => {
                         return connected_client;
@@ -468,7 +468,7 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
 
         match pool.attempt_to_add(clone_queue) {
             Ok(_) => {}
-            Err(e) => {
+            Err(_e) => {
                 panic!("Failed to add pool to pool list.")
             }
         };
@@ -638,7 +638,7 @@ impl<T> ConnectedPeersPool<T> where T: Send {
 
         let mut batch = Vec::with_capacity(vec_size);
 
-        let mut guard = self.connected_clients.lock().unwrap();
+        let guard = self.connected_clients.lock().unwrap();
 
         let mut dced = Vec::new();
 
@@ -834,7 +834,7 @@ impl<T> ConnectedPeer<T> where T: Send {
             }
             Self::UnpooledConnection { sender, client_id } => {
                 let send_lock = sender.lock().unwrap();
-                let mut sender_guard = send_lock.as_ref();
+                let sender_guard = send_lock.as_ref();
 
                 match sender_guard {
                     None => {

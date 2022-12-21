@@ -103,7 +103,7 @@ where
 {
     /// Creates a new timeout event, that will fire after a duration of `dur`.
     pub fn timeout(&self, dur: Duration, kind: TimeoutKind) {
-        let mut system_tx = self.system_tx.clone();
+        let system_tx = self.system_tx.clone();
         rt::spawn(async move {
             Delay::new(dur).await;
 
@@ -118,7 +118,7 @@ where
     /// Different from `timeout()`, this method returns a handle that allows the user
     /// to cancel the timeout before it is triggered.
     pub fn timeout_with_cancel(&self, dur: Duration, kind: TimeoutKind) -> TimeoutHandle {
-        let mut system_tx = self.system_tx.clone();
+        let system_tx = self.system_tx.clone();
         let seq = self.shared.gen_seq_no();
 
         let shared = Arc::clone(&self.shared);

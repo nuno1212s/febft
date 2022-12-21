@@ -1,20 +1,20 @@
 use crate::bft;
 use crate::bft::benchmarks::CommStats;
-use crate::bft::communication::channel::{ChannelAsyncRx, ChannelAsyncTx, ChannelSyncRx, ChannelSyncTx, RecvError, SendError};
+use crate::bft::communication::channel::{ChannelAsyncRx, ChannelAsyncTx, ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::WireMessage;
-use crate::bft::communication::socket::{SecureSocketSendAsync, SecureSocketSendSync, SocketSendAsync, SocketSendSync};
-use crate::bft::communication::{channel, Node, NodeId, PeerAddr};
+use crate::bft::communication::socket::{SocketSendAsync, SocketSendSync};
+use crate::bft::communication::{Node, NodeId};
 use crate::bft::error::*;
 use dashmap::DashMap;
-use log::{debug, error};
+use log::{error};
 use std::sync::Arc;
 use std::time::Instant;
-use either::Either;
+
 
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::serialize::SharedData;
 
-use super::NodeConnector;
+
 
 ///Implements the behaviour where each connection has it's own dedicated thread that will handle
 ///Sending messages from it
@@ -117,7 +117,7 @@ fn sync_sending_thread<D>(
 
         let to_send = match recv_result {
             Ok(to_send) => to_send,
-            Err(recv_err) => {
+            Err(_recv_err) => {
                 error!("Sending channel for client {:?} has disconnected!", peer_id);
                 break;
             }
@@ -195,7 +195,7 @@ async fn async_sending_task<D>(
 
         let to_send = match recv_result {
             Ok(to_send) => to_send,
-            Err(recv_err) => {
+            Err(_recv_err) => {
                 error!("Sending channel for client {:?} has disconnected!", peer_id);
                 break;
             }
@@ -211,7 +211,7 @@ async fn async_sending_task<D>(
                 // problems; add a timeout
                 match to_send.write_to(socket.mut_socket(), true).await {
                     Ok(_) => {}
-                    Err(error) => {
+                    Err(_error) => {
                         error!("Failed to write to socket on client {:?}", peer_id);
                         break;
                     }

@@ -7,7 +7,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures::future::FusedFuture;
-use thiserror::Error;
+
 
 #[cfg(feature = "channel_futures_mpsc")]
 mod futures_mpsc;

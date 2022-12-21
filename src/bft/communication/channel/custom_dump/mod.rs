@@ -3,9 +3,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use dsrust::channels::async_ch::{ReceiverFut, ReceiverMultFut};
 use dsrust::channels::queue_channel::{Receiver, ReceiverMult, Sender};
-use dsrust::queues::lf_array_queue::LFBQueue;
+
 use dsrust::queues::mqueue::MQueue;
-use dsrust::queues::rooms_array_queue::LFBRArrayQueue;
+
 use futures::future::FusedFuture;
 use crate::bft::communication::channel::{RecvError, RecvMultError, SendError};
 
@@ -123,7 +123,7 @@ impl<T> ChannelRxMult<T> {
     }
 
     #[inline]
-    pub fn try_recv_mult(&self, dest: &mut Vec<T>, bound: usize) -> Result<usize, RecvMultError> {
+    pub fn try_recv_mult(&self, dest: &mut Vec<T>, _bound: usize) -> Result<usize, RecvMultError> {
         match self.inner.try_recv_mult(dest) {
             Ok(recved) => {
                 Ok(recved)

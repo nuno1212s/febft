@@ -4,20 +4,20 @@
 
 use log::error;
 use std::marker::PhantomData;
-use std::sync::Arc;
+
 
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::{Message, ObserveEventKind, ReplyMessage, SystemMessage};
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::{channel, NodeId, SendNode};
-use crate::bft::consensus::log::Log;
+
 use crate::bft::core::server::client_replier::ReplyHandle;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::error::*;
 use crate::bft::ordering::SeqNo;
 
-use super::consensus::log::persistent::PersistentLogModeTrait;
+
 use super::ordering::Orderable;
 
 /// Represents a single client update request, to be executed.
@@ -214,7 +214,7 @@ pub struct ReplicaReplier;
 impl ExecutorReplier for ReplicaReplier {
     fn execution_finished<S: Service>(
         mut send_node: SendNode<<S as Service>::Data>,
-        seq: Option<SeqNo>,
+        _seq: Option<SeqNo>,
         batch: BatchReplies<Reply<S>>,
     ) {
         crate::bft::threadpool::execute(move || {
@@ -433,11 +433,11 @@ impl<S, T> Executor<S, T>
     fn deliver_checkpoint_state(&self, seq: SeqNo) {
         let cloned_state = self.state.clone();
 
-        let mut system_tx = self.send_node.loopback_channel().clone();
+        let system_tx = self.send_node.loopback_channel().clone();
 
         let m = Message::ExecutionFinishedWithAppstate((seq, cloned_state));
 
-        if let Err(err) = system_tx.push_request_sync(m) {
+        if let Err(_err) = system_tx.push_request_sync(m) {
             error!(
                 "{:?} // FAILED TO DELIVER CHECKPOINT STATE",
                 self.send_node.id()
@@ -446,7 +446,7 @@ impl<S, T> Executor<S, T>
     }
 
     fn execution_finished(&self, seq: Option<SeqNo>, batch: BatchReplies<Reply<S>>) {
-        let mut send_node = self.send_node.clone();
+        let send_node = self.send_node.clone();
 
         {
             if let Some(seq) = seq {

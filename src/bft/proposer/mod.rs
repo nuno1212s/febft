@@ -419,7 +419,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
 
     fn requests_received(
         &self,
-        t: DateTime<Utc>,
+        _t: DateTime<Utc>,
         reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>,
     ) {
         for (h, r) in reqs.into_iter().map(StoredMessage::into_inner) {
@@ -427,7 +427,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
         }
     }
 
-    fn request_received(&self, h: Header, r: SystemMessage<State<S>, Request<S>, Reply<S>>) {
+    fn request_received(&self, h: Header, _r: SystemMessage<State<S>, Request<S>, Reply<S>>) {
         self.synchronizer
             .watch_request(h.unique_digest(), &self.timeouts);
 

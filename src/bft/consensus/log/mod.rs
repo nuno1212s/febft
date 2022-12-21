@@ -20,7 +20,7 @@ use crate::bft::communication::message::{
     StoredMessage, SystemMessage,
 };
 use crate::bft::communication::NodeId;
-use crate::bft::communication::serialize::SharedData;
+
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
@@ -31,7 +31,7 @@ use crate::bft::globals::ReadOnly;
 use crate::bft::ordering::{Orderable, SeqNo};
 
 use self::persistent::{PersistentLog, WriteMode};
-use self::persistent::{PersistentLogMode, PersistentLogModeTrait};
+use self::persistent::{PersistentLogModeTrait};
 
 pub mod persistent;
 
@@ -603,7 +603,7 @@ impl<S, T> Log<S, T>
     }
 
     /// Update the log state, received from the CST protocol.
-    pub fn install_state(&self, last_seq: SeqNo, mut rs: RecoveryState<State<S>, Request<S>>) {
+    pub fn install_state(&self, last_seq: SeqNo, rs: RecoveryState<State<S>, Request<S>>) {
         // FIXME: what to do with `self.deciding`..?
 
         //Replace the log
@@ -778,7 +778,7 @@ impl<S, T> Log<S, T>
     ) -> Option<Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>> {
         match self.request_batches.remove(batch_digest) {
             None => None,
-            Some((digest, batch)) => Some(batch),
+            Some((_digest, batch)) => Some(batch),
         }
     }
 
@@ -876,7 +876,7 @@ impl<S, T> Log<S, T>
         for x in rqs {
             let (header, message) = x.into_inner();
 
-            let key = operation_key::<Request<S>>(&header, &message);
+            let _key = operation_key::<Request<S>>(&header, &message);
 
             // let seq_no = latest_op_guard
             //     .get(key)
@@ -960,8 +960,8 @@ impl<S, T> Log<S, T>
             CheckpointState::Complete(_) => {
                 Err("Checkpoint already finalized").wrapped(ErrorKind::ConsensusLog)
             }
-            CheckpointState::Partial { ref seq }
-            | CheckpointState::PartialWithEarlier { ref seq, .. } => {
+            CheckpointState::Partial { seq: _ }
+            | CheckpointState::PartialWithEarlier { seq: _, .. } => {
                 self.checkpoint
                     .replace(CheckpointState::Complete(Arc::new(ReadOnly::new(
                         Checkpoint {

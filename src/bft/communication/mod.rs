@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use async_tls::{TlsAcceptor, TlsConnector};
 use dashmap::DashMap;
 use either::{Either, Left, Right};
-use futures::future::err;
+
 use futures::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use futures_timer::Delay;
 use intmap::IntMap;
@@ -31,7 +31,7 @@ use crate::bft::communication::message::{
 };
 use crate::bft::communication::peer_handling::{ConnectedPeer, NodePeers};
 use crate::bft::communication::peer_sending_threads::ConnectionHandle;
-use crate::bft::communication::ping_handler::{PingHandler, PingResponse};
+use crate::bft::communication::ping_handler::{PingHandler};
 
 use crate::bft::communication::serialize::{Buf, DigestData, SharedData};
 use crate::bft::communication::socket::{
@@ -187,12 +187,12 @@ impl PeerTx {
     pub fn disconnect_peer(&self, peer_id: u64) -> Option<ConnectionHandle> {
         match self {
             PeerTx::Client { connected, .. } => {
-                connected.remove(&peer_id).map(|(u, v)| {
+                connected.remove(&peer_id).map(|(_u, v)| {
                     v
                 })
             }
             PeerTx::Server { connected, .. } => {
-                connected.remove(&peer_id).map(|(u, v)| {
+                connected.remove(&peer_id).map(|(_u, v)| {
                     v
                 })
             }
@@ -349,7 +349,7 @@ impl<D> Node<D>
 {
     fn setup_connector(
         sync_connector: Arc<ClientConfig>,
-        async_connector: TlsConnector,
+        _async_connector: TlsConnector,
     ) -> NodeConnector {
         //TODO: Support Async connectors as well
         NodeConnector::Sync(sync_connector)
@@ -593,7 +593,7 @@ impl<D> Node<D>
 
         debug!("Initializing node reference");
 
-        let mut node = Arc::new(Node {
+        let node = Arc::new(Node {
             id,
             rng,
             shared,
@@ -1013,7 +1013,7 @@ impl<D> Node<D>
     ) {
         threadpool::execute(move || {
             // send to ourselves
-            if let Some(mut send_to) = my_send_to {
+            if let Some(send_to) = my_send_to {
                 let id = match &send_to {
                     SerializedSendTo::Me { id, .. } => *id,
                     _ => unreachable!(),
@@ -1098,7 +1098,7 @@ impl<D> Node<D>
         message: SystemMessage<D::State, D::Request, D::Reply>,
         my_send_to: Option<SendTo<D>>,
         other_send_tos: SendTos<D>,
-        first_cli: NodeId,
+        _first_cli: NodeId,
         nonce: u64,
         comm_stats: Option<(Arc<CommStats>, Instant)>,
     ) {
@@ -1286,7 +1286,7 @@ impl<D> Node<D>
 
                         continue;
                     }
-                    (Some(sock), None) => {
+                    (Some(_sock), None) => {
                         error!("Found socket but didn't find rx? Closing {:?}", id.id());
 
                         continue;
@@ -1484,7 +1484,7 @@ impl<D> Node<D>
     pub async fn tx_side_connect_async(self: Arc<Self>, n: u32, connector: TlsConnector) {
         for peer_id in NodeId::targets_u32(0..n).filter(|&id| id != self.id()) {
             let clone = self.clone();
-            let connector = connector.clone();
+            let _connector = connector.clone();
 
             Self::tx_connect_node_async(clone, peer_id, None);
         }
@@ -1497,7 +1497,7 @@ impl<D> Node<D>
     pub fn tx_side_connect_sync(self: Arc<Self>, n: u32, connector: Arc<ClientConfig>) {
         for peer_id in NodeId::targets_u32(0..n).filter(|&id| id != self.id()) {
             let clone = self.clone();
-            let connector = connector.clone();
+            let _connector = connector.clone();
 
             Self::tx_connect_node_sync(clone, peer_id, None);
         }
@@ -1552,7 +1552,7 @@ impl<D> Node<D>
                                 //Our connection is fine, we should not create a new one
                                 return;
                             }
-                            Err(error) => {}
+                            Err(_error) => {}
                         }
                     }
                     Err(error) => {
@@ -1662,7 +1662,7 @@ impl<D> Node<D>
 
                                     return;
                                 }
-                                Err(error) => {}
+                                Err(_error) => {}
                             }
                         }
                         Err(error) => {
@@ -2679,7 +2679,7 @@ impl<D> SendTo<D>
                 shared: ref sh,
                 sock,
                 peer_tx,
-                tx,
+                tx: _,
             } => {
                 match &sock {
                     ConnectionHandle::Sync(_) => {}
@@ -2733,7 +2733,7 @@ impl<D> SendTo<D>
                 shared: ref sh,
                 sock,
                 peer_tx,
-                tx: rx,
+                tx: _rx,
             } => {
                 match &sock {
                     ConnectionHandle::Sync(_) => {}
@@ -2790,7 +2790,7 @@ impl<D> SendTo<D>
     }
 
     async fn peers(
-        flush: bool,
+        _flush: bool,
         my_id: NodeId,
         peer_id: NodeId,
         n: u64,
@@ -2815,7 +2815,7 @@ impl<D> SendTo<D>
     }
 
     fn peers_sync(
-        flush: bool,
+        _flush: bool,
         my_id: NodeId,
         peer_id: NodeId,
         n: u64,
@@ -2864,7 +2864,7 @@ impl<D> SerializedSendTo<D>
             }
             SerializedSendTo::Peers {
                 id,
-                our_id,
+                our_id: _,
                 sock,
                 peer_tx,
                 tx,
@@ -2896,7 +2896,7 @@ impl<D> SerializedSendTo<D>
             }
             SerializedSendTo::Peers {
                 id,
-                our_id,
+                our_id: _,
                 sock,
                 peer_tx,
                 tx,
@@ -2954,7 +2954,7 @@ impl<D> SerializedSendTo<D>
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
         peer_tx: &PeerTx,
         conn_handle: ConnectionHandle,
-        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+        _cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
         // create wire msg
         let (_, raw) = m.into_inner();
@@ -2978,7 +2978,7 @@ impl<D> SerializedSendTo<D>
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
         peer_tx: &PeerTx,
         mut conn_handle: ConnectionHandle,
-        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+        _cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
     ) {
         // create wire msg
         let (_, raw) = m.into_inner();

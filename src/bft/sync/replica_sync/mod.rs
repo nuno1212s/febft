@@ -22,7 +22,7 @@ use crate::bft::consensus::log::Log;
 use crate::bft::consensus::log::persistent::PersistentLogModeTrait;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
-use crate::bft::executable::{Reply, Request, Service, State};
+use crate::bft::executable::{Request, Service};
 use crate::bft::globals::ReadOnly;
 use crate::bft::ordering::{Orderable, SeqNo};
 
@@ -140,7 +140,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     pub fn watch_request_batch<T>(
         &self,
         preprepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-        timeouts: &TimeoutsHandle<S>,
+        _timeouts: &TimeoutsHandle<S>,
         log: &Log<S, T>,
     ) -> Vec<Digest> where T: PersistentLogModeTrait {
 
@@ -238,7 +238,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     //
     pub fn client_requests_timed_out(
         &self,
-        base_sync: &Synchronizer<S>,
+        _base_sync: &Synchronizer<S>,
         _seq: SeqNo,
         _timeouts: &TimeoutsHandle<S>,
     ) -> SynchronizerStatus {
@@ -293,7 +293,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         base_sync: &Synchronizer<S>,
         timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         node: &Node<S::Data>,
-        log: &Log<S, T>,
+        _log: &Log<S, T>,
     ) where T: PersistentLogModeTrait {
         let message = SystemMessage::ForwardedRequests(ForwardedRequestsMessage::new(timed_out));
         let targets = NodeId::targets(0..base_sync.view().params().n());

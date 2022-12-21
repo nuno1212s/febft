@@ -28,7 +28,7 @@ use crate::bft::{
     executable::{Reply, Request, Service, State},
     globals::ReadOnly,
     ordering::{Orderable, SeqNo},
-    sync::{AbstractSynchronizer, Synchronizer},
+    sync::{AbstractSynchronizer},
     threadpool,
 };
 
@@ -80,7 +80,7 @@ impl<S: Service + 'static> Consensus<S> {
 
         let seq = self.sequence_number();
         let view_seq = view.sequence_number();
-        let quorum = view.quorum_members().clone();
+        let _quorum = view.quorum_members().clone();
 
         let sign_detached = node.sign_detached();
         let current_digest = self.current_digest.clone();

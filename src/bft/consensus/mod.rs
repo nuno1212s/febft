@@ -456,7 +456,7 @@ impl<S: Service + 'static> Consensus<S> {
 
     /// Starts a new consensus instance.
     pub fn next_instance(&mut self) {
-        let prev_seq = self.curr_seq.clone();
+        let _prev_seq = self.curr_seq.clone();
 
         self.tbo.next_instance_queue();
 
@@ -545,7 +545,7 @@ impl<S: Service + 'static> Consensus<S> {
 
                 let pre_prepare_received_time = Utc::now();
 
-                let request_batch = match message.kind() {
+                let _request_batch = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_)
                         if message.view() != view.sequence_number() =>
                     {

@@ -569,7 +569,7 @@ where
                         // quorum, he can never be in this state)
                         unreachable!()
                     }
-                    SynchronizerAccessory::Replica(rep) => {
+                    SynchronizerAccessory::Replica(_rep) => {
                         let msg_seq = message.sequence_number();
                         let current_view = self.view();
                         let seq = current_view.sequence_number();
@@ -774,7 +774,7 @@ where
                         return SynchronizerStatus::Running;
                     }
                     ViewChangeMessageKind::Sync(_) => {
-                        let mut message = message;
+                        let message = message;
 
                         message.take_collects().unwrap().into_inner()
                     }
@@ -810,7 +810,7 @@ where
                     sound,
                     proposed,
                 };
-                let mut collects_guard = self.collects.lock().unwrap();
+                let _collects_guard = self.collects.lock().unwrap();
 
                 finalize_view_change!(
                     self,
@@ -843,7 +843,7 @@ where
     {
         let state = self.finalize_state.borrow_mut().take()?;
 
-        let mut lock_guard = self.collects.lock().unwrap();
+        let _lock_guard = self.collects.lock().unwrap();
 
         finalize_view_change!(
             self,
@@ -868,7 +868,7 @@ where
         &self,
         timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
         node: &Node<S::Data>,
-        log: &Log<S, T>,
+        _log: &Log<S, T>,
     ) where
         T: PersistentLogModeTrait,
     {
