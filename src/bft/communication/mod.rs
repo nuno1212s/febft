@@ -1514,6 +1514,7 @@ impl<D> Node<D>
             Self::tx_connect_node_sync(clone, peer_id, None);
         }
     }
+
     /// Check if we are already attempting to connect to a given node.
     fn is_currently_connecting_to_node(&self, peer_id: NodeId) -> bool {
         let guard = self.currently_connecting.lock().unwrap();
