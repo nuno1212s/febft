@@ -1674,6 +1674,7 @@ impl<D> Node<D>
                             match result {
                                 Ok(_) => {
                                     //Our connection to this peer is fine, we shouldn't try to reconnect
+                                    debug!("Attempted to reconnect to peer {:?} but the current connection appears to be fine.", peer_id);
 
                                     self.unregister_currently_connecting_to_node(peer_id);
                                     return;
