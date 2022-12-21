@@ -6,7 +6,7 @@ use crate::bft::communication::socket::{SecureSocketSendAsync, SecureSocketSendS
 use crate::bft::communication::{channel, Node, NodeId, PeerAddr};
 use crate::bft::error::*;
 use dashmap::DashMap;
-use log::error;
+use log::{debug, error};
 use std::sync::Arc;
 use std::time::Instant;
 use either::Either;
@@ -25,10 +25,13 @@ pub type SendMessage = SendMessageType;
 pub type PingResponse = Result<()>;
 
 pub enum SendMessageType {
-    Ping(Either<ChannelSyncTx<PingResponse>, ChannelAsyncTx<PingResponse>>),
     Message(WireMessage, Instant, Option<u64>),
 }
 
+///A handle for the connection in question
+///When the connection fails for some reason, the RX side of
+/// this handle will be dropped and as such, this will
+/// error out when attempting to send the next message
 #[derive(Clone)]
 pub enum ConnectionHandle {
     Sync(ChannelSyncTx<SendMessage>),
@@ -70,69 +73,6 @@ impl ConnectionHandle {
                 Err(Error::wrapped(ErrorKind::CommunicationPeerSendingThreads, error))
             }
         }
-    }
-
-    pub fn is_active_sync(&self) -> bool {
-        let channel = match self {
-            ConnectionHandle::Sync(channel) => {
-                channel
-            }
-            ConnectionHandle::Async(_) => {
-                panic!("Cannot send asynchronously on synchronous channel!");
-            }
-        };
-
-        let (response_channel_tx, response_channel_rx)
-            = channel::new_bounded_sync(1);
-
-        match channel.send(SendMessageType::Ping(Either::Left(response_channel_tx))) {
-            Ok(_) => {}
-            Err(err) => {
-                error!("Failed to send message to queue {:?}", err);
-
-                return false;
-            }
-        }
-
-        match response_channel_rx.recv() {
-            Ok(Ok(())) => {
-                return true;
-            }
-            _ => {
-                return false;
-            }
-        };
-    }
-
-    pub async fn is_active_async(&self) -> bool {
-        let mut channel = match self {
-            ConnectionHandle::Sync(_) => {
-                panic!("Cannot send synchronously on asynchronous channel!");
-            }
-            ConnectionHandle::Async(channel) => {
-                channel.clone()
-            }
-        };
-
-        let (response_channel_tx, mut response_channel_rx) = channel::new_bounded_async(1);
-
-        match channel.send(SendMessageType::Ping(Either::Right(response_channel_tx))).await {
-            Ok(_) => {}
-            Err(err) => {
-                error!("Failed to send message to queue {:?}", err);
-
-                return false;
-            }
-        }
-
-        match response_channel_rx.recv().await {
-            Ok(Ok(())) => {
-                return true;
-            }
-            _ => {
-                return false;
-            }
-        };
     }
 
     pub fn close(self) {
@@ -184,16 +124,6 @@ fn sync_sending_thread<D>(
         };
 
         match to_send {
-            SendMessage::Ping(tx_channel) => {
-                let tx_channel = match tx_channel {
-                    Either::Left(tx_channel) => {
-                        tx_channel
-                    }
-                    _ => { panic!("") }
-                };
-
-                ping_sync(&node, peer_id, socket.mut_socket(), tx_channel);
-            }
             SendMessage::Message(to_send, init_time, rq_key) => {
                 let before_send = Instant::now();
 
@@ -228,6 +158,9 @@ fn sync_sending_thread<D>(
             }
         }
     }
+
+
+    node.tx_connect_node_sync(peer_id, None)
 }
 
 pub fn initialize_async_sending_task_for<D>(
@@ -269,18 +202,6 @@ async fn async_sending_task<D>(
         };
 
         match to_send {
-            SendMessage::Ping(tx_channel) => {
-                let mut tx_channel = match tx_channel {
-                    Either::Right(tx_channel) => {
-                        tx_channel
-                    }
-                    _ => {
-                        panic!("Wrong channel for ping");
-                    }
-                };
-
-                ping_async(&node, peer_id, socket.mut_socket(), tx_channel).await;
-            }
             SendMessage::Message(to_send, init_time, _) => {
                 let before_send = Instant::now();
 
@@ -309,53 +230,6 @@ async fn async_sending_task<D>(
             }
         }
     }
-}
 
-/// Ping the synchronous channel to see if it is active
-fn ping_sync<D>(node: &Arc<Node<D>>,
-                peer_id: NodeId,
-                mut socket: &mut SecureSocketSendSync,
-                mut tx_channel: ChannelSyncTx<PingResponse>) -> Result<()>
-    where D: SharedData + 'static {
-    let wm = WireMessage::new(node.id(), peer_id, Vec::new(), 0, None, None);
-
-    match wm.write_to_sync(socket, true) {
-        Ok(_) => {
-            tx_channel.send(Ok(())).unwrap();
-
-            return Ok(());
-        }
-        Err(err) => {
-            error!("Failed to write to socket on client {:?} {:?}", peer_id, err);
-
-            tx_channel.send(Err(Error::wrapped(ErrorKind::CommunicationPeerSendingThreads, err))).unwrap();
-
-            return Err(Error::simple(ErrorKind::CommunicationPeerSendingThreads));
-        }
-    };
-}
-
-///Ping the asynchronous channel to see if it is active
-async fn ping_async<D>(node: &Arc<Node<D>>,
-                       peer_id: NodeId,
-                       socket: &mut SecureSocketSendAsync,
-                       mut tx_channel: ChannelAsyncTx<PingResponse>, ) -> Result<()>
-    where D: SharedData + 'static {
-    let wm = WireMessage::new(node.id(), peer_id, Vec::new(), 0, None, None);
-
-    match wm.write_to(socket, true).await {
-        Ok(_) => {
-            tx_channel.send(Ok(())).await.unwrap();
-
-            return Ok(());
-        }
-        Err(err) => {
-            error!("Failed to write to socket on client {:?} {:?}", peer_id, err);
-
-            tx_channel.send(Err(Error::wrapped(ErrorKind::CommunicationPeerSendingThreads, err)))
-                .await.unwrap();
-
-            return Err(Error::simple(ErrorKind::CommunicationPeerSendingThreads));
-        }
-    };
+    node.tx_connect_node_async(peer_id, None);
 }

@@ -22,6 +22,8 @@ fn client_channel_init<T>(capacity: usize) -> (ChannelMultTx<T>, ChannelMultRx<T
 
 ///Handles the communication between two peers (replica - replica, replica - client)
 ///Only handles reception of requests, not transmission
+/// It's also built on top of the default networking layer, which handles
+/// actually serializing the messages. This only handles already serialized messages.
 pub struct NodePeers<T: Send + 'static> {
     batch_size: usize,
     //The first client id, so we can distinguish clients from replicas
@@ -148,7 +150,7 @@ impl<T> NodePeers<T> where T: Send {
     pub fn receive_from_clients(&self, timeout: Option<Duration>) -> Result<Vec<T>> {
         return match &self.client_rx {
             None => {
-                Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive from clients as there are no clients connected"))
+                Err(Error::simple_with_msg(ErrorKind::CommunicationPeerHandling, "Failed to receive from clients as there are no clients connected"))
             }
             Some(rx) => {
                 match timeout {
@@ -158,7 +160,7 @@ impl<T> NodePeers<T> where T: Send {
                                 Ok(vec)
                             }
                             Err(_) => {
-                                Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive"))
+                                Err(Error::simple_with_msg(ErrorKind::CommunicationPeerHandling, "Failed to receive"))
                             }
                         }
                     }
@@ -173,10 +175,10 @@ impl<T> NodePeers<T> where T: Send {
                                         Ok(vec![])
                                     }
                                     TryRecvError::ChannelDc => {
-                                        Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive"))
+                                        Err(Error::simple_with_msg(ErrorKind::CommunicationPeerHandling, "Failed to receive"))
                                     }
                                     TryRecvError::ChannelEmpty => {
-                                        Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive"))
+                                        Err(Error::simple_with_msg(ErrorKind::CommunicationPeerHandling, "Failed to receive"))
                                     }
                                 }
                             }
@@ -190,7 +192,7 @@ impl<T> NodePeers<T> where T: Send {
     pub fn try_receive_from_clients(&self) -> Result<Option<Vec<T>>> {
         return match &self.client_rx {
             None => {
-                Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive from clients as there are no clients connected"))
+                Err(Error::simple_with_msg(ErrorKind::CommunicationPeerHandling, "Failed to receive from clients as there are no clients connected"))
             }
             Some(rx) => {
                 match rx.try_recv() {
@@ -203,10 +205,10 @@ impl<T> NodePeers<T> where T: Send {
                                 Ok(None)
                             }
                             TryRecvError::ChannelDc => {
-                                Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive from clients as there are no clients connected"))
+                                Err(Error::simple_with_msg(ErrorKind::CommunicationPeerHandling, "Failed to receive from clients as there are no clients connected"))
                             }
                             TryRecvError::Timeout => {
-                                Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to receive from clients as there are no clients connected"))
+                                Err(Error::simple_with_msg(ErrorKind::CommunicationPeerHandling, "Failed to receive from clients as there are no clients connected"))
                             }
                         }
                     }

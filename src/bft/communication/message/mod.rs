@@ -235,12 +235,14 @@ pub enum SystemMessage<S, O, P> {
     Reply(ReplyMessage<P>),
     Consensus(ConsensusMessage<O>),
     FwdConsensus(FwdConsensusMessage<O>),
-    ///Collaborative state transfer messages
+    //Collaborative state transfer messages
     Cst(CstMessage<S, O>),
     ViewChange(ViewChangeMessage<O>),
     ForwardedRequests(ForwardedRequestsMessage<O>),
     //Observer related messages
     ObserverMessage(ObserverMessage),
+    //Ping messages
+    Ping
 }
 
 impl<S, O, P> Debug for SystemMessage<S, O, P> {
@@ -285,6 +287,9 @@ impl<S, O, P> Debug for SystemMessage<S, O, P> {
             }
             SystemMessage::FwdConsensus(_) => {
                 write!(f, "Fwd consensus message")
+            }
+            SystemMessage::Ping => {
+                write!(f, "Ping message")
             }
         }
     }

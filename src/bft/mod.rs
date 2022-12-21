@@ -71,7 +71,6 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
         },
     };
 
-    //env_logger::init();
     let appender = FileAppender::builder()
         .encoder(Box::new(PatternEncoder::new("{l} {d} - {m}{n}")))
         .build(path)

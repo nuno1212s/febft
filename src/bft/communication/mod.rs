@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use async_tls::{TlsAcceptor, TlsConnector};
 use dashmap::DashMap;
 use either::{Either, Left, Right};
+use futures::future::err;
 use futures::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use futures_timer::Delay;
 use intmap::IntMap;
@@ -30,6 +31,7 @@ use crate::bft::communication::message::{
 };
 use crate::bft::communication::peer_handling::{ConnectedPeer, NodePeers};
 use crate::bft::communication::peer_sending_threads::ConnectionHandle;
+use crate::bft::communication::ping_handler::{PingHandler, PingResponse};
 
 use crate::bft::communication::serialize::{Buf, DigestData, SharedData};
 use crate::bft::communication::socket::{
@@ -51,10 +53,7 @@ pub mod peer_handling;
 pub mod peer_sending_threads;
 pub mod serialize;
 pub mod socket;
-
-//pub trait HijackMessage {
-//    fn hijack_message(&self, stored: ) -> Either<M
-//}
+pub mod ping_handler;
 
 /// A `NodeId` represents the id of a process in the BFT system.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
@@ -231,12 +230,21 @@ pub enum NodeConnector {
 pub struct Node<D: SharedData + 'static> {
     id: NodeId,
     first_cli: NodeId,
+    //Handles the incomming connections' buffering and request collection
     node_handling: NodePeers<Message<D::State, D::Request, D::Reply>>,
-    rng: ThreadSafePrng,
-    shared: Arc<NodeShared>,
+    //Handles the outgoing connection references
     peer_tx: PeerTx,
+    //Handles the Pseudo random number generation for this node
+    rng: ThreadSafePrng,
+    //Some shared node information
+    shared: Arc<NodeShared>,
+    //A set of the nodes we are currently attempting to connect to
     currently_connecting: Mutex<BTreeSet<NodeId>>,
+    //The connector used to establish secure connections between peers
     connector: NodeConnector,
+    //Handles pings and timeouts of said pings
+    ping_handler: Arc<PingHandler<D>>,
+    //An address map of all the peers
     peer_addrs: IntMap<PeerAddr>,
     comm_stats: Option<Arc<CommStats>>,
 
@@ -516,6 +524,8 @@ impl<D> Node<D>
 
         debug!("Initializing node peer handling.");
 
+        let ping_handler = PingHandler::new();
+
         //Setup all the peer message reception handling.
         let peers = NodePeers::new(
             cfg.id,
@@ -594,6 +604,7 @@ impl<D> Node<D>
             first_cli: cfg.first_cli,
             comm_stats: cfg.comm_stats,
             sent_rqs,
+            ping_handler,
             recv_rqs: rcv_rqs,
             currently_connecting: Mutex::new(BTreeSet::new()),
         });
@@ -664,6 +675,7 @@ impl<D> Node<D>
 
         let rogue = Vec::new();
 
+        //TODO: We need to receive the amount of replicas in the quorum
         while node.node_handling.replica_count() < cfg.n {
             //Any received messages will be handled by the connection pool buffers
             debug!(
@@ -1474,7 +1486,7 @@ impl<D> Node<D>
             let clone = self.clone();
             let connector = connector.clone();
 
-            rt::spawn(Self::tx_connect_node_async(clone, peer_id, None));
+            Self::tx_connect_node_async(clone, peer_id, None);
         }
     }
 
@@ -1487,15 +1499,10 @@ impl<D> Node<D>
             let clone = self.clone();
             let connector = connector.clone();
 
-            std::thread::Builder::new()
-                .name(format!("Peer {:?} connector", peer_id))
-                .spawn(move || {
-                    Self::tx_connect_node_sync(clone, peer_id, None);
-                })
-                .expect("Failed to launch peer connection thread.");
+            Self::tx_connect_node_sync(clone, peer_id, None);
         }
     }
-        /// Check if we are already attempting to connect to a given node.
+    /// Check if we are already attempting to connect to a given node.
     fn is_currently_connecting_to_node(&self, peer_id: NodeId) -> bool {
         let guard = self.currently_connecting.lock().unwrap();
 
@@ -1517,195 +1524,212 @@ impl<D> Node<D>
     ///Connect to a given node.
     /// Also accepts a callback that is called when the connection is completed
     /// (Either not successfully or successfully)
-    /// TODO: Make this use the correct type of connections
-    /// depending on what is configured.
-    pub async fn tx_connect_node_async(
+    ///
+    /// Spawns a task to handle the outgoing connection attempt
+    //TODO: Make this use the correct type of connections
+    // depending on what is configured.
+    pub fn tx_connect_node_async(
         self: Arc<Self>,
         peer_id: NodeId,
         callback: Option<Box<dyn FnOnce(bool) + Send>>,
     ) {
-        if !self.register_currently_connecting_to_node(peer_id) {
-            warn!(
+        rt::spawn(async move {
+            if !self.register_currently_connecting_to_node(peer_id) {
+                warn!(
                 "{:?} // Tried to connect to node that I'm already connecting to {:?}",
                 self.id, peer_id
             );
-
-            return;
-        }
-
-        if self.is_connected_to_tx(peer_id) {
-            let connection_handle = self.peer_tx.find_peer(peer_id.into());
-
-            if let Some(connection) = connection_handle {
-                if connection.is_active_async().await {
-                    return;
-                }
-            }
-
-            self.peer_tx.disconnect_peer(peer_id.into());
-        }
-
-        debug!("{:?} // Connecting to the node {:?}", self.id, peer_id);
-
-        let mut rng = prng::State::new();
-
-        let addr = match self.peer_addrs.get(peer_id.id() as u64) {
-            None => {
-                error!(
-                    "{:?} // Failed to find peer address for peer {:?}",
-                    self.id, peer_id
-                );
-
                 return;
             }
-            Some(addr) => addr,
-        };
 
-        let nonce = rng.next_state();
+            if self.is_connected_to_tx(peer_id) {
+                match self.ping_handler.ping_peer(&self, peer_id) {
+                    Ok(result_handle) => {
+                        let ping_result = result_handle.recv_async().await.unwrap();
 
-        //Get the correct IP for us to address the node
-        //If I'm a client I will always use the client facing addr
-        //While if I'm a replica I'll connect to the replica addr (clients only have this addr)
-        let peer_addr = if self.id >= self.first_cli {
-            addr.client_addr.clone()
-        } else {
-            //We are a replica, but we are connecting to a client, so
-            //We need the client addr.
-            if peer_id >= self.first_cli {
-                addr.client_addr.clone()
-            } else {
-                match addr.replica_addr.as_ref() {
-                    Some(addr) => addr,
-                    None => {
-                        error!(
-                            "{:?} // Failed to find IP address for peer {:?}",
-                            self.id, peer_id
-                        );
+                        match ping_result {
+                            Ok(_) => {
+                                //Our connection is fine, we should not create a new one
+                                return;
+                            }
+                            Err(error) => {}
+                        }
+                    }
+                    Err(error) => {
+                        error!("Failed to ping peer {:?} for {:?}", peer_id, error);
 
                         return;
                     }
                 }
-                    .clone()
             }
-        };
 
-        debug!(
+            debug!("{:?} // Connecting to the node {:?}", self.id, peer_id);
+
+            let mut rng = prng::State::new();
+
+            let addr = match self.peer_addrs.get(peer_id.id() as u64) {
+                None => {
+                    error!(
+                    "{:?} // Failed to find peer address for peer {:?}",
+                    self.id, peer_id
+                );
+
+                    return;
+                }
+                Some(addr) => addr,
+            };
+
+            let nonce = rng.next_state();
+
+            //Get the correct IP for us to address the node
+            //If I'm a client I will always use the client facing addr
+            //While if I'm a replica I'll connect to the replica addr (clients only have this addr)
+            let peer_addr = if self.id >= self.first_cli {
+                addr.client_addr.clone()
+            } else {
+                //We are a replica, but we are connecting to a client, so
+                //We need the client addr.
+                if peer_id >= self.first_cli {
+                    addr.client_addr.clone()
+                } else {
+                    match addr.replica_addr.as_ref() {
+                        Some(addr) => addr,
+                        None => {
+                            error!(
+                            "{:?} // Failed to find IP address for peer {:?}",
+                            self.id, peer_id
+                        );
+
+                            return;
+                        }
+                    }
+                        .clone()
+                }
+            };
+
+            debug!(
             "{:?} // Starting connection to node {:?} with address {:?}",
             self.id(),
             peer_id,
             peer_addr.0
         );
 
-        let my_id = self.id();
-        let first_cli = self.first_client_id();
+            let my_id = self.id();
+            let first_cli = self.first_client_id();
 
-        let connector = match &self.connector {
-            NodeConnector::Async(connector) => { connector }
-            NodeConnector::Sync(_) => { panic!("Failed, trying to use sync connector in async mode") }
-        }.clone();
+            let connector = match &self.connector {
+                NodeConnector::Async(connector) => { connector }
+                NodeConnector::Sync(_) => { panic!("Failed, trying to use sync connector in async mode") }
+            }.clone();
 
-        self.tx_side_connect_task(
-            my_id, first_cli, peer_id, nonce, connector, peer_addr, callback,
-        );
+            self.tx_side_connect_task(
+                my_id, first_cli, peer_id, nonce, connector, peer_addr, callback,
+            );
+        });
     }
 
     ///Connect to a given node.
     /// Also accepts a callback that is called when the connection is completed
     /// (Either not successfully or successfully)
-    /// TODO: Make this use the correct type of connections
-    /// depending on what is configured.
+    ///
+    /// This will spawn a new thread to handle the establishment of the new connection
+    //TODO: Make this use the correct type of connections
+    // depending on what is configured.
     pub fn tx_connect_node_sync(
         self: Arc<Self>,
         peer_id: NodeId,
         callback: Option<Box<dyn FnOnce(bool) + Send>>,
     ) {
-        if !self.register_currently_connecting_to_node(peer_id) {
-            warn!(
+        std::thread::Builder::new().name(format!("Tx connection thread {:?}", peer_id))
+            .spawn(move || {
+                if !self.register_currently_connecting_to_node(peer_id) {
+                    warn!(
                 "{:?} // Tried to connect to node that I'm already connecting to {:?}",
                 self.id, peer_id
-            );
-
-            return;
-        }
-
-        if self.is_connected_to_tx(peer_id) {
-            let connection_handle = self.peer_tx.find_peer(peer_id.into());
-
-            if let Some(connection) = connection_handle {
-                if connection.is_active_sync() {
-                    return;
-                }
-            }
-
-            self.peer_tx.disconnect_peer(peer_id.into());
-        }
-
-        debug!("{:?} // Connecting to the node {:?}", self.id, peer_id);
-
-        let mut rng = prng::State::new();
-
-        let addr = match self.peer_addrs.get(peer_id.id() as u64) {
-            None => {
-                error!(
-                    "{:?} // Failed to find peer address for peer {:?}",
-                    self.id, peer_id
                 );
 
-                return;
-            }
-            Some(addr) => addr,
-        };
+                    return;
+                }
 
-        let nonce = rng.next_state();
+                if self.is_connected_to_tx(peer_id) {
+                    match self.ping_handler.ping_peer(&self, peer_id) {
+                        Ok(result) => {
+                            let result = rt::block_on(result.recv()).unwrap();
 
-        //Get the correct IP for us to address the node
-        //If I'm a client I will always use the client facing addr
-        //While if I'm a replica I'll connect to the replica addr (clients only have this addr)
-        let peer_addr = if self.id >= self.first_cli {
-            addr.client_addr.clone()
-        } else {
-            //We are a replica, but we are connecting to a client, so 
-            //We need the client addr.
-            if peer_id >= self.first_cli {
-                addr.client_addr.clone()
-            } else {
-                match addr.replica_addr.as_ref() {
-                    Some(addr) => addr,
+                            match result {
+                                Ok(_) => {
+                                    //Our connection to this peer is fine, we shouldn't try to reconnect
+
+                                    return;
+                                }
+                                Err(error) => {}
+                            }
+                        }
+                        Err(error) => {
+                            error!("Failed to ping peer {:?} for {:?}", peer_id, error);
+                        }
+                    }
+                }
+
+                debug!("{:?} // Connecting to the node {:?}", self.id, peer_id);
+
+                let mut rng = prng::State::new();
+
+                let addr = match self.peer_addrs.get(peer_id.id() as u64) {
                     None => {
-                        error!(
-                            "{:?} // Failed to find IP address for peer {:?}",
-                            self.id, peer_id
-                        );
+                        error!("{:?} // Failed to find peer address for peer {:?}",
+                            self.id, peer_id);
 
                         return;
                     }
-                }
-                    .clone()
-            }
-        };
+                    Some(addr) => addr,
+                };
 
-        debug!(
-            "{:?} // Starting connection to node {:?} with address {:?}",
-            self.id(),
-            peer_id,
-            peer_addr.0
-        );
+                let nonce = rng.next_state();
 
-        let my_id = self.id();
-        let first_cli = self.first_client_id();
+                //Get the correct IP for us to address the node
+                //If I'm a client I will always use the client facing addr
+                //While if I'm a replica I'll connect to the replica addr (clients only have this addr)
+                let peer_addr = if self.id >= self.first_cli {
+                    addr.client_addr.clone()
+                } else {
+                    //We are a replica, but we are connecting to a client, so
+                    //We need the client addr.
+                    if peer_id >= self.first_cli {
+                        addr.client_addr.clone()
+                    } else {
+                        match addr.replica_addr.as_ref() {
+                            Some(addr) => addr,
+                            None => {
+                                error!("{:?} // Failed to find IP address for peer {:?}",
+                                    self.id, peer_id);
 
-        let connector = match &self.connector {
-            NodeConnector::Async(_) => {
-                panic!("Failed using async connector in sync mode");
-            }
-            NodeConnector::Sync(connector) => {
-                connector
-            }
-        }.clone();
+                                return;
+                            }
+                        }.clone()
+                    }
+                };
 
-        self.tx_side_connect_task_sync(
-            my_id, first_cli, peer_id, nonce, connector, peer_addr, callback,
-        );
+                debug!("{:?} // Starting connection to node {:?} with address {:?}",
+                self.id(),peer_id,peer_addr.0
+                );
+
+                let my_id = self.id();
+                let first_cli = self.first_client_id();
+
+                let connector = match &self.connector {
+                    NodeConnector::Async(_) => {
+                        panic!("Failed using async connector in sync mode");
+                    }
+                    NodeConnector::Sync(connector) => {
+                        connector
+                    }
+                }.clone();
+
+                self.tx_side_connect_task_sync(
+                    my_id, first_cli, peer_id, nonce, connector, peer_addr, callback,
+                );
+            });
     }
 
     ///Connect to a particular replica
@@ -2229,7 +2253,6 @@ impl<D> Node<D>
         peer_id: NodeId,
         mut sock: SecureSocketRecvSync,
     ) {
-
         self.clone().tx_connect_node_sync(peer_id, None);
 
         let client = self.node_handling.init_peer_conn(peer_id.clone());
@@ -2304,6 +2327,7 @@ impl<D> Node<D>
                     peer_id,
                     inner
                 );
+
                 break;
             };
 
