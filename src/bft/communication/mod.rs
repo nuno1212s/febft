@@ -2226,6 +2226,18 @@ impl<D> Node<D>
                 }
             };
 
+            //Also handle ping requests and prevent them from being inserted into the
+            //Request handling system.
+            match &message {
+                SystemMessage::Ping => {
+                    //Handle the incoming ping requests
+                    self.ping_handler.handle_ping_response(peer_id);
+
+                    continue;
+                }
+                _ => {}
+            };
+
             let msg = Message::System(header, message);
 
             if let Err(inner) = client.push_request(msg).await {
@@ -2311,9 +2323,17 @@ impl<D> Node<D>
 
             //Just to obtain the request key for logging purposes, in the case this is indeed a
             //Client request
+            //Also handle ping requests and prevent them from being inserted into the
+            //Request handling system.
             let req_key = match &message {
                 SystemMessage::Request(req) => {
                     Some(get_request_key(req.session_id(), req.sequence_number()))
+                }
+                SystemMessage::Ping => {
+                    //Handle the incoming ping requests
+                    self.ping_handler.handle_ping_response(peer_id);
+
+                    continue;
                 }
                 _ => None,
             };
