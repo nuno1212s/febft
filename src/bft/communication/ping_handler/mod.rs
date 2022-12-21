@@ -10,7 +10,7 @@ use crate::bft::communication::message::SystemMessage;
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::error::*;
 
-struct PingInfo {
+pub struct PingInfo {
     tx: ChannelMixedTx<PingResponse>,
     time_sent: u128
 }
@@ -28,12 +28,12 @@ const PING_INTERVAL: u64 = 500;
 /// Handles pinging other nodes
 /// Will timeout the ping after a set timeout.
 /// To receive the ping request, one must use the
-pub struct PingHandler<D> where D: SharedData + 'static {
+pub struct PingHandler {
     //A map detailing the pings that are still awaiting response
     awaiting_response: Mutex<BTreeMap<u64, PingInformation>>,
 }
 
-impl<D> PingHandler<D> where D: SharedData + 'static {
+impl PingHandler {
 
     /// Initialize the ping handler
     pub fn new() -> Arc<Self> {
@@ -50,14 +50,14 @@ impl<D> PingHandler<D> where D: SharedData + 'static {
     /// Returns a response receiver that you should receive from to
     /// receive the response to the peer request
     /// The returned channel is blocking on send
-    pub fn ping_peer(&self, node: &Arc<Node<D>>, peer_id: NodeId) -> Result<PingResponseReceiver> {
+    pub fn ping_peer<D>(&self, node: &Arc<Node<D>>, peer_id: NodeId) -> Result<PingResponseReceiver> where D: SharedData + 'static {
         let (tx, rx) = new_bounded_mixed(1);
 
         {
-            let awaiting_response = self.awaiting_response.lock().unwrap();
+            let mut awaiting_response = self.awaiting_response.lock().unwrap();
 
             if awaiting_response.contains_key(&peer_id.into()) {
-                Err(Error::simple_with_msg(ErrorKind::CommunicationPingHandler, "Already attempting to ping this peer"))
+                return Err(Error::simple_with_msg(ErrorKind::CommunicationPingHandler, "Already attempting to ping this peer"));
             }
 
             let time = Utc::now().timestamp_millis();
@@ -74,7 +74,7 @@ impl<D> PingHandler<D> where D: SharedData + 'static {
     /// Handles a received ping from other replicas.
     pub fn handle_ping_response(&self, peer_id: NodeId) {
         let response = {
-            let awaiting_response = self.awaiting_response.lock().unwrap();
+            let mut awaiting_response = self.awaiting_response.lock().unwrap();
 
             awaiting_response.remove(&peer_id.into())
         };
@@ -91,8 +91,8 @@ impl<D> PingHandler<D> where D: SharedData + 'static {
 
     /// Start the thread responsible for performing timeout checks
     fn start_timeout_thread(self: Arc<Self>) {
-        std::thread::Builder::new().name("Ping Timeout Thread")
-            .spawn(|| {
+        std::thread::Builder::new().name("Ping Timeout Thread".to_string())
+            .spawn(move || {
                 loop {
                     self.handle_ping_timeouts();
 
@@ -107,9 +107,9 @@ impl<D> PingHandler<D> where D: SharedData + 'static {
     fn handle_ping_timeouts(&self) {
         let current_time = Utc::now().timestamp_millis() as u128;
 
-        let to_remove = Vec::new();
+        let mut to_remove = Vec::new();
 
-        let awaiting_pings_lock = self.awaiting_response.lock().unwrap();
+        let mut awaiting_pings_lock = self.awaiting_response.lock().unwrap();
 
         for (id, ping_info) in awaiting_pings_lock.iter() {
             let time_sent = ping_info.time_sent;

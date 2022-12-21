@@ -351,6 +351,7 @@ where
                         SystemMessage::FwdConsensus(_) => {
                             warn!("Rogue fwd consensus message observed.")
                         }
+                        SystemMessage::Ping => {}
                     }
                 }
                 // ignore other messages for now
@@ -566,6 +567,7 @@ where
                     SystemMessage::UnOrderedRequest(_) => {
                         warn!("Rogue unordered request message detected")
                     }
+                    SystemMessage::Ping => {}
                 }
             }
             Message::Timeout(timeout_kind) => {
@@ -673,6 +675,7 @@ where
                     SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
                     SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
                     SystemMessage::UnOrderedRequest(_) => todo!(),
+                    SystemMessage::Ping => {}
                 }
             }
             //////// XXX XXX XXX XXX
@@ -788,6 +791,7 @@ where
                     SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
                     SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
                     SystemMessage::UnOrderedRequest(_) => todo!(),
+                    SystemMessage::Ping => {},
                 }
             }
             Message::Timeout(timeout_kind) => {

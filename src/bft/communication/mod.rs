@@ -243,7 +243,7 @@ pub struct Node<D: SharedData + 'static> {
     //The connector used to establish secure connections between peers
     connector: NodeConnector,
     //Handles pings and timeouts of said pings
-    ping_handler: Arc<PingHandler<D>>,
+    ping_handler: Arc<PingHandler>,
     //An address map of all the peers
     peer_addrs: IntMap<PeerAddr>,
     comm_stats: Option<Arc<CommStats>>,
@@ -1544,7 +1544,7 @@ impl<D> Node<D>
 
             if self.is_connected_to_tx(peer_id) {
                 match self.ping_handler.ping_peer(&self, peer_id) {
-                    Ok(result_handle) => {
+                    Ok(mut result_handle) => {
                         let ping_result = result_handle.recv_async().await.unwrap();
 
                         match ping_result {
@@ -1653,8 +1653,8 @@ impl<D> Node<D>
 
                 if self.is_connected_to_tx(peer_id) {
                     match self.ping_handler.ping_peer(&self, peer_id) {
-                        Ok(result) => {
-                            let result = rt::block_on(result.recv()).unwrap();
+                        Ok(mut result) => {
+                            let result = rt::block_on(result.recv_async()).unwrap();
 
                             match result {
                                 Ok(_) => {
