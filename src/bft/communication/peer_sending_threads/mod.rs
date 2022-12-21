@@ -159,8 +159,7 @@ fn sync_sending_thread<D>(
         }
     }
 
-
-    node.tx_connect_node_sync(peer_id, None)
+    node.tx_connect_node_sync(peer_id, None);
 }
 
 pub fn initialize_async_sending_task_for<D>(

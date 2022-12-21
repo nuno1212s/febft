@@ -303,7 +303,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                     // FIXME: handle rogue reply messages
                     SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
                     SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
-                    SystemMessage::Ping => {}
+                    SystemMessage::Ping(_) => {}
                 }
             }
             Message::Timeout(timeout_kind) => {
@@ -419,7 +419,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                     SystemMessage::UnOrderedRequest(_) => {
                         warn!("Received request while synchronizing, ignoring.")
                     }
-                    SystemMessage::Ping => {}
+                    SystemMessage::Ping(_) => {}
                 }
             }
             //////// XXX XXX XXX XXX
@@ -542,7 +542,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                     SystemMessage::UnOrderedReply(_) => {
                         warn!("How can I receive a reply here?")
                     }
-                    SystemMessage::Ping => {
+                    SystemMessage::Ping(_) => {
 
                     }
                 }

@@ -3,16 +3,16 @@ use std::sync::{Mutex, Arc};
 use std::time::Duration;
 use chrono::{Utc};
 
-use log::error;
+use log::{debug, error};
 use crate::bft::communication::{Node, NodeId};
 use crate::bft::communication::channel::{ChannelMixedRx, ChannelMixedTx, new_bounded_mixed};
-use crate::bft::communication::message::SystemMessage;
+use crate::bft::communication::message::{PingMessage, SystemMessage};
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::error::*;
 
 pub struct PingInfo {
     tx: ChannelMixedTx<PingResponse>,
-    time_sent: u128
+    time_sent: u128,
 }
 
 pub type PingInformation = PingInfo;
@@ -21,9 +21,9 @@ pub type PingResponse = Result<()>;
 
 pub type PingResponseReceiver = ChannelMixedRx<PingResponse>;
 
-pub const PING_TIMEOUT : u128 = 2500;
+pub const PING_TIMEOUT: u128 = 100;
 
-const PING_INTERVAL: u64 = 500;
+const PING_INTERVAL: u64 = 50;
 
 /// Handles pinging other nodes
 /// Will timeout the ping after a set timeout.
@@ -34,7 +34,6 @@ pub struct PingHandler {
 }
 
 impl PingHandler {
-
     /// Initialize the ping handler
     pub fn new() -> Arc<Self> {
         let ping_handler = Arc::new(Self {
@@ -62,30 +61,43 @@ impl PingHandler {
 
             let time = Utc::now().timestamp_millis();
 
-            awaiting_response.insert(peer_id.into(), PingInformation { tx: tx,
-                time_sent: time as u128 });
+            awaiting_response.insert(peer_id.into(), PingInformation {
+                tx,
+                time_sent: time as u128,
+            });
         }
 
-        node.send(SystemMessage::Ping, peer_id, true);
+        debug!("Pinging the node {:?}", peer_id);
+
+        node.send(SystemMessage::Ping(PingMessage::new(true)), peer_id, true);
 
         Ok(rx)
     }
 
     /// Handles a received ping from other replicas.
-    pub fn handle_ping_response(&self, peer_id: NodeId) {
+    pub fn handle_ping_received<D>(&self, node: &Arc<Node<D>>,
+                                   ping: &PingMessage,
+                                   peer_id: NodeId) where D: SharedData + 'static {
         let response = {
             let mut awaiting_response = self.awaiting_response.lock().unwrap();
 
             awaiting_response.remove(&peer_id.into())
         };
 
-        if let Some(information) = response {
+        if ping.is_request() {
+            debug!("Received ping request from node {:?}, sending ping response", peer_id);
 
-            let ping_response = Ok(());
-
-            information.tx.send(ping_response);
+            node.send(SystemMessage::Ping(PingMessage::new(false)), peer_id, true);
         } else {
-            error!("Received ping that was not requested? {:?}", peer_id);
+            if let Some(information) = response {
+                let ping_response = Ok(());
+
+                information.tx.send(ping_response).unwrap();
+
+                debug!("Received ping response from peer {:?}", peer_id);
+            } else {
+                error!("Received ping that was not requested? {:?}", peer_id);
+            }
         }
     }
 
@@ -98,9 +110,8 @@ impl PingHandler {
 
                     std::thread::sleep(Duration::from_millis(PING_INTERVAL));
                 }
-
-            });
-
+            })
+            .expect("Failed to allocate ping timeout thread");
     }
 
     ///Perform a check on whether any pending ping request has timed out
@@ -117,7 +128,9 @@ impl PingHandler {
             if current_time - time_sent >= PING_TIMEOUT {
                 ping_info.tx.send(
                     Err(Error::simple_with_msg(ErrorKind::CommunicationPingHandler,
-                                               "Ping request has timed out")));
+                                               "Ping request has timed out"))).unwrap();
+
+                debug!("Timed out ping to node {:?}", id);
 
                 to_remove.push(id.clone());
             }

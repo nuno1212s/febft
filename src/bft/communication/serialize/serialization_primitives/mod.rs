@@ -1,10 +1,7 @@
 use std::io::Read;
 use std::io::Write;
 
-use crate::bft::communication::message::{
-    ConsensusMessage, ConsensusMessageKind, Header, ObserveEventKind, ObserverMessage,
-    ReplyMessage, RequestMessage, StoredMessage, SystemMessage,
-};
+use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, ObserveEventKind, ObserverMessage, PingMessage, ReplyMessage, RequestMessage, StoredMessage, SystemMessage};
 
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
@@ -180,6 +177,11 @@ where
                     }
                 }
             }
+        }
+        SystemMessage::Ping(message) => {
+            let mut builder = sys_msg.init_ping();
+
+            builder.set_request(message.is_request());
         }
         _ => return Err("Unsupported system message").wrapped(ErrorKind::CommunicationSerialize),
     }
@@ -476,6 +478,12 @@ where
             Ok(SystemMessage::ObserverMessage(observer_msg))
         }
         messages_capnp::system::Which::ObserverMessage(Err(err)) => {
+            Err(format!("{:?}", err).as_str()).wrapped(ErrorKind::CommunicationSerialize)
+        }
+        messages_capnp::system::Which::Ping(Ok(ping_message)) => {
+            Ok(SystemMessage::Ping(PingMessage::new(ping_message.get_request())))
+        }
+        messages_capnp::system::Which::Ping(Err(err)) => {
             Err(format!("{:?}", err).as_str()).wrapped(ErrorKind::CommunicationSerialize)
         }
     }

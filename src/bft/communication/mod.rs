@@ -161,6 +161,14 @@ impl PeerTx {
         };
     }
 
+    pub fn connected(&self) -> usize {
+        match self {
+            //+ 1 as we don't store the loopback connection here, it's in the replica handling.
+            PeerTx::Client { connected, .. } => connected.len() + 1,
+            PeerTx::Server { connected, .. } => connected.len() + 1
+        }
+    }
+
     pub fn find_peer(&self, client_id: u64) -> Option<ConnectionHandle> {
         match self {
             PeerTx::Client { connected, .. } => {
@@ -676,20 +684,23 @@ impl<D> Node<D>
         let rogue = Vec::new();
 
         //TODO: We need to receive the amount of replicas in the quorum
-        while node.node_handling.replica_count() < cfg.n {
+        while node.node_handling.replica_count() < cfg.n || node.peer_tx.connected() < cfg.n {
             //Any received messages will be handled by the connection pool buffers
             debug!(
-                "{:?} // Connected to {} replicas",
+                "{:?} // Connected to {} RX replicas, {} TX",
                 node.id,
-                node.node_handling.replica_count()
+                node.node_handling.replica_count(),
+                node.peer_tx.connected()
             );
 
             Delay::new(Duration::from_millis(500)).await;
         }
 
         debug!(
-            "Found all nodes required {}",
-            node.node_handling.replica_count()
+            "Found all nodes required {}, {} RX, {} TX",
+            node.node_handling.replica_count(),
+            node.node_handling.replica_count(),
+            node.peer_tx.connected()
         );
 
         // success
@@ -1418,11 +1429,12 @@ impl<D> Node<D>
         }
     }
 
-    ///Check if we are currently connected to a provided node
+    /// Check if we are currently connected to a provided node (in terms of message reception)
     pub fn is_connected_to_rx(&self, id: NodeId) -> bool {
         self.node_handling.resolve_peer_conn(id).is_some()
     }
 
+    /// Are we connected to a node (in terms of message sending)
     pub fn is_connected_to_tx(&self, id: NodeId) -> bool {
         self.peer_tx.find_peer(id.0 as u64).is_some()
     }
@@ -1550,17 +1562,20 @@ impl<D> Node<D>
                         match ping_result {
                             Ok(_) => {
                                 //Our connection is fine, we should not create a new one
+                                self.unregister_currently_connecting_to_node(peer_id);
                                 return;
                             }
-                            Err(_error) => {}
+                            Err(_error) => {
+                                debug!("Peer {:?} is not reachable. Attempting to reconnect. ", peer_id);
+                            }
                         }
                     }
                     Err(error) => {
                         error!("Failed to ping peer {:?} for {:?}", peer_id, error);
-
-                        return;
                     }
                 }
+
+                self.peer_tx.disconnect_peer(peer_id.into());
             }
 
             debug!("{:?} // Connecting to the node {:?}", self.id, peer_id);
@@ -1654,21 +1669,26 @@ impl<D> Node<D>
                 if self.is_connected_to_tx(peer_id) {
                     match self.ping_handler.ping_peer(&self, peer_id) {
                         Ok(mut result) => {
-                            let result = rt::block_on(result.recv_async()).unwrap();
+                            let result = result.recv().unwrap();
 
                             match result {
                                 Ok(_) => {
                                     //Our connection to this peer is fine, we shouldn't try to reconnect
 
+                                    self.unregister_currently_connecting_to_node(peer_id);
                                     return;
                                 }
-                                Err(_error) => {}
+                                Err(_error) => {
+                                    debug!("Peer {:?} is not reachable. Attempting to reconnect. ", peer_id);
+                                }
                             }
                         }
                         Err(error) => {
                             error!("Failed to ping peer {:?} for {:?}", peer_id, error);
                         }
                     }
+
+                    self.peer_tx.disconnect_peer(peer_id.into());
                 }
 
                 debug!("{:?} // Connecting to the node {:?}", self.id, peer_id);
@@ -1729,7 +1749,7 @@ impl<D> Node<D>
                 self.tx_side_connect_task_sync(
                     my_id, first_cli, peer_id, nonce, connector, peer_addr, callback,
                 );
-            });
+            }).expect("Failed to create thread to handle connection attempt");
     }
 
     ///Connect to a particular replica
@@ -2229,9 +2249,9 @@ impl<D> Node<D>
             //Also handle ping requests and prevent them from being inserted into the
             //Request handling system.
             match &message {
-                SystemMessage::Ping => {
+                SystemMessage::Ping(ping_message) => {
                     //Handle the incoming ping requests
-                    self.ping_handler.handle_ping_response(peer_id);
+                    self.ping_handler.handle_ping_received(&self, ping_message, peer_id);
 
                     continue;
                 }
@@ -2329,9 +2349,9 @@ impl<D> Node<D>
                 SystemMessage::Request(req) => {
                     Some(get_request_key(req.session_id(), req.sequence_number()))
                 }
-                SystemMessage::Ping => {
+                SystemMessage::Ping(ping_message) => {
                     //Handle the incoming ping requests
-                    self.ping_handler.handle_ping_response(peer_id);
+                    self.ping_handler.handle_ping_received(&self, ping_message, peer_id);
 
                     continue;
                 }

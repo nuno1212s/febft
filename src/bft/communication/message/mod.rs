@@ -242,7 +242,7 @@ pub enum SystemMessage<S, O, P> {
     //Observer related messages
     ObserverMessage(ObserverMessage),
     //Ping messages
-    Ping
+    Ping(PingMessage),
 }
 
 impl<S, O, P> Debug for SystemMessage<S, O, P> {
@@ -288,7 +288,7 @@ impl<S, O, P> Debug for SystemMessage<S, O, P> {
             SystemMessage::FwdConsensus(_) => {
                 write!(f, "Fwd consensus message")
             }
-            SystemMessage::Ping => {
+            SystemMessage::Ping(_) => {
                 write!(f, "Ping message")
             }
         }
@@ -720,6 +720,32 @@ impl Debug for ObserveEventKind {
                 write!(f, "Executed the consensus instance {:?}", seq)
             }
         }
+    }
+}
+
+///}@
+
+///
+/// Ping messages
+/// @{
+
+///Contains a boolean representing if this is a request.
+///If it is a ping request, should be set to true,
+///ping responses should be false
+#[derive(Clone)]
+pub struct PingMessage {
+    request: bool,
+}
+
+impl PingMessage {
+    pub fn new(is_request: bool) -> Self {
+        Self {
+            request: is_request
+        }
+    }
+
+    pub fn is_request(&self) -> bool {
+        self.request
     }
 }
 

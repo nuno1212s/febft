@@ -5,12 +5,13 @@ $Rust.parentModule("bft::communication::serialize::serialization_primitives");
 
 struct System {
     union {
-        request   @0 :Request;
-        reply     @1 :Reply;
-        consensus @2 :Consensus;
+        request          @0 :Request;
+        reply            @1 :Reply;
+        consensus        @2 :Consensus;
         observerMessage  @3 :ObserverMessage;
         unorderedRequest @4 :UnorderedRequest;
         unorderedReply   @5 :UnorderedReply;
+        ping             @6 :Ping;
     }
 }
 
@@ -93,4 +94,8 @@ struct ViewInfo {
     n          @1 :UInt32;
     f          @2 :UInt32;
 
+}
+
+struct Ping {
+    request    @0 :Bool;
 }
