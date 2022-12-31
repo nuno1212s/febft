@@ -22,7 +22,7 @@ use crate::bft::threadpool;
 use crate::bft::core::server::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UnorderedBatch};
 use crate::bft::ordering::Orderable;
-use crate::bft::timeouts::TimeoutsHandle;
+use crate::bft::timeouts::{Timeouts};
 
 use super::consensus::log::persistent::PersistentLogModeTrait;
 use super::core::server::ViewInfo;
@@ -38,7 +38,7 @@ pub struct Proposer<S: Service + 'static, T> where T: PersistentLogModeTrait{
     batch_channel: (ChannelSyncTx<BatchType<S>>, ChannelSyncRx<BatchType<S>>),
     node_ref: Arc<Node<S::Data>>,
     synchronizer: Arc<Synchronizer<S>>,
-    timeouts: Arc<TimeoutsHandle<S>>,
+    timeouts: Timeouts,
     log: Arc<Log<S, T>>,
     //For unordered request execution
     executor_handle: ExecutorHandle<S>,
@@ -63,7 +63,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
         node: Arc<Node<S::Data>>,
         sync: Arc<Synchronizer<S>>,
         log: Arc<Log<S, T>>,
-        timeouts: Arc<TimeoutsHandle<S>>,
+        timeouts: Timeouts,
         executor_handle: ExecutorHandle<S>,
         consensus_guard: ConsensusGuard,
         target_global_batch_size: usize,

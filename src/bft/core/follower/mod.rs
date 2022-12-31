@@ -18,7 +18,7 @@ use crate::bft::proposer::follower_proposer::FollowerProposer;
 use crate::bft::sync::{
     AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus,
 };
-use crate::bft::timeouts::{TimeoutKind, Timeouts, TimeoutsHandle};
+use crate::bft::timeouts::{Timeout, TimeoutKind, Timeouts};
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum FollowerPhase {
@@ -59,7 +59,7 @@ pub struct Follower<S: Service + 'static, T: PersistentLogModeTrait> {
     //These timeouts are only used for the CST protocol,
     //As it's the only place where we are expected to send messages to
     //Other replicas
-    timeouts: Arc<TimeoutsHandle<S>>,
+    timeouts: Timeouts,
     //The proposer, which in this case wil
     proposer: Arc<FollowerProposer<S, T>>,
     //Synchronizer observer
@@ -167,7 +167,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
             batch_timeout,
         );
 
-        let timeouts = Timeouts::new(Arc::clone(node.loopback_channel()));
+        let timeouts = Timeouts::new::<S>(500, Arc::clone(node.loopback_channel()));
 
         Ok(Self {
             phase: FollowerPhase::NormalPhase,
@@ -660,39 +660,41 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
         Ok(())
     }
 
-    fn timeout_received(&mut self, timeout_kind: TimeoutKind) {
-        match timeout_kind {
-            TimeoutKind::Cst(cst_seq) => {
-                let status = self.cst.timed_out(cst_seq);
+    fn timeout_received(&mut self, timeouts: Timeout) {
+        for timeout_kind in timeouts {
+            match timeout_kind {
+                TimeoutKind::Cst(cst_seq) => {
+                    let status = self.cst.timed_out(cst_seq);
 
-                match status {
-                    CstStatus::RequestLatestCid => {
-                        self.cst.request_latest_consensus_seq_no(
-                            &self.synchronizer,
-                            &self.timeouts,
-                            &self.node,
-                            &self.log,
-                        );
+                    match status {
+                        CstStatus::RequestLatestCid => {
+                            self.cst.request_latest_consensus_seq_no(
+                                &self.synchronizer,
+                                &self.timeouts,
+                                &self.node,
+                                &self.log,
+                            );
 
-                        self.switch_phase(FollowerPhase::RetrievingStatePhase);
+                            self.switch_phase(FollowerPhase::RetrievingStatePhase);
+                        }
+                        CstStatus::RequestState => {
+                            self.cst.request_latest_state(
+                                &self.synchronizer,
+                                &self.timeouts,
+                                &self.node,
+                                &self.log,
+                            );
+
+                            self.switch_phase(FollowerPhase::RetrievingStatePhase);
+                        }
+                        // nothing to do
+                        _ => (),
                     }
-                    CstStatus::RequestState => {
-                        self.cst.request_latest_state(
-                            &self.synchronizer,
-                            &self.timeouts,
-                            &self.node,
-                            &self.log,
-                        );
-
-                        self.switch_phase(FollowerPhase::RetrievingStatePhase);
-                    }
-                    // nothing to do
-                    _ => (),
                 }
-            }
-            TimeoutKind::ClientRequests(_timeout_seq) => {
-                //Followers never time out client requests (They don't even received ordered requests)
-                unreachable!();
+                TimeoutKind::ClientRequestTimeout(_timeout_seq) => {
+                    //Followers never time out client requests (They don't even receive ordered requests)
+                    unreachable!();
+                }
             }
         }
     }

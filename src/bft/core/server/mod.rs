@@ -33,7 +33,7 @@ use crate::bft::proposer::Proposer;
 use crate::bft::sync::{
     AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus,
 };
-use crate::bft::timeouts::{TimeoutKind, Timeouts, TimeoutsHandle};
+use crate::bft::timeouts::{Timeout, TimeoutKind, Timeouts};
 
 use super::SystemParams;
 
@@ -119,7 +119,7 @@ pub struct Replica<S: Service + 'static, T: PersistentLogModeTrait> {
     // this value is primarily used to switch from
     // state transfer back to a view change
     phase_stack: Option<ReplicaPhase>,
-    timeouts: Arc<TimeoutsHandle<S>>,
+    timeouts: Timeouts,
     executor: ExecutorHandle<S>,
     synchronizer: Arc<Synchronizer<S>>,
     consensus: Consensus<S>,
@@ -263,7 +263,7 @@ where
 
         debug!("Initializing timeouts");
         // start timeouts handler
-        let timeouts = Timeouts::new(Arc::clone(node.loopback_channel()));
+        let timeouts = Timeouts::new::<S>(500, Arc::clone(node.loopback_channel()));
 
         // TODO:
         // - client req timeout base dur configure param
@@ -907,61 +907,63 @@ where
             .watch_forwarded_requests(requests, &self.timeouts, &mut self.log);
     }
 
-    fn timeout_received(&mut self, timeout_kind: TimeoutKind) {
-        match timeout_kind {
-            TimeoutKind::Cst(cst_seq) => {
-                let status = self.cst.timed_out(cst_seq);
+    fn timeout_received(&mut self, timeouts: Timeout) {
+        for timeout_kind in timeouts {
+            match timeout_kind {
+                TimeoutKind::Cst(cst_seq) => {
+                    let status = self.cst.timed_out(cst_seq);
 
-                match status {
-                    CstStatus::RequestLatestCid => {
-                        self.cst.request_latest_consensus_seq_no(
-                            &self.synchronizer,
-                            &self.timeouts,
-                            &self.node,
-                            &self.log,
-                        );
+                    match status {
+                        CstStatus::RequestLatestCid => {
+                            self.cst.request_latest_consensus_seq_no(
+                                &self.synchronizer,
+                                &self.timeouts,
+                                &self.node,
+                                &self.log,
+                            );
 
-                        self.switch_phase(ReplicaPhase::RetrievingState);
+                            self.switch_phase(ReplicaPhase::RetrievingState);
+                        }
+                        CstStatus::RequestState => {
+                            self.cst.request_latest_state(
+                                &self.synchronizer,
+                                &self.timeouts,
+                                &self.node,
+                                &self.log,
+                            );
+
+                            self.switch_phase(ReplicaPhase::RetrievingState);
+                        }
+                        // nothing to do
+                        _ => (),
                     }
-                    CstStatus::RequestState => {
-                        self.cst.request_latest_state(
-                            &self.synchronizer,
-                            &self.timeouts,
-                            &self.node,
-                            &self.log,
-                        );
-
-                        self.switch_phase(ReplicaPhase::RetrievingState);
-                    }
-                    // nothing to do
-                    _ => (),
                 }
-            }
-            TimeoutKind::ClientRequests(_timeout_seq) => {
-                //let status = self.synchronizer
-                //    .client_requests_timed_out(timeout_seq, &self.timeouts);
+                TimeoutKind::ClientRequestTimeout(_timeout_seq) => {
+                    //let status = self.synchronizer
+                    //    .client_requests_timed_out(timeout_seq, &self.timeouts);
 
-                //match status {
-                //    SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
-                //        if forwarded.len() > 0 {
-                //            let requests = self.log.clone_requests(&forwarded);
-                //            self.synchronizer.forward_requests(
-                //                requests,
-                //                &mut self.node,
-                //            );
-                //        }
-                //        if stopped.len() > 0 {
-                //            let stopped = self.log.clone_requests(&stopped);
-                //            self.synchronizer.begin_view_change(
-                //                Some(stopped),
-                //                &mut self.node,
-                //            );
-                //            self.phase = ReplicaPhase::SyncPhase;
-                //        }
-                //    },
-                //    // nothing to do
-                //    _ => (),
-                //}
+                    //match status {
+                    //    SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
+                    //        if forwarded.len() > 0 {
+                    //            let requests = self.log.clone_requests(&forwarded);
+                    //            self.synchronizer.forward_requests(
+                    //                requests,
+                    //                &mut self.node,
+                    //            );
+                    //        }
+                    //        if stopped.len() > 0 {
+                    //            let stopped = self.log.clone_requests(&stopped);
+                    //            self.synchronizer.begin_view_change(
+                    //                Some(stopped),
+                    //                &mut self.node,
+                    //            );
+                    //            self.phase = ReplicaPhase::SyncPhase;
+                    //        }
+                    //    },
+                    //    // nothing to do
+                    //    _ => (),
+                    //}
+                }
             }
         }
     }

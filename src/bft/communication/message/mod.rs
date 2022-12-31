@@ -31,7 +31,7 @@ use crate::bft::consensus::log::CollectData;
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::NodeId;
 use crate::bft::core::server::ViewInfo;
-use crate::bft::timeouts::TimeoutKind;
+use crate::bft::timeouts::{Timeout, TimeoutKind};
 use crate::bft::sync::LeaderCollects;
 use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
@@ -198,7 +198,7 @@ pub enum Message<S, O, P> where S: Send, O: Send, P: Send {
     /// This is useful for local checkpoints.
     ExecutionFinishedWithAppstate((SeqNo, S)),
     /// We received a timeout from the timeouts layer.
-    Timeout(TimeoutKind),
+    Timeout(Timeout),
 }
 
 impl<S, O, P> Debug for Message<S, O, P> where S: Send, O: Send, P: Send {
@@ -732,6 +732,8 @@ impl Debug for ObserveEventKind {
 ///Contains a boolean representing if this is a request.
 ///If it is a ping request, should be set to true,
 ///ping responses should be false
+///
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct PingMessage {
     request: bool,

@@ -25,8 +25,7 @@ use crate::bft::crypto::hash::Digest;
 use crate::bft::executable::{Request, Service};
 use crate::bft::globals::ReadOnly;
 use crate::bft::ordering::{Orderable, SeqNo};
-
-use crate::bft::timeouts::TimeoutsHandle;
+use crate::bft::timeouts::{ClientRqInfo, TimeoutKind, Timeouts};
 
 use super::{AbstractSynchronizer, Synchronizer, SynchronizerStatus, TimeoutPhase};
 
@@ -59,7 +58,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         base_sync: &super::Synchronizer<S>,
         current_view: &ViewInfo,
         log: &Log<S, T>,
-        timeouts: &TimeoutsHandle<S>,
+        timeouts: &Timeouts,
         node: &Node<S::Data>,
     ) where T: PersistentLogModeTrait {
         // NOTE:
@@ -108,7 +107,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     }
 
     /// Watch a client request with the digest `digest`.
-    pub fn watch_request(&self, digest: Digest, timeouts: &TimeoutsHandle<S>) {
+    pub fn watch_request(&self, digest: Digest, timeouts: &Timeouts) {
         let phase = TimeoutPhase::Init(Instant::now());
         self.watch_request_impl(phase, digest, timeouts);
     }
@@ -118,7 +117,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     pub fn watch_forwarded_requests<T>(
         &self,
         requests: ForwardedRequestsMessage<Request<S>>,
-        timeouts: &TimeoutsHandle<S>,
+        timeouts: &Timeouts,
         log: &Log<S, T>,
     ) where T: PersistentLogModeTrait{
         let phase = TimeoutPhase::TimedOutOnce(Instant::now());
@@ -140,7 +139,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     pub fn watch_request_batch<T>(
         &self,
         preprepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-        _timeouts: &TimeoutsHandle<S>,
+        timeouts: &Timeouts,
         log: &Log<S, T>,
     ) -> Vec<Digest> where T: PersistentLogModeTrait {
 
@@ -151,14 +150,23 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
 
         let mut digests = Vec::with_capacity(requests.len());
 
+        let mut client_rqs = Vec::with_capacity(requests.len());
+
         //TODO: Cancel ongoing timeouts of requests that are in the batch
 
         for x in requests {
             let header = x.header();
             let digest = header.unique_digest();
 
+            let seq_no = x.message().sequence_number();
+            let session = x.message().session_id();
+
+            client_rqs.push(TimeoutKind::ClientRequestTimeout(ClientRqInfo::new(header.from(), session, seq_no)));
+
             digests.push(digest);
         }
+
+        timeouts.received_requests(client_rqs);
 
         //It's possible that, if the latency of the client to a given replica A is smaller than the
         //Latency to leader replica B + time taken to process request in B + Latency between A and B,
@@ -190,7 +198,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         &self,
         _phase: TimeoutPhase,
         _digest: Digest,
-        _timeouts: &TimeoutsHandle<S>,
+        _timeouts: &Timeouts,
     ) {
         //if !self.watching_timeouts {
         //    let seq = self.next_timeout();
@@ -215,7 +223,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     }
 
     /// Start watching all pending client requests.
-    pub fn watch_all_requests(&self, _timeouts: &TimeoutsHandle<S>) {
+    pub fn watch_all_requests(&self, _timeouts: &Timeouts) {
         //let phase = TimeoutPhase::Init(Instant::now());
         //for timeout_phase in self.watching.values_mut() {
         //    *timeout_phase = phase;
@@ -240,7 +248,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         &self,
         _base_sync: &Synchronizer<S>,
         _seq: SeqNo,
-        _timeouts: &TimeoutsHandle<S>,
+        _timeouts: &Timeouts,
     ) -> SynchronizerStatus {
         SynchronizerStatus::Nil
         //let ignore_timeout = !self.watching_timeouts

@@ -26,7 +26,6 @@ use super::core::server::observer::ObserverHandle;
 use super::executable::Reply;
 use super::globals::ReadOnly;
 use super::sync::{AbstractSynchronizer, Synchronizer};
-use super::timeouts::TimeoutsHandle;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
@@ -34,6 +33,7 @@ use crate::bft::executable::{Request, Service, State};
 use crate::bft::ordering::{
     tbo_advance_message_queue, tbo_pop_message, tbo_queue_message, Orderable, SeqNo,
 };
+use crate::bft::timeouts::Timeouts;
 
 pub mod follower_consensus;
 pub mod log;
@@ -489,7 +489,7 @@ impl<S: Service + 'static> Consensus<S> {
         &mut self,
         (header, message): (Header, ConsensusMessage<Request<S>>),
         synchronizer: &Synchronizer<S>,
-        timeouts: &TimeoutsHandle<S>,
+        timeouts: &Timeouts,
         log: &Log<S, T>,
         node: &Node<S::Data>,
     ) where T: PersistentLogModeTrait {
@@ -512,7 +512,7 @@ impl<S: Service + 'static> Consensus<S> {
         header: Header,
         message: ConsensusMessage<Request<S>>,
         synchronizer: &Synchronizer<S>,
-        timeouts: &TimeoutsHandle<S>,
+        timeouts: &Timeouts,
         log: &Log<S, T>,
         node: &Node<S::Data>,
     ) -> ConsensusStatus<'a> where T: PersistentLogModeTrait {
@@ -903,7 +903,7 @@ where
 #[inline]
 fn request_batch_received<S, T>(
     preprepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-    timeouts: &TimeoutsHandle<S>,
+    timeouts: &Timeouts,
     synchronizer: &Synchronizer<S>,
     log: &Log<S, T>,
 ) -> Vec<Digest>

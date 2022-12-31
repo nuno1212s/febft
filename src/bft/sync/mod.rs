@@ -29,7 +29,6 @@ use super::{
     globals::ReadOnly,
     ordering::{tbo_advance_message_queue, tbo_pop_message, tbo_queue_message, Orderable, SeqNo},
     prng,
-    timeouts::TimeoutsHandle,
 };
 
 pub mod follower_sync;
@@ -38,6 +37,7 @@ pub mod replica_sync;
 use intmap::IntMap;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+use crate::bft::timeouts::Timeouts;
 
 macro_rules! extract_msg {
     ($t:ty => $g:expr, $q:expr) => {
@@ -437,7 +437,7 @@ where
         &self,
         header: Header,
         message: ViewChangeMessage<Request<S>>,
-        timeouts: &TimeoutsHandle<S>,
+        timeouts: &Timeouts,
         log: &Log<S, T>,
         consensus: &mut Consensus<S>,
         node: &Node<S::Data>,
@@ -834,7 +834,7 @@ where
     pub fn resume_view_change<T>(
         &self,
         log: &Log<S, T>,
-        timeouts: &TimeoutsHandle<S>,
+        timeouts: &Timeouts,
         consensus: &mut Consensus<S>,
         node: &Node<S::Data>,
     ) -> Option<()>
@@ -945,7 +945,7 @@ where
         &self,
         state: FinalizeState<Request<S>>,
         log: &Log<S, T>,
-        timeouts: &TimeoutsHandle<S>,
+        timeouts: &Timeouts,
         consensus: &mut Consensus<S>,
         node: &Node<S::Data>,
     ) -> SynchronizerStatus
@@ -985,7 +985,7 @@ where
     pub fn watch_request_batch<T>(
         &self,
         preprepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-        timeouts: &TimeoutsHandle<S>,
+        timeouts: &Timeouts,
         log: &Log<S, T>,
     ) -> Vec<Digest>
     where
@@ -1002,7 +1002,7 @@ where
     pub fn watch_forwarded_requests<T>(
         &self,
         requests: ForwardedRequestsMessage<Request<S>>,
-        timeouts: &TimeoutsHandle<S>,
+        timeouts: &Timeouts,
         log: &Log<S, T>,
     ) where
         T: PersistentLogModeTrait,
@@ -1015,7 +1015,7 @@ where
         }
     }
     /// Watch a client request with the digest `digest`.
-    pub fn watch_request(&self, digest: Digest, timeouts: &TimeoutsHandle<S>) {
+    pub fn watch_request(&self, digest: Digest, timeouts: &Timeouts) {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => rep.watch_request(digest, timeouts),
             _ => {}

@@ -22,7 +22,7 @@ use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State};
 use crate::bft::ordering::{Orderable, SeqNo};
-use crate::bft::timeouts::{TimeoutKind, TimeoutsHandle};
+use crate::bft::timeouts::{TimeoutKind, Timeouts};
 
 use super::consensus::AbstractConsensus;
 use super::consensus::log::persistent::PersistentLogModeTrait;
@@ -455,7 +455,7 @@ where
     pub fn request_latest_consensus_seq_no<T, W>(
         &mut self,
         synchronizer: &Arc<T>,
-        timeouts: &TimeoutsHandle<S>,
+        timeouts: &Timeouts,
         node: &Node<S::Data>,
         _log: &Log<S, W>,
     ) where
@@ -483,7 +483,7 @@ where
     pub fn request_latest_state<T, W>(
         &mut self,
         synchronizer: &Arc<T>,
-        timeouts: &TimeoutsHandle<S>,
+        timeouts: &Timeouts,
         node: &Node<S::Data>,
         _log: &Log<S, W>,
     ) where
