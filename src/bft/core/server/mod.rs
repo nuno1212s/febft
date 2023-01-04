@@ -847,13 +847,9 @@ where
                 let new_meta = BatchMeta::new();
                 let meta = std::mem::replace(&mut *self.log.batch_meta().lock(), new_meta);
 
-                if let Some((info, batch, meta)) = 
-                self.log.finalize_batch(seq, batch_digest, digests, needed_messages, meta)?
-                {
-                    //Send the finalized batch to the rq finalizer
-                    //So everything can be removed from the correct logs and
-                    //Given to the service thread to execute
-                    //self.rq_finalizer.queue_finalize(info, meta, rqs);
+                if let Some((info, batch, meta)) =
+                    self.log.finalize_batch(seq, batch_digest, digests, needed_messages, meta)? {
+
                     match info {
                         Info::Nil => self.executor.queue_update(meta, batch),
                         // execute and begin local checkpoint

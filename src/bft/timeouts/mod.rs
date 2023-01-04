@@ -144,7 +144,7 @@ impl<S: Service + 'static> TimeoutsThread<S> {
                 }
             };
 
-            ///Handle all incoming messages and update the pending timeouts accordingly
+            //Handle all incoming messages and update the pending timeouts accordingly
             if let Some(mut message) = message {
                 match message {
                     MessageType::TimeoutRequest(RqTimeoutMessage { timeout, mut timeout_info }) => {
@@ -195,8 +195,7 @@ impl<S: Service + 'static> TimeoutsThread<S> {
                 }
             }
 
-            /// run timeouts
-            ///
+            // run timeouts
             let current_timestamp = Utc::now().timestamp_millis() as u64;
 
             let mut to_time_out = vec![];

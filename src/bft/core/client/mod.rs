@@ -319,7 +319,6 @@ where
     /// Updates the replicated state of the application running
     /// on top of `febft`.
     //
-    // TODO: request timeout
     pub async fn update<T>(&mut self, operation: D::Request) -> Result<D::Reply>
     where
         T: ClientType<D>,

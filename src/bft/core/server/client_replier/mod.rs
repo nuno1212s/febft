@@ -8,6 +8,8 @@ use crate::bft::executable::{Reply, Service, BatchReplies};
 
 type RepliesType<S> = BatchReplies<S>;
 
+///Dedicated thread to reply to clients
+/// This is currently not being used (we are currently using the thread pool)
 pub struct Replier<S> where S: Service + 'static {
     node_id: NodeId,
     channel:  ChannelSyncRx<RepliesType<Reply<S>>>,

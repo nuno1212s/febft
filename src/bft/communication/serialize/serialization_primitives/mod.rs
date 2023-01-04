@@ -74,7 +74,7 @@ where
 
             let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_reply(&mut rq, reply.payload());
+            S::serialize_reply(&mut rq, reply.payload())?;
 
             reply_obj.set_reply(&rq[..]);
         }
@@ -101,11 +101,14 @@ where
                         {
                             let mut request = forwarded.reborrow().init_request();
 
+                            request.set_session_id(req.session_id().into());
+                            request.set_operation_id(req.sequence_number().into());
+
                             let stored_req = stored.message();
 
                             let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-                            S::serialize_request(&mut rq, stored_req.operation());
+                            S::serialize_request(&mut rq, stored_req.operation())?;
 
                             request.set_request(&rq[..]);
                         }

@@ -626,6 +626,8 @@ impl<S: Service + 'static> Consensus<S> {
                 match &self.acessory {
                     ConsensusAccessory::Follower => {}
                     ConsensusAccessory::Replica(_) => {
+                        //Perform the rest of the necessary operations to handle the received message
+                        //If we are a replica
                         Self::handle_preprepare_sucessfull(self, view, stored_msg, node);
                     }
                 }
