@@ -38,7 +38,7 @@ where
 
             let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_request(&mut rq, req.operation());
+            S::serialize_request(&mut rq, req.operation())?;
 
             request.set_request(&rq[..]);
         }
@@ -50,7 +50,7 @@ where
 
             let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_request(&mut rq, req.operation());
+            S::serialize_request(&mut rq, req.operation())?;
 
              request.set_request(&rq[..]);
         }
@@ -62,7 +62,7 @@ where
 
             let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_reply(&mut rq, reply.payload());
+            S::serialize_reply(&mut rq, reply.payload())?;
 
             reply_obj.set_reply(&rq[..]);
         }
@@ -80,43 +80,8 @@ where
         }
         SystemMessage::Consensus(m) => {
             let mut consensus = sys_msg.init_consensus();
-            consensus.set_seq_no(m.sequence_number().into());
-            consensus.set_view(m.view().into());
-            match m.kind() {
-                ConsensusMessageKind::PrePrepare(requests) => {
-                    let mut header = [0; Header::LENGTH];
-                    let mut pre_prepare_requests =
-                        consensus.init_pre_prepare(requests.len() as u32);
 
-                    for (i, stored) in requests.iter().enumerate() {
-                        let mut forwarded = pre_prepare_requests.reborrow().get(i as u32);
-
-                        // set header
-                        {
-                            stored.header().serialize_into(&mut header[..]).unwrap();
-                            forwarded.set_header(&header[..]);
-                        }
-
-                        // set request
-                        {
-                            let mut request = forwarded.reborrow().init_request();
-
-                            request.set_session_id(req.session_id().into());
-                            request.set_operation_id(req.sequence_number().into());
-
-                            let stored_req = stored.message();
-
-                            let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
-
-                            S::serialize_request(&mut rq, stored_req.operation())?;
-
-                            request.set_request(&rq[..]);
-                        }
-                    }
-                }
-                ConsensusMessageKind::Prepare(digest) => consensus.set_prepare(digest.as_ref()),
-                ConsensusMessageKind::Commit(digest) => consensus.set_commit(digest.as_ref()),
-            }
+            serialize_consensus_message(&mut consensus, m) ?;
         }
         SystemMessage::ObserverMessage(observer_message) => {
             let capnp_observer = sys_msg.init_observer_message();
@@ -519,11 +484,14 @@ where
                 {
                     let mut request = forwarded.reborrow().init_request();
 
+                    request.set_session_id(req.session_id().into());
+                    request.set_operation_id(req.sequence_number().into());
+
                     let stored_req = stored.message();
 
                     let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-                    S::serialize_request(&mut rq, stored_req.operation());
+                    S::serialize_request(&mut rq, stored_req.operation())?;
 
                     request.set_request(&rq[..]);
                 }
