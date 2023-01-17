@@ -420,7 +420,6 @@ where
         //however if it's possible to have various proposals for the same seq number in case of leader
         //Failure or something like that. I think that's impossible though so lets keep it as is)
 
-        //Observing code
         if self.phase != old_phase {
             //If the phase is the same, then we got nothing to do as no states have changed
 
@@ -428,6 +427,14 @@ where
                 (ReplicaPhase::NormalPhase, _) => {
                     //We want to stop the proposer from trying to propose any requests while we are performing
                     //Other operations.
+                    self.consensus_guard
+                        .consensus_guard()
+                        .store(true, Ordering::SeqCst);
+                },
+                (ReplicaPhase::SyncPhase, ReplicaPhase::NormalPhase) => {
+                    // When changing from the sync phase to the normal phase
+                    // The phase starts with a SYNC phase, so we don't want to allow
+                    // The proposer to propose anything
                     self.consensus_guard
                         .consensus_guard()
                         .store(true, Ordering::SeqCst);
@@ -462,9 +469,10 @@ where
                 .tx()
                 .send(MessageType::Event(to_send))
                 .expect("Failed to notify observer thread");
+
             /*
             }@
-                 */
+            */
         }
     }
 
@@ -907,6 +915,7 @@ where
         for timeout_kind in timeouts {
             match timeout_kind {
                 TimeoutKind::Cst(cst_seq) => {
+                    //Handle the timeout of a CST message
                     let status = self.cst.timed_out(cst_seq);
 
                     match status {
@@ -935,30 +944,32 @@ where
                     }
                 }
                 TimeoutKind::ClientRequestTimeout(_timeout_seq) => {
-                    //let status = self.synchronizer
-                    //    .client_requests_timed_out(timeout_seq, &self.timeouts);
+                    let status = self.synchronizer
+                        .client_requests_timed_out(timeout_seq, &self.timeouts);
 
-                    //match status {
-                    //    SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
-                    //        if forwarded.len() > 0 {
-                    //            let requests = self.log.clone_requests(&forwarded);
-                    //            self.synchronizer.forward_requests(
-                    //                requests,
-                    //                &mut self.node,
-                    //            );
-                    //        }
-                    //        if stopped.len() > 0 {
-                    //            let stopped = self.log.clone_requests(&stopped);
-                    //            self.synchronizer.begin_view_change(
-                    //                Some(stopped),
-                    //                &mut self.node,
-                    //            );
-                    //            self.phase = ReplicaPhase::SyncPhase;
-                    //        }
-                    //    },
-                    //    // nothing to do
-                    //    _ => (),
-                    //}
+                    match status {
+                       SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
+                           if forwarded.len() > 0 {
+                               let requests = self.log.clone_requests(&forwarded);
+
+                               self.synchronizer.forward_requests(
+                                   requests,
+                                   &mut self.node,
+                               );
+                           }
+                           if stopped.len() > 0 {
+                               let stopped = self.log.clone_requests(&stopped);
+
+                               self.synchronizer.begin_view_change(Some(stopped),
+                                                                   &mut self.node,
+                                                                   &self.timeouts,
+                                                                   &self.log);
+                               self.phase = ReplicaPhase::SyncPhase;
+                           }
+                       },
+                       // nothing to do
+                       _ => (),
+                    }
                 }
             }
         }

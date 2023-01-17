@@ -519,16 +519,17 @@ fn read_latest_state<S: Service>(db: &KVDB) -> Result<Option<InstallState<S>>> {
     for ele in messages {
         let wrapped_msg = Arc::new(ReadOnly::new(ele));
 
+        //TODO: Make sure this is sorted
         match wrapped_msg.message().kind() {
-            ConsensusMessageKind::PrePrepare(_) => dec_log.pre_prepares.push(wrapped_msg),
-            ConsensusMessageKind::Prepare(_) => dec_log.prepares.push(wrapped_msg),
-            ConsensusMessageKind::Commit(_) => dec_log.commits.push(wrapped_msg),
+            ConsensusMessageKind::PrePrepare(_) => dec_log.append_pre_prepare(wrapped_msg),
+            ConsensusMessageKind::Prepare(_) => dec_log.append_prepare(wrapped_msg),
+            ConsensusMessageKind::Commit(_) => dec_log.append_commit(wrapped_msg),
         }
     }
 
     let checkpoint = Arc::new(ReadOnly::new(Checkpoint {
         seq: first_seq,
-        appstate: state.unwrap(),
+        app_state: state.unwrap(),
     }));
 
     Ok(Some((view.unwrap(), checkpoint, dec_log)))
@@ -561,7 +562,7 @@ fn write_checkpoint<S: Service>(db: &KVDB, state: &State<S>, last_seq: SeqNo) ->
     //To assert no information can be lost
     let start = db.get(CF_OTHER, FIRST_SEQ)?;
 
-    //Update the first seq number, oficially making all of the previous messages useless
+    //Update the first seq number, officially making all of the previous messages useless
     //And ready to be deleted
     db.set(
         CF_OTHER,
@@ -579,7 +580,7 @@ fn write_checkpoint<S: Service>(db: &KVDB, state: &State<S>, last_seq: SeqNo) ->
         Some(start) => {
             let start = &start[..];
 
-            //Erase the logs from the previous
+            //Erase the logs from the previous executions
             db.erase_range(CF_COMMITS, start, &end)?;
             db.erase_range(CF_PREPARES, start, &end)?;
             db.erase_range(CF_PREPREPARES, start, &end)?;

@@ -49,6 +49,7 @@ pub struct RecoveryState<S, O> {
     // used to replay log on recovering replicas;
     // the request batches have been concatenated,
     // for memory efficiency
+    //TODO: I don't think this is necessary and it adds so much More potential memory usage (2x) with the declog
     pub(crate) requests: Vec<O>,
     pub(crate) declog: DecisionLog<O>,
 }
@@ -83,9 +84,13 @@ where
 
     // TODO: update pub/priv keys when reconfig is implemented?
 
+    //Update the current view we are in
     synchronizer.install_view(recovery_state.view.clone());
+    //Update the consensus phase
     consensus.install_new_phase(&recovery_state);
+    //Update the executor phase
     executor.install_state(state, requests)?;
+    //Persist the newly obtained state
     log.install_state(consensus.sequence_number(), recovery_state);
 
     Ok(())
@@ -467,14 +472,20 @@ where
         self.latest_cid_count = 0;
 
         let cst_seq = self.next_seq();
-        timeouts.timeout(self.curr_timeout, TimeoutKind::Cst(cst_seq));
+        let current_view = synchronizer.view();
+
+        timeouts.timeout_cst_request(self.curr_timeout,
+                                     current_view.params().quorum() as u32,
+                                     cst_seq);
+
         self.phase = ProtoPhase::ReceivingCid(0);
 
         let message = SystemMessage::Cst(CstMessage::new(
             cst_seq,
             CstMessageKind::RequestLatestConsensusSeq,
         ));
-        let targets = NodeId::targets(0..synchronizer.view().params().n());
+
+        let targets = NodeId::targets(0..current_view.params().n());
 
         node.broadcast(message, targets);
     }
@@ -494,13 +505,18 @@ where
         self.received_states.clear();
 
         let cst_seq = self.next_seq();
-        timeouts.timeout(self.curr_timeout, TimeoutKind::Cst(cst_seq));
+        let current_view = synchronizer.view();
+
+        timeouts.timeout_cst_request(self.curr_timeout,
+                                     current_view.params().quorum() as u32,
+                                     cst_seq);
+
         self.phase = ProtoPhase::ReceivingState(0);
 
         //TODO: Maybe attempt to use followers to rebuild state and avoid
         // Overloading the replicas
         let message = SystemMessage::Cst(CstMessage::new(cst_seq, CstMessageKind::RequestState));
-        let targets = NodeId::targets(0..synchronizer.view().params().n());
+        let targets = NodeId::targets(0..current_view.params().n());
         node.broadcast(message, targets);
     }
 }

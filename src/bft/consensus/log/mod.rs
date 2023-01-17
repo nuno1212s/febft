@@ -20,6 +20,8 @@ use crate::bft::communication::message::{
     StoredMessage, SystemMessage,
 };
 use crate::bft::communication::NodeId;
+use crate::bft::consensus::Consensus;
+use crate::bft::consensus::log::decisions::{Checkpoint, DecisionLog};
 
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
 use crate::bft::core::server::ViewInfo;
@@ -34,6 +36,7 @@ use self::persistent::{PersistentLog, WriteMode};
 use self::persistent::{PersistentLogModeTrait};
 
 pub mod persistent;
+pub mod decisions;
 
 /// Checkpoint period.
 ///
@@ -72,429 +75,7 @@ enum CheckpointState<S> {
     Complete(Arc<ReadOnly<Checkpoint<S>>>),
 }
 
-/// Represents a local checkpoint.
-///
-/// Contains the last application state, as well as the sequence number
-/// which decided the last batch of requests executed before the checkpoint.
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct Checkpoint<S> {
-    seq: SeqNo,
-    appstate: S,
-}
-
-impl<S> Orderable for Checkpoint<S> {
-    /// Returns the sequence number of the batch of client requests
-    /// decided before the local checkpoint.
-    fn sequence_number(&self) -> SeqNo {
-        self.seq
-    }
-}
-
-impl<S> Checkpoint<S> {
-    /// Returns a reference to the state of the application before
-    /// the local checkpoint.
-    pub fn state(&self) -> &S {
-        &self.appstate
-    }
-
-    /// Returns the inner values within this local checkpoint.
-    pub fn into_inner(self) -> (SeqNo, S) {
-        (self.seq, self.appstate)
-    }
-}
-
-/// Subset of a `Log`, containing only consensus messages.
-///
-/// Cloning this decision log is actually pretty cheap (compared to the alternative of cloning
-/// all requests executed since the last checkpoint) since it only has to clone the arcs (which is one atomic operation)
-/// We can't wrap the entire vector since the decision log is actually constantly modified by the consensus
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct DecisionLog<O> {
-    last_exec: Option<SeqNo>,
-    pre_prepares: Vec<Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>>,
-    prepares: Vec<Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>>,
-    commits: Vec<Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>>,
-}
-
-/// Represents a single decision from the `DecisionLog`.
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct Proof<O> {
-    pre_prepare: StoredMessage<ConsensusMessage<O>>,
-    prepares: Vec<StoredMessage<ConsensusMessage<O>>>,
-    commits: Vec<StoredMessage<ConsensusMessage<O>>>,
-}
-
-/// Contains a collection of `ViewDecisionPair` values,
-/// pertaining to a particular consensus instance.
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct WriteSet(pub Vec<ViewDecisionPair>);
-
-/// Contains a sequence number pertaining to a particular view,
-/// as well as a hash digest of a value decided in a consensus
-/// instance of that view.
-///
-/// Corresponds to the `TimestampValuePair` class in `BFT-SMaRt`.
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct ViewDecisionPair(pub SeqNo, pub Digest);
-
-/// Represents an incomplete decision from the `DecisionLog`.
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct IncompleteProof {
-    in_exec: SeqNo,
-    write_set: WriteSet,
-    quorum_writes: Option<ViewDecisionPair>,
-}
-
-impl WriteSet {
-    /// Iterate over this `WriteSet`.
-    ///
-    /// Convenience method for calling `iter()` on the inner `Vec`.
-    pub fn iter(&self) -> impl Iterator<Item=&ViewDecisionPair> {
-        self.0.iter()
-    }
-}
-
-impl<O> Proof<O> {
-    /// Returns the `PRE-PREPARE` message of this `Proof`.
-    pub fn pre_prepare(&self) -> &StoredMessage<ConsensusMessage<O>> {
-        &self.pre_prepare
-    }
-
-    /// Returns the `PREPARE` message of this `Proof`.
-    pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
-        &self.prepares[..]
-    }
-
-    /// Returns the `COMMIT` message of this `Proof`.
-    pub fn commits(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
-        &self.commits[..]
-    }
-}
-
-impl IncompleteProof {
-    /// Returns the sequence number of the consensus instance currently
-    /// being executed.
-    pub fn executing(&self) -> SeqNo {
-        self.in_exec
-    }
-
-    /// Returns a reference to the `WriteSet` included in this `IncompleteProof`.
-    pub fn write_set(&self) -> &WriteSet {
-        &self.write_set
-    }
-
-    /// Returns a reference to the quorum writes included in this `IncompleteProof`,
-    /// if any value was prepared in the previous view.
-    pub fn quorum_writes(&self) -> Option<&ViewDecisionPair> {
-        self.quorum_writes.as_ref()
-    }
-}
-
-/// Contains data about the running consensus instance,
-/// as well as the last stable proof acquired from the previous
-/// consensus instance.
-///
-/// Corresponds to the class of the same name in `BFT-SMaRt`.
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct CollectData<O> {
-    incomplete_proof: IncompleteProof,
-    last_proof: Option<Proof<O>>,
-}
-
-impl<O> CollectData<O> {
-    pub fn incomplete_proof(&self) -> &IncompleteProof {
-        &self.incomplete_proof
-    }
-
-    pub fn last_proof(&self) -> Option<&Proof<O>> {
-        self.last_proof.as_ref()
-    }
-}
-
-impl<O: Clone> DecisionLog<O> {
-    /// Returns a brand new `DecisionLog`.
-    pub fn new() -> Self {
-        Self {
-            // TODO: when recovering a replica from persistent
-            // storage, set this value to `Some(...)`
-            last_exec: None,
-            pre_prepares: Vec::new(),
-            prepares: Vec::new(),
-            commits: Vec::new(),
-        }
-    }
-
-    /// Returns the sequence number of the last executed batch of client
-    /// requests, assigned by the conesensus layer.
-    pub fn last_execution(&self) -> Option<SeqNo> {
-        self.last_exec
-    }
-
-    /// Returns the list of `PRE-PREPARE` messages after the last checkpoint
-    /// at the moment of the creation of this `DecisionLog`.
-    pub fn pre_prepares(&self) -> &[Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>] {
-        &self.pre_prepares[..]
-    }
-
-    /// Returns the list of `PREPARE` messages after the last checkpoint
-    /// at the moment of the creation of this `DecisionLog`.
-    pub fn prepares(&self) -> &[Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>] {
-        &self.prepares[..]
-    }
-
-    /// Returns the list of `COMMIT` messages after the last checkpoint
-    /// at the moment of the creation of this `DecisionLog`.
-    pub fn commits(&self) -> &[Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>] {
-        &self.commits[..]
-    }
-
-    // TODO: quorum sizes may differ when we implement reconfiguration
-    pub fn collect_data(&self, view: ViewInfo) -> CollectData<O> {
-        CollectData {
-            incomplete_proof: self.to_be_decided(view.clone()),
-            last_proof: self.last_decision(view),
-        }
-    }
-
-    /// Returns the sequence number of the consensus instance
-    /// currently being executed
-    pub fn executing(&self) -> SeqNo {
-        // we haven't called `finalize_batch` yet, so the in execution
-        // seq no will be the last + 1 or 0
-        self.last_exec
-            .map(|last| SeqNo::from(u32::from(last) + 1))
-            .unwrap_or(SeqNo::ZERO)
-    }
-
-    /// Returns an incomplete proof of the consensus
-    /// instance currently being decided in this `DecisionLog`.
-    pub fn to_be_decided(&self, view: ViewInfo) -> IncompleteProof {
-        let in_exec = self.executing();
-
-        // fetch write set
-        let write_set = WriteSet({
-            let mut buf = Vec::new();
-            for stored in self.pre_prepares.iter().rev() {
-                match stored.message().sequence_number().cmp(&in_exec) {
-                    Ordering::Equal => {
-                        buf.push(ViewDecisionPair(
-                            stored.message().view(),
-                            stored.header().digest().clone(),
-                        ));
-                    }
-                    Ordering::Less => break,
-                    // impossible, because we are executing `in_exec`
-                    Ordering::Greater => unreachable!(),
-                }
-            }
-            buf
-        });
-
-        // fetch quorum writes
-        let quorum_writes = 'outer: loop {
-            // NOTE: check `last_decision` comment on quorum
-            let quorum = view.params().f() << 1;
-            let mut last_view = None;
-            let mut count = 0;
-
-            for stored in self.prepares.iter().rev() {
-                match stored.message().sequence_number().cmp(&in_exec) {
-                    Ordering::Equal => {
-                        match last_view {
-                            None => (),
-                            Some(v) if stored.message().view() == v => (),
-                            _ => count = 0,
-                        }
-                        last_view = Some(stored.message().view());
-                        count += 1;
-                        if count == quorum {
-                            let digest = match stored.message().kind() {
-                                ConsensusMessageKind::Prepare(d) => d.clone(),
-                                _ => unreachable!(),
-                            };
-                            break 'outer Some(ViewDecisionPair(stored.message().view(), digest));
-                        }
-                    }
-                    Ordering::Less => break,
-                    // impossible, because we are executing `in_exec`
-                    Ordering::Greater => unreachable!(),
-                }
-            }
-
-            break 'outer None;
-        };
-
-        IncompleteProof {
-            in_exec,
-            write_set,
-            quorum_writes,
-        }
-    }
-
-    /// Returns the proof of the last executed consensus
-    /// instance registered in this `DecisionLog`.
-    pub fn last_decision(&self, view: ViewInfo) -> Option<Proof<O>> {
-        let last_exec = self.last_exec?;
-
-        let pre_prepare = 'outer: loop {
-            for stored in self.pre_prepares.iter().rev() {
-                if stored.message().sequence_number() == last_exec {
-                    break 'outer (**stored).clone();
-                }
-            }
-            // if nothing went wrong, this code should be unreachable,
-            // since we registered the last executed sequence number
-            unreachable!()
-        };
-        let prepares = {
-            // TODO: this code could be improved when `ControlFlow` is stabilized in
-            // the Rust standard library
-            let mut buf = Vec::new();
-            let mut last_view = SeqNo::ZERO;
-            let mut found = false;
-            for stored in self.prepares.iter().rev() {
-                if !found {
-                    if stored.message().sequence_number() != last_exec {
-                        // skip messages added to log after the last execution
-                        continue;
-                    } else {
-                        found = true;
-                        last_view = stored.message().view();
-                        buf.push((**stored).clone());
-                        continue;
-                    }
-                }
-                let will_exit = stored.message().sequence_number() != last_exec
-                    || stored.message().view() != last_view;
-                if will_exit {
-                    break;
-                }
-                buf.push((**stored).clone());
-            }
-            // quorum size minus one, because leader doesn't vote in the PREPARE
-            // phase, since it already voted in the PRE-PREPARE phase;
-            // = (N - F) - 1 = (2F + 1) - 1 = 2F
-            let quorum = view.params().f() << 1;
-            if buf.len() < quorum {
-                None
-            } else {
-                Some(buf)
-            }
-        }?;
-        let commits = {
-            let mut buf = Vec::new();
-            let mut last_view = SeqNo::ZERO;
-            let mut found = false;
-            for stored in self.commits.iter().rev() {
-                if !found {
-                    if stored.message().sequence_number() != last_exec {
-                        continue;
-                    } else {
-                        found = true;
-                        last_view = stored.message().view();
-                        buf.push((**stored).clone());
-                        continue;
-                    }
-                }
-                let will_exit = stored.message().sequence_number() != last_exec
-                    || stored.message().view() != last_view;
-                if will_exit {
-                    break;
-                }
-                buf.push((**stored).clone());
-            }
-            let quorum = view.params().quorum();
-            if buf.len() < quorum {
-                None
-            } else {
-                Some(buf)
-            }
-        }?;
-
-        Some(Proof {
-            pre_prepare,
-            prepares,
-            commits,
-        })
-    }
-
-    /// Clear incomplete proofs from the log, which match the consensus
-    /// with sequence number `in_exec`.
-    ///
-    /// If `value` is `Some(v)`, then a `PRE-PREPARE` message will be
-    /// returned matching the digest `v`.
-    pub fn clear_last_occurrences(
-        &mut self,
-        in_exec: SeqNo,
-        value: Option<&Digest>,
-    ) -> Option<StoredMessage<ConsensusMessage<O>>> {
-        let mut scratch = Vec::with_capacity(8);
-
-        fn clear_log<M>(
-            in_exec: SeqNo,
-            scratch: &mut Vec<usize>,
-            log: &mut Vec<Arc<ReadOnly<StoredMessage<M>>>>,
-        ) where
-            M: Orderable,
-        {
-            for (i, stored) in log.iter().enumerate().rev() {
-                if stored.message().sequence_number() != in_exec {
-                    break;
-                }
-                scratch.push(i);
-            }
-            for i in scratch.drain(..) {
-                log.swap_remove(i);
-            }
-        }
-
-        let pre_prepare = {
-            let mut pre_prepare_i = None;
-            let mut pre_prepare = None;
-
-            // find which indices to remove, and try to locate PRE-PREPARE
-            for (i, stored) in self.pre_prepares.iter().enumerate().rev() {
-                if stored.message().sequence_number() != in_exec {
-                    break;
-                }
-                scratch.push(i);
-                if let Some(v) = value {
-                    if pre_prepare_i.is_none() && stored.header().digest() == v {
-                        pre_prepare_i = Some(i);
-                    }
-                }
-            }
-
-            // remove indices from scratch space, and retrieve
-            // PRE-PREPARE if available
-            for i in scratch.drain(..) {
-                match pre_prepare_i {
-                    Some(j) if i == j => {
-                        pre_prepare = Some((**self.pre_prepares.swap_remove(i)).clone());
-                        pre_prepare_i = None;
-                    }
-                    _ => {
-                        self.pre_prepares.swap_remove(i);
-                    }
-                }
-            }
-
-            pre_prepare
-        };
-
-        clear_log(in_exec, &mut scratch, &mut self.prepares);
-        clear_log(in_exec, &mut scratch, &mut self.commits);
-
-        pre_prepare
-    }
-}
+pub type ReadableConsensusMessage<O> = Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>;
 
 /// Represents a log of messages received by the BFT system.
 pub struct Log<S: Service, T: PersistentLogModeTrait> {
@@ -528,10 +109,15 @@ pub struct Log<S: Service, T: PersistentLogModeTrait> {
 
     //Stores all of the performed requests concatenated in a vec
     decided: RefCell<Vec<Request<S>>>,
+    //The most recent checkpoint that we have.
+    //Contains the app state and the last executed seq no on
+    //That app state
     checkpoint: RefCell<CheckpointState<State<S>>>,
+
     //Some stuff for statistics.
     meta: Arc<Mutex<BatchMeta>>,
 
+    //Persistent logging
     persistent_log: PersistentLog<S, T>,
 
     //Observer
@@ -632,7 +218,7 @@ impl<S, T> Log<S, T>
                         requests.clone()
                     }
                     ConsensusMessageKind::Prepare(_) => { unreachable!() }
-                    ConsensusMessageKind::Commit(_) => { unreachable!()}
+                    ConsensusMessageKind::Commit(_) => { unreachable!() }
                 };
 
                 for request in pre_prepare_rqs {
@@ -692,9 +278,9 @@ impl<S, T> Log<S, T>
         let mut dec_log = self.declog.borrow_mut();
 
         match consensus_msg.message().kind() {
-            ConsensusMessageKind::PrePrepare(_) => dec_log.pre_prepares.push(consensus_msg.clone()),
-            ConsensusMessageKind::Prepare(_) => dec_log.prepares.push(consensus_msg.clone()),
-            ConsensusMessageKind::Commit(_) => dec_log.commits.push(consensus_msg.clone()),
+            ConsensusMessageKind::PrePrepare(_) => dec_log.append_pre_prepare(consensus_msg.clone()),
+            ConsensusMessageKind::Prepare(_) => dec_log.append_prepare(consensus_msg.clone()),
+            ConsensusMessageKind::Commit(_) => dec_log.append_commit(consensus_msg.clone()),
         }
 
         if let Err(err) = self
@@ -740,9 +326,9 @@ impl<S, T> Log<S, T>
                 let mut dec_log = self.declog.borrow_mut();
 
                 match stored.message().kind() {
-                    ConsensusMessageKind::PrePrepare(_) => dec_log.pre_prepares.push(stored),
-                    ConsensusMessageKind::Prepare(_) => dec_log.prepares.push(stored),
-                    ConsensusMessageKind::Commit(_) => dec_log.commits.push(stored),
+                    ConsensusMessageKind::PrePrepare(_) => dec_log.append_pre_prepare(stored),
+                    ConsensusMessageKind::Prepare(_) => dec_log.append_prepare(stored),
+                    ConsensusMessageKind::Commit(_) => dec_log.append_commit(stored),
                 }
 
                 if let Err(err) = self
@@ -757,6 +343,7 @@ impl<S, T> Log<S, T>
         }
     }
 
+    // Insert a batch of requests, received from a pre prepare
     pub fn insert_batched(
         &self,
         message: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
@@ -898,9 +485,12 @@ impl<S, T> Log<S, T>
         // pertaining to the current request being executed
         let mut dec_log_guard = self.declog.borrow_mut();
 
-        let last_seq_no = if dec_log_guard.pre_prepares.len() > 0 {
+        let pre_prepares = dec_log_guard.pre_prepares();
+
+        let last_seq_no = if pre_prepares.len() > 0 {
             let stored_pre_prepare =
-                &dec_log_guard.pre_prepares[dec_log_guard.pre_prepares.len() - 1].message();
+                pre_prepares[pre_prepares.len() - 1].message();
+
             stored_pre_prepare.sequence_number()
         } else {
             // the log was cleared concurrently, retrieve
@@ -918,7 +508,7 @@ impl<S, T> Log<S, T>
         };
 
         // the last executed sequence number
-        dec_log_guard.last_exec = Some(seq);
+        dec_log_guard.finished_quorum_execution(last_seq_no);
 
         self.persistent_log.queue_batch(((info, batch, meta), needed_messages))
     }
@@ -960,17 +550,14 @@ impl<S, T> Log<S, T>
             CheckpointState::Complete(_) => {
                 Err("Checkpoint already finalized").wrapped(ErrorKind::ConsensusLog)
             }
-            CheckpointState::Partial { seq: _ }
-            | CheckpointState::PartialWithEarlier { seq: _, .. } => {
-                self.checkpoint
-                    .replace(CheckpointState::Complete(Arc::new(ReadOnly::new(
-                        Checkpoint {
-                            seq: final_seq,
-                            appstate,
-                        },
-                    ))));
+            CheckpointState::Partial { seq: _ } | CheckpointState::PartialWithEarlier { seq: _, .. } => {
+                let checkpoint_state = CheckpointState::Complete(
+                    Checkpoint::new(final_seq, appstate),
+                );
 
-                let mut decided_request_count: usize = 0;
+                self.checkpoint.replace(checkpoint_state);
+
+                let mut decided_request_count;
 
                 //Clear the log of messages up to final_seq.
                 //Messages ahead of final_seq will not be removed as they are not included in the
@@ -978,46 +565,9 @@ impl<S, T> Log<S, T>
                 {
                     let mut guard = self.declog.borrow_mut();
 
-                    let mut new_preprepares = Vec::new();
-                    let mut new_prepares = Vec::new();
-                    let mut new_commits = Vec::new();
+                    decided_request_count = guard.clear_until_seq(final_seq);
 
-                    for ele in &guard.pre_prepares {
-                        if ele.message().sequence_number() <= final_seq {
-                            //Mark the requests contained in this message for removal
-                            decided_request_count += match ele.message().kind() {
-                                ConsensusMessageKind::PrePrepare(messages) => messages.len(),
-                                _ => 0,
-                            };
-
-
-                            continue;
-                        }
-
-                        new_preprepares.push(ele.clone());
-                    }
-
-                    for ele in &guard.prepares {
-                        if ele.message().sequence_number() <= final_seq {
-                            continue;
-                        }
-
-                        new_prepares.push(ele.clone());
-                    }
-
-                    for ele in &guard.commits {
-                        if ele.message().sequence_number() <= final_seq {
-                            continue;
-                        }
-
-                        new_commits.push(ele.clone());
-                    }
-
-                    guard.pre_prepares = new_preprepares;
-                    guard.prepares = new_prepares;
-                    guard.commits = new_commits;
-
-                    if let Some(last_sq) = guard.pre_prepares.last() {
+                    if let Some(last_sq) = guard.pre_prepares().last() {
                         // store the id of the last received pre-prepare,
                         // which corresponds to the request currently being
                         // processed
@@ -1056,6 +606,10 @@ impl<S, T> Log<S, T>
                     }
                 }
 
+                /// {@
+                /// Observer code
+                /// @}
+                ///
                 if let Some(observer) = &self.observer {
                     observer
                         .tx()
@@ -1064,6 +618,10 @@ impl<S, T> Log<S, T>
                         )))
                         .unwrap();
                 }
+
+                ///
+                /// @}
+                ///
 
                 Ok(())
             }

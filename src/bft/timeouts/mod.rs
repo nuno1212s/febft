@@ -1,5 +1,5 @@
-use std::cmp::Ordering;
-use std::collections::{BinaryHeap, BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use chrono::Utc;
@@ -8,6 +8,7 @@ use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx, new_bound
 use crate::bft::communication::message::Message;
 use crate::bft::communication::NodeId;
 use crate::bft::communication::peer_handling::ConnectedPeer;
+use crate::bft::crypto::hash::Digest;
 use crate::bft::executable::{Reply, Request, Service, State};
 use crate::bft::ordering::SeqNo;
 
@@ -18,11 +19,11 @@ pub type Timeout = Vec<TimeoutKind>;
 
 #[derive(Eq, PartialEq, Ord, PartialOrd)]
 pub struct ClientRqInfo {
-    client_id: NodeId,
-    req_session: SeqNo,
-    req_seq_no: SeqNo,
+    //The digest of the request in question
+    digest: Digest,
 }
 
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
 pub enum TimeoutKind {
     ///Relates to the timeout of a client request.
     /// Stores the client who sent it, along with the request
@@ -37,6 +38,8 @@ pub enum TimeoutKind {
 struct TimeoutRequest {
     time_made: u64,
     timeout: Duration,
+    notifications_needed: u32,
+    notifications_received: BTreeSet<NodeId>,
     info: TimeoutKind,
 }
 
@@ -44,11 +47,22 @@ type TimeoutMessage = MessageType;
 
 enum MessageType {
     TimeoutRequest(RqTimeoutMessage),
-    MessagesReceived(Vec<TimeoutKind>),
+    MessagesReceived(ReceivedRequest),
+    ClearClientTimeouts(Option<Vec<Digest>>),
+    ClearCstTimeouts(Option<SeqNo>),
+}
+
+enum ReceivedRequest {
+    //The node that proposed the message and all the requests contained within it
+    PrePrepareRequestReceived(NodeId, Vec<Digest>),
+    //Receive a CST message relating to the following sequence number from the given
+    //Node
+    Cst(NodeId, SeqNo),
 }
 
 struct RqTimeoutMessage {
     timeout: Duration,
+    notifications_needed: u32,
     timeout_info: Timeout,
 }
 
@@ -64,6 +78,8 @@ struct TimeoutsThread<S: Service + 'static> {
     //Iterating a binary tree is pretty quick and it keeps the elements ordered
     //So we can use that to our advantage when timing out requests
     pending_timeouts: BTreeMap<u64, Vec<TimeoutRequest>>,
+    //Allows us to quickly find the correct bucket for the request we are looking for
+    pending_timeouts_reverse_search: BTreeMap<Rc<TimeoutRequest>, u64>,
     //Receive messages from other threads
     channel_rx: ChannelSyncRx<TimeoutMessage>,
     //Loopback so we can deliver the timeouts to the main consensus thread so they can be
@@ -78,7 +94,7 @@ impl Timeouts {
     ///Initialize the timeouts thread and return a handle to it
     /// This handle can then be used everywhere timeouts are needed.
     pub fn new<S: Service + 'static>(iteration_delay: u64,
-               loopback_channel: Arc<ConnectedPeer<Message<State<S>, Request<S>, Reply<S>>>>) -> Self {
+                                     loopback_channel: Arc<ConnectedPeer<Message<State<S>, Request<S>, Reply<S>>>>) -> Self {
         let tx = TimeoutsThread::<S>::new(iteration_delay, loopback_channel);
 
         Self {
@@ -86,23 +102,60 @@ impl Timeouts {
         }
     }
 
-    pub fn timeout(&self, timeout: Duration, timeout_info: TimeoutKind) {
-        self.handle.send(TimeoutMessage::TimeoutRequest ( RqTimeoutMessage{
-            timeout,
-            timeout_info: vec![timeout_info],
-        })).expect("Failed to contact timeout thread");
-    }
+    /// Start a timeout request on the list of digests that have been provided
+    pub fn timeout_client_requests(&self, timeout: Duration, requests: Vec<Digest>) {
+        let requests: Vec<TimeoutKind> = requests.into_iter().map(|req| TimeoutKind::ClientRequestTimeout(ClientRqInfo::new(req)))
+            .collect();
 
-    pub fn timeout_requests(&self, timeout: Duration, timeout_infos: Vec<TimeoutKind>) {
         self.handle.send(TimeoutMessage::TimeoutRequest(RqTimeoutMessage {
             timeout,
-            timeout_info: timeout_infos,
-        })).expect("Failed to contact timeout thread");
+            // we choose 1 here because we only need to receive one valid pre prepare containing
+            // this request for it to be considered valid
+            notifications_needed: 1,
+            timeout_info: requests,
+        })).expect("Failed to contact timeout thread")
     }
 
-    pub fn received_requests(self, recvd_rqs: Vec<TimeoutKind>) {
-        self.handle.send(TimeoutMessage::MessagesReceived(recvd_rqs))
-            .expect("Failed to contact timeout thread");}
+    /// Notify that a pre prepare with the following requests has been received and we must therefore
+    /// Disable any timeouts pertaining to the received requests
+    pub fn received_pre_prepare(&self, from: NodeId, recvd_rqs: Vec<Digest>) {
+        self.handle.send(TimeoutMessage::MessagesReceived(
+            ReceivedRequest::PrePrepareRequestReceived(from, recvd_rqs)
+        ))
+            .expect("Failed to contact timeout thread");
+    }
+
+    /// Cancel timeouts of player requests.
+    /// This accepts an option. If this Option is None, then the
+    /// timeouts for all client requests are going to be disabled
+    pub fn cancel_client_rq_timeouts(&self, requests_to_clear: Option<Vec<Digest>>) {
+        self.handle.send(TimeoutMessage::ClearClientTimeouts(requests_to_clear))
+            .expect("Failed to contact timeout thread")
+    }
+
+    pub fn timeout_cst_request(&self, timeout: Duration, requests_needed: u32, seq_no: SeqNo) {
+        self.handle.send(TimeoutMessage::TimeoutRequest(RqTimeoutMessage {
+            timeout,
+            notifications_needed: requests_needed,
+            timeout_info: vec![TimeoutKind::Cst(seq_no)],
+        }
+        )).expect("Failed to contact timeout thread");
+    }
+
+    /// Handle having received a cst request
+    pub fn received_cst_request(&self, from: NodeId, seq_no: SeqNo) {
+        self.handle.send(TimeoutMessage::MessagesReceived(
+            ReceivedRequest::Cst(from, seq_no)))
+            .expect("Failed to contact timeout thread");
+    }
+
+    /// Cancel timeouts of CST messages.
+    /// This accepts an option. If this Option is None, then the
+    /// timeouts for all CST requests are going to be disabled.
+    pub fn cancel_cst_timeout(&self, seq_no: Option<SeqNo>) {
+        self.handle.send(TimeoutMessage::ClearCstTimeouts(seq_no))
+            .expect("Failed to contact timeout thread");
+    }
 }
 
 impl<S: Service + 'static> TimeoutsThread<S> {
@@ -110,7 +163,8 @@ impl<S: Service + 'static> TimeoutsThread<S> {
         let (tx, rx) = new_bounded_sync(CHANNEL_SIZE);
 
         let timeout_thread = Self {
-            pending_timeouts: BTreeMap::new(),
+            pending_timeouts: Default::default(),
+            pending_timeouts_reverse_search: Default::default(),
             channel_rx: rx,
             loopback_channel,
             iteration_delay,
@@ -147,50 +201,17 @@ impl<S: Service + 'static> TimeoutsThread<S> {
             //Handle all incoming messages and update the pending timeouts accordingly
             if let Some(mut message) = message {
                 match message {
-                    MessageType::TimeoutRequest(RqTimeoutMessage { timeout, mut timeout_info }) => {
-                        let current_timestamp = Utc::now().timestamp_millis() as u64;
-
-                        let final_timestamp = current_timestamp + timeout.as_millis() as u64;
-
-                        let mut timeout_rqs = Vec::with_capacity(timeout_info.len());
-
-                        for timeout_kind in timeout_info {
-
-                            timeout_rqs.push(TimeoutRequest {
-                                time_made: current_timestamp,
-                                timeout,
-                                info: timeout_kind,
-                            });
-                        }
-
-                        if self.pending_timeouts.contains_key(&final_timestamp) {
-                            self.pending_timeouts.get_mut(&final_timestamp).unwrap()
-                                .append(&mut timeout_rqs);
-                        } else {
-                            self.pending_timeouts.insert(final_timestamp, timeout_rqs);
-                        }
+                    MessageType::TimeoutRequest(timeout_rq) => {
+                        self.handle_message_timeout_request(timeout_rq);
                     }
                     MessageType::MessagesReceived(message) => {
-
-                        let mut fast_rq_info = BTreeSet::new();
-
-                        for timeout in message {
-                            if let TimeoutKind::ClientRequestTimeout(rq_info) = timeout {
-                                fast_rq_info.insert(rq_info);
-                            }
-                        }
-
-                        for timeout_reqs in self.pending_timeouts.values_mut() {
-                            timeout_reqs.retain(|rq| {
-
-                                //retain all values that are not in the set to be removed
-                                if let TimeoutKind::ClientRequestTimeout(rq_info) = &rq.info {
-                                    fast_rq_info.contains(rq_info)
-                                } else {
-                                    true
-                                }
-                            });
-                        }
+                        self.handle_messages_received(message);
+                    }
+                    MessageType::ClearClientTimeouts(requests) => {
+                        self.handle_clear_client_rqs(requests);
+                    }
+                    MessageType::ClearCstTimeouts(seq_no) => {
+                        self.handle_clear_cst_rqs(seq_no);
                     }
                 }
             }
@@ -228,15 +249,120 @@ impl<S: Service + 'static> TimeoutsThread<S> {
             }
         }
     }
+
+    fn handle_message_timeout_request(&mut self, message: RqTimeoutMessage) {
+        let RqTimeoutMessage {
+            timeout,
+            notifications_needed,
+            mut timeout_info
+        } = message;
+
+        let current_timestamp = Utc::now().timestamp_millis() as u64;
+
+        let final_timestamp = current_timestamp + timeout.as_millis() as u64;
+
+        let mut timeout_rqs = Vec::with_capacity(timeout_info.len());
+
+        for timeout_kind in timeout_info {
+            timeout_rqs.push(TimeoutRequest {
+                time_made: current_timestamp,
+                timeout,
+                notifications_needed,
+                notifications_received: Default::default(),
+                info: timeout_kind,
+            });
+        }
+
+        if self.pending_timeouts.contains_key(&final_timestamp) {
+            self.pending_timeouts.get_mut(&final_timestamp).unwrap()
+                .append(&mut timeout_rqs);
+        } else {
+            self.pending_timeouts.insert(final_timestamp, timeout_rqs);
+        }
+    }
+
+    fn handle_messages_received(&mut self, received_request: ReceivedRequest) {
+        for timeout_requests in self.pending_timeouts.values_mut() {
+            timeout_requests.retain_mut(|rq| {
+                return match (&rq.info, &received_request) {
+                    (TimeoutKind::ClientRequestTimeout(rq_info),
+                        ReceivedRequest::PrePrepareRequestReceived(received, rqs)) => {
+                        if rqs.contains(&rq_info.digest) {
+                            !rq.register_received_from(received.clone())
+                        } else {
+                            true
+                        }
+                    }
+                    (TimeoutKind::Cst(seq_no), ReceivedRequest::Cst(from, seq_no_2)) => {
+                        if *seq_no == *seq_no_2 {
+                            !rq.register_received_from(from.clone())
+                        } else {
+                            true
+                        }
+                    }
+                    (_, _) => { true }
+                };
+            });
+        }
+    }
+
+    fn handle_clear_client_rqs(&mut self, requests: Option<Vec<Digest>>) {
+        for timeout_rqs in self.pending_timeouts.values_mut() {
+            timeout_rqs.retain(|rq| {
+                match &rq.info {
+                    TimeoutKind::ClientRequestTimeout(rq_info) => {
+                        if let Some(requests) = &requests {
+                            return !requests.contains(&rq_info.digest);
+                        }
+
+                        //We want to delete all of the client request timeouts
+                        false
+                    }
+                    TimeoutKind::Cst(_) => {
+                        true
+                    }
+                }
+            });
+        }
+    }
+
+    fn handle_clear_cst_rqs(&mut self, seq_no: Option<SeqNo>) {
+        for timeout_rqs in self.pending_timeouts.values_mut() {
+            timeout_rqs.retain(|rq| {
+                match &rq.info {
+                    TimeoutKind::ClientRequestTimeout(_) => {
+                        true
+                    }
+                    TimeoutKind::Cst(rq_seq_no) => {
+                        if let Some(seq_no) = &seq_no {
+                            return *seq_no == *rq_seq_no;
+                        }
+
+                        false
+                    }
+                }
+            });
+        }
+    }
 }
 
 impl ClientRqInfo {
-    pub fn new(node_id: NodeId, session: SeqNo, seq_no: SeqNo) -> Self {
+    pub fn new(digest: Digest) -> Self {
         Self {
-            client_id: node_id,
-            req_session: session,
-            req_seq_no: seq_no,
+            digest
         }
+    }
+}
+
+impl TimeoutRequest {
+    fn is_disabled(&self) -> bool {
+        return self.notifications_needed <= self.notifications_received.len() as u32;
+    }
+
+    fn register_received_from(&mut self, from: NodeId) -> bool {
+        self.notifications_received.insert(from);
+
+        return self.is_disabled();
     }
 }
 

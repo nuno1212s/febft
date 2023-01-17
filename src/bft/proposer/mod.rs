@@ -422,16 +422,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
         _t: DateTime<Utc>,
         reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>,
     ) {
-        for (h, r) in reqs.into_iter().map(StoredMessage::into_inner) {
-            self.request_received(h, SystemMessage::Request(r))
-        }
+
     }
 
-    fn request_received(&self, h: Header, _r: SystemMessage<State<S>, Request<S>, Reply<S>>) {
-        self.synchronizer
-            .watch_request(h.unique_digest(), &self.timeouts);
-
-        // This was replaced with a batched log instead of a per message log to save hashing ops
-        // self.log.insert(h, r);
-    }
 }

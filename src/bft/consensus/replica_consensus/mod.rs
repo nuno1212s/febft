@@ -1,8 +1,8 @@
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc,
+        atomic::{AtomicBool, Ordering}, Mutex,
     },
 };
 
@@ -16,8 +16,8 @@ use crate::bft::{
             ConsensusMessage, ConsensusMessageKind, ObserveEventKind, SerializedMessage,
             StoredMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage,
         },
-        serialize::DigestData,
-        Node, NodeId,
+        Node,
+        NodeId, serialize::DigestData,
     },
     core::server::{
         follower_handling::{FollowerEvent, FollowerHandle},
@@ -28,15 +28,14 @@ use crate::bft::{
     executable::{Reply, Request, Service, State},
     globals::ReadOnly,
     ordering::{Orderable, SeqNo},
-    sync::{AbstractSynchronizer},
+    sync::AbstractSynchronizer,
     threadpool,
 };
-
 use crate::bft::ordering::tbo_pop_message;
 
 use super::{
-    log::{persistent::PersistentLogModeTrait, Log},
-    AbstractConsensus, Consensus, ConsensusAccessory, ConsensusGuard, ConsensusPollStatus,
+    AbstractConsensus,
+    Consensus, ConsensusAccessory, ConsensusGuard, ConsensusPollStatus, log::{Log, persistent::PersistentLogModeTrait},
     ProtoPhase,
 };
 
@@ -69,105 +68,101 @@ pub struct ReplicaConsensus<S: Service> {
     follower_handle: Option<FollowerHandle<S>>,
 }
 
-impl<S: Service + 'static> Consensus<S> {
+impl<S: Service + 'static> ReplicaConsensus<S> {
     pub(super) fn handle_preprepare_sucessfull(
         &mut self,
+        consensus: &Consensus<S>,
         view: ViewInfo,
         msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
         node: &Node<S::Data>,
     ) {
-        let my_id = self.node_id;
+        let my_id = consensus.node_id;
 
-        let seq = self.sequence_number();
+        let seq = consensus.sequence_number();
         let view_seq = view.sequence_number();
         let _quorum = view.quorum_members().clone();
 
         let sign_detached = node.sign_detached();
-        let current_digest = self.current_digest.clone();
+        let current_digest = consensus.current_digest.clone();
         let n = view.params().n();
 
-        match &mut self.acessory {
-            ConsensusAccessory::Replica(rep) => {
-                let speculative_commits = Arc::clone(&rep.speculative_commits);
+        let speculative_commits = Arc::clone(&self.speculative_commits);
 
-                // start speculatively creating COMMIT messages,
-                // which involve potentially expensive signing ops
-                //Speculate in another thread.
-                threadpool::execute(move || {
-                    // create COMMIT
-                    let message = SystemMessage::Consensus(ConsensusMessage::new(
-                        seq,
-                        view_seq,
-                        ConsensusMessageKind::Commit(current_digest),
-                    ));
+        // start speculatively creating COMMIT messages,
+        // which involve potentially expensive signing ops
+        //Speculate in another thread.
+        threadpool::execute(move || {
+            // create COMMIT
+            let message = SystemMessage::Consensus(ConsensusMessage::new(
+                seq,
+                view_seq,
+                ConsensusMessageKind::Commit(current_digest.clone()),
+            ));
 
-                    // serialize raw msg
-                    let mut buf = Vec::new();
+            // serialize raw msg
+            let mut buf = Vec::new();
 
-                    let digest =
-                        <S::Data as DigestData>::serialize_digest(&message, &mut buf).unwrap();
+            let digest =
+                <S::Data as DigestData>::serialize_digest(&message, &mut buf).unwrap();
 
-                    for peer_id in NodeId::targets(0..n) {
-                        let buf_clone = Vec::from(&buf[..]);
+            for peer_id in NodeId::targets(0..n) {
+                let buf_clone = Vec::from(&buf[..]);
 
-                        // create header
-                        let (header, _) = WireMessage::new(
-                            my_id,
-                            peer_id,
-                            buf_clone,
-                            // NOTE: nonce not too important here,
-                            // since we already contain enough random
-                            // data with the unique digest of the
-                            // PRE-PREPARE message
-                            0,
-                            Some(digest),
-                            Some(sign_detached.key_pair()),
-                        )
-                        .into_inner();
+                // create header
+                let (header, _) = WireMessage::new(
+                    my_id,
+                    peer_id,
+                    buf_clone,
+                    // NOTE: nonce not too important here,
+                    // since we already contain enough random
+                    // data with the unique digest of the
+                    // PRE-PREPARE message
+                    0,
+                    Some(digest),
+                    Some(sign_detached.key_pair()),
+                )
+                    .into_inner();
 
-                        // store serialized header + message
-                        let serialized = SerializedMessage::new(message.clone(), buf.clone());
+                // store serialized header + message
+                let serialized = SerializedMessage::new(message.clone(), buf.clone());
 
-                        let stored = StoredMessage::new(header, serialized);
+                let stored = StoredMessage::new(header, serialized);
 
-                        let mut map = speculative_commits.lock().unwrap();
-                        map.insert(peer_id.into(), stored);
-                    }
-                });
-
-                // leader can't vote for a PREPARE
-                // Since the preprepare message is already "equivalent" to the leaders prepare message
-                if my_id != view.leader() {
-                    let message = SystemMessage::Consensus(ConsensusMessage::new(
-                        seq,
-                        view.sequence_number(),
-                        ConsensusMessageKind::Prepare(self.current_digest.clone()),
-                    ));
-
-                    let targets = NodeId::targets(0..view.params().n());
-
-                    node.broadcast(message, targets);
-                }
-
-                //Notify the followers
-                if let Some(follower_handle) = &rep.follower_handle {
-                    if let Err(err) =
-                        follower_handle.send(FollowerEvent::ReceivedConsensusMsg(view, msg))
-                    {
-                        error!("{:?}", err);
-                    }
-                }
-
-                //Notify the observers
-                if let Err(err) = rep
-                    .observer_handle
-                    .tx()
-                    .send(MessageType::Event(ObserveEventKind::Prepare(seq)))
-                {
-                    error!("{:?}", err);
-                }
+                let mut map = speculative_commits.lock().unwrap();
+                map.insert(peer_id.into(), stored);
             }
-            _ => {}
+        });
+
+        // leader can't vote for a PREPARE
+        // Since the preprepare message is already "equivalent" to the leaders prepare message
+        if my_id != view.leader() {
+            let message = SystemMessage::Consensus(ConsensusMessage::new(
+                seq,
+                view.sequence_number(),
+                ConsensusMessageKind::Prepare(current_digest),
+            ));
+
+            let targets = NodeId::targets(0..view.params().n());
+
+            node.broadcast(message, targets);
+        }
+
+        //Notify the followers
+        if let Some(follower_handle) = &self.follower_handle {
+            if let Err(err) =
+                follower_handle.send(FollowerEvent::ReceivedConsensusMsg(view, msg))
+            {
+                error!("{:?}", err);
+            }
+        }
+
+        //Notify the observers
+        if let Err(err) = self
+            .observer_handle
+            .tx()
+            .send(MessageType::Event(ObserveEventKind::Prepare(seq)))
+        {
+            error!("{:?}", err);
         }
     }
 
@@ -181,24 +176,20 @@ impl<S: Service + 'static> Consensus<S> {
     ) where
         T: PersistentLogModeTrait,
     {
-        match &self.acessory {
-            ConsensusAccessory::Replica(rep) => {
-                if let Some(follower_handle) = &rep.follower_handle {
-                    if let Err(err) = follower_handle.send(FollowerEvent::ReceivedConsensusMsg(
-                        curr_view,
-                        preparing_msg,
-                    )) {
-                        error!("{:?}", err);
-                    }
-                }
+        if let Some(follower_handle) = &self.follower_handle {
+            if let Err(err) = follower_handle.send(FollowerEvent::ReceivedConsensusMsg(
+                curr_view,
+                preparing_msg,
+            )) {
+                error!("{:?}", err);
             }
-            _ => {}
         }
     }
 
     ///Handle a prepare message when we have already obtained a valid quorum of messages
     pub(super) fn handle_preparing_quorum<T>(
         &mut self,
+        consensus: &Consensus<S>,
         curr_view: ViewInfo,
         preparing_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
         log: &Log<S, T>,
@@ -206,60 +197,56 @@ impl<S: Service + 'static> Consensus<S> {
     ) where
         T: PersistentLogModeTrait,
     {
-        let seq = self.sequence_number();
-        let node_id = self.node_id;
+        let seq = consensus.sequence_number();
+        let node_id = consensus.node_id;
+        let current_digest = consensus.current_digest.clone();
 
-        match &mut self.acessory {
-            ConsensusAccessory::Replica(rep) => {
-                let speculative_commits = rep.take_speculative_commits();
+        let speculative_commits = self.take_speculative_commits();
 
-                if valid_spec_commits::<S>(&speculative_commits, node_id, seq, &curr_view) {
-                    for (_, msg) in speculative_commits.iter() {
-                        debug!("{:?} // Broadcasting speculative commit message {:?} (total of {} messages) to {} targets",
+        if valid_spec_commits::<S>(&speculative_commits, node_id, seq, &curr_view) {
+            for (_, msg) in speculative_commits.iter() {
+                debug!("{:?} // Broadcasting speculative commit message {:?} (total of {} messages) to {} targets",
                      node_id, msg.message().original(), speculative_commits.len(), curr_view.params().n());
-                        break;
-                    }
+                break;
+            }
 
-                    node.broadcast_serialized(speculative_commits);
-                } else {
-                    let message = SystemMessage::Consensus(ConsensusMessage::new(
-                        seq,
-                        curr_view.sequence_number(),
-                        ConsensusMessageKind::Commit(self.current_digest.clone()),
-                    ));
+            node.broadcast_serialized(speculative_commits);
+        } else {
+            let message = SystemMessage::Consensus(ConsensusMessage::new(
+                seq,
+                curr_view.sequence_number(),
+                ConsensusMessageKind::Commit(current_digest.clone()),
+            ));
 
-                    debug!(
+            debug!(
                         "{:?} // Broadcasting commit consensus message {:?}",
                         node_id, message
                     );
 
-                    let targets = NodeId::targets(0..curr_view.params().n());
+            let targets = NodeId::targets(0..curr_view.params().n());
 
-                    node.broadcast_signed(message, targets);
-                }
+            node.broadcast_signed(message, targets);
+        }
 
-                log.batch_meta().lock().commit_sent_time = Utc::now();
+        log.batch_meta().lock().commit_sent_time = Utc::now();
 
-                //Follower notifications
-                if let Some(follower_handle) = &rep.follower_handle {
-                    if let Err(err) = follower_handle.send(FollowerEvent::ReceivedConsensusMsg(
-                        curr_view,
-                        preparing_msg,
-                    )) {
-                        error!("{:?}", err);
-                    }
-                }
-
-                //Observer notifications
-                if let Err(err) = rep
-                    .observer_handle
-                    .tx()
-                    .send(MessageType::Event(ObserveEventKind::Commit(seq)))
-                {
-                    error!("{:?}", err);
-                }
+        //Follower notifications
+        if let Some(follower_handle) = &self.follower_handle {
+            if let Err(err) = follower_handle.send(FollowerEvent::ReceivedConsensusMsg(
+                curr_view,
+                preparing_msg,
+            )) {
+                error!("{:?}", err);
             }
-            _ => {}
+        }
+
+        //Observer notifications
+        if let Err(err) = self
+            .observer_handle
+            .tx()
+            .send(MessageType::Event(ObserveEventKind::Commit(seq)))
+        {
+            error!("{:?}", err);
         }
     }
 
@@ -268,143 +255,119 @@ impl<S: Service + 'static> Consensus<S> {
         curr_view: ViewInfo,
         commit_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
     ) {
-        match &self.acessory {
-            ConsensusAccessory::Replica(rep) => {
-                //Notify followers of the received message
-                if let Some(follower_handle) = &rep.follower_handle {
-                    if let Err(err) = follower_handle
-                        .send(FollowerEvent::ReceivedConsensusMsg(curr_view, commit_msg))
-                    {
-                        error!("{:?}", err);
-                    }
-                }
+        //Notify followers of the received message
+        if let Some(follower_handle) = &self.follower_handle {
+            if let Err(err) = follower_handle
+                .send(FollowerEvent::ReceivedConsensusMsg(curr_view, commit_msg))
+            {
+                error!("{:?}", err);
             }
-            _ => {}
         }
     }
 
     pub(super) fn handle_committing_quorum(
         &mut self,
+        current_seq: SeqNo,
         view_info: ViewInfo,
         commit_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
     ) {
-        match &self.acessory {
-            ConsensusAccessory::Replica(rep) => {
-                //Notify follower of the received message
-                if let Some(follower_handle) = &rep.follower_handle {
-                    if let Err(err) = follower_handle
-                        .send(FollowerEvent::ReceivedConsensusMsg(view_info, commit_msg))
-                    {
-                        error!("{:?}", err);
-                    }
-                }
-
-                if let Err(_) =
-                    rep.observer_handle
-                        .tx()
-                        .send(MessageType::Event(ObserveEventKind::Consensus(
-                            self.sequence_number(),
-                        )))
-                {
-                    warn!("Failed to notify observers of the consensus instance")
-                }
+        //Notify follower of the received message
+        if let Some(follower_handle) = &self.follower_handle {
+            if let Err(err) = follower_handle
+                .send(FollowerEvent::ReceivedConsensusMsg(view_info, commit_msg))
+            {
+                error!("{:?}", err);
             }
-            _ => {}
+        }
+
+        if let Err(_) =
+            self.observer_handle
+                .tx()
+                .send(MessageType::Event(ObserveEventKind::Consensus(
+                    current_seq,
+                )))
+        {
+            warn!("Failed to notify observers of the consensus instance")
         }
     }
 
-    pub(super) fn handle_installed_seq_num(&mut self) {
-        match &self.acessory {
-            ConsensusAccessory::Replica(rep) => {
-                let mut guard = rep.consensus_guard.consensus_info().lock().unwrap();
+    pub(super) fn handle_installed_seq_num(&mut self, consensus: &Consensus<S>) {
+        let mut guard = self.consensus_guard.consensus_info().lock().unwrap();
 
-                guard.0 = self.curr_seq;
-            }
-            _ => {}
-        }
+        guard.0 = consensus.curr_seq;
     }
 
-    pub(super) fn handle_next_instance(&mut self) {
-        match &self.acessory {
-            ConsensusAccessory::Replica(rep) => {
-                {
-                    let mut guard = rep.consensus_guard.consensus_info().lock().unwrap();
+    pub(super) fn handle_next_instance(&mut self, consensus: &Consensus<S>) {
+        {
+            let mut guard = self.consensus_guard.consensus_info().lock().unwrap();
 
-                    guard.0 = self.curr_seq;
-                }
+            guard.0 = consensus.curr_seq;
+        }
 
-                rep.consensus_guard
-                    .consensus_guard()
-                    .store(false, Ordering::SeqCst);
+        //Mark as ready for the next batch to come in
+        self.consensus_guard
+            .consensus_guard()
+            .store(false, Ordering::SeqCst);
 
-                if let Err(_) = rep
-                    .observer_handle
-                    .tx()
-                    .send(MessageType::Event(ObserveEventKind::Ready(self.curr_seq)))
-                {
-                    warn!("Failed to notify observers of the consensus instance")
-                }
-            }
-            ConsensusAccessory::Follower => {}
+        if let Err(_) = self
+            .observer_handle
+            .tx()
+            .send(MessageType::Event(ObserveEventKind::Ready(consensus.curr_seq)))
+        {
+            warn!("Failed to notify observers of the consensus instance")
         }
     }
 
     pub(super) fn handle_finalize_view_change<T>(&mut self, synchronizer: &T)
-    where
-        T: AbstractSynchronizer<S>,
+        where
+            T: AbstractSynchronizer<S>,
     {
-        match &self.acessory {
-            ConsensusAccessory::Replica(rep) => {
-                //Update the current view and seq numbers
+        //Update the current view and seq numbers
 
-                //Acq consensus guard since we already have the message to propose
-                //So we don't want the proposer to propose anything yet
-                rep.consensus_guard
-                    .consensus_guard()
-                    .store(true, Ordering::SeqCst);
+        //Acq consensus guard since we already have the message to propose
+        //So we don't want the proposer to propose anything yet
+        self.consensus_guard
+            .consensus_guard()
+            .store(true, Ordering::SeqCst);
 
-                let mut guard = rep.consensus_guard.consensus_lock.lock().unwrap();
+        let mut guard = rep.consensus_guard.consensus_lock.lock().unwrap();
 
-                guard.1 = synchronizer.view();
-            }
-            ConsensusAccessory::Follower => {}
-        }
+        guard.1 = synchronizer.view();
     }
 
     pub(super) fn handle_poll_preparing_requests<T>(
         &mut self,
+        consensus: &mut Consensus<S>,
         log: &Log<S, T>,
     ) -> ConsensusPollStatus<Request<S>>
-    where
-        T: PersistentLogModeTrait,
+        where
+            T: PersistentLogModeTrait,
     {
-        match &mut self.acessory {
-            ConsensusAccessory::Replica(rep) => {
-                let iterator = rep
-                    .missing_requests
-                    .iter()
-                    .enumerate()
-                    .filter(|(_index, digest)| log.has_request(digest));
-                for (index, _) in iterator {
-                    rep.missing_swapbuf.push(index);
-                }
-                for index in rep.missing_swapbuf.drain(..) {
-                    rep.missing_requests.swap_remove_back(index);
-                }
-                if rep.missing_requests.is_empty() {
-                    extract_msg!(
+        let iterator = self
+            .missing_requests
+            .iter()
+            .enumerate()
+            .filter(|(_index, digest)| log.has_request(digest));
+
+        for (index, _) in iterator {
+            rep.missing_swapbuf.push(index);
+        }
+
+        for index in rep.missing_swapbuf.drain(..) {
+            rep.missing_requests.swap_remove_back(index);
+        }
+
+        if rep.missing_requests.is_empty() {
+            extract_msg!(
                         {
-                            self.phase = ProtoPhase::Preparing(1);
+                            consensus.phase = ProtoPhase::Preparing(1);
                         },
                         ConsensusPollStatus::Recv,
-                        &mut self.tbo.get_queue,
-                        &mut self.tbo.prepares
+                        &mut consensus.tbo.get_queue,
+                        &mut consensus.tbo.prepares
                     )
-                } else {
-                    ConsensusPollStatus::Recv
-                }
-            }
-            ConsensusAccessory::Follower => ConsensusPollStatus::Recv,
+        } else {
+            ConsensusPollStatus::Recv
         }
     }
 }
@@ -446,11 +409,11 @@ fn valid_spec_commits<S>(
     seq_no: SeqNo,
     view: &ViewInfo,
 ) -> bool
-where
-    S: Service + Send + 'static,
-    State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
-    Reply<S>: Send + 'static,
+    where
+        S: Service + Send + 'static,
+        State<S>: Send + Clone + 'static,
+        Request<S>: Send + Clone + 'static,
+        Reply<S>: Send + 'static,
 {
     let len = speculative_commits.len();
 

@@ -130,6 +130,7 @@ fxhash = { version = "0.2", optional = true }
 dsrust = { version = "0.1.9", git = "https://github.com/nuno1212s/DSRust", optional = true }
 #dsrust = { path = "/home/nunogneto/Documents/Development/Rust/dsrust" }
 crossbeam-channel = { version = "0.5.2", optional = true }
+crossbeam-skiplist = "0.1.1"
 rocksdb = {version = "0.19.0", optional = true }
 
 log = "0.4.17"

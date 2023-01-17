@@ -317,6 +317,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
         Ok(())
     }
 
+    /// Iterate the
     fn update_sync_phase(&mut self) -> Result<bool> {
         // retrieve a view change message to be processed
         let message = match self.synchronizer.poll() {
