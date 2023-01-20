@@ -31,11 +31,13 @@ use crate::bft::{
     sync::AbstractSynchronizer,
     threadpool,
 };
+use crate::bft::msg_log::Log;
+use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::tbo_pop_message;
 
 use super::{
     AbstractConsensus,
-    Consensus, ConsensusAccessory, ConsensusGuard, ConsensusPollStatus, log::{Log, persistent::PersistentLogModeTrait},
+    Consensus, ConsensusAccessory, ConsensusGuard, ConsensusPollStatus,
     ProtoPhase,
 };
 
@@ -68,22 +70,25 @@ pub struct ReplicaConsensus<S: Service> {
     follower_handle: Option<FollowerHandle<S>>,
 }
 
+pub(super) enum ReplicaPreparingPollStatus {
+    Recv,
+    MoveToPreparing
+}
+
 impl<S: Service + 'static> ReplicaConsensus<S> {
     pub(super) fn handle_preprepare_sucessfull(
         &mut self,
-        consensus: &Consensus<S>,
+        seq: SeqNo,
+        current_digest: Digest,
         view: ViewInfo,
         msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
         node: &Node<S::Data>,
     ) {
-        let my_id = consensus.node_id;
-
-        let seq = consensus.sequence_number();
+        let my_id = node.id();
         let view_seq = view.sequence_number();
         let _quorum = view.quorum_members().clone();
 
         let sign_detached = node.sign_detached();
-        let current_digest = consensus.current_digest.clone();
         let n = view.params().n();
 
         let speculative_commits = Arc::clone(&self.speculative_commits);
@@ -189,7 +194,8 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
     ///Handle a prepare message when we have already obtained a valid quorum of messages
     pub(super) fn handle_preparing_quorum<T>(
         &mut self,
-        consensus: &Consensus<S>,
+        seq: SeqNo,
+        current_digest: Digest,
         curr_view: ViewInfo,
         preparing_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
         log: &Log<S, T>,
@@ -197,9 +203,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
     ) where
         T: PersistentLogModeTrait,
     {
-        let seq = consensus.sequence_number();
-        let node_id = consensus.node_id;
-        let current_digest = consensus.current_digest.clone();
+        let node_id = node.id();
 
         let speculative_commits = self.take_speculative_commits();
 
@@ -218,10 +222,8 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
                 ConsensusMessageKind::Commit(current_digest.clone()),
             ));
 
-            debug!(
-                        "{:?} // Broadcasting commit consensus message {:?}",
-                        node_id, message
-                    );
+            debug!("{:?} // Broadcasting commit consensus message {:?}",
+                        node_id, message);
 
             let targets = NodeId::targets(0..curr_view.params().n());
 
@@ -291,28 +293,26 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         }
     }
 
-    pub(super) fn handle_installed_seq_num(&mut self, consensus: &Consensus<S>) {
+    pub(super) fn handle_installed_seq_num(&mut self, seq: SeqNo) {
         let mut guard = self.consensus_guard.consensus_info().lock().unwrap();
 
-        guard.0 = consensus.curr_seq;
+        guard.0 = seq;
     }
 
-    pub(super) fn handle_next_instance(&mut self, consensus: &Consensus<S>) {
+    pub(super) fn handle_next_instance(&mut self, seq_no: SeqNo) {
         {
             let mut guard = self.consensus_guard.consensus_info().lock().unwrap();
 
-            guard.0 = consensus.curr_seq;
+            guard.0 = seq_no;
         }
 
         //Mark as ready for the next batch to come in
-        self.consensus_guard
-            .consensus_guard()
-            .store(false, Ordering::SeqCst);
+        self.consensus_guard.unlock_consensus();
 
         if let Err(_) = self
             .observer_handle
             .tx()
-            .send(MessageType::Event(ObserveEventKind::Ready(consensus.curr_seq)))
+            .send(MessageType::Event(ObserveEventKind::Ready(seq_no)))
         {
             warn!("Failed to notify observers of the consensus instance")
         }
@@ -326,20 +326,18 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
 
         //Acq consensus guard since we already have the message to propose
         //So we don't want the proposer to propose anything yet
-        self.consensus_guard
-            .consensus_guard()
-            .store(true, Ordering::SeqCst);
+        self.consensus_guard.lock_consensus();
 
-        let mut guard = rep.consensus_guard.consensus_lock.lock().unwrap();
+        let mut guard = self.consensus_guard.consensus_info().lock().unwrap();
 
         guard.1 = synchronizer.view();
     }
 
+
     pub(super) fn handle_poll_preparing_requests<T>(
         &mut self,
-        consensus: &mut Consensus<S>,
         log: &Log<S, T>,
-    ) -> ConsensusPollStatus<Request<S>>
+    ) -> ReplicaPreparingPollStatus
         where
             T: PersistentLogModeTrait,
     {
@@ -347,27 +345,20 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
             .missing_requests
             .iter()
             .enumerate()
-            .filter(|(_index, digest)| log.has_request(digest));
+            .filter(|(_index, digest)| log.has_pending_request(digest));
 
         for (index, _) in iterator {
-            rep.missing_swapbuf.push(index);
+            self.missing_swapbuf.push(index);
         }
 
-        for index in rep.missing_swapbuf.drain(..) {
-            rep.missing_requests.swap_remove_back(index);
+        for index in self.missing_swapbuf.drain(..) {
+            self.missing_requests.swap_remove_back(index);
         }
 
-        if rep.missing_requests.is_empty() {
-            extract_msg!(
-                        {
-                            consensus.phase = ProtoPhase::Preparing(1);
-                        },
-                        ConsensusPollStatus::Recv,
-                        &mut consensus.tbo.get_queue,
-                        &mut consensus.tbo.prepares
-                    )
+        if self.missing_requests.is_empty() {
+            ReplicaPreparingPollStatus::MoveToPreparing
         } else {
-            ConsensusPollStatus::Recv
+            ReplicaPreparingPollStatus::Recv
         }
     }
 }
@@ -384,7 +375,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
             missing_swapbuf: Vec::new(),
             speculative_commits: Arc::new(Mutex::new(IntMap::new())),
             consensus_guard: ConsensusGuard {
-                consensus_lock: Arc::new(Mutex::new((next_seq, view))),
+                consensus_information: Arc::new(Mutex::new((next_seq, view))),
                 consensus_guard: Arc::new(AtomicBool::new(false)),
             },
             observer_handle,

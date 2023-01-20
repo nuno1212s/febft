@@ -7,9 +7,9 @@ use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::{RequestMessage, StoredMessage};
 use crate::bft::communication::{channel, NodeId};
 
-use crate::bft::consensus::log::persistent::PersistentLogModeTrait;
-use crate::bft::consensus::log::{operation_key, Info, Log};
 use crate::bft::executable::{ExecutorHandle, Request, Service, UpdateBatch};
+use crate::bft::msg_log::{Info, Log, operation_key};
+use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::{Orderable, SeqNo};
 
 type RequestToProcess<O> = (

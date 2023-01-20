@@ -7,13 +7,13 @@ use crate::bft::{
     communication::{
         channel::{self, ChannelSyncRx, ChannelSyncTx},
     },
-    consensus::log::Info,
     crypto::hash::Digest,
     executable::{ExecutorHandle, Request, Service, UpdateBatch},
     ordering::{Orderable, SeqNo},
 };
 
 use crate::bft::error::*;
+use crate::bft::msg_log::Info;
 
 use super::{ResponseMessage, ResponseMsg};
 
@@ -59,7 +59,7 @@ impl<S: Service> ConsensusBackLogHandle<S> {
 
     pub fn queue_batch(&self, batch: PendingBatch<S>) -> Result<()> {
         if let Err(err) =  self.rq_tx.send(batch) {
-            Err(Error::simple_with_msg(ErrorKind::ConsensusLogPersistent, format!("{:?}", err).as_str()))
+            Err(Error::simple_with_msg(ErrorKind::MsgLogPersistent, format!("{:?}", err).as_str()))
         } else {
             Ok(())
         }

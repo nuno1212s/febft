@@ -21,6 +21,7 @@ pub mod proposer;
 pub mod sync;
 pub mod threadpool;
 pub mod timeouts;
+pub mod msg_log;
 
 use std::ops::Drop;
 
@@ -74,7 +75,7 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
     let appender = FileAppender::builder()
         .encoder(Box::new(PatternEncoder::new("{l} {d} - {m}{n}")))
         .build(path)
-        .wrapped(ErrorKind::ConsensusLog)?;
+        .wrapped(ErrorKind::MsgLog)?;
 
     let config = Config::builder()
         .appender(Appender::builder().build("appender", Box::new(appender)))
@@ -89,9 +90,9 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
                 .appender("appender")
                 .build(LevelFilter::Debug),
         )
-        .wrapped(ErrorKind::ConsensusLog)?;
+        .wrapped(ErrorKind::MsgLog)?;
 
-    let _handle = log4rs::init_config(config).wrapped(ErrorKind::ConsensusLog)?;
+    let _handle = log4rs::init_config(config).wrapped(ErrorKind::MsgLog)?;
 
     //tracing_subscriber::fmt::init();
 

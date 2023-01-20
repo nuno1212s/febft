@@ -7,7 +7,7 @@ use log::info;
 use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx, new_bounded_sync, TryRecvError};
 use crate::bft::communication::message::Message;
 use crate::bft::communication::NodeId;
-use crate::bft::communication::peer_handling::ConnectedPeer;
+use crate::bft::communication::incoming_peer_handling::ConnectedPeer;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::executable::{Reply, Request, Service, State};
 use crate::bft::ordering::SeqNo;
@@ -20,10 +20,10 @@ pub type Timeout = Vec<TimeoutKind>;
 #[derive(Eq, PartialEq, Ord, PartialOrd)]
 pub struct ClientRqInfo {
     //The digest of the request in question
-    digest: Digest,
+    pub digest: Digest,
 }
 
-#[derive(Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Eq, Ord, PartialOrd)]
 pub enum TimeoutKind {
     ///Relates to the timeout of a client request.
     /// Stores the client who sent it, along with the request
@@ -162,16 +162,17 @@ impl<S: Service + 'static> TimeoutsThread<S> {
     fn new(iteration_delay: u64, loopback_channel: Arc<ConnectedPeer<Message<State<S>, Request<S>, Reply<S>>>>) -> ChannelSyncTx<TimeoutMessage> {
         let (tx, rx) = new_bounded_sync(CHANNEL_SIZE);
 
-        let timeout_thread = Self {
-            pending_timeouts: Default::default(),
-            pending_timeouts_reverse_search: Default::default(),
-            channel_rx: rx,
-            loopback_channel,
-            iteration_delay,
-        };
-
         std::thread::Builder::new().name("Timeout Thread".to_string())
             .spawn(move || {
+
+                let timeout_thread = Self {
+                    pending_timeouts: Default::default(),
+                    pending_timeouts_reverse_search: Default::default(),
+                    channel_rx: rx,
+                    loopback_channel,
+                    iteration_delay,
+                };
+
                 timeout_thread.run();
             }).expect("Failed to launch timeout thread");
 

@@ -21,7 +21,6 @@ use super::{
         Node, NodeId,
     },
     consensus::{
-        log::{persistent::PersistentLogModeTrait, CollectData, Log, Proof, ViewDecisionPair},
         Consensus,
     },
     core::server::ViewInfo,
@@ -32,14 +31,17 @@ use super::{
     prng,
 };
 
-pub mod follower_sync;
-pub mod replica_sync;
-
 use intmap::IntMap;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
-use crate::bft::consensus::log::decisions::{CollectData, Proof, ViewDecisionPair};
-use crate::bft::timeouts::Timeouts;
+use crate::bft::msg_log::decisions::{CollectData, Proof, ViewDecisionPair};
+use crate::bft::msg_log::Log;
+use crate::bft::msg_log::persistent::PersistentLogModeTrait;
+use crate::bft::timeouts::{ClientRqInfo, Timeouts};
+
+
+pub mod follower_sync;
+pub mod replica_sync;
 
 /// Attempt to extract a msg from the tbo queue
 /// If the message is not null (there is a message in the tbo queue)
@@ -78,14 +80,13 @@ macro_rules! finalize_view_change {
         $self:expr,
         $state:expr,
         $proof:expr,
-        $collects_guard:expr,
         $normalized_collects:expr,
         $log:expr,
         $timeouts:expr,
         $consensus:expr,
         $node:expr $(,)?
     ) => {{
-        match $self.pre_finalize($state, $proof,$collects_guard, $normalized_collects, $log) {
+        match $self.pre_finalize($state, $proof, $normalized_collects, $log) {
             // wait for next timeout
             FinalizeStatus::NoValue => SynchronizerStatus::Running,
             // we need to run cst before proceeding with view change
@@ -162,6 +163,8 @@ impl Sound {
 pub struct TboQueue<O> {
     // the current view
     view: ViewInfo,
+    // Stores the previous view, for useful information when changing views
+    previous_view: Option<ViewInfo>,
     // probe messages from this queue instead of
     // fetching them from the network
     get_queue: bool,
@@ -177,6 +180,7 @@ impl<O> TboQueue<O> {
     fn new(view: ViewInfo) -> Self {
         Self {
             view,
+            previous_view: None,
             get_queue: false,
             stop: VecDeque::new(),
             stop_data: VecDeque::new(),
@@ -184,8 +188,13 @@ impl<O> TboQueue<O> {
         }
     }
 
+
+    /// Installs a new view into the queue.
+    /// Returns the old view
     pub fn install_view(&mut self, view: ViewInfo) {
-        self.view = view;
+        let prev_view = std::mem::replace(&mut self.view, view);
+
+        self.previous_view = Some(prev_view);
     }
 
     /// Signal this `TboQueue` that it may be able to extract new
@@ -240,6 +249,14 @@ impl<O> TboQueue<O> {
     fn queue_sync(&mut self, h: Header, m: ViewChangeMessage<O>) {
         let seq = self.view.sequence_number();
         tbo_queue_message(seq, &mut self.sync, StoredMessage::new(h, m))
+    }
+
+    pub fn view(&self) -> &ViewInfo {
+        &self.view
+    }
+
+    pub fn previous_view(&self) -> &Option<ViewInfo> {
+        &self.previous_view
     }
 }
 
@@ -333,10 +350,11 @@ type CollectsType<S> = IntMap<StoredMessage<ViewChangeMessage<Request<S>>>>;
 /// for keeping track of any timed out client requests
 pub struct Synchronizer<S: Service> {
     phase: RefCell<ProtoPhase>,
+    //Tbo queue, keeps track of the current view and keeps messages arriving in order
+    tbo: Mutex<TboQueue<Request<S>>>,
     //Stores currently received requests from other nodes
     stopped: RefCell<IntMap<Vec<StoredMessage<RequestMessage<Request<S>>>>>>,
     collects: Mutex<CollectsType<S>>,
-    tbo: Mutex<TboQueue<Request<S>>>,
     finalize_state: RefCell<Option<FinalizeState<Request<S>>>>,
     accessory: SynchronizerAccessory<S>,
 }
@@ -353,7 +371,7 @@ impl<S: Service + 'static> AbstractSynchronizer<S> for Synchronizer<S> {
     /// Returns some information regarding the current view, such as
     /// the number of faulty replicas the system can tolerate.
     fn view(&self) -> ViewInfo {
-        self.tbo.lock().unwrap().view.clone()
+        self.tbo.lock().unwrap().view().clone()
     }
 
     /// Install a new view received from the CST protocol, or from
@@ -399,6 +417,8 @@ impl<S> Synchronizer<S>
             accessory: SynchronizerAccessory::Replica(ReplicaSynchronizer::new(timeout_dur)),
         })
     }
+
+    fn previous_view(&self) -> Option<ViewInfo> { self.tbo.lock().unwrap().previous_view().clone() }
 
     pub fn signal(&self) {
         self.tbo.lock().unwrap().signal()
@@ -573,7 +593,12 @@ impl<S> Synchronizer<S>
                         SynchronizerAccessory::Follower(_) => {}
                     }
 
-                    self.phase.replace(ProtoPhase::Syncing);
+                    if current_view.leader() == node.id() {
+                        //Move to the stopping data phase as we are the new leader
+                        self.phase.replace(ProtoPhase::StoppingData(0));
+                    } else {
+                        self.phase.replace(ProtoPhase::Syncing);
+                    }
                 } else {
                     self.phase.replace(ProtoPhase::Stopping2(i));
                 }
@@ -605,6 +630,9 @@ impl<S> Synchronizer<S>
                             }
                             ViewChangeMessageKind::StopData(_) if msg_seq != seq => {
                                 if current_view.peek(msg_seq).leader() == node.id() {
+                                    //If we are the leader of the view the message is in,
+                                    //Then we want to accept the message, but since it is not the current
+                                    //View, then it cannot be processed atm
                                     let mut guard = self.tbo.lock().unwrap();
 
                                     guard.queue_stop_data(header, message);
@@ -615,6 +643,7 @@ impl<S> Synchronizer<S>
                             ViewChangeMessageKind::StopData(_)
                             if current_view.leader() != node.id() =>
                                 {
+                                    //If we are not the leader, ignore
                                     return SynchronizerStatus::Running;
                                 }
                             ViewChangeMessageKind::StopData(_)
@@ -626,6 +655,8 @@ impl<S> Synchronizer<S>
                             ViewChangeMessageKind::StopData(_) => i + 1,
                             ViewChangeMessageKind::Sync(_) => {
                                 let mut guard = self.tbo.lock().unwrap();
+                                //Since we are the current leader and are waiting for stop data,
+                                //This must be related to another view.
                                 guard.queue_sync(header, message);
 
                                 return SynchronizerStatus::Running;
@@ -634,7 +665,7 @@ impl<S> Synchronizer<S>
 
                         // NOTE: the STOP-DATA message signatures are already
                         // verified by the TLS layer, but we still need to
-                        // verify their content when we retransmit the COLLECTs
+                        // verify their content when we retransmit the COLLECT's
                         // to other nodes via a SYNC message! this guarantees
                         // the new leader isn't forging messages.
 
@@ -651,7 +682,16 @@ impl<S> Synchronizer<S>
                             // - broadcast SYNC msg with collected
                             //   STOP-DATA proofs so other replicas
                             //   can repeat the leader's computation
-                            let proof = Self::highest_proof(&*collects_guard, &current_view, node);
+
+
+                            let previous_view = self.previous_view();
+
+                            //Since all of these requests were done in the previous view of the algorithm
+                            // then we should also use the previous view
+                            let view_ref = previous_view.as_ref().unwrap_or(&current_view);
+
+                            let proof = Self::highest_proof(&*collects_guard,
+                                                            view_ref, node);
 
                             let curr_cid = proof
                                 .map(|p| p.pre_prepare().message().sequence_number())
@@ -679,7 +719,7 @@ impl<S> Synchronizer<S>
 
                             let p = log.view_change_propose();
 
-                            //We create the preprepare here as we are the new leader,
+                            //We create the pre-prepare here as we are the new leader,
                             //And we sign it right now
 
                             let (header, message) = {
@@ -690,23 +730,22 @@ impl<S> Synchronizer<S>
                                 let digest = <S::Data as DigestData>::serialize_digest(
                                     &forged_preprepare,
                                     &mut buf,
-                                )
-                                    .unwrap();
+                                ).unwrap();
 
                                 let mut prng_state = prng::State::new();
 
                                 //Create a forged message as if the leader had sent this to us.
                                 //This is safe because he has actually sent these requests in the SYNC phase
-                                //TODO: This should be signed
                                 let (h, _) = WireMessage::new(
                                     self.view().leader(),
                                     node.id(),
                                     buf,
                                     prng_state.next_state(),
                                     Some(digest),
+                                    //TODO: This should be signed (Replace this with an
+                                    // Actual secret key)
                                     None,
-                                )
-                                    .into_inner();
+                                ).into_inner();
 
                                 if let SystemMessage::Consensus(consensus) = forged_preprepare {
                                     (h, consensus)
@@ -717,7 +756,8 @@ impl<S> Synchronizer<S>
 
                             let fwd_request = FwdConsensusMessage::new(header, message);
 
-                            let collects = collects_guard.values().cloned().collect();
+                            let collects = collects_guard.values()
+                                .cloned().collect();
 
                             let message = SystemMessage::ViewChange(ViewChangeMessage::new(
                                 current_view.sequence_number(),
@@ -743,7 +783,6 @@ impl<S> Synchronizer<S>
                             self,
                             state,
                             proof,
-                            collects_guard,
                             normalized_collects,
                             log,
                             timeouts,
@@ -830,13 +869,11 @@ impl<S> Synchronizer<S>
                     sound,
                     proposed,
                 };
-                let collects_guard = self.collects.lock().unwrap();
 
                 finalize_view_change!(
                     self,
                     state,
                     proof,
-                    collects_guard,
                     normalized_collects,
                     log,
                     timeouts,
@@ -863,13 +900,13 @@ impl<S> Synchronizer<S>
     {
         let state = self.finalize_state.borrow_mut().take()?;
 
-        let lock_guard = self.collects.lock().unwrap();
+        //This is kept alive until it is out of the scope
+        let _lock_guard = self.collects.lock().unwrap();
 
         finalize_view_change!(
             self,
             state,
             None,
-            lock_guard,
             Vec::new(),
             log,
             timeouts,
@@ -938,22 +975,16 @@ impl<S> Synchronizer<S>
         &self,
         state: FinalizeState<Request<S>>,
         _proof: Option<&Proof<Request<S>>>,
-        _mutex_guard: MutexGuard<CollectsType<S>>,
         _normalized_collects: Vec<Option<&CollectData<Request<S>>>>,
         log: &Log<S, T>,
     ) -> FinalizeStatus<Request<S>>
         where
             T: PersistentLogModeTrait,
     {
-        //
-        if let ProtoPhase::Syncing = *self.phase.borrow() {
-            //
-            // NOTE: this code will not run when we resume
-            // the view change protocol after running CST
-            //
-            if log.decision_log().borrow().executing() != state.curr_cid {
-                return FinalizeStatus::RunCst(state);
-            }
+        //If we are more than one operation behind the most recent consensus id,
+        //Then we must run a consensus state transfer
+        if u32::from(log.decision_log().borrow().executing()) + 1 < u32::from(state.curr_cid) {
+            return FinalizeStatus::RunCst(state);
         }
 
         let rqs = match state.proposed.consensus().kind() {
@@ -970,6 +1001,8 @@ impl<S> Synchronizer<S>
         FinalizeStatus::Commit(state)
     }
 
+    /// Finalize a view change and install the new view in the other
+    /// state machines (Consensus)
     fn finalize<T>(
         &self,
         state: FinalizeState<Request<S>>,
@@ -1028,6 +1061,7 @@ impl<S> Synchronizer<S>
         }
     }
 
+    /// Watch requests that have been forwarded to us
     pub fn watch_forwarded_requests<T>(
         &self,
         requests: ForwardedRequestsMessage<Request<S>>,
@@ -1044,6 +1078,8 @@ impl<S> Synchronizer<S>
         }
     }
 
+    /// Watch requests that have been received from other replicas
+    ///
     pub fn watch_received_requests(&self, digest: Vec<Digest>, timeouts: &Timeouts) {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
@@ -1059,6 +1095,37 @@ impl<S> Synchronizer<S>
             SynchronizerAccessory::Replica(rep) =>
                 rep.watch_request(digest, timeouts),
             _ => {}
+        }
+    }
+
+    /// Forward the requests that have timed out to the whole network
+    /// So that everyone knows about (including a leader that could still be correct, but
+    /// Has not received the requests from the client)
+    pub fn forward_requests<T>(&self,
+                               timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+                               node: &Node<S::Data>,
+                               log: &Log<S, T>, ) where T: PersistentLogModeTrait {
+        match &self.accessory {
+            SynchronizerAccessory::Follower(_) => {}
+            SynchronizerAccessory::Replica(rep) => {
+                rep.forward_requests(self, timed_out, node, log);
+            }
+        }
+    }
+
+    /// Client requests have timed out. We must now send a stop message containing all of the
+    /// Requests that have timed out
+    pub fn client_requests_timed_out(
+        &self,
+        seq: &Vec<ClientRqInfo>,
+    ) -> SynchronizerStatus {
+        match &self.accessory {
+            SynchronizerAccessory::Follower(_) => {
+                SynchronizerStatus::Nil
+            }
+            SynchronizerAccessory::Replica(rep) => {
+                rep.client_requests_timed_out(seq)
+            }
         }
     }
 
@@ -1141,7 +1208,7 @@ fn sound<'a, O>(curr_view: &ViewInfo, normalized_collects: &[Option<&'a CollectD
     for seq_no in seq_numbers {
         for value in values.iter() {
             if binds(&curr_view, seq_no, value, normalized_collects) {
-                return Sound::Bound(**value);
+                return Sound::Bound(*value);
             }
         }
     }
@@ -1310,12 +1377,14 @@ fn validate_signature<'a, S, M>(node: &'a Node<S::Data>, stored: &'a StoredMessa
         Ok(wm) => wm,
         _ => return false,
     };
+
     // check if we even have the public key of the node that claims
     // to have sent this particular message
     let key = match node.get_public_key(stored.header().from()) {
         Some(k) => k,
         None => return false,
     };
+
     wm.is_valid(Some(key))
 }
 
@@ -1336,23 +1405,38 @@ fn highest_proof<'a, S, I>(
         .filter_map(|collect| collect.last_proof())
         // check if COMMIT msgs are signed, and all have the same digest
         //
-        // TODO: check proofs and digests of PREPAREs as well, eventually,
-        // but for now we are replicating the behavior of BFT-SMaRt
         .filter(move |proof| {
             let digest = proof.pre_prepare().header().digest();
 
-            proof
+            let commits_valid = proof
                 .commits()
                 .iter()
                 .filter(|stored| {
                     stored
                         .message()
                         .has_proposed_digest(digest)
+                        //If he does not have the digest, then it is not valid
                         .unwrap_or(false)
                 })
-                .filter(move |&stored| validate_signature::<S, _>(node, stored))
-                .count()
-                >= view.params().quorum()
+                .filter(move |&stored|
+                    { validate_signature::<S, _>(node, stored) })
+                .count() >= view.params().quorum();
+
+            let prepares_valid = proof
+                .prepares()
+                .iter()
+                .filter(|stored| {
+                    stored
+                        .message()
+                        .has_proposed_digest(digest)
+                        //If he does not have the digest, then it is not valid
+                        .unwrap_or(false)
+                })
+                .filter(move |&stored|
+                    { validate_signature::<S, _>(node, stored) })
+                .count() >= view.params().quorum();
+
+            commits_valid && prepares_valid
         })
         .max_by_key(|proof| proof.pre_prepare().message().sequence_number())
 }

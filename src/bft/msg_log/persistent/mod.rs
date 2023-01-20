@@ -30,7 +30,7 @@ use crate::bft::{
     ordering::SeqNo,
     persistentdb::KVDB,
 };
-use crate::bft::consensus::log::persistent::consensus_backlog::{BatchInfo, PendingBatch};
+use crate::bft::msg_log::persistent::consensus_backlog::{BatchInfo, PendingBatch};
 
 use self::consensus_backlog::ConsensusBackLogHandle;
 use self::consensus_backlog::ConsensusBacklog;
@@ -514,7 +514,7 @@ fn read_latest_state<S: Service>(db: &KVDB) -> Result<Option<InstallState<S>>> {
 
     let mut dec_log = DecisionLog::new();
 
-    dec_log.last_exec = Some(last_seq);
+    dec_log.finished_quorum_execution(last_seq);
 
     for ele in messages {
         let wrapped_msg = Arc::new(ReadOnly::new(ele));
@@ -527,10 +527,7 @@ fn read_latest_state<S: Service>(db: &KVDB) -> Result<Option<InstallState<S>>> {
         }
     }
 
-    let checkpoint = Arc::new(ReadOnly::new(Checkpoint {
-        seq: first_seq,
-        app_state: state.unwrap(),
-    }));
+    let checkpoint = Checkpoint::new(first_seq, state.unwrap());
 
     Ok(Some((view.unwrap(), checkpoint, dec_log)))
 }
@@ -587,7 +584,7 @@ fn write_checkpoint<S: Service>(db: &KVDB, state: &State<S>, last_seq: SeqNo) ->
         }
         _ => {
             return Err(Error::simple_with_msg(
-                ErrorKind::ConsensusLogPersistent,
+                ErrorKind::MsgLogPersistent,
                 "Failed to get the range of values to erase",
             ));
         }
@@ -774,7 +771,7 @@ fn read_seq_from_vec(data: Vec<u8>) -> Result<SeqNo> {
     let seq_cast: [u8; 4] = data
         .as_slice()
         .try_into()
-        .wrapped(ErrorKind::ConsensusLogPersistent)?;
+        .wrapped(ErrorKind::MsgLogPersistent)?;
 
     let seq = u32::from_le_bytes(seq_cast);
 

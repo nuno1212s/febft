@@ -1,6 +1,6 @@
 pub mod follower_proposer;
 
-use log::{error, warn, debug, info};
+use log::{error, warn, debug, info, trace};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -15,16 +15,15 @@ use crate::bft::communication::message::{
 use crate::bft::communication::{channel, Node, NodeId};
 use crate::bft::consensus::ConsensusGuard;
 use chrono::{DateTime, Utc};
-
-use crate::bft::consensus::log::Log;
 use crate::bft::threadpool;
 
 use crate::bft::core::server::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UnorderedBatch};
+use crate::bft::msg_log::Log;
+use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::Orderable;
 use crate::bft::timeouts::{Timeouts};
 
-use super::consensus::log::persistent::PersistentLogModeTrait;
 use super::core::server::ViewInfo;
 use super::ordering::SeqNo;
 use super::sync::{Synchronizer, AbstractSynchronizer};
@@ -35,19 +34,21 @@ pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
 pub struct Proposer<S: Service + 'static, T> where T: PersistentLogModeTrait{
-    batch_channel: (ChannelSyncTx<BatchType<S>>, ChannelSyncRx<BatchType<S>>),
     node_ref: Arc<Node<S::Data>>,
+
     synchronizer: Arc<Synchronizer<S>>,
     timeouts: Timeouts,
+
     log: Arc<Log<S, T>>,
-    //For unordered request execution
-    executor_handle: ExecutorHandle<S>,
     consensus_guard: ConsensusGuard,
     cancelled: AtomicBool,
     //The target
     target_global_batch_size: usize,
     //Time limit for generating a batch with target_global_batch_size size
     global_batch_time_limit: u128,
+
+    //For unordered request execution
+    executor_handle: ExecutorHandle<S>,
 
     //Observer related stuff
     observer_handle: ObserverHandle,
@@ -70,10 +71,8 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
         global_batch_time_limit: u128,
         observer_handle: ObserverHandle,
     ) -> Arc<Self> {
-        let (channel_tx, channel_rx) = channel::new_bounded_sync(BATCH_CHANNEL_SIZE);
 
         Arc::new(Self {
-            batch_channel: (channel_tx, channel_rx),
             node_ref: node,
             synchronizer: sync,
             timeouts,
@@ -85,10 +84,6 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
             observer_handle,
             executor_handle,
         })
-    }
-
-    pub fn receiver_channel(&self) -> &ChannelSyncRx<BatchType<S>> {
-        &self.batch_channel.1
     }
 
     ///Start this work
@@ -155,9 +150,6 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
                             },
                         }
                     };
-
-                    //debug!("{:?} // Received batch of {} messages from clients, processing them, is_leader? {}",
-                    //    self.node_ref.id(), messages.len(), is_leader);
 
                     //TODO: Handle timing out requests
 
@@ -254,7 +246,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
                         }
 
                         //Attempt to propose new batch
-                        match self.consensus_guard.consensus_guard().compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed) {
+                        match self.consensus_guard.attempt_to_propose_message() {
                             Ok(_) => {
                                 last_proposed_batch = Instant::now();
 
@@ -276,29 +268,9 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
 
                                 last_seq = Some(*seq);
 
-                                let next_batch = if currently_accumulated.len() > self.target_global_batch_size {
-
-                                    //TODO: just make processing these batches faster
-                                    //If the batch is too large (120k requests for example, we can get stuck on processing (execution) them as they all come at once and
-                                    //Producing the replies takes some time.)
-                                    //So we will split it up here
-
-
-                                    //This now contains target_global_size requests. We want this to be our next batch
-                                    //Currently accumulated contains the remaining messages to be sent in the next batch
-                                    let mut next_batch = currently_accumulated.split_off(currently_accumulated.len() - self.target_global_batch_size);
-
-                                    //So we swap that memory with the other vector memory and we have it!
-                                    std::mem::swap(&mut next_batch, &mut currently_accumulated);
-
-                                    Some(next_batch)
-                                } else {
-                                    None
-                                };
-
                                 self.propose(*seq, view, currently_accumulated);
                                 
-                                currently_accumulated = next_batch.unwrap_or(Vec::with_capacity(self.node_ref.batch_size() * 2));
+                                currently_accumulated = Vec::with_capacity(self.node_ref.batch_size() * 2);
 
                                 //Stats
                                 if batches_made % 10000 == 0 {
@@ -324,6 +296,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
 
 
     /// Proposes a new batch.
+    /// (Basically broadcasts it to all of the members)
     fn propose(
         &self,
         seq: SeqNo,

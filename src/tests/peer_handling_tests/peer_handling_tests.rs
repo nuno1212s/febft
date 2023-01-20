@@ -2,7 +2,7 @@
 pub mod peer_handling_tests {
     use std::sync::Arc;
     use crate::bft::communication::{NodeId};
-    use crate::bft::communication::peer_handling::NodePeers;
+    use crate::bft::communication::incoming_peer_handling::PeerIncomingRqHandling;
     use crate::bft::async_runtime as rt;
 
 
@@ -27,7 +27,7 @@ pub mod peer_handling_tests {
 
         let own_id = NodeId(1001);
 
-        let peers = Arc::new(NodePeers::new(own_id, FIRST_CLI, BATCH_SIZE, CLIENT_PER_POOL, BATCH_TIMEOUT_MICROS, BATCH_SLEEP_MICROS));
+        let peers = Arc::new(PeerIncomingRqHandling::new(own_id, FIRST_CLI, BATCH_SIZE, CLIENT_PER_POOL, BATCH_TIMEOUT_MICROS, BATCH_SLEEP_MICROS));
 
         for cli_id in 0..CLIENT_COUNT {
             let client_id = NodeId(cli_id);

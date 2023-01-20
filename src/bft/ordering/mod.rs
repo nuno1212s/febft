@@ -14,11 +14,11 @@ use either::{
     Either,
 };
 
-use crate::bft::consensus::log;
 use crate::bft::communication::message::StoredMessage;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
+use crate::bft::msg_log::PERIOD;
 
 /// Represents a sequence number attributed to a client request
 /// during a `Consensus` instance.
@@ -114,7 +114,7 @@ impl SeqNo {
         // TODO: add config param for these consts
         const OVERFLOW_THRES_POS: i32 = 10000;
         const OVERFLOW_THRES_NEG: i32 = -OVERFLOW_THRES_POS;
-        const DROP_SEQNO_THRES: i32 = (log::PERIOD + (log::PERIOD >> 1)) as i32;
+        const DROP_SEQNO_THRES: i32 = (PERIOD + (PERIOD >> 1)) as i32;
 
         let index = {
             let index = (self.0).wrapping_sub(other.0);

@@ -16,16 +16,17 @@ use serde::{Deserialize, Serialize};
 use crate::bft::collections::{self, HashMap};
 use crate::bft::communication::message::{CstMessage, CstMessageKind, Header, SystemMessage};
 use crate::bft::communication::{Node, NodeId};
-use crate::bft::consensus::log::{Checkpoint, DecisionLog, Log};
 use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State};
+use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog};
+use crate::bft::msg_log::Log;
+use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::timeouts::{TimeoutKind, Timeouts};
 
 use super::consensus::AbstractConsensus;
-use super::consensus::log::persistent::PersistentLogModeTrait;
 use super::globals::ReadOnly;
 use super::sync::AbstractSynchronizer;
 

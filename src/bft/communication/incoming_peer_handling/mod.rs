@@ -24,7 +24,7 @@ fn client_channel_init<T>(capacity: usize) -> (ChannelMultTx<T>, ChannelMultRx<T
 ///Only handles reception of requests, not transmission
 /// It's also built on top of the default networking layer, which handles
 /// actually serializing the messages. This only handles already serialized messages.
-pub struct NodePeers<T: Send + 'static> {
+pub struct PeerIncomingRqHandling<T: Send + 'static> {
     batch_size: usize,
     //The first client id, so we can distinguish clients from replicas
     first_cli: NodeId,
@@ -46,13 +46,13 @@ const DEFAULT_REPLICA_QUEUE: usize = 1024;
 ///We make this class Sync and send since the clients are going to be handled by a single class
 ///And the replicas are going to be handled by another class.
 /// There is no possibility of 2 threads accessing the client_rx or replica_rx concurrently
-unsafe impl<T> Sync for NodePeers<T> where T: Send {}
+unsafe impl<T> Sync for PeerIncomingRqHandling<T> where T: Send {}
 
-unsafe impl<T> Send for NodePeers<T> where T: Send {}
+unsafe impl<T> Send for PeerIncomingRqHandling<T> where T: Send {}
 
-impl<T> NodePeers<T> where T: Send {
+impl<T> PeerIncomingRqHandling<T> where T: Send {
     pub fn new(id: NodeId, first_cli: NodeId, batch_size: usize, clients_per_pool: usize,
-               batch_timeout_micros: u64, batch_sleep_micros: u64) -> NodePeers<T> {
+               batch_timeout_micros: u64, batch_sleep_micros: u64) -> PeerIncomingRqHandling<T> {
         //We only want to setup client handling if we are a replica
         let client_handling;
 
@@ -88,7 +88,7 @@ impl<T> NodePeers<T> where T: Send {
             (None, None)
         };
 
-        let peers = NodePeers {
+        let peers = PeerIncomingRqHandling {
             batch_size,
             first_cli,
             own_id: id,
@@ -107,6 +107,8 @@ impl<T> NodePeers<T> where T: Send {
     }
 
     ///Initialize a new peer connection
+    /// This will be used by the networking layer to deliver the received messages to the
+    /// Actual system
     pub fn init_peer_conn(&self, peer: NodeId) -> Arc<ConnectedPeer<T>> {
         //debug!("Initializing peer connection for peer {:?} on peer {:?}", peer, self.own_id);
 
@@ -133,10 +135,11 @@ impl<T> NodePeers<T> where T: Send {
     }
 
     ///Get our loopback request queue
-    pub fn peer_loopback(&self) -> &Arc<ConnectedPeer<T>> {
+    pub fn loopback_connection(&self) -> &Arc<ConnectedPeer<T>> {
         &self.peer_loopback
     }
 
+    /// Get how many client request batches are waiting in the queue
     pub fn rqs_len_from_clients(&self) -> usize {
         return match &self.client_rx {
             None => { 0 }
@@ -148,71 +151,69 @@ impl<T> NodePeers<T> where T: Send {
 
     ///Receive request vector from clients. Block until we get the requests
     pub fn receive_from_clients(&self, timeout: Option<Duration>) -> Result<Vec<T>> {
-        return match &self.client_rx {
+        let rx = self.get_client_rx()?;
+
+        match timeout {
             None => {
-                Err(Error::simple_with_msg(ErrorKind::CommunicationPeerHandling, "Failed to receive from clients as there are no clients connected"))
-            }
-            Some(rx) => {
-                match timeout {
-                    None => {
-                        match rx.recv() {
-                            Ok(vec) => {
-                                Ok(vec)
-                            }
-                            Err(_) => {
-                                Err(Error::simple_with_msg(ErrorKind::CommunicationPeerHandling, "Failed to receive"))
-                            }
-                        }
+                match rx.recv() {
+                    Ok(vec) => {
+                        Ok(vec)
                     }
-                    Some(timeout) => {
-                        match rx.recv_timeout(timeout) {
-                            Ok(vec) => {
-                                Ok(vec)
-                            }
-                            Err(err) => {
-                                match err {
-                                    TryRecvError::Timeout => {
-                                        Ok(vec![])
-                                    }
-                                    TryRecvError::ChannelDc => {
-                                        Err(Error::simple_with_msg(ErrorKind::CommunicationPeerHandling, "Failed to receive"))
-                                    }
-                                    TryRecvError::ChannelEmpty => {
-                                        Err(Error::simple_with_msg(ErrorKind::CommunicationPeerHandling, "Failed to receive"))
-                                    }
-                                }
-                            }
-                        }
+                    Err(_) => {
+                        Err(Error::simple_with_msg(ErrorKind::CommunicationIncomingPeerHandling, "Failed to receive"))
                     }
                 }
             }
-        };
-    }
-
-    pub fn try_receive_from_clients(&self) -> Result<Option<Vec<T>>> {
-        return match &self.client_rx {
-            None => {
-                Err(Error::simple_with_msg(ErrorKind::CommunicationPeerHandling, "Failed to receive from clients as there are no clients connected"))
-            }
-            Some(rx) => {
-                match rx.try_recv() {
-                    Ok(msgs) => {
-                        Ok(Some(msgs))
+            Some(timeout) => {
+                match rx.recv_timeout(timeout) {
+                    Ok(vec) => {
+                        Ok(vec)
                     }
                     Err(err) => {
                         match err {
-                            TryRecvError::ChannelEmpty => {
-                                Ok(None)
-                            }
-                            TryRecvError::ChannelDc => {
-                                Err(Error::simple_with_msg(ErrorKind::CommunicationPeerHandling, "Failed to receive from clients as there are no clients connected"))
-                            }
                             TryRecvError::Timeout => {
-                                Err(Error::simple_with_msg(ErrorKind::CommunicationPeerHandling, "Failed to receive from clients as there are no clients connected"))
+                                Ok(vec![])
+                            }
+                            _ => {
+                                Err(Error::simple_with_msg(ErrorKind::CommunicationIncomingPeerHandling, "Failed to receive"))
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Try to receive from the clients.
+    /// It's possible that there are no messages currently available, so
+    /// we return a result with an option
+    pub fn try_receive_from_clients(&self) -> Result<Option<Vec<T>>> {
+        let rx = self.get_client_rx()?;
+
+        match rx.try_recv() {
+            Ok(msgs) => {
+                Ok(Some(msgs))
+            }
+            Err(err) => {
+                match &err {
+                    TryRecvError::ChannelEmpty => {
+                        Ok(None)
+                    }
+                    _ => {
+                        Err(Error::wrapped(ErrorKind::CommunicationIncomingPeerHandling, err))
+                    }
+                }
+            }
+        }
+    }
+
+    fn get_client_rx(&self) -> Result<&ChannelSyncRx<Vec<T>>> {
+        return match &self.client_rx {
+            None => {
+                Err(Error::simple_with_msg(ErrorKind::CommunicationIncomingPeerHandling, "Failed to receive from clients as there are no clients connected"))
+            }
+            Some(rx) => {
+                Ok(rx)
             }
         };
     }

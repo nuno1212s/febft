@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
+use serde::{Serialize, Deserialize};
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, StoredMessage};
 use crate::bft::crypto::hash::Digest;
 use crate::bft::globals::ReadOnly;
@@ -354,6 +355,8 @@ impl<O: Clone> DecisionLog<O> {
                                 Option<Vec<StoredMessage<ConsensusMessage<O>>>> {
         let mut collected_messages = Vec::with_capacity(quorum);
 
+        let mut found = false;
+
         //Start at the last added message
         for message in messages.iter().rev() {
             if !found {
@@ -363,7 +366,7 @@ impl<O: Clone> DecisionLog<O> {
                 } else {
                     found = true;
 
-                    buf.push((**message).clone());
+                    collected_messages.push((**message).clone());
                     continue;
                 }
             }
@@ -375,7 +378,7 @@ impl<O: Clone> DecisionLog<O> {
                 //Since the ordering is maintained,
                 //We will keep adding to the message vec until we
                 //Reach the next seq no
-                buf.push((**message).clone());
+                collected_messages.push((**message).clone());
             }
         }
 
@@ -383,7 +386,7 @@ impl<O: Clone> DecisionLog<O> {
             //Only return if we have successfully obtained a quorum
             None
         } else {
-            Some(buf)
+            Some(collected_messages)
         }
     }
 
@@ -468,7 +471,7 @@ impl<O: Clone> DecisionLog<O> {
             if pre_prepare.message().sequence_number() <= seq_no {
 
                 //Mark the requests contained in this message for removal
-                decided_request_count += match ele.message().kind() {
+                decided_request_count += match pre_prepare.message().kind() {
                     ConsensusMessageKind::PrePrepare(messages) => messages.len(),
                     _ => 0,
                 };
@@ -498,9 +501,13 @@ impl<O: Clone> DecisionLog<O> {
                 break
             }
 
-            new_commits.inser(ele.clone());
+            new_commits.push(ele.clone());
         }
 
+        //Since we iterate the elements in reverse order and then add them to the tail of the vec
+        //Which means we get the reverse order ([1,2,3] -> [3,2,1]) when read in a reverse order)
+        // , so we must reverse back in order
+        //To get the correct order
         new_pre_prepares.reverse();
         new_prepares.reverse();
         new_commits.reverse();

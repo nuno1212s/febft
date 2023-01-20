@@ -29,7 +29,7 @@ use crate::bft::benchmarks::CommStats;
 use crate::bft::communication::message::{
     Header, Message, SerializedMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage,
 };
-use crate::bft::communication::peer_handling::{ConnectedPeer, NodePeers};
+use crate::bft::communication::incoming_peer_handling::{ConnectedPeer, PeerIncomingRqHandling};
 use crate::bft::communication::peer_sending_threads::ConnectionHandle;
 use crate::bft::communication::ping_handler::{PingHandler};
 
@@ -49,7 +49,7 @@ use crate::bft::threadpool;
 
 pub mod channel;
 pub mod message;
-pub mod peer_handling;
+pub mod incoming_peer_handling;
 pub mod peer_sending_threads;
 pub mod serialize;
 pub mod socket;
@@ -239,7 +239,8 @@ pub struct Node<D: SharedData + 'static> {
     id: NodeId,
     first_cli: NodeId,
     //Handles the incomming connections' buffering and request collection
-    node_handling: NodePeers<Message<D::State, D::Request, D::Reply>>,
+    //This is polled by the proposer for client requests and by the
+    client_pooling: PeerIncomingRqHandling<Message<D::State, D::Request, D::Reply>>,
     //Handles the outgoing connection references
     peer_tx: PeerTx,
     //Handles the Pseudo random number generation for this node
@@ -324,7 +325,7 @@ pub struct NodeConfig {
     pub sync_server_config: ServerConfig,
     ///The TLS configuration used to connect to replica nodes (from replica nodes) (Synchronousy)
     pub sync_client_config: ClientConfig,
-    ///How many clients should be placed in a single collecting pool (seen in peer_handling)
+    ///How many clients should be placed in a single collecting pool (seen in incoming_peer_handling)
     pub clients_per_pool: usize,
     ///The timeout for batch collection in each client pool.
     /// (The first to reach between batch size and timeout)
@@ -535,7 +536,7 @@ impl<D> Node<D>
         let ping_handler = PingHandler::new();
 
         //Setup all the peer message reception handling.
-        let peers = NodePeers::new(
+        let peers = PeerIncomingRqHandling::new(
             cfg.id,
             cfg.first_cli,
             cfg.batch_size,
@@ -606,7 +607,7 @@ impl<D> Node<D>
             rng,
             shared,
             peer_tx,
-            node_handling: peers,
+            client_pooling: peers,
             connector,
             peer_addrs: cfg.addrs,
             first_cli: cfg.first_cli,
@@ -684,12 +685,12 @@ impl<D> Node<D>
         let rogue = Vec::new();
 
         //TODO: We need to receive the amount of replicas in the quorum
-        while node.node_handling.replica_count() < cfg.n || node.peer_tx.connected() < cfg.n {
+        while node.client_pooling.replica_count() < cfg.n || node.peer_tx.connected() < cfg.n {
             //Any received messages will be handled by the connection pool buffers
             debug!(
                 "{:?} // Connected to {} RX replicas, {} TX",
                 node.id,
-                node.node_handling.replica_count(),
+                node.client_pooling.replica_count(),
                 node.peer_tx.connected()
             );
 
@@ -698,8 +699,8 @@ impl<D> Node<D>
 
         debug!(
             "Found all nodes required {}, {} RX, {} TX",
-            node.node_handling.replica_count(),
-            node.node_handling.replica_count(),
+            node.client_pooling.replica_count(),
+            node.client_pooling.replica_count(),
             node.peer_tx.connected()
         );
 
@@ -708,14 +709,14 @@ impl<D> Node<D>
     }
 
     pub fn batch_size(&self) -> usize {
-        self.node_handling.batch_size()
+        self.client_pooling.batch_size()
     }
 
     fn resolve_client_rx_connection(
         &self,
         node_id: NodeId,
     ) -> Option<Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>> {
-        self.node_handling.resolve_peer_conn(node_id)
+        self.client_pooling.resolve_peer_conn(node_id)
     }
 
     // clone the shared data and pass it to a new object
@@ -759,7 +760,7 @@ impl<D> Node<D>
 
     /// Returns a handle to the loopback channel of this `Node`. (Sending messages to ourselves)
     pub fn loopback_channel(&self) -> &Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
-        self.node_handling.peer_loopback()
+        self.client_pooling.loopback_connection()
     }
 
     /// Send a `SystemMessage` to a single destination.
@@ -1431,7 +1432,7 @@ impl<D> Node<D>
 
     /// Check if we are currently connected to a provided node (in terms of message reception)
     pub fn is_connected_to_rx(&self, id: NodeId) -> bool {
-        self.node_handling.resolve_peer_conn(id).is_some()
+        self.client_pooling.resolve_peer_conn(id).is_some()
     }
 
     /// Are we connected to a node (in terms of message sending)
@@ -1441,7 +1442,7 @@ impl<D> Node<D>
 
     //Get how many pending messages are in the requests channel
     pub fn rqs_len_from_clients(&self) -> usize {
-        self.node_handling.rqs_len_from_clients()
+        self.client_pooling.rqs_len_from_clients()
     }
 
     //Receive messages from the clients we are connected to
@@ -1449,18 +1450,18 @@ impl<D> Node<D>
         &self,
         timeout: Option<Duration>,
     ) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
-        self.node_handling.receive_from_clients(timeout)
+        self.client_pooling.receive_from_clients(timeout)
     }
 
     pub fn try_recv_from_clients(
         &self,
     ) -> Result<Option<Vec<Message<D::State, D::Request, D::Reply>>>> {
-        self.node_handling.try_receive_from_clients()
+        self.client_pooling.try_receive_from_clients()
     }
 
     //Receive messages from the replicas we are connected to
     pub fn receive_from_replicas(&self) -> Result<Message<D::State, D::Request, D::Reply>> {
-        self.node_handling.receive_from_replicas()
+        self.client_pooling.receive_from_replicas()
     }
 
     /// Registers the newly created transmission socket to the peer
@@ -2194,7 +2195,7 @@ impl<D> Node<D>
         //Init the per client queue and start putting the received messages into it
         debug!("{:?} // Handling connection of peer {:?}", self.id, peer_id);
 
-        let client = self.node_handling.init_peer_conn(peer_id.clone());
+        let client = self.client_pooling.init_peer_conn(peer_id.clone());
 
         let mut buf = SmallVec::<[u8; 16384]>::new();
 
@@ -2289,7 +2290,7 @@ impl<D> Node<D>
     ) {
         self.clone().tx_connect_node_sync(peer_id, None);
 
-        let client = self.node_handling.init_peer_conn(peer_id.clone());
+        let client = self.client_pooling.init_peer_conn(peer_id.clone());
 
         let mut buf = SmallVec::<[u8; 16384]>::new();
 

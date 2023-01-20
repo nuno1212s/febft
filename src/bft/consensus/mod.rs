@@ -1,10 +1,11 @@
 //! The consensus algorithm used for `febft` and other logic.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
 
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ::log::debug;
@@ -14,9 +15,8 @@ use either::Either::{Left, Right};
 use crate::bft::communication::message::{
     ConsensusMessage, ConsensusMessageKind, Header, StoredMessage,
 };
+use crate::bft::consensus::replica_consensus::ReplicaPreparingPollStatus;
 
-use self::log::Log;
-use self::log::persistent::PersistentLogModeTrait;
 use self::replica_consensus::ReplicaConsensus;
 
 use super::communication::message::{RequestMessage, SystemMessage};
@@ -30,13 +30,15 @@ use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
 use crate::bft::executable::{Request, Service, State};
+use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog, ProcessedBatch};
+use crate::bft::msg_log::Log;
+use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::{
     tbo_advance_message_queue, tbo_pop_message, tbo_queue_message, Orderable, SeqNo,
 };
 use crate::bft::timeouts::Timeouts;
 
 pub mod follower_consensus;
-pub mod log;
 pub mod replica_consensus;
 
 /// Represents the status of calling `poll()` on a `Consensus`.
@@ -192,9 +194,11 @@ enum ProtoPhase {
 }
 
 #[derive(Clone)]
+//TODO: Make sure the consensus is locked during view changes and Csts
+//This is kind of already done but I'm not 200% sure so I'm leaving this comment
+//Situations that have been dealt
 pub struct ConsensusGuard {
-    //TODO: Make sure the consensus is locked during view changes and Csts
-    consensus_lock: Arc<Mutex<(SeqNo, ViewInfo)>>,
+    consensus_information: Arc<Mutex<(SeqNo, ViewInfo)>>,
     //Consensus atomic bool guard. Set to true when the consensus is locked,
     //Set to false when it is unlocked and the proposer can propose the new
     //Consensus instance
@@ -204,23 +208,36 @@ pub struct ConsensusGuard {
 impl ConsensusGuard {
     fn new(seq_no: SeqNo, view: ViewInfo) -> Self {
         Self {
-            consensus_lock: Arc::new(Mutex::new((seq_no, view))),
+            consensus_information: Arc::new(Mutex::new((seq_no, view))),
             consensus_guard: Arc::new(AtomicBool::new(true)),
         }
     }
 
     pub fn consensus_info(&self) -> &Arc<Mutex<(SeqNo, ViewInfo)>> {
-        &self.consensus_lock
+        &self.consensus_information
     }
 
-    ///Get a reference to the
-    pub fn consensus_guard(&self) -> &Arc<AtomicBool> {
-        &self.consensus_guard
+    /// Make it so the proposer is not able to propose any new requests at this time
+    pub fn lock_consensus(&self) {
+        self.consensus_guard.store(true, Ordering::SeqCst)
+    }
+
+    /// Make it so the proposer is able to propose one request. This indicates that the
+    /// consensus is ready for a new batch
+    pub fn unlock_consensus(&self) {
+        self.consensus_guard.store(false, Ordering::SeqCst);
+    }
+
+    /// This is for the proposer to check if he can propose a new batch at this time.
+    /// The user of the function is then bound to propose a new batch or the
+    /// whole system can go unresponsive
+    pub fn attempt_to_propose_message(&self) -> Result<bool, bool> {
+        self.consensus_guard.compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed)
     }
 }
 
 /// Status returned from processing a consensus message.
-pub enum ConsensusStatus<'a> {
+pub enum ConsensusStatus<S> where S: Service {
     /// A particular node tried voting twice.
     VotedTwice(NodeId),
     /// A `febft` quorum still hasn't made a decision
@@ -230,7 +247,9 @@ pub enum ConsensusStatus<'a> {
     /// the batch of requests with the given digests.
     /// The first digest is the digest of the Prepare message
     /// And therefore the entire batch digest
-    Decided(Digest, &'a [Digest], Vec<Digest>),
+    /// THe second Vec<Digest> is a vec with digests of the requests contained in the batch
+    /// The third is the messages that should be persisted for this batch to be considered persisted
+    Decided(CompletedBatch<S>),
 }
 
 /// An abstract consensus trait.
@@ -247,16 +266,8 @@ pub struct Consensus<S: Service> {
     phase: ProtoPhase,
     tbo: TboQueue<Request<S>>,
 
-    //A vector that contains the digest of all requests contained in the batch that is currently being processed
-    current: Vec<Digest>,
-    //The digest of the entire batch that is currently being processed
-    current_digest: Digest,
-    //The size of batch that is currently being processed
-    current_batch_size: usize,
-    //A list of digests of all consensus related messages pertaining to this
-    //Consensus instance. Used to keep track of if the persistent log has saved the messages already
-    //So the requests can be executed
-    current_messages: Vec<Digest>,
+    // The information about the log that is currently being processed
+    deciding_log: DecidingLog<S>,
 
     accessory: ConsensusAccessory<S>,
 }
@@ -299,7 +310,6 @@ impl<S: Service + 'static> Consensus<S> {
         node_id: NodeId,
         view: ViewInfo,
         next_seq_num: SeqNo,
-        batch_size: usize,
         observer_handle: ObserverHandle,
         follower_handle: Option<FollowerHandle<S>>,
     ) -> Self {
@@ -307,11 +317,8 @@ impl<S: Service + 'static> Consensus<S> {
             node_id,
             phase: ProtoPhase::Init,
             tbo: TboQueue::new(next_seq_num),
-            current_digest: Digest::from_bytes(&[0; Digest::LENGTH][..]).unwrap(),
-            current: Vec::with_capacity(batch_size),
-            current_batch_size: 0,
-            current_messages: Vec::new(),
-            accessory: ConsensusAccessory::Replica(ReplicaConsensus::new(
+            deciding_log: DecidingLog::new(),
+            accessory:  ConsensusAccessory::Replica(ReplicaConsensus::new(
                 view,
                 next_seq_num,
                 observer_handle,
@@ -320,22 +327,14 @@ impl<S: Service + 'static> Consensus<S> {
         }
     }
 
-    pub fn new_follower(node_id: NodeId, next_seq_num: SeqNo, batch_size: usize) -> Self {
+    pub fn new_follower(node_id: NodeId, next_seq_num: SeqNo) -> Self {
         Self {
             node_id,
             phase: ProtoPhase::Init,
             tbo: TboQueue::new(next_seq_num),
-            current_digest: Digest::from_bytes(&[0; Digest::LENGTH][..]).unwrap(),
-            current: Vec::with_capacity(batch_size),
-            current_batch_size: batch_size,
-            current_messages: Vec::new(),
-            accessory: ConsensusAccessory::Follower,
+            deciding_log: DecidingLog::new(),
+            accessory:  ConsensusAccessory::Follower,
         }
-    }
-
-    ///Get the kind of consensus state machine this is
-    pub fn kind(&self) -> &ConsensusAccessory<S> {
-        &self.accessory
     }
 
     ///Get the consensus guard, only available on replicas
@@ -377,7 +376,20 @@ impl<S: Service + 'static> Consensus<S> {
                     unreachable!();
                 }
                 ConsensusAccessory::Replica(rep) => {
-                    rep.handle_poll_preparing_requests(self, log)
+                    match rep.handle_poll_preparing_requests(log) {
+                        ReplicaPreparingPollStatus::Recv => {
+                            ConsensusPollStatus::Recv
+                        }
+                        ReplicaPreparingPollStatus::MoveToPreparing => {
+                            extract_msg!({
+                                self.phase = ProtoPhase::Preparing(1);
+                            },
+                            ConsensusPollStatus::Recv,
+                            &mut self.tbo.get_queue,
+                            &mut self.tbo.prepares
+                        )
+                        }
+                    }
                 }
             },
             ProtoPhase::PrePreparing if self.tbo.get_queue => {
@@ -394,6 +406,9 @@ impl<S: Service + 'static> Consensus<S> {
     }
 
     /// Sets the id of the current consensus.
+    /// This is done by the CST protocol and we must clear
+    /// every request that we have already received via CST from
+    /// our message queues
     pub fn install_sequence_number(&mut self, seq: SeqNo) {
         // drop old msgs
         match seq.index(self.sequence_number()) {
@@ -409,12 +424,12 @@ impl<S: Service + 'static> Consensus<S> {
                 self.tbo.commits.clear();
             }
             Right(limit) => {
-                let iterator = self.tbo.pre_prepares.drain(..limit).chain(
-                    self.tbo
-                        .prepares
-                        .drain(..limit)
-                        .chain(self.tbo.commits.drain(..limit)),
-                );
+                //Remove all messages up to the ones we are currently using
+                let iterator =
+                    self.tbo.pre_prepares.drain(..limit)
+                        .chain(self.tbo.prepares.drain(..limit))
+                        .chain(self.tbo.commits.drain(..limit));
+
                 for _ in iterator {
                     // consume elems
                 }
@@ -433,14 +448,17 @@ impl<S: Service + 'static> Consensus<S> {
         // NOTE: using `ProtoPhase::Init` forces us to queue
         // all messages, which is fine, until we call `install_new_phase`
         self.tbo.curr_seq = seq;
+        self.curr_seq = seq;
         self.tbo.get_queue = true;
+        //Move back to the init phase and prepare to process all of the
+        //Pending messages so we can quickly catch up
         self.phase = ProtoPhase::Init;
         // FIXME: do we need to clear the missing requests buffers?
 
         match &mut self.accessory {
             ConsensusAccessory::Follower => {}
             ConsensusAccessory::Replica(rep) => {
-                rep.handle_installed_seq_num(self);
+                rep.handle_installed_seq_num(seq);
             }
         }
     }
@@ -455,17 +473,18 @@ impl<S: Service + 'static> Consensus<S> {
 
     /// Starts a new consensus instance.
     pub fn next_instance(&mut self) {
-        self.current.clear();
-        self.current_messages.clear();
+        self.deciding_log.reset();
 
         let _prev_seq = self.curr_seq.clone();
 
         self.tbo.next_instance_queue();
 
+        let current_seq = self.curr_seq;
+
         match &mut self.accessory {
             ConsensusAccessory::Follower => {}
             ConsensusAccessory::Replica(rep) => {
-                rep.handle_next_instance(self);
+                rep.handle_next_instance(current_seq);
             }
         }
     }
@@ -517,7 +536,7 @@ impl<S: Service + 'static> Consensus<S> {
         timeouts: &Timeouts,
         log: &Log<S, T>,
         node: &Node<S::Data>,
-    ) -> ConsensusStatus<'a> where T: PersistentLogModeTrait {
+    ) -> ConsensusStatus<S> where T: PersistentLogModeTrait {
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just
         // the amount of votes received
@@ -538,7 +557,7 @@ impl<S: Service + 'static> Consensus<S> {
                         self.queue_commit(header, message);
                         ConsensusStatus::Deciding
                     }
-                }
+                };
             }
             ProtoPhase::PrePreparing => {
                 // queue message if we're not pre-preparing
@@ -605,14 +624,11 @@ impl<S: Service + 'static> Consensus<S> {
                     log,
                 );
 
-                //Populate the currently active requests
-                self.current_digest = header.digest().clone();
-
-                self.current.clear();
-                self.current.append(&mut digests);
-
-                self.current_messages.clear();
-                self.current_messages.push(header.digest().clone());
+                self.deciding_log.processing_new_batch(
+                    stored_msg.clone(),
+                    stored_msg.header().digest().clone(),
+                    digests,
+                );
 
                 {
                     //Update batch meta
@@ -625,12 +641,17 @@ impl<S: Service + 'static> Consensus<S> {
                 // add message to the log
                 log.insert_consensus(stored_msg.clone());
 
+                let seq_no = self.sequence_number();
+                let current_digest = self.deciding_log.current_digest().unwrap();
+
                 match &mut self.accessory {
                     ConsensusAccessory::Follower => {}
                     ConsensusAccessory::Replica(rep) => {
                         //Perform the rest of the necessary operations to handle the received message
                         //If we are a replica
-                        rep.handle_preprepare_sucessfull(self, view, stored_msg, node);
+                        rep.handle_preprepare_sucessfull(seq_no,
+                                                         current_digest,
+                                                         view, stored_msg, node);
                     }
                 }
 
@@ -641,7 +662,7 @@ impl<S: Service + 'static> Consensus<S> {
                 ConsensusStatus::Deciding
             }
             ProtoPhase::PreparingRequests => {
-                match &mut self.accessory {
+                match &self.accessory {
                     ConsensusAccessory::Follower => {
                         unreachable!()
                     }
@@ -654,6 +675,7 @@ impl<S: Service + 'static> Consensus<S> {
                                     "{:?} // Received pre prepare message while in preparing requests",
                                     self.node_id
                                 );
+
                                 self.queue_pre_prepare(header, message);
                                 ConsensusStatus::Deciding
                             }
@@ -673,7 +695,7 @@ impl<S: Service + 'static> Consensus<S> {
                                 self.queue_commit(header, message);
                                 ConsensusStatus::Deciding
                             }
-                        }
+                        };
                     }
                 }
             }
@@ -703,10 +725,10 @@ impl<S: Service + 'static> Consensus<S> {
 
                             return ConsensusStatus::Deciding;
                         }
-                    ConsensusMessageKind::Prepare(d) if d != &self.current_digest => {
+                    ConsensusMessageKind::Prepare(d) if *d != self.deciding_log.current_digest().unwrap() => {
                         // drop msg with different digest from proposed value
                         debug!("{:?} // Dropped prepare message {:?} because of digest {:?} vs {:?} (ours)",
-                            self.node_id, d, d, self.current_digest);
+                            self.node_id, d, d, self.deciding_log.current_digest());
                         return ConsensusStatus::Deciding;
                     }
                     ConsensusMessageKind::Prepare(d)
@@ -734,7 +756,7 @@ impl<S: Service + 'static> Consensus<S> {
 
                 //Add the message to the messages that must be saved before 
                 //We are able to execute the consensus instance
-                self.current_messages.push(stored_msg.header().digest().clone());
+                self.deciding_log.register_consensus_message(stored_msg.header().digest().clone());
 
                 // add message to the log
                 log.insert_consensus(stored_msg.clone());
@@ -744,10 +766,16 @@ impl<S: Service + 'static> Consensus<S> {
                 self.phase = if i == curr_view.params().quorum() {
                     log.batch_meta().lock().commit_sent_time = Utc::now();
 
+                    let seq_no = self.sequence_number();
+                    let current_digest = self.deciding_log.current_digest().unwrap();
+
                     match &mut self.accessory {
                         ConsensusAccessory::Follower => {}
                         ConsensusAccessory::Replica(rep) => {
-                            rep.handle_preparing_quorum(self, curr_view, stored_msg, log, node);
+                            rep.handle_preparing_quorum(seq_no,
+                                                        current_digest,
+                                                        curr_view, stored_msg,
+                                                        log, node);
                         }
                     }
 
@@ -799,10 +827,10 @@ impl<S: Service + 'static> Consensus<S> {
 
                             return ConsensusStatus::Deciding;
                         }
-                    ConsensusMessageKind::Commit(d) if d != &self.current_digest => {
+                    ConsensusMessageKind::Commit(d) if *d != self.deciding_log.current_digest().unwrap() => {
                         // drop msg with different digest from proposed value
                         debug!("{:?} // Dropped commit message {:?} because of digest {:?} vs {:?} (ours)",
-                            self.node_id, d, d, self.current_digest);
+                            self.node_id, d, d, self.deciding_log.current_digest());
 
                         return ConsensusStatus::Deciding;
                     }
@@ -826,7 +854,7 @@ impl<S: Service + 'static> Consensus<S> {
 
                 //Add the message to the messages that must be saved before 
                 //We are able to execute the consensus instance
-                self.current_messages.push(stored_message.header().digest().clone());
+                self.deciding_log.register_consensus_message(stored_message.header().digest().clone());
 
                 // add message to the log
                 log.insert_batched(stored_message.clone());
@@ -845,27 +873,25 @@ impl<S: Service + 'static> Consensus<S> {
 
                     log.batch_meta().lock().consensus_decision_time = Utc::now();
 
+                    let seq_no = self.sequence_number();
+
                     match &mut self.accessory {
                         ConsensusAccessory::Follower => {}
                         ConsensusAccessory::Replica(rep) => {
-                            rep.handle_committing_quorum(self.sequence_number(), curr_view, stored_message);
+                            rep.handle_committing_quorum(seq_no, curr_view, stored_message);
                         }
                     }
 
-                    let mut messages = Vec::with_capacity(self.current_messages.len());
+                    let processed_batch = self.deciding_log.finish_processing_batch().unwrap();
 
-                    //clear our local current messages vec and return the messages we need to wait for 
-                    //To the necessary place
-                    messages.append(&mut self.current_messages);
-
-                    ConsensusStatus::Decided(batch_digest, &self.current[..self.current_batch_size], messages)
+                    ConsensusStatus::Decided(processed_batch)
                 } else {
                     self.phase = ProtoPhase::Committing(i);
 
-                    match &self.accessory {
+                    match &mut self.accessory {
                         ConsensusAccessory::Follower => {}
-                        ConsensusAccessory::Replica(_) => {
-                            Self::handle_committing_no_quorum(self, curr_view, stored_message);
+                        ConsensusAccessory::Replica(rep) => {
+                            rep.handle_committing_no_quorum(curr_view, stored_message);
                         }
                     }
 

@@ -27,7 +27,7 @@ use crate::bft::ordering::{
     SeqNo,
     Orderable,
 };
-use crate::bft::consensus::log::CollectData;
+
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::NodeId;
 use crate::bft::core::server::ViewInfo;
@@ -35,6 +35,7 @@ use crate::bft::timeouts::{Timeout, TimeoutKind};
 use crate::bft::sync::LeaderCollects;
 use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
+use crate::bft::msg_log::decisions::CollectData;
 
 // convenience type
 pub type StoredSerializedSystemMessage<D> = StoredMessage<
@@ -972,6 +973,13 @@ impl WireMessage {
         ctx.finish()
     }
 
+    ///Sign a given message, with the following passed parameters
+    /// From is the node that sent the message
+    /// to is the destination node
+    /// nonce is the none
+    /// and the payload is what we actually want to sign (in this case we will
+    /// sign the digest of the message, instead of the actual entire payload
+    /// since that would be quite slow)
     fn sign_parts(
         sk: &KeyPair,
         from: u32,
@@ -985,6 +993,14 @@ impl WireMessage {
         sk.sign(digest.as_ref()).unwrap()
     }
 
+    ///Verify the signature of a given message, which contains
+    /// the following parameters
+    /// From is the node that sent the message
+    /// to is the destination node
+    /// nonce is the none
+    /// and the payload is what we actually want to sign (in this case we will
+    /// sign the digest of the message, instead of the actual entire payload
+    /// since that would be quite slow)
     fn verify_parts(
         pk: &PublicKey,
         sig: &Signature,
@@ -1019,9 +1035,11 @@ impl WireMessage {
         let preliminary_check_failed =
             self.header.version != WireMessage::CURRENT_VERSION
                 || self.header.length != self.payload.len() as u64;
+
         if preliminary_check_failed {
             return false;
         }
+
         public_key
             .map(|pk| {
                 Self::verify_parts(

@@ -5,14 +5,14 @@ use std::time::{Duration, Instant};
 use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::message::{ConsensusMessage, Header, Message, SystemMessage};
 use crate::bft::communication::{Node, NodeConfig, NodeId};
-use crate::bft::consensus::log::persistent::PersistentLogModeTrait;
-use crate::bft::consensus::log::{Info, Log};
 use crate::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::ViewInfo;
 use crate::bft::cst::{install_recovery_state, CollabStateTransfer, CstProgress, CstStatus};
 use crate::bft::error::*;
 use crate::bft::executable::{Executor, ExecutorHandle, FollowerReplier, Request, Service, State};
+use crate::bft::msg_log::{Info, Log};
+use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::proposer::follower_proposer::FollowerProposer;
 use crate::bft::sync::{
@@ -102,7 +102,6 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
 
         let log = Log::new(
             log_node_id,
-            global_batch_size,
             None,
             executor.clone(),
             db_path,
@@ -151,7 +150,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
             None,
         )?;
 
-        let consensus = Consensus::new_follower(node.id(), seq, global_batch_size);
+        let consensus = Consensus::new_follower(node.id(), seq);
 
         const CST_BASE_DUR: Duration = Duration::from_secs(30);
 
@@ -594,7 +593,9 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
             // FIXME: execution layer needs to receive the id
             // attributed by the consensus layer to each op,
             // to execute in order
-            ConsensusStatus::Decided(batch_digest, digests, messages) => {
+            ConsensusStatus::Decided(completed_batch) => {
+
+
                 // for digest in digests.iter() {
                 //     self.synchronizer.unwatch_request(digest);
                 // }
@@ -604,7 +605,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
 
                 if let Some((info, batch, meta)) =
                     self.log
-                        .finalize_batch(seq, batch_digest, digests, messages, meta)?
+                        .finalize_batch(seq, completed_batch, meta)?
                 {
                     //Send the finalized batch to the rq finalizer
                     //So everything can be removed from the correct logs and

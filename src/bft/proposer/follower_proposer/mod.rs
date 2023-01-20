@@ -6,9 +6,10 @@ use crate::bft::{
         message::{RequestMessage, StoredMessage},
         Node,
     },
-    consensus::log::{persistent::PersistentLogModeTrait, Log},
     executable::{ExecutorHandle, Service},
 };
+use crate::bft::msg_log::Log;
+use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 
 pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
 

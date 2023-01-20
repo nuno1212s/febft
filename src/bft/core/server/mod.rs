@@ -17,8 +17,6 @@ use crate::bft::communication::message::{
     StoredMessage, SystemMessage,
 };
 use crate::bft::communication::{Node, NodeConfig, NodeId};
-use crate::bft::consensus::log::persistent::PersistentLogModeTrait;
-use crate::bft::consensus::log::{Info, Log};
 use crate::bft::consensus::{Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
@@ -28,6 +26,8 @@ use crate::bft::error::*;
 use crate::bft::executable::{
     Executor, ExecutorHandle, ReplicaReplier, Reply, Request, Service, State,
 };
+use crate::bft::msg_log::{Info, Log};
+use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::proposer::Proposer;
 use crate::bft::sync::{
@@ -208,7 +208,6 @@ where
         debug!("Initializing log");
         let log = Log::new(
             log_node_id,
-            global_batch_size,
             Some(observer_handle.clone()),
             executor.clone(),
             db_path,
@@ -282,7 +281,6 @@ where
             node.id(),
             view.clone(),
             next_consensus_seq,
-            global_batch_size,
             observer_handle.clone(),
             None
         );
@@ -427,24 +425,18 @@ where
                 (ReplicaPhase::NormalPhase, _) => {
                     //We want to stop the proposer from trying to propose any requests while we are performing
                     //Other operations.
-                    self.consensus_guard
-                        .consensus_guard()
-                        .store(true, Ordering::SeqCst);
+                    self.consensus_guard.lock_consensus();
                 },
                 (ReplicaPhase::SyncPhase, ReplicaPhase::NormalPhase) => {
                     // When changing from the sync phase to the normal phase
                     // The phase starts with a SYNC phase, so we don't want to allow
                     // The proposer to propose anything
-                    self.consensus_guard
-                        .consensus_guard()
-                        .store(true, Ordering::SeqCst);
+                    self.consensus_guard.lock_consensus();
                 }
                 (_, ReplicaPhase::NormalPhase) => {
                     //Mark the consensus as available, since we are changing to the normal phase
                     //And are therefore ready to receive pre-prepares (if are are the leaders)
-                    self.consensus_guard
-                        .consensus_guard()
-                        .store(false, Ordering::SeqCst);
+                    self.consensus_guard.unlock_consensus();
                 }
                 (_, _) => {}
             }
@@ -847,7 +839,7 @@ where
             // FIXME: execution layer needs to receive the id
             // attributed by the consensus layer to each op,
             // to execute in order
-            ConsensusStatus::Decided(batch_digest, digests, needed_messages) => {
+            ConsensusStatus::Decided(batch_digest) => {
                 // for digest in digests.iter() {
                 //     self.synchronizer.unwatch_request(digest);
                 // }
@@ -856,7 +848,7 @@ where
                 let meta = std::mem::replace(&mut *self.log.batch_meta().lock(), new_meta);
 
                 if let Some((info, batch, meta)) =
-                    self.log.finalize_batch(seq, batch_digest, digests, needed_messages, meta)? {
+                    self.log.finalize_batch(seq, batch_digest, meta)? {
 
                     match info {
                         Info::Nil => self.executor.queue_update(meta, batch),
@@ -912,6 +904,9 @@ where
     }
 
     fn timeout_received(&mut self, timeouts: Timeout) {
+
+        let mut client_rq_timeouts = Vec::with_capacity(timeouts.len());
+
         for timeout_kind in timeouts {
             match timeout_kind {
                 TimeoutKind::Cst(cst_seq) => {
@@ -943,35 +938,44 @@ where
                         _ => (),
                     }
                 }
-                TimeoutKind::ClientRequestTimeout(_timeout_seq) => {
-                    let status = self.synchronizer
-                        .client_requests_timed_out(timeout_seq, &self.timeouts);
-
-                    match status {
-                       SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
-                           if forwarded.len() > 0 {
-                               let requests = self.log.clone_requests(&forwarded);
-
-                               self.synchronizer.forward_requests(
-                                   requests,
-                                   &mut self.node,
-                               );
-                           }
-                           if stopped.len() > 0 {
-                               let stopped = self.log.clone_requests(&stopped);
-
-                               self.synchronizer.begin_view_change(Some(stopped),
-                                                                   &mut self.node,
-                                                                   &self.timeouts,
-                                                                   &self.log);
-                               self.phase = ReplicaPhase::SyncPhase;
-                           }
-                       },
-                       // nothing to do
-                       _ => (),
-                    }
+                TimeoutKind::ClientRequestTimeout(timeout_seq) => {
+                    client_rq_timeouts.push(timeout_seq);
                 }
             }
+        }
+
+        if client_rq_timeouts.len() > 0 {
+
+            let status = self.synchronizer
+                .client_requests_timed_out(
+                                           &client_rq_timeouts,);
+
+            match status {
+                SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
+                    if forwarded.len() > 0 {
+                        let requests = self.log.clone_pending_requests(&forwarded);
+
+                        self.synchronizer.forward_requests(
+                            requests,
+                            &mut self.node,
+                            &self.log
+                        );
+                    }
+
+                    if stopped.len() > 0 {
+                        let stopped = self.log.clone_pending_requests(&stopped);
+
+                        self.synchronizer.begin_view_change(Some(stopped),
+                                                            &mut self.node,
+                                                            &self.timeouts,
+                                                            &self.log);
+                        self.phase = ReplicaPhase::SyncPhase;
+                    }
+                },
+                // nothing to do
+                _ => (),
+            }
+
         }
     }
 

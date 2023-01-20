@@ -15,7 +15,7 @@ readme = "README.md"
 default = [
     "expose_impl",
     "async_runtime_async_std",
-    "threadpool_crossbeam",
+    "threadpool_rayon",
     "socket_tokio_tcp",
     "serialize_serde",
     "channel_flume_mpmc",
