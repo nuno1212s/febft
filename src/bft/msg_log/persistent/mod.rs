@@ -3,13 +3,15 @@ pub mod consensus_backlog;
 use std::convert::TryInto;
 
 use std::marker::PhantomData;
+use std::ops::Deref;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use log::error;
 
 use crate::bft::communication::channel;
-use crate::bft::communication::channel::ChannelSyncRx;
+use crate::bft::communication::channel::{ChannelSyncRx, SendError};
 use crate::bft::communication::message::ConsensusMessage;
 use crate::bft::communication::message::ConsensusMessageKind;
 use crate::bft::communication::message::Header;
@@ -30,6 +32,8 @@ use crate::bft::{
     ordering::SeqNo,
     persistentdb::KVDB,
 };
+use crate::bft::cst::CstProgress::Message;
+use crate::bft::cst::install_recovery_state;
 use crate::bft::msg_log::persistent::consensus_backlog::{BatchInfo, PendingBatch};
 
 use self::consensus_backlog::ConsensusBackLogHandle;
@@ -48,7 +52,7 @@ pub const LATEST_SEQ: &str = "latest_seq";
 pub const LATEST_VIEW_SEQ: &str = "latest_view_seq";
 
 pub const CF_OTHER: &str = "others";
-pub const CF_PREPREPARES: &str = "preprepares";
+pub const CF_PRE_PREPARES: &str = "preprepares";
 pub const CF_PREPARES: &str = "prepares";
 pub const CF_COMMITS: &str = "commits";
 
@@ -57,7 +61,6 @@ pub const CF_COMMITS: &str = "commits";
 /// execute a function when the logger stops finishes the computation
 pub type CallbackType = Box<dyn FnOnce(Result<ResponseMsg>) + Send>;
 
-#[derive(Clone)]
 pub enum PersistentLogMode<S: Service> {
     ///The strict log mode is meant to indicate that the consensus can only be finalized and the
     /// requests executed when the replica has all the information persistently stored.
@@ -135,46 +138,46 @@ pub enum WriteMode {
     //Of your choice
     //Note that this function will be executed on the persistent logging thread, so keep it short and
     //Be careful with race conditions.
-    //TODO: Maybe change this to the threadpool?
-    Async(Option<CallbackType>),
-    Sync,
+    NonBlockingSync(Option<CallbackType>),
+    BlockingSync,
 }
 
-#[derive(Clone)]
+
 ///TODO: Handle sequence numbers that loop the u32 range.
 /// This is the main reference to the persistent log, used to push data to it
-pub struct PersistentLog<S: Service, T>
-    where
-        T: PersistentLogModeTrait,
+pub struct PersistentLog<S: Service>
 {
-    ///The persistency mode for this log
     persistency_mode: PersistentLogMode<S>,
 
-    //Handle to send the work to the worker thread
-    tx: ChannelSyncTx<ChannelMsg<S>>,
+    // A handle for the persistent log workers (each with his own thread)
+    worker_handle: Arc<PersistentLogWorkerHandle<S>>,
 
     ///The persistent KV-DB to be used
     db: KVDB,
-
-    p: PhantomData<T>,
 }
 
-///We can do this thanks to two primitives
-unsafe impl<S, T> Sync for PersistentLog<S, T>
-    where
-        S: Service,
-        T: PersistentLogModeTrait,
-{}
+/// A handle for all of the persistent workers.
+/// Handles task distribution and load balancing across the
+/// workers
+pub struct PersistentLogWorkerHandle<S: Service> {
+    round_robin_counter: AtomicUsize,
+    tx: Vec<PersistentLogWriteStub<S>>,
+}
 
-impl<S: Service + 'static, T> PersistentLog<S, T>
-    where
-        T: PersistentLogModeTrait,
+///A stub that is only useful for writing to the persistent log
+#[derive(Clone)]
+struct PersistentLogWriteStub<S: Service> {
+    tx: ChannelSyncTx<ChannelMsg<S>>,
+}
+
+impl<S: Service + 'static> PersistentLog<S>
 {
-    pub fn init_log<K>(executor: ExecutorHandle<S>, db_path: K) -> Result<Self>
+    pub fn init_log<K, T>(executor: ExecutorHandle<S>, db_path: K) -> Result<Self>
         where
             K: AsRef<Path>,
+            T: PersistentLogModeTrait
     {
-        let prefixes = vec![CF_OTHER, CF_PREPREPARES, CF_PREPARES, CF_COMMITS];
+        let prefixes = vec![CF_OTHER, CF_PRE_PREPARES, CF_PREPARES, CF_COMMITS];
 
         let log_mode = T::init_persistent_log(executor);
 
@@ -189,26 +192,37 @@ impl<S: Service + 'static, T> PersistentLog<S, T>
 
         let (tx, rx) = channel::new_bounded_sync(1024);
 
-        let _worker = PersistentLogWorker {
+        let worker = PersistentLogWorker {
             request_rx: rx,
             response_txs,
             db: kvdb.clone(),
         };
 
-        //TODO: Start worker
+        match &log_mode {
+            PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
+                std::thread::Builder::new().name(format!("Persistent log Worker #1"))
+                    .spawn(move || {
+                        worker.work();
+                    }).unwrap();
+            }
+            _ => {}
+        }
+
+        let persistent_log_write_stub = PersistentLogWriteStub { tx };
+
+        let worker_handle = Arc::new(PersistentLogWorkerHandle {
+            round_robin_counter: AtomicUsize::new(0),
+            tx: vec![persistent_log_write_stub],
+        });
 
         Ok(Self {
             persistency_mode: log_mode,
-            tx,
+            worker_handle,
             db: kvdb,
-            p: Default::default(),
         })
     }
 
-    pub fn kind(&self) -> &PersistentLogMode<S> {
-        &self.persistency_mode
-    }
-
+    /// TODO: Maybe make this async? We need it to start execution anyways...
     pub fn read_state(&self) -> Result<Option<InstallState<S>>> {
         match self.kind() {
             PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
@@ -220,16 +234,18 @@ impl<S: Service + 'static, T> PersistentLog<S, T>
         }
     }
 
-    pub fn queue_committed(&self, write_mode: WriteMode, seq: SeqNo) -> Result<()> {
+    pub fn kind(&self) -> &PersistentLogMode<S> {
+        &self.persistency_mode
+    }
+
+    pub fn write_committed_seq_no(&self, write_mode: WriteMode, seq: SeqNo) -> Result<()> {
         match self.persistency_mode {
             PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
                 match write_mode {
-                    WriteMode::Async(callback) => {
-                        self.tx.send((Message::Committed(seq), callback));
-
-                        todo!()
+                    WriteMode::NonBlockingSync(callback) => {
+                        self.worker_handle.queue_committed(seq, callback)
                     }
-                    WriteMode::Sync => write_latest_seq(&self.db, seq),
+                    WriteMode::BlockingSync => write_latest_seq(&self.db, seq),
                 }
             }
             PersistentLogMode::None => {
@@ -238,16 +254,14 @@ impl<S: Service + 'static, T> PersistentLog<S, T>
         }
     }
 
-    pub fn queue_view_number(&self, write_mode: WriteMode, view_seq: ViewInfo) -> Result<()> {
+    pub fn write_view_info(&self, write_mode: WriteMode, view_seq: ViewInfo) -> Result<()> {
         match self.persistency_mode {
             PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
                 match write_mode {
-                    WriteMode::Async(callback) => {
-                        self.tx.send((Message::View(view_seq), callback));
-
-                        todo!()
+                    WriteMode::NonBlockingSync(callback) => {
+                        self.worker_handle.queue_view_number(view_seq, callback)
                     }
-                    WriteMode::Sync => write_latest_view_seq(&self.db, view_seq.sequence_number()),
+                    WriteMode::BlockingSync => write_latest_view_seq(&self.db, view_seq.sequence_number()),
                 }
             }
             PersistentLogMode::None => {
@@ -256,7 +270,7 @@ impl<S: Service + 'static, T> PersistentLog<S, T>
         }
     }
 
-    pub fn queue_message(
+    pub fn write_message(
         &self,
         write_mode: WriteMode,
         msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
@@ -264,12 +278,10 @@ impl<S: Service + 'static, T> PersistentLog<S, T>
         match self.persistency_mode {
             PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
                 match write_mode {
-                    WriteMode::Async(callback) => {
-                        self.tx.send((Message::Message(msg), callback));
-
-                        todo!()
+                    WriteMode::NonBlockingSync(callback) => {
+                        self.worker_handle.queue_message(msg, callback)
                     }
-                    WriteMode::Sync => write_message::<S>(&self.db, &msg),
+                    WriteMode::BlockingSync => write_message::<S>(&self.db, &msg),
                 }
             }
             PersistentLogMode::None => {
@@ -278,20 +290,24 @@ impl<S: Service + 'static, T> PersistentLog<S, T>
         }
     }
 
-    pub fn queue_state(
+    pub fn write_checkpoint(
         &self,
         write_mode: WriteMode,
-        state: Arc<ReadOnly<Checkpoint<State<S>>>>,
+        checkpoint: Arc<ReadOnly<Checkpoint<State<S>>>>,
     ) -> Result<()> {
         match self.persistency_mode {
             PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
                 match write_mode {
-                    WriteMode::Async(callback) => {
-                        self.tx.send((Message::Checkpoint(state), callback));
-
-                        todo!()
+                    WriteMode::NonBlockingSync(callback) => {
+                        self.worker_handle.queue_state(checkpoint, callback)
                     }
-                    WriteMode::Sync => Ok(()),
+                    WriteMode::BlockingSync => {
+                        let state = checkpoint.state();
+
+                        let last_seq = checkpoint.last_seq();
+
+                        write_checkpoint::<S>(&self.db, state, last_seq.clone())
+                    }
                 }
             }
             PersistentLogMode::None => {
@@ -300,17 +316,35 @@ impl<S: Service + 'static, T> PersistentLog<S, T>
         }
     }
 
-    pub fn queue_invalidate(&self, write_mode: WriteMode, seq: SeqNo) -> Result<()> {
+    pub fn write_invalidate(&self, write_mode: WriteMode, seq: SeqNo) -> Result<()> {
         match self.persistency_mode {
             PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
                 match write_mode {
-                    WriteMode::Async(callback) => {
-                        self.tx.send((Message::Invalidate(seq), callback));
-
-                        todo!()
+                    WriteMode::NonBlockingSync(callback) => {
+                        self.worker_handle.queue_invalidate(seq, callback)
                     }
-                    WriteMode::Sync => Ok(()),
-                }}
+                    WriteMode::BlockingSync => delete_all_msgs_for_seq::<S>(&self.db, seq),
+                }
+            }
+            PersistentLogMode::None => {
+                Ok(())
+            }
+        }
+    }
+
+    /// Attempt
+    pub fn write_install_state(&self, write_mode: WriteMode, state: InstallState<S>) -> Result<()> {
+        match self.persistency_mode {
+            PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
+                match write_mode {
+                    WriteMode::NonBlockingSync(callback) => {
+                        self.worker_handle.queue_install_state(state, callback)
+                    }
+                    WriteMode::BlockingSync => {
+                        write_state::<S>(&self.db, state)
+                    },
+                }
+            }
             PersistentLogMode::None => {
                 Ok(())
             }
@@ -320,7 +354,7 @@ impl<S: Service + 'static, T> PersistentLog<S, T>
     ///Attempt to queue a batch into waiting for persistent logging
     /// If the batch does not have to wait, it's returned to it can be instantly
     /// passed to the executor
-    pub fn queue_batch(&self, batch: PendingBatch<S>) -> Result<Option<BatchInfo<S>>> {
+    pub fn wait_for_batch_persistency_and_execute(&self, batch: PendingBatch<S>) -> Result<Option<BatchInfo<S>>> {
         match &self.persistency_mode {
             PersistentLogMode::Strict(consensus_backlog) => {
                 consensus_backlog.queue_batch(batch)?;
@@ -334,8 +368,95 @@ impl<S: Service + 'static, T> PersistentLog<S, T>
     }
 }
 
+impl<S: Service> Clone for PersistentLog<S> {
+    fn clone(&self) -> Self {
+        Self {
+            persistency_mode: self.persistency_mode.clone(),
+            worker_handle: self.worker_handle.clone(),
+            db: self.db.clone()
+        }
+    }
+}
+
+impl<S: Service> Clone for PersistentLogMode<S> {
+    fn clone(&self) -> Self {
+        match self {
+            PersistentLogMode::Strict(handle) => {
+                PersistentLogMode::Strict(handle.clone())
+            }
+            PersistentLogMode::Optimistic => {
+                PersistentLogMode::Optimistic
+            }
+            PersistentLogMode::None => {
+                PersistentLogMode::None
+            }
+        }
+    }
+}
+
+impl<S: Service> Deref for PersistentLogWriteStub<S> {
+    type Target = ChannelSyncTx<ChannelMsg<S>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.tx
+    }
+}
+
+impl<S: Service> PersistentLogWorkerHandle<S> {
+    /// Employ a simple round robin load distribution
+    fn next_worker(&self) -> &PersistentLogWriteStub<S> {
+        let counter = self.round_robin_counter.fetch_add(1, Ordering::Relaxed);
+
+        self.tx.get(counter % self.tx.len()).unwrap()
+    }
+
+    fn translate_error<V,T>(result: std::result::Result<V, SendError<T>>) -> Result<V> {
+        match result {
+            Ok(v) => {
+                Ok(v)
+            }
+            Err(err) => {
+                Err(Error::simple_with_msg(ErrorKind::MsgLogPersistent, format!("{:?}", err).as_str()))
+            }
+        }
+    }
+
+    fn register_callback_receiver(&self, receiver: ChannelSyncTx<ResponseMsg>) -> Result<()> {
+        for write_stub in &self.tx {
+            Self::translate_error(write_stub.send((PWMessage::RegisterCallbackReceiver(receiver.clone()), None)))?;
+        }
+
+        Ok(())
+    }
+
+    fn queue_invalidate(&self, seq_no: SeqNo, callback: Option<CallbackType>) -> Result<()> {
+        Self::translate_error(self.next_worker().send((PWMessage::Invalidate(seq_no), callback)))
+    }
+
+    fn queue_committed(&self, seq_no: SeqNo, callback: Option<CallbackType>) -> Result<()> {
+        Self::translate_error(self.next_worker().send((PWMessage::Committed(seq_no), callback)))
+    }
+
+    fn queue_view_number(&self, view: ViewInfo, callback: Option<CallbackType>) -> Result<()> {
+        Self::translate_error(self.next_worker().send((PWMessage::View(view), callback)))
+    }
+
+    fn queue_message(&self, message: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+                     callback: Option<CallbackType>) -> Result<()> {
+        Self::translate_error(self.next_worker().send((PWMessage::Message(message), callback)))
+    }
+
+    fn queue_state(&self, state: Arc<ReadOnly<Checkpoint<State<S>>>>, callback: Option<CallbackType>) -> Result<()> {
+        Self::translate_error(self.next_worker().send((PWMessage::Checkpoint(state), callback)))
+    }
+
+    fn queue_install_state(&self, install_state: InstallState<S>, callback: Option<CallbackType>) -> Result<()> {
+        Self::translate_error(self.next_worker().send((PWMessage::InstallState(install_state), callback)))
+    }
+}
+
 ///A worker for the persistent logging
-pub struct PersistentLogWorker<S: Service> {
+struct PersistentLogWorker<S: Service> {
     request_rx: ChannelSyncRx<ChannelMsg<S>>,
 
     response_txs: Vec<ChannelSyncTx<ResponseMsg>>,
@@ -344,7 +465,7 @@ pub struct PersistentLogWorker<S: Service> {
 }
 
 impl<S: Service> PersistentLogWorker<S> {
-    fn work(self) {
+    fn work(mut self) {
         loop {
             let (request, callback) = match self.request_rx.recv() {
                 Ok((request, callback)) => (request, callback),
@@ -357,8 +478,10 @@ impl<S: Service> PersistentLogWorker<S> {
             let response = self.exec_req(request);
 
             if let Some(callback) = callback {
+                //If we have a callback to call with the response, then call it
                 (callback)(response);
             } else {
+                //If not, then deliver it down the response_txs
                 match response {
                     Ok(response) => {
                         for ele in &self.response_txs {
@@ -375,56 +498,65 @@ impl<S: Service> PersistentLogWorker<S> {
         }
     }
 
-    fn exec_req(&self, message: Message<S>) -> Result<ResponseMsg> {
+    fn exec_req(&mut self, message: PWMessage<S>) -> Result<ResponseMsg> {
         Ok(match message {
-            Message::View(view) => {
+            PWMessage::View(view) => {
                 write_latest_view_seq(&self.db, view.sequence_number())?;
 
                 ResponseMsg::ViewPersisted(view.sequence_number())
             }
-            Message::Committed(seq) => {
+            PWMessage::Committed(seq) => {
                 write_latest_seq(&self.db, seq)?;
 
                 ResponseMsg::CommittedPersisted(seq)
             }
-            Message::Message(msg) => {
+            PWMessage::Message(msg) => {
                 write_message::<S>(&self.db, &msg)?;
 
                 let seq = msg.message().sequence_number();
 
                 ResponseMsg::WroteMessage(seq, msg.header().digest().clone())
             }
-            Message::Checkpoint(checkpoint) => {
+            PWMessage::Checkpoint(checkpoint) => {
                 write_checkpoint::<S>(&self.db, checkpoint.state(), checkpoint.sequence_number())?;
 
                 ResponseMsg::Checkpointed(checkpoint.sequence_number())
             }
-            Message::Invalidate(seq) => {
+            PWMessage::Invalidate(seq) => {
                 delete_all_msgs_for_seq::<S>(&self.db, seq)?;
 
                 ResponseMsg::InvalidationPersisted(seq)
             }
-            Message::InstallState(state) => {
+            PWMessage::InstallState(state) => {
+                let seq_no = state.2.last_execution().unwrap();
+
                 write_state::<S>(&self.db, state)?;
 
-                ResponseMsg::InstalledState(todo!())
+                ResponseMsg::InstalledState(seq_no)
+            }
+            PWMessage::RegisterCallbackReceiver(receiver) => {
+                self.response_txs.push(receiver);
+
+                ResponseMessage::RegisteredCallback
             }
         })
     }
 }
 
 /// Messages that are sent to the logging thread to log specific requests
-pub type ChannelMsg<S> = (Message<S>, Option<CallbackType>);
+pub(crate) type ChannelMsg<S> = (PWMessage<S>, Option<CallbackType>);
 
 /// The type of the installed state information
 pub type InstallState<S> = (
     //The view sequence number
     SeqNo,
+    // The state that we want to persist
     Arc<ReadOnly<Checkpoint<State<S>>>>,
+    //The decision log that comes after that state
     DecisionLog<Request<S>>,
 );
 
-pub enum Message<S: Service> {
+pub(crate) enum PWMessage<S: Service> {
     //Persist a new view into the persistent storage
     View(ViewInfo),
 
@@ -440,8 +572,10 @@ pub enum Message<S: Service> {
     //Remove all associated stored messages for this given seq number
     Invalidate(SeqNo),
 
-    //Install a recovery state received from CST
+    //Install a recovery state received from CST or produced by us
     InstallState(InstallState<S>),
+
+    RegisterCallbackReceiver(ChannelSyncTx<ResponseMsg>),
 }
 
 pub type ResponseMsg = ResponseMessage;
@@ -459,7 +593,7 @@ pub enum ResponseMessage {
     /// TODO: Decide this unique identifier
     WroteMessage(SeqNo, Digest),
 
-    //
+    // Notifies that the state has been successfully installed and returns
     InstalledState(SeqNo),
 
     /// Notifies that all messages relating to the given sequence number have been destroyed
@@ -467,6 +601,8 @@ pub enum ResponseMessage {
 
     /// Notifies that the given checkpoint was persisted into the database
     Checkpointed(SeqNo),
+
+    RegisteredCallback
 }
 
 ///Write a state provided by the CST protocol into the persistent DB
@@ -580,7 +716,7 @@ fn write_checkpoint<S: Service>(db: &KVDB, state: &State<S>, last_seq: SeqNo) ->
             //Erase the logs from the previous executions
             db.erase_range(CF_COMMITS, start, &end)?;
             db.erase_range(CF_PREPARES, start, &end)?;
-            db.erase_range(CF_PREPREPARES, start, &end)?;
+            db.erase_range(CF_PRE_PREPARES, start, &end)?;
         }
         _ => {
             return Err(Error::simple_with_msg(
@@ -605,7 +741,7 @@ fn read_message_for_range<S: Service>(
 
     let mut messages = Vec::new();
 
-    let preprepares = db.iter_range(CF_PREPREPARES, Some(&start_key), Some(&end_key))?;
+    let preprepares = db.iter_range(CF_PRE_PREPARES, Some(&start_key), Some(&end_key))?;
 
     let prepares = db.iter_range(CF_PREPARES, Some(&start_key), Some(&end_key))?;
 
@@ -643,7 +779,7 @@ fn read_messages_for_seq<S: Service>(
 
     let mut messages = Vec::new();
 
-    let preprepares = db.iter_range(CF_PREPREPARES, Some(&start_key), Some(&end_key))?;
+    let preprepares = db.iter_range(CF_PRE_PREPARES, Some(&start_key), Some(&end_key))?;
 
     let prepares = db.iter_range(CF_PREPARES, Some(&start_key), Some(&end_key))?;
 
@@ -698,7 +834,7 @@ fn write_message<S: Service>(
     let key = make_msg_seq(msg_seq, Some(message.header().from()));
 
     match message.message().kind() {
-        ConsensusMessageKind::PrePrepare(_) => db.set(CF_PREPREPARES, key, buf)?,
+        ConsensusMessageKind::PrePrepare(_) => db.set(CF_PRE_PREPARES, key, buf)?,
         ConsensusMessageKind::Prepare(_) => db.set(CF_PREPARES, key, buf)?,
         ConsensusMessageKind::Commit(_) => db.set(CF_COMMITS, key, buf)?,
     }
@@ -712,7 +848,7 @@ fn delete_all_msgs_for_seq<S: Service>(db: &KVDB, msg_seq: SeqNo) -> Result<()> 
 
     let end_key = make_msg_seq(msg_seq.next(), None);
 
-    db.erase_range(CF_PREPREPARES, &start_key, &end_key)?;
+    db.erase_range(CF_PRE_PREPARES, &start_key, &end_key)?;
 
     db.erase_range(CF_PREPARES, &start_key, &end_key)?;
 

@@ -28,6 +28,7 @@ pub type PendingBatch<S> = (BatchInfo<S>, Vec<Digest>);
 pub struct ConsensusBacklog<S: Service> {
     rx: ChannelSyncRx<PendingBatch<S>>,
 
+    //Receives messages from the persistent log
     logger_rx: ChannelSyncRx<ResponseMsg>,
 
     //The handle to the executor
@@ -45,7 +46,6 @@ pub struct ConsensusBacklog<S: Service> {
 
 ///A detachable handle so we deliver work to the
 /// consensus back log thread
-#[derive(Clone)]
 pub struct ConsensusBackLogHandle<S: Service> {
     rq_tx: ChannelSyncTx<PendingBatch<S>>,
     logger_tx: ChannelSyncTx<ResponseMsg>,
@@ -65,6 +65,15 @@ impl<S: Service> ConsensusBackLogHandle<S> {
         }
     }
 
+}
+
+impl<S: Service> Clone for ConsensusBackLogHandle<S> {
+    fn clone(&self) -> Self {
+        Self {
+            rq_tx: self.rq_tx.clone(),
+            logger_tx: self.logger_tx.clone()
+        }
+    }
 }
 
 ///This channel size serves as the "buffer" for the amount of consensus instances

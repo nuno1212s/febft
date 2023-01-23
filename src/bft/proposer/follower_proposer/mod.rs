@@ -8,17 +8,17 @@ use crate::bft::{
     },
     executable::{ExecutorHandle, Service},
 };
-use crate::bft::msg_log::Log;
+use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 
 pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
 
 
 ///TODO:
-pub struct FollowerProposer<S: Service + 'static, T: PersistentLogModeTrait> {
+pub struct FollowerProposer<S: Service + 'static> {
     batch_channel: (ChannelSyncTx<BatchType<S>>, ChannelSyncRx<BatchType<S>>),
 
-    log: Arc<Log<S, T>>,
+    log: Arc<PendingRequestLog<S>>,
     //For request execution
     executor_handle: ExecutorHandle<S>,
     cancelled: AtomicBool,
@@ -36,10 +36,10 @@ pub struct FollowerProposer<S: Service + 'static, T: PersistentLogModeTrait> {
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
 
-impl<S: Service + 'static, T: PersistentLogModeTrait> FollowerProposer<S, T> {
+impl<S: Service + 'static> FollowerProposer<S> {
     pub fn new(
         node: Arc<Node<S::Data>>,
-        log: Arc<Log<S, T>>,
+        log: Arc<PendingRequestLog<S>>,
         executor: ExecutorHandle<S>,
         target_global_batch_size: usize,
         global_batch_time_limit: u128,

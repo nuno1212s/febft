@@ -32,7 +32,12 @@ impl<S> Checkpoint<S> {
             app_state,
         }))
     }
-
+    
+    /// The last sequence no represented in this checkpoint
+    pub fn last_seq(&self) -> &SeqNo {
+        &self.seq
+    }
+    
     /// Returns a reference to the state of the application before
     /// the local checkpoint.
     pub fn state(&self) -> &S {

@@ -20,13 +20,15 @@ use crate::bft::communication::{Node, NodeConfig, NodeId};
 use crate::bft::consensus::{Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
-use crate::bft::core::server::rq_finalizer::{RqFinalizer, RqFinalizerHandle};
 use crate::bft::cst::{install_recovery_state, CollabStateTransfer, CstProgress, CstStatus};
 use crate::bft::error::*;
 use crate::bft::executable::{
     Executor, ExecutorHandle, ReplicaReplier, Reply, Request, Service, State,
 };
-use crate::bft::msg_log::{Info, Log};
+use crate::bft::msg_log;
+use crate::bft::msg_log::{Info};
+use crate::bft::msg_log::decided_log::DecidedLog;
+use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::proposer::Proposer;
@@ -41,7 +43,7 @@ pub mod observer;
 
 pub mod client_replier;
 pub mod follower_handling;
-pub mod rq_finalizer;
+// pub mod rq_finalizer;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub(crate) enum ReplicaPhase {
@@ -114,14 +116,21 @@ impl ViewInfo {
 }
 
 /// Represents a replica in `febft`.
-pub struct Replica<S: Service + 'static, T: PersistentLogModeTrait> {
+pub struct Replica<S: Service + 'static> {
+    // What phase of the algorithm is this replica currently in
     phase: ReplicaPhase,
     // this value is primarily used to switch from
     // state transfer back to a view change
     phase_stack: Option<ReplicaPhase>,
+    // The timeout layer, handles timing out requests
     timeouts: Timeouts,
+    // The handle to the executor
     executor: ExecutorHandle<S>,
+    // Consensus state transfer State machine
+    cst: CollabStateTransfer<S>,
+    // Synchronizer state machine
     synchronizer: Arc<Synchronizer<S>>,
+    //Consensus state machine
     consensus: Consensus<S>,
     //The guard for the consensus.
     //Set to true when there is a consensus running, false when it's ready to receive
@@ -130,11 +139,17 @@ pub struct Replica<S: Service + 'static, T: PersistentLogModeTrait> {
     // Check if unordered requests can be proposed.
     // This can only occur when we are in the normal phase of the state machine
     unordered_rq_guard: Arc<AtomicBool>,
-    cst: CollabStateTransfer<S>,
-    log: Arc<Log<S, T>>,
-    proposer: Arc<Proposer<S, T>>,
+
+    // The pending request log. Handles requests received by this replica
+    // Or forwarded by others that have not yet made it into a consensus instance
+    pending_request_log: Arc<PendingRequestLog<S>>,
+    // The log of the decided consensus messages
+    // This is completely owned by the server thread and therefore does not
+    // Require any synchronization
+    decided_log: DecidedLog<S>,
+    //The proposer
+    proposer: Arc<Proposer<S>>,
     node: Arc<Node<S::Data>>,
-    rq_finalizer: RqFinalizerHandle<S>,
     //A handle to the observer worker thread
     observer_handle: ObserverHandle,
 }
@@ -161,18 +176,15 @@ pub struct ReplicaConfig<S: Service, T: PersistentLogModeTrait> {
     pub node: NodeConfig,
 }
 
-impl<S, T> Replica<S, T>
-where
-    S: Service + Send + 'static,
-    State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
-    Reply<S>: Send + 'static,
-    T: PersistentLogModeTrait + 'static,
+impl<S> Replica<S>
+    where
+        S: Service + Send + 'static,
+        State<S>: Send + Clone + 'static,
+        Request<S>: Send + Clone + 'static,
+        Reply<S>: Send + 'static,
 {
-
-
     /// Bootstrap a replica in `febft`.
-    pub async fn bootstrap(cfg: ReplicaConfig<S, T>) -> Result<Self> {
+    pub async fn bootstrap<T>(cfg: ReplicaConfig<S, T>) -> Result<Self> where T: PersistentLogModeTrait {
         let ReplicaConfig {
             next_consensus_seq,
             global_batch_size,
@@ -206,12 +218,11 @@ where
         let (executor, handle) = Executor::<S, ReplicaReplier>::init_handle();
 
         debug!("Initializing log");
-        let log = Log::new(
-            log_node_id,
-            Some(observer_handle.clone()),
-            executor.clone(),
-            db_path,
-        );
+        let persistent_log = msg_log::initialize_persistent_log::<S, String, T>(executor.clone(), db_path)?;
+
+        let mut decided_log = msg_log::initialize_decided_log(persistent_log.clone())?;
+
+        let pending_request_log = Arc::new(msg_log::initialize_pending_request_log()?);
 
         let seq;
 
@@ -219,8 +230,7 @@ where
 
         debug!("Reading state from memory");
         //Read the state from the persistent log
-        let state = if let Some(read_state) = log.read_current_state(n, f)? {
-
+        let state = if let Some(read_state) = decided_log.read_current_state(n, f)? {
             let last_seq = if let Some(seq) = read_state.decision_log().last_execution() {
                 seq
             } else {
@@ -235,11 +245,10 @@ where
 
             let state = read_state.checkpoint().state().clone();
 
-            log.install_state(last_seq, read_state);
+            decided_log.install_state(last_seq, read_state);
 
             Some((state, executed_requests))
         } else {
-
             seq = SeqNo::ZERO;
 
             view = ViewInfo::new(SeqNo::ZERO, n, f)?;
@@ -248,6 +257,7 @@ where
         };
 
         debug!("Initializing executor.");
+
         // start executor
         Executor::<S, ReplicaReplier>::new(
             reply_handle,
@@ -273,8 +283,6 @@ where
 
         let synchronizer = Synchronizer::new_replica(view.clone(), REQ_BASE_DUR);
 
-        let rq_finalizer = RqFinalizer::new(node.id(), log.clone(), executor.clone());
-
         debug!("Initializing consensus");
 
         let consensus = Consensus::new_replica(
@@ -282,7 +290,7 @@ where
             view.clone(),
             next_consensus_seq,
             observer_handle.clone(),
-            None
+            None,
         );
 
         //We can unwrap since it's guaranteed that this consensus is of a replica type
@@ -298,11 +306,10 @@ where
             consensus_guard: consensus_guard.clone(),
             timeouts: timeouts.clone(),
             node,
-            log: log.clone(),
             proposer: Proposer::new(
                 node_clone,
                 synchronizer,
-                log,
+                pending_request_log.clone(),
                 timeouts,
                 executor.clone(),
                 consensus_guard,
@@ -311,9 +318,10 @@ where
                 observer_handle.clone(),
             ),
             executor,
-            rq_finalizer,
             observer_handle: observer_handle.clone(),
             unordered_rq_guard: Arc::new(Default::default()),
+            pending_request_log,
+            decided_log,
         };
 
         //Start receiving and processing client requests
@@ -324,7 +332,7 @@ where
             match message {
                 Message::System(header, message) => {
                     match message {
-                        request @ SystemMessage::Request(_) => {
+                        SystemMessage::Request(request) => {
                             replica.request_received(header, request);
                         }
                         SystemMessage::Consensus(message) => {
@@ -426,7 +434,7 @@ where
                     //We want to stop the proposer from trying to propose any requests while we are performing
                     //Other operations.
                     self.consensus_guard.lock_consensus();
-                },
+                }
                 (ReplicaPhase::SyncPhase, ReplicaPhase::NormalPhase) => {
                     // When changing from the sync phase to the normal phase
                     // The phase starts with a SYNC phase, so we don't want to allow
@@ -480,7 +488,7 @@ where
                         // while we are retrieving state...
                         self.forwarded_requests_received(requests);
                     }
-                    request @ SystemMessage::Request(_) => {
+                    SystemMessage::Request(request) => {
                         self.request_received(header, request);
                     }
                     SystemMessage::Consensus(message) => {
@@ -497,7 +505,7 @@ where
                             CstProgress::Message(header, message),
                             &self.synchronizer,
                             &self.consensus,
-                            &self.log,
+                            &self.decided_log,
                             &self.node,
                         );
                         match status {
@@ -506,7 +514,7 @@ where
                                 install_recovery_state(
                                     state,
                                     &self.synchronizer,
-                                    &self.log,
+                                    &mut self.decided_log,
                                     &mut self.executor,
                                     &mut self.consensus,
                                 )?;
@@ -531,7 +539,6 @@ where
                                         &self.synchronizer,
                                         &self.timeouts,
                                         &self.node,
-                                        &self.log,
                                     );
                                 } else {
                                     self.switch_phase(ReplicaPhase::NormalPhase);
@@ -542,7 +549,6 @@ where
                                     &self.synchronizer,
                                     &self.timeouts,
                                     &self.node,
-                                    &self.log,
                                 );
                             }
                             CstStatus::RequestState => {
@@ -550,7 +556,6 @@ where
                                     &self.synchronizer,
                                     &self.timeouts,
                                     &mut self.node,
-                                    &self.log,
                                 );
                             }
                             // should not happen...
@@ -593,7 +598,7 @@ where
             }
             SynchronizerPollStatus::ResumeViewChange => {
                 self.synchronizer.resume_view_change(
-                    &self.log,
+                    &mut self.decided_log,
                     &self.timeouts,
                     &mut self.consensus,
                     &self.node,
@@ -616,7 +621,7 @@ where
                     SystemMessage::ForwardedRequests(requests) => {
                         self.forwarded_requests_received(requests);
                     }
-                    request @ SystemMessage::Request(_) => {
+                    SystemMessage::Request(request) => {
                         self.request_received(header, request);
                     }
                     SystemMessage::Cst(message) => {
@@ -624,14 +629,14 @@ where
                             CstProgress::Message(header, message),
                             &self.synchronizer,
                             &self.consensus,
-                            &self.log,
+                            &self.decided_log,
                             &mut self.node,
                         );
                         match status {
                             CstStatus::Nil => (),
                             // should not happen...
                             _ => {
-                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer)
+                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer);
                             }
                         }
                     }
@@ -640,7 +645,8 @@ where
                             header,
                             message,
                             &self.timeouts,
-                            &mut self.log,
+                            &mut self.decided_log,
+                            &self.pending_request_log,
                             &mut self.consensus,
                             &mut self.node,
                         );
@@ -667,7 +673,7 @@ where
                             }
                             // should not happen...
                             _ => {
-                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer)
+                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer);
                             }
                         }
                     }
@@ -712,7 +718,7 @@ where
         //
         // the order of the next consensus message is guaranteed by
         // `TboQueue`, in the consensus module.
-        let polled_message = self.consensus.poll(&self.log);
+        let polled_message = self.consensus.poll(&self.pending_request_log);
 
         let _leader = self.synchronizer.view().leader() == self.id();
 
@@ -739,7 +745,7 @@ where
                     SystemMessage::ForwardedRequests(requests) => {
                         self.forwarded_requests_received(requests);
                     }
-                    request @ SystemMessage::Request(_) => {
+                    SystemMessage::Request(request) => {
                         self.request_received(header, request);
                     }
                     SystemMessage::Cst(message) => {
@@ -747,14 +753,14 @@ where
                             CstProgress::Message(header, message),
                             &self.synchronizer,
                             &self.consensus,
-                            &self.log,
+                            &self.decided_log,
                             &mut self.node,
                         );
                         match status {
                             CstStatus::Nil => (),
                             // should not happen...
                             _ => {
-                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer)
+                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer);
                             }
                         }
                     }
@@ -763,7 +769,8 @@ where
                             header,
                             message,
                             &self.timeouts,
-                            &self.log,
+                            &mut self.decided_log,
+                            &self.pending_request_log,
                             &mut self.consensus,
                             &self.node,
                         );
@@ -777,7 +784,7 @@ where
                             }
                             // should not happen...
                             _ => {
-                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer)
+                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer);
                             }
                         }
                     }
@@ -791,7 +798,7 @@ where
                     SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
                     SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
                     SystemMessage::UnOrderedRequest(_) => todo!(),
-                    SystemMessage::Ping(_) => {},
+                    SystemMessage::Ping(_) => {}
                 }
             }
             Message::Timeout(timeout_kind) => {
@@ -825,7 +832,7 @@ where
             message,
             &self.synchronizer,
             &self.timeouts,
-            &self.log,
+            &mut self.decided_log,
             &self.node,
         );
 
@@ -844,12 +851,10 @@ where
                 //     self.synchronizer.unwatch_request(digest);
                 // }
 
-                let new_meta = BatchMeta::new();
-                let meta = std::mem::replace(&mut *self.log.batch_meta().lock(), new_meta);
 
                 if let Some((info, batch, meta)) =
-                    self.log.finalize_batch(seq, batch_digest, meta)? {
-
+                    //Should the execution be scheduled here or will it be scheduled by the persistent log?
+                    self.decided_log.finalize_batch(seq, batch_digest)? {
                     match info {
                         Info::Nil => self.executor.queue_update(meta, batch),
                         // execute and begin local checkpoint
@@ -857,7 +862,7 @@ where
                             self.executor.queue_update_and_get_appstate(meta, batch)
                         }
                     }
-                    .unwrap();
+                        .unwrap();
                 }
 
                 self.consensus.next_instance();
@@ -882,7 +887,7 @@ where
     }
 
     fn execution_finished_with_appstate(&mut self, seq: SeqNo, appstate: State<S>) -> Result<()> {
-        self.log.finalize_checkpoint(seq,appstate)?;
+        self.decided_log.finalize_checkpoint(seq, appstate)?;
         if self.cst.needs_checkpoint() {
             // status should return CstStatus::Nil,
             // which does not need to be handled
@@ -890,7 +895,7 @@ where
                 CstProgress::Nil,
                 &self.synchronizer,
                 &self.consensus,
-                &self.log,
+                &self.decided_log,
                 &mut self.node,
             );
         }
@@ -898,13 +903,12 @@ where
         Ok(())
     }
 
-    fn forwarded_requests_received(&mut self, requests: ForwardedRequestsMessage<Request<S>>) {
+    fn forwarded_requests_received(&self, requests: ForwardedRequestsMessage<Request<S>>) {
         self.synchronizer
-            .watch_forwarded_requests(requests, &self.timeouts, &mut self.log);
+            .watch_forwarded_requests(requests, &self.timeouts, &self.pending_request_log);
     }
 
     fn timeout_received(&mut self, timeouts: Timeout) {
-
         let mut client_rq_timeouts = Vec::with_capacity(timeouts.len());
 
         for timeout_kind in timeouts {
@@ -919,7 +923,6 @@ where
                                 &self.synchronizer,
                                 &self.timeouts,
                                 &self.node,
-                                &self.log,
                             );
 
                             self.switch_phase(ReplicaPhase::RetrievingState);
@@ -929,7 +932,6 @@ where
                                 &self.synchronizer,
                                 &self.timeouts,
                                 &self.node,
-                                &self.log,
                             );
 
                             self.switch_phase(ReplicaPhase::RetrievingState);
@@ -945,37 +947,35 @@ where
         }
 
         if client_rq_timeouts.len() > 0 {
-
             let status = self.synchronizer
-                .client_requests_timed_out(
-                                           &client_rq_timeouts,);
+                .client_requests_timed_out(&client_rq_timeouts);
 
             match status {
                 SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
                     if forwarded.len() > 0 {
-                        let requests = self.log.clone_pending_requests(&forwarded);
+                        let requests = self.pending_request_log.clone_pending_requests(&forwarded);
 
                         self.synchronizer.forward_requests(
                             requests,
                             &mut self.node,
-                            &self.log
+                            &self.pending_request_log,
                         );
                     }
 
                     if stopped.len() > 0 {
-                        let stopped = self.log.clone_pending_requests(&stopped);
+                        let stopped = self.pending_request_log.clone_pending_requests(&stopped);
 
                         self.synchronizer.begin_view_change(Some(stopped),
                                                             &mut self.node,
                                                             &self.timeouts,
-                                                            &self.log);
+                                                            &self.decided_log);
+
                         self.phase = ReplicaPhase::SyncPhase;
                     }
-                },
+                }
                 // nothing to do
                 _ => (),
             }
-
         }
     }
 
@@ -984,21 +984,22 @@ where
         t: DateTime<Utc>,
         reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>,
     ) {
-        let mut batch_meta = self.log.batch_meta().lock();
-
-        batch_meta.reception_time = t;
-        batch_meta.batch_size = reqs.len();
-
-        drop(batch_meta);
+        // let mut batch_meta = self.log.batch_meta().lock();
+        //
+        // batch_meta.reception_time = t;
+        // batch_meta.batch_size = reqs.len();
+        //
+        // drop(batch_meta);
 
         for (h, r) in reqs.into_iter().map(StoredMessage::into_inner) {
-            self.request_received(h, SystemMessage::Request(r))
+            self.request_received(h, r)
         }
     }
 
-    fn request_received(&self, h: Header, r: SystemMessage<State<S>, Request<S>, Reply<S>>) {
+    fn request_received(&self, h: Header, r: RequestMessage<Request<S>>) {
         self.synchronizer
             .watch_request(h.unique_digest(), &self.timeouts);
-        self.log.insert(h, r);
+
+        self.pending_request_log.insert(h, r);
     }
 }

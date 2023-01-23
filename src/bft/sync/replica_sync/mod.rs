@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use std::time::{Duration, Instant};
-use log::error;
+use log::{debug, error};
 
 use crate::bft::collections::{self, ConcurrentHashMap};
 use crate::bft::communication::message::{
@@ -23,7 +23,8 @@ use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::executable::{Request, Service};
 use crate::bft::globals::ReadOnly;
-use crate::bft::msg_log::Log;
+use crate::bft::msg_log::decided_log::DecidedLog;
+use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::timeouts::{ClientRqInfo, TimeoutKind, Timeouts};
@@ -57,14 +58,15 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     ///
     /// Therefore, we start by clearing our stopped requests and treating them as
     /// newly proposed requests (by resetting their timer)
-    pub(super) fn handle_stopping_quorum<T>(
+    pub(super) fn handle_stopping_quorum(
         &self,
         base_sync: &Synchronizer<S>,
         previous_view: ViewInfo,
-        log: &Log<S, T>,
+        log: &DecidedLog<S>,
+        pending_rq_log: &PendingRequestLog<S>,
         timeouts: &Timeouts,
         node: &Node<S::Data>,
-    ) where T: PersistentLogModeTrait {
+    ) {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
         // - add requests from STOP into client requests
@@ -72,13 +74,13 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         // - reset the timers of the requests in the STOP
         //   messages with TimeoutPhase::Init(_)
         // - send STOP-DATA message
-        self.add_stopped_requests(base_sync, log);
+        self.add_stopped_requests(base_sync, pending_rq_log);
         self.watch_all_requests(timeouts);
 
         let current_view_seq = base_sync.view().sequence_number();
         let current_leader = base_sync.view().leader();
 
-        let collect = log.decision_log().borrow()
+        let collect = log.decision_log()
             //we use the previous views' f because the new view could have changed
             //The N of the network (With reconfigurable views)
             .collect_data(previous_view.params().f());
@@ -127,12 +129,12 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     /// Watch a group of client requests that we received from a
     /// forwarded requests system message.
     ///
-    pub fn watch_forwarded_requests<T>(
+    pub fn watch_forwarded_requests(
         &self,
         requests: ForwardedRequestsMessage<Request<S>>,
         timeouts: &Timeouts,
-        log: &Log<S, T>,
-    ) where T: PersistentLogModeTrait {
+        log: &PendingRequestLog<S>,
+    ) {
 
         let phase = TimeoutPhase::TimedOutOnce(Instant::now());
 
@@ -144,7 +146,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         let mut digests = Vec::with_capacity(requests.len());
 
         for (header, request) in requests {
-            log.insert(header, SystemMessage::Request(request));
+            log.insert(header, request);
 
             let unique_digest = header.unique_digest();
 
@@ -181,12 +183,11 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     ///Watch a batch of requests received from a Pre prepare message sent by the leader
     /// In reality we won't watch, more like the contrary, since the requests were already
     /// proposed, they won't timeout
-    pub fn received_request_batch<T>(
+    pub fn received_request_batch(
         &self,
         pre_prepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
         timeouts: &Timeouts,
-        log: &Log<S, T>,
-    ) -> Vec<Digest> where T: PersistentLogModeTrait {
+    ) -> Vec<Digest> {
         let requests = match pre_prepare.message().kind() {
             ConsensusMessageKind::PrePrepare(req) => { req }
             _ => {
@@ -230,13 +231,13 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         //This means that that client would not be able to process requests from that replica, which could
         //break some of the quorum properties (replica A would always be faulty for that client even if it is
         //not, so we could only tolerate f-1 faults for clients that are in that situation)
-        log.insert_batched(pre_prepare);
+        //log.insert_batched(pre_prepare);
 
         digests
     }
 
     /// Register all of the requests that are missing from the view change
-    fn add_stopped_requests<T>(&self, base_sync: &Synchronizer<S>, log: &Log<S, T>) where T: PersistentLogModeTrait {
+    fn add_stopped_requests(&self, base_sync: &Synchronizer<S>, log: &PendingRequestLog<S>) {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
 
@@ -330,6 +331,8 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         // - on the second timeout, we start a view change by
         //   broadcasting a STOP message
 
+        debug!("Received {} timeouts from the timeout layer", timed_out_rqs.len());
+
         for timed_out_rq in timed_out_rqs {
             let watching_request = self.watching.get_mut(&timed_out_rq.digest);
 
@@ -348,6 +351,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
                         // requests, on `watch_forwarded_requests`
                         // The timer will also be set there
                     }
+
                     TimeoutPhase::TimedOutOnce(instant)
                     if now.duration_since(*instant) >= self.timeout_dur.get() => {
                         stopped.push(digest.clone());
@@ -360,21 +364,24 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         }
 
         if forwarded.is_empty() && stopped.is_empty() {
+            debug!("Forwarded and stopped requests are empty? What");
             return SynchronizerStatus::Nil;
         }
+
+        debug!("Replying requests time out forwarded {}, stopped {}", forwarded.len(), stopped.len());
 
         SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
     }
 
     /// Forward the requests that timed out, `timed_out`, to all the nodes in the
     /// current view.
-    pub fn forward_requests<T>(
+    pub fn forward_requests(
         &self,
         base_sync: &Synchronizer<S>,
         timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         node: &Node<S::Data>,
-        _log: &Log<S, T>,
-    ) where T: PersistentLogModeTrait {
+        _log: &PendingRequestLog<S>,
+    ) {
         let message = SystemMessage::ForwardedRequests(ForwardedRequestsMessage::new(timed_out));
         let targets = NodeId::targets(0..base_sync.view().params().n());
         node.broadcast(message, targets);

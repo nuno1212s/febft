@@ -34,8 +34,9 @@ use super::{
 use intmap::IntMap;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::decisions::{CollectData, Proof, ViewDecisionPair};
-use crate::bft::msg_log::Log;
+use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::timeouts::{ClientRqInfo, Timeouts};
 
@@ -468,17 +469,16 @@ impl<S> Synchronizer<S>
     /// Advances the state of the view change state machine.
     //
     // TODO: retransmit STOP msgs
-    pub fn process_message<T>(
+    pub fn process_message(
         &self,
         header: Header,
         message: ViewChangeMessage<Request<S>>,
         timeouts: &Timeouts,
-        log: &Log<S, T>,
+        log: &mut DecidedLog<S>,
+        pending_rq_log: &PendingRequestLog<S>,
         consensus: &mut Consensus<S>,
         node: &Node<S::Data>,
     ) -> SynchronizerStatus
-        where
-            T: PersistentLogModeTrait,
     {
         match *self.phase.borrow() {
             ProtoPhase::Init => {
@@ -588,7 +588,8 @@ impl<S> Synchronizer<S>
 
                     match &self.accessory {
                         SynchronizerAccessory::Replica(rep) => {
-                            rep.handle_stopping_quorum(self, previous_view, log, timeouts, node)
+                            rep.handle_stopping_quorum(self, previous_view, log,
+                                                       pending_rq_log, timeouts, node)
                         }
                         SynchronizerAccessory::Follower(_) => {}
                     }
@@ -717,7 +718,7 @@ impl<S> Synchronizer<S>
                                 return SynchronizerStatus::Running;
                             }
 
-                            let p = log.view_change_propose();
+                            let p = pending_rq_log.view_change_propose();
 
                             //We create the pre-prepare here as we are the new leader,
                             //And we sign it right now
@@ -888,15 +889,13 @@ impl<S> Synchronizer<S>
     }
 
     /// Resume the view change protocol after running the CST protocol.
-    pub fn resume_view_change<T>(
+    pub fn resume_view_change(
         &self,
-        log: &Log<S, T>,
+        log: &mut DecidedLog<S>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<S>,
         node: &Node<S::Data>,
     ) -> Option<()>
-        where
-            T: PersistentLogModeTrait,
     {
         let state = self.finalize_state.borrow_mut().take()?;
 
@@ -923,14 +922,13 @@ impl<S> Synchronizer<S>
     /// that have timed out on the current replica.
     /// If the timed out requests are None, that means that the view change
     /// originated in the other replicas.
-    pub fn begin_view_change<T>(
+    pub fn begin_view_change(
         &self,
         timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
         node: &Node<S::Data>,
         timeouts: &Timeouts,
-        _log: &Log<S, T>,
-    ) where
-        T: PersistentLogModeTrait,
+        _log: &DecidedLog<S>,
+    )
     {
         match (&*self.phase.borrow(), &timed_out) {
             // we have received STOP messages from peer nodes,
@@ -971,19 +969,17 @@ impl<S> Synchronizer<S>
 
     // this function mostly serves the purpose of consuming
     // values with immutable references, to allow borrowing data mutably
-    fn pre_finalize<T>(
+    fn pre_finalize(
         &self,
         state: FinalizeState<Request<S>>,
         _proof: Option<&Proof<Request<S>>>,
         _normalized_collects: Vec<Option<&CollectData<Request<S>>>>,
-        log: &Log<S, T>,
+        log: &DecidedLog<S>,
     ) -> FinalizeStatus<Request<S>>
-        where
-            T: PersistentLogModeTrait,
     {
         //If we are more than one operation behind the most recent consensus id,
         //Then we must run a consensus state transfer
-        if u32::from(log.decision_log().borrow().executing()) + 1 < u32::from(state.curr_cid) {
+        if u32::from(log.decision_log().executing()) + 1 < u32::from(state.curr_cid) {
             return FinalizeStatus::RunCst(state);
         }
 
@@ -1003,16 +999,14 @@ impl<S> Synchronizer<S>
 
     /// Finalize a view change and install the new view in the other
     /// state machines (Consensus)
-    fn finalize<T>(
+    fn finalize(
         &self,
         state: FinalizeState<Request<S>>,
-        log: &Log<S, T>,
+        log: &mut DecidedLog<S>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<S>,
         node: &Node<S::Data>,
     ) -> SynchronizerStatus
-        where
-            T: PersistentLogModeTrait,
     {
         let FinalizeState {
             curr_cid,
@@ -1023,8 +1017,7 @@ impl<S> Synchronizer<S>
         // we will get some value to be proposed because of the
         // check we did in `pre_finalize()`, guarding against no values
         let (header, message) = log
-            .decision_log()
-            .borrow_mut()
+            .mut_decision_log()
             .clear_last_occurrences(curr_cid, sound.value())
             .and_then(|stored| Some(stored.into_inner()))
             .unwrap_or(proposed.into_inner());
@@ -1044,31 +1037,27 @@ impl<S> Synchronizer<S>
     /// Handle a batch of requests received from a Pre prepare message sent by the leader
     /// In reality we won't watch, more like the contrary, since the requests were already
     /// proposed, they won't timeout
-    pub fn request_batch_received<T>(
+    pub fn request_batch_received(
         &self,
         pre_prepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
         timeouts: &Timeouts,
-        log: &Log<S, T>,
     ) -> Vec<Digest>
-        where
-            T: PersistentLogModeTrait,
     {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
-                rep.received_request_batch(pre_prepare, timeouts, log)
+                rep.received_request_batch(pre_prepare, timeouts)
             }
-            SynchronizerAccessory::Follower(fol) => fol.watch_request_batch(pre_prepare, log),
+            SynchronizerAccessory::Follower(fol) => fol.watch_request_batch(pre_prepare),
         }
     }
 
     /// Watch requests that have been forwarded to us
-    pub fn watch_forwarded_requests<T>(
+    pub fn watch_forwarded_requests(
         &self,
         requests: ForwardedRequestsMessage<Request<S>>,
         timeouts: &Timeouts,
-        log: &Log<S, T>,
-    ) where
-        T: PersistentLogModeTrait,
+        log: &PendingRequestLog<S>,
+    )
     {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
@@ -1101,10 +1090,10 @@ impl<S> Synchronizer<S>
     /// Forward the requests that have timed out to the whole network
     /// So that everyone knows about (including a leader that could still be correct, but
     /// Has not received the requests from the client)
-    pub fn forward_requests<T>(&self,
+    pub fn forward_requests(&self,
                                timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
                                node: &Node<S::Data>,
-                               log: &Log<S, T>, ) where T: PersistentLogModeTrait {
+                               log: &PendingRequestLog<S> )  {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {}
             SynchronizerAccessory::Replica(rep) => {

@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
 
 use std::ops::{Deref, DerefMut};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -30,8 +31,9 @@ use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
 use crate::bft::executable::{Request, Service, State};
+use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog, ProcessedBatch};
-use crate::bft::msg_log::Log;
+use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::{
     tbo_advance_message_queue, tbo_pop_message, tbo_queue_message, Orderable, SeqNo,
@@ -355,10 +357,10 @@ impl<S: Service + 'static> Consensus<S> {
 
     /// Check if we can process new consensus messages.
     /// Checks for messages that have been received
-    pub fn poll<T>(
+    pub fn poll(
         &mut self,
-        log: &Log<S, T>,
-    ) -> ConsensusPollStatus<Request<S>> where T: PersistentLogModeTrait {
+        log: &PendingRequestLog<S>,
+    ) -> ConsensusPollStatus<Request<S>> {
         match self.phase {
             ProtoPhase::Init if self.tbo.get_queue => {
                 extract_msg!(
@@ -506,14 +508,14 @@ impl<S: Service + 'static> Consensus<S> {
         ))
     }
 
-    pub fn finalize_view_change<T>(
+    pub fn finalize_view_change(
         &mut self,
         (header, message): (Header, ConsensusMessage<Request<S>>),
         synchronizer: &Synchronizer<S>,
         timeouts: &Timeouts,
-        log: &Log<S, T>,
+        log: &mut DecidedLog<S>,
         node: &Node<S::Data>,
-    ) where T: PersistentLogModeTrait {
+    ) {
         match &mut self.accessory {
             ConsensusAccessory::Follower => {}
             ConsensusAccessory::Replica(rep) => {
@@ -528,15 +530,15 @@ impl<S: Service + 'static> Consensus<S> {
     }
 
     /// Process a message for a particular consensus instance.
-    pub fn process_message<'a, T>(
+    pub fn process_message<'a>(
         &'a mut self,
         header: Header,
         message: ConsensusMessage<Request<S>>,
         synchronizer: &Synchronizer<S>,
         timeouts: &Timeouts,
-        log: &Log<S, T>,
+        log: &mut DecidedLog<S>,
         node: &Node<S::Data>,
-    ) -> ConsensusStatus<S> where T: PersistentLogModeTrait {
+    ) -> ConsensusStatus<S> {
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just
         // the amount of votes received
@@ -617,29 +619,32 @@ impl<S: Service + 'static> Consensus<S> {
                 //To prevent cloning it, wrap it into this
                 let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
 
+                // Notify the synchronizer and other things that we have received this batch
                 let mut digests = request_batch_received(
                     stored_msg.clone(),
                     timeouts,
                     synchronizer,
-                    log,
+                    &self.deciding_log,
                 );
 
+                //Store the currently deciding batch in the deciding log.
+                //Also update the rest of the fields to reflect this
                 self.deciding_log.processing_new_batch(
                     stored_msg.clone(),
                     stored_msg.header().digest().clone(),
                     digests,
                 );
 
+                // add message to the log
+                log.insert_consensus(stored_msg.clone());
+
                 {
                     //Update batch meta
-                    let mut meta_guard = log.batch_meta().lock();
+                    let mut meta_guard = self.deciding_log.batch_meta().lock().unwrap();
 
                     meta_guard.prepare_sent_time = Utc::now();
                     meta_guard.pre_prepare_received_time = pre_prepare_received_time;
                 }
-
-                // add message to the log
-                log.insert_consensus(stored_msg.clone());
 
                 let seq_no = self.sequence_number();
                 let current_digest = self.deciding_log.current_digest().unwrap();
@@ -764,7 +769,7 @@ impl<S: Service + 'static> Consensus<S> {
                 // check if we have gathered enough votes,
                 // and transition to a new phase
                 self.phase = if i == curr_view.params().quorum() {
-                    log.batch_meta().lock().commit_sent_time = Utc::now();
+                    self.deciding_log.batch_meta().lock().unwrap().commit_sent_time = Utc::now();
 
                     let seq_no = self.sequence_number();
                     let current_digest = self.deciding_log.current_digest().unwrap();
@@ -775,7 +780,7 @@ impl<S: Service + 'static> Consensus<S> {
                             rep.handle_preparing_quorum(seq_no,
                                                         current_digest,
                                                         curr_view, stored_msg,
-                                                        log, node);
+                                                        &self.deciding_log, node);
                         }
                     }
 
@@ -785,7 +790,7 @@ impl<S: Service + 'static> Consensus<S> {
                     match &mut self.accessory {
                         ConsensusAccessory::Follower => {}
                         ConsensusAccessory::Replica(rep) => {
-                            rep.handle_preparing_no_quorum(curr_view, stored_msg, log, node);
+                            rep.handle_preparing_no_quorum(curr_view, stored_msg, node);
                         }
                     }
 
@@ -856,13 +861,12 @@ impl<S: Service + 'static> Consensus<S> {
                 //We are able to execute the consensus instance
                 self.deciding_log.register_consensus_message(stored_message.header().digest().clone());
 
-                // add message to the log
-                log.insert_batched(stored_message.clone());
-
                 if i == 1 {
                     //Log the first received commit message
-                    log.batch_meta().lock().first_commit_received = Utc::now();
+                    self.deciding_log.batch_meta().lock().unwrap().first_commit_received = Utc::now();
                 }
+
+                log.insert_consensus(stored_message.clone());
 
                 // check if we have gathered enough votes,
                 // and transition to a new phase
@@ -871,7 +875,7 @@ impl<S: Service + 'static> Consensus<S> {
                     // notify core protocol
                     self.phase = ProtoPhase::Init;
 
-                    log.batch_meta().lock().consensus_decision_time = Utc::now();
+                    self.deciding_log.batch_meta().lock().unwrap().consensus_decision_time = Utc::now();
 
                     let seq_no = self.sequence_number();
 
@@ -931,20 +935,19 @@ impl<S> DerefMut for Consensus<S>
 }
 
 #[inline]
-fn request_batch_received<S, T>(
+fn request_batch_received<S>(
     preprepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
     timeouts: &Timeouts,
     synchronizer: &Synchronizer<S>,
-    log: &Log<S, T>,
+    log: &DecidingLog<S>,
 ) -> Vec<Digest>
     where
         S: Service + Send + 'static,
         State<S>: Send + Clone + 'static,
         Request<S>: Send + Clone + 'static,
         Reply<S>: Send + 'static,
-        T: PersistentLogModeTrait
 {
-    let mut batch_guard = log.batch_meta().lock();
+    let mut batch_guard = log.batch_meta().lock().unwrap();
 
     batch_guard.batch_size = match preprepare.message().kind() {
         ConsensusMessageKind::PrePrepare(req) => {
@@ -955,6 +958,5 @@ fn request_batch_received<S, T>(
     batch_guard.reception_time = Utc::now();
 
     //Tell the synchronizer to watch this request batch
-    //The synchronizer will also add the batch into the log of requests
-    synchronizer.request_batch_received(preprepare, timeouts, log)
+    synchronizer.request_batch_received(preprepare, timeouts)
 }

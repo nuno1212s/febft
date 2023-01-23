@@ -1,7 +1,6 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::bft::{executable::{Service, Request}, crypto::hash::Digest, communication::message::{StoredMessage, ConsensusMessage, ConsensusMessageKind}, globals::ReadOnly};
-use crate::bft::msg_log::Log;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 
 pub struct FollowerSynchronizer<S: Service> {
@@ -17,13 +16,12 @@ impl<S: Service + 'static> FollowerSynchronizer<S> {
     ///Watch a batch of requests received from a Pre prepare message sent by the leader
     /// In reality we won't watch, more like the contrary, since the requests were already
     /// proposed, they won't timeout
-    pub fn watch_request_batch<T>(
+    pub fn watch_request_batch(
         &self,
-        preprepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-        log: &Log<S, T>,
-    ) -> Vec<Digest> where T: PersistentLogModeTrait {
+        pre_prepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+    ) -> Vec<Digest> {
 
-        let requests = match preprepare.message().kind() {
+        let requests = match pre_prepare.message().kind() {
             ConsensusMessageKind::PrePrepare(req) => {req},
             _ => {panic!()}
         };
@@ -39,13 +37,16 @@ impl<S: Service + 'static> FollowerSynchronizer<S> {
             digests.push(digest);
         }
 
+        //If we try to send just the array of the digests contained in the batch (instead of the actual
+        //requests)
+
         //It's possible that, if the latency of the client to a given replica A is smaller than the
         //Latency to leader replica B + time taken to process request in B + Latency between A and B,
         //This replica does not know of the request and yet it is valid.
         //This means that that client would not be able to process requests from that replica, which could
         //break some of the quorum properties (replica A would always be faulty for that client even if it is
         //not, so we could only tolerate f-1 faults for clients that are in that situation)
-        log.insert_batched(preprepare);
+        //log.insert_batched(preprepare);
 
         digests
     }

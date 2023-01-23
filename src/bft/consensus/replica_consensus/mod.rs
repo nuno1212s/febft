@@ -31,7 +31,8 @@ use crate::bft::{
     sync::AbstractSynchronizer,
     threadpool,
 };
-use crate::bft::msg_log::Log;
+use crate::bft::msg_log::deciding_log::DecidingLog;
+use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::tbo_pop_message;
 
@@ -172,14 +173,12 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
     }
 
     ///Handle a prepare message when we have not yet reached a consensus
-    pub(super) fn handle_preparing_no_quorum<T>(
+    pub(super) fn handle_preparing_no_quorum(
         &mut self,
         curr_view: ViewInfo,
         preparing_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-        _log: &Log<S, T>,
         _node: &Node<S::Data>,
-    ) where
-        T: PersistentLogModeTrait,
+    )
     {
         if let Some(follower_handle) = &self.follower_handle {
             if let Err(err) = follower_handle.send(FollowerEvent::ReceivedConsensusMsg(
@@ -192,17 +191,15 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
     }
 
     ///Handle a prepare message when we have already obtained a valid quorum of messages
-    pub(super) fn handle_preparing_quorum<T>(
+    pub(super) fn handle_preparing_quorum(
         &mut self,
         seq: SeqNo,
         current_digest: Digest,
         curr_view: ViewInfo,
         preparing_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-        log: &Log<S, T>,
+        log: &DecidingLog<S>,
         node: &Node<S::Data>,
-    ) where
-        T: PersistentLogModeTrait,
-    {
+    ) {
         let node_id = node.id();
 
         let speculative_commits = self.take_speculative_commits();
@@ -230,7 +227,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
             node.broadcast_signed(message, targets);
         }
 
-        log.batch_meta().lock().commit_sent_time = Utc::now();
+        log.batch_meta().lock().unwrap().commit_sent_time = Utc::now();
 
         //Follower notifications
         if let Some(follower_handle) = &self.follower_handle {
@@ -334,12 +331,10 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
     }
 
 
-    pub(super) fn handle_poll_preparing_requests<T>(
+    pub(super) fn handle_poll_preparing_requests(
         &mut self,
-        log: &Log<S, T>,
+        log: &PendingRequestLog<S>,
     ) -> ReplicaPreparingPollStatus
-        where
-            T: PersistentLogModeTrait,
     {
         let iterator = self
             .missing_requests

@@ -11,7 +11,10 @@ use crate::bft::core::server::ViewInfo;
 use crate::bft::cst::{install_recovery_state, CollabStateTransfer, CstProgress, CstStatus};
 use crate::bft::error::*;
 use crate::bft::executable::{Executor, ExecutorHandle, FollowerReplier, Request, Service, State};
-use crate::bft::msg_log::{Info, Log};
+use crate::bft::msg_log;
+use crate::bft::msg_log::{Info};
+use crate::bft::msg_log::decided_log::DecidedLog;
+use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::proposer::follower_proposer::FollowerProposer;
@@ -44,7 +47,7 @@ pub enum FollowerPhase {
 ///
 /// They might also be used to loosen the load on the quorum replicas when we need a
 /// State transfer as they can request the last checkpoint from these replicas.
-pub struct Follower<S: Service + 'static, T: PersistentLogModeTrait> {
+pub struct Follower<S: Service + 'static> {
     //The current phase of the follower
     phase: FollowerPhase,
     phase_stack: Option<FollowerPhase>,
@@ -61,11 +64,14 @@ pub struct Follower<S: Service + 'static, T: PersistentLogModeTrait> {
     //Other replicas
     timeouts: Timeouts,
     //The proposer, which in this case wil
-    proposer: Arc<FollowerProposer<S, T>>,
+    proposer: Arc<FollowerProposer<S>>,
     //Synchronizer observer
     synchronizer: Arc<Synchronizer<S>>,
+
     //The log of messages
-    log: Arc<Log<S, T>>,
+    decided_log: DecidedLog<S>,
+
+    pending_rq_log: Arc<PendingRequestLog<S>>,
 
     node: Arc<Node<S::Data>>,
 }
@@ -80,8 +86,8 @@ pub struct FollowerConfig<S: Service, T: PersistentLogModeTrait> {
     pub node: NodeConfig,
 }
 
-impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
-    pub async fn new(cfg: FollowerConfig<S, T>) -> Result<Self> {
+impl<S: Service + 'static> Follower<S> {
+    pub async fn new<T>(cfg: FollowerConfig<S, T>) -> Result<Self> where T: PersistentLogModeTrait {
         let FollowerConfig {
             service,
             log_mode: _,
@@ -100,19 +106,19 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
 
         let (executor, handle) = Executor::<S, FollowerReplier>::init_handle();
 
-        let log = Log::new(
-            log_node_id,
-            None,
-            executor.clone(),
-            db_path,
-        );
+        debug!("Initializing log");
+        let persistent_log = msg_log::initialize_persistent_log::<S, String, T>(executor.clone(), db_path)?;
+
+        let mut decided_log = msg_log::initialize_decided_log(persistent_log.clone())?;
+
+        let pending_request_log = Arc::new(msg_log::initialize_pending_request_log()?);
 
         let seq;
 
         let view;
 
         //Read the state from the persistent log
-        let state = if let Some(read_state) = log.read_current_state(n, f)? {
+        let state = if let Some(read_state) = decided_log.read_current_state(n, f)? {
             let last_seq = if let Some(seq) = read_state.decision_log().last_execution() {
                 seq
             } else {
@@ -127,7 +133,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
 
             let state = read_state.checkpoint().state().clone();
 
-            log.install_state(last_seq, read_state);
+            decided_log.install_state(last_seq, read_state);
 
             Some((state, executed_requests))
         } else {
@@ -160,7 +166,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
 
         let follower_proposer = FollowerProposer::new(
             node.clone(),
-            log.clone(),
+            pending_request_log.clone(),
             executor.clone(),
             global_batch_size,
             batch_timeout,
@@ -175,10 +181,11 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
             consensus,
             synchronizer,
             proposer: follower_proposer,
-            log,
             node,
             timeouts,
             phase_stack: None,
+            decided_log,
+            pending_rq_log: pending_request_log,
         })
     }
 
@@ -219,7 +226,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
         //
         // the order of the next consensus message is guaranteed by
         // `TboQueue`, in the consensus module.
-        let polled_message = self.consensus.poll(&self.log);
+        let polled_message = self.consensus.poll(&self.pending_rq_log);
 
         let _leader = self.synchronizer.view().leader() == self.id();
 
@@ -255,7 +262,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                             CstProgress::Message(header, message),
                             &self.synchronizer,
                             &self.consensus,
-                            &self.log,
+                            &self.decided_log,
                             &mut self.node,
                         );
                         match status {
@@ -272,7 +279,8 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                             header,
                             message,
                             &self.timeouts,
-                            &self.log,
+                            &mut self.decided_log,
+                            &self.pending_rq_log,
                             &mut self.consensus,
                             &self.node,
                         );
@@ -326,7 +334,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
             }
             SynchronizerPollStatus::ResumeViewChange => {
                 self.synchronizer.resume_view_change(
-                    &self.log,
+                    &mut self.decided_log,
                     &self.timeouts,
                     &mut self.consensus,
                     &self.node,
@@ -360,7 +368,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                             CstProgress::Message(header, message),
                             &self.synchronizer,
                             &self.consensus,
-                            &self.log,
+                            &self.decided_log,
                             &mut self.node,
                         );
                         match status {
@@ -377,7 +385,8 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                             header,
                             message,
                             &self.timeouts,
-                            &mut self.log,
+                            &mut self.decided_log,
+                            &self.pending_rq_log,
                             &mut self.consensus,
                             &mut self.node,
                         );
@@ -467,7 +476,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                             CstProgress::Message(header, message),
                             &self.synchronizer,
                             &self.consensus,
-                            &self.log,
+                            &self.decided_log,
                             &self.node,
                         );
                         match status {
@@ -476,7 +485,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                                 install_recovery_state(
                                     state,
                                     &self.synchronizer,
-                                    &self.log,
+                                    &mut self.decided_log,
                                     &mut self.executor,
                                     &mut self.consensus,
                                 )?;
@@ -502,8 +511,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                                     self.cst.request_latest_state(
                                         &self.synchronizer,
                                         &self.timeouts,
-                                        &self.node,
-                                        &self.log,
+                                        &self.node
                                     );
                                 } else {
                                     self.switch_phase(FollowerPhase::NormalPhase);
@@ -513,16 +521,14 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                                 self.cst.request_latest_consensus_seq_no(
                                     &self.synchronizer,
                                     &self.timeouts,
-                                    &self.node,
-                                    &self.log,
+                                    &self.node
                                 );
                             }
                             CstStatus::RequestState => {
                                 self.cst.request_latest_state(
                                     &self.synchronizer,
                                     &self.timeouts,
-                                    &mut self.node,
-                                    &self.log,
+                                    &mut self.node
                                 );
                             }
                             // should not happen...
@@ -579,7 +585,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
             message,
             &self.synchronizer,
             &self.timeouts,
-            &self.log,
+            &mut self.decided_log,
             &self.node,
         );
 
@@ -595,17 +601,13 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
             // to execute in order
             ConsensusStatus::Decided(completed_batch) => {
 
-
                 // for digest in digests.iter() {
                 //     self.synchronizer.unwatch_request(digest);
                 // }
 
-                let new_meta = BatchMeta::new();
-                let meta = std::mem::replace(&mut *self.log.batch_meta().lock(), new_meta);
-
                 if let Some((info, batch, meta)) =
-                    self.log
-                        .finalize_batch(seq, completed_batch, meta)?
+                    self.decided_log
+                        .finalize_batch(seq, completed_batch)?
                 {
                     //Send the finalized batch to the rq finalizer
                     //So everything can be removed from the correct logs and
@@ -645,7 +647,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
     ///Receive a state delivered by the execution layer.
     /// Also must receive the sequence number of the last consensus instance executed in that state.
     fn execution_finished_with_appstate(&mut self, seq: SeqNo, appstate: State<S>) -> Result<()> {
-        self.log.finalize_checkpoint(seq, appstate)?;
+        self.decided_log.finalize_checkpoint(seq, appstate)?;
 
         if self.cst.needs_checkpoint() {
             // status should return CstStatus::Nil,
@@ -654,7 +656,7 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                 CstProgress::Nil,
                 &self.synchronizer,
                 &self.consensus,
-                &self.log,
+                &self.decided_log,
                 &mut self.node,
             );
         }
@@ -674,7 +676,6 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                                 &self.synchronizer,
                                 &self.timeouts,
                                 &self.node,
-                                &self.log,
                             );
 
                             self.switch_phase(FollowerPhase::RetrievingStatePhase);
@@ -684,7 +685,6 @@ impl<S: Service + 'static, T: PersistentLogModeTrait> Follower<S, T> {
                                 &self.synchronizer,
                                 &self.timeouts,
                                 &self.node,
-                                &self.log,
                             );
 
                             self.switch_phase(FollowerPhase::RetrievingStatePhase);

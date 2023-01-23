@@ -19,7 +19,7 @@ use crate::bft::threadpool;
 
 use crate::bft::core::server::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UnorderedBatch};
-use crate::bft::msg_log::Log;
+use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::Orderable;
 use crate::bft::timeouts::{Timeouts};
@@ -33,13 +33,15 @@ pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
 ///Handles taking requests from the client pools and storing the requests in the log,
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
-pub struct Proposer<S: Service + 'static, T> where T: PersistentLogModeTrait{
+pub struct Proposer<S: Service + 'static> {
     node_ref: Arc<Node<S::Data>>,
 
     synchronizer: Arc<Synchronizer<S>>,
     timeouts: Timeouts,
 
-    log: Arc<Log<S, T>>,
+    /// The log of pending requests
+    pending_decision_log: Arc<PendingRequestLog<S>>,
+
     consensus_guard: ConsensusGuard,
     cancelled: AtomicBool,
     //The target
@@ -59,11 +61,11 @@ const TIMEOUT: Duration = Duration::from_micros(10);
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
 
-impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
+impl<S: Service + 'static> Proposer<S> {
     pub fn new(
         node: Arc<Node<S::Data>>,
         sync: Arc<Synchronizer<S>>,
-        log: Arc<Log<S, T>>,
+        pending_decision_log: Arc<PendingRequestLog<S>>,
         timeouts: Timeouts,
         executor_handle: ExecutorHandle<S>,
         consensus_guard: ConsensusGuard,
@@ -76,13 +78,13 @@ impl<S: Service + 'static, T: PersistentLogModeTrait + 'static> Proposer<S, T> {
             node_ref: node,
             synchronizer: sync,
             timeouts,
-            log,
             cancelled: AtomicBool::new(false),
             consensus_guard,
             target_global_batch_size,
             global_batch_time_limit,
             observer_handle,
             executor_handle,
+            pending_decision_log,
         })
     }
 

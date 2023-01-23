@@ -1,10 +1,19 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use crate::bft::benchmarks::BatchMeta;
 use crate::bft::communication::message::{ConsensusMessage, StoredMessage};
 use crate::bft::crypto::hash::Digest;
 use crate::bft::executable::{Request, Service};
 use crate::bft::globals::ReadOnly;
 use crate::bft::error::*;
+use crate::bft::msg_log::persistent::PersistentLog;
 
+/// The log for the current consensus decision
+/// Stores the pre prepare that is being decided along with
+/// Digests of all of the requests, digest of the entire batch and
+/// the messages that should be persisted in order to consider this execution unit
+/// persisted.
+/// Basically some utility information about the current batch.
+/// The actual consensus messages are handled by the decided log
 pub struct DecidingLog<S> where S: Service {
     //Stores the request batch that is currently being processed by the system
     pre_prepare_message: Option<Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>>,
@@ -20,6 +29,8 @@ pub struct DecidingLog<S> where S: Service {
     //Consensus instance. Used to keep track of if the persistent log has saved the messages already
     //So the requests can be executed
     current_messages_to_persist: Vec<Digest>,
+
+    batch_meta: Arc<Mutex<BatchMeta>>
 }
 
 ///The type that composes a processed batch
@@ -40,19 +51,21 @@ pub struct CompletedBatch<S> where S: Service {
     //The messages that must be persisted for this consensus decision to be executable
     //This should contain the pre prepare, quorum of prepares and quorum of commits
     messages_to_persist: Vec<Digest>,
+
+    batch_meta: BatchMeta
 }
 
 impl<S> Into<(Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-              Digest, Vec<Digest>, Vec<Digest>)> for CompletedBatch<S> where S: Service {
+              Digest, Vec<Digest>, Vec<Digest>, BatchMeta)> for CompletedBatch<S> where S: Service {
 
     fn into(self) -> (Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-                      Digest, Vec<Digest>, Vec<Digest>) {
-        (self.pre_prepare_message, self.batch_digest, self.request_digests, self.messages_to_persist)
+                      Digest, Vec<Digest>, Vec<Digest>, BatchMeta) {
+        (self.pre_prepare_message, self.batch_digest, self.request_digests, self.messages_to_persist, self.batch_meta)
     }
 }
 
-impl<S> DecidingLog<S> where S: Service
-{
+impl<S> DecidingLog<S> where S: Service {
+
     pub fn new() -> Self {
         Self {
             pre_prepare_message: None,
@@ -60,7 +73,12 @@ impl<S> DecidingLog<S> where S: Service
             current_requests: Vec::with_capacity(1000),
             current_batch_size: 1000,
             current_messages_to_persist: Vec::with_capacity(1000),
+            batch_meta: Arc::new(Mutex::new(BatchMeta::new())),
         }
+    }
+
+    pub fn batch_meta(&self) -> &Arc<Mutex<BatchMeta>> {
+        &self.batch_meta
     }
 
     ///Inform the log that we are now processing a new
@@ -109,11 +127,15 @@ impl<S> DecidingLog<S> where S: Service
                 Vec::with_capacity(prev_messages_to_persist),
             );
 
+            let new_meta = BatchMeta::new();
+            let meta = std::mem::replace(&mut *self.batch_meta().lock().unwrap(), new_meta);
+
             Some(CompletedBatch {
                 pre_prepare_message: currently_processing,
                 batch_digest,
                 request_digests: current_requests,
                 messages_to_persist,
+                batch_meta: meta
             })
         } else {
             None
@@ -157,7 +179,10 @@ impl<S> DecidingLog<S> where S: Service
         }
     }
 
+    /// The current messages that should be persisted for the current consensus instance to be
+    /// considered executable
     pub fn current_messages(&self) -> &Vec<Digest> {
         &self.current_messages_to_persist
     }
+
 }
