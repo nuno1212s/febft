@@ -22,7 +22,6 @@ use crate::bft::communication::message::{
 use crate::bft::communication::NodeId;
 use crate::bft::consensus::Consensus;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
-use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;

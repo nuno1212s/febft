@@ -19,7 +19,6 @@ use crate::bft::communication::message::{
 };
 
 use crate::bft::communication::{Node, NodeId};
-use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::executable::{Request, Service};
 use crate::bft::globals::ReadOnly;
@@ -27,6 +26,7 @@ use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::{Orderable, SeqNo};
+use crate::bft::sync::view::ViewInfo;
 use crate::bft::timeouts::{ClientRqInfo, TimeoutKind, Timeouts};
 
 use super::{AbstractSynchronizer, Synchronizer, SynchronizerStatus, TimeoutPhase};

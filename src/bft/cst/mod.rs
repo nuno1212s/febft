@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use crate::bft::collections::{self, HashMap};
 use crate::bft::communication::message::{CstMessage, CstMessageKind, Header, SystemMessage};
 use crate::bft::communication::{Node, NodeId};
-use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State};
@@ -24,6 +23,7 @@ use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog};
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::{Orderable, SeqNo};
+use crate::bft::sync::view::ViewInfo;
 use crate::bft::timeouts::{TimeoutKind, Timeouts};
 
 use super::consensus::AbstractConsensus;
@@ -426,7 +426,36 @@ where
     }
 
     /// Handle a timeout received from the timeouts layer.
-    pub fn timed_out(&mut self, seq: SeqNo) -> CstStatus<State<S>, Request<S>> {
+    /// Returns a bool to signify if we must move to the Retrieving state
+    /// If the timeout is no longer relevant, returns false (Can remain in current phase)
+    pub fn cst_request_timed_out(&mut self, seq: SeqNo) -> bool {
+        let status = self.cst.timed_out(seq);
+
+        match status {
+            CstStatus::RequestLatestCid => {
+                self.cst.request_latest_consensus_seq_no(
+                    &self.synchronizer,
+                    &self.timeouts,
+                    &self.node,
+                );
+
+                true
+            }
+            CstStatus::RequestState => {
+                self.cst.request_latest_state(
+                    &self.synchronizer,
+                    &self.timeouts,
+                    &self.node,
+                );
+
+                true
+            }
+            // nothing to do
+            _ => false,
+        }
+    }
+
+    fn timed_out(&mut self, seq: SeqNo) -> CstStatus<State<S>, Request<S>> {
         if seq.next() != self.cst_seq {
             // the timeout we received is for a request
             // that has already completed, therefore we ignore it
@@ -437,6 +466,7 @@ where
             // from peer nodes
             return CstStatus::Nil;
         }
+
         match self.phase {
             // retry requests if receiving state and we have timed out
             ProtoPhase::ReceivingCid(_) => {

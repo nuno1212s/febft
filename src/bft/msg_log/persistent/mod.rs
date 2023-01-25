@@ -19,7 +19,6 @@ use crate::bft::communication::NodeId;
 
 use crate::bft::communication::serialize::{SharedData, Persister};
 
-use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 
 use crate::bft::error::*;
@@ -35,6 +34,7 @@ use crate::bft::{
 use crate::bft::cst::CstProgress::Message;
 use crate::bft::cst::install_recovery_state;
 use crate::bft::msg_log::persistent::consensus_backlog::{BatchInfo, PendingBatch};
+use crate::bft::sync::view::ViewInfo;
 
 use self::consensus_backlog::ConsensusBackLogHandle;
 use self::consensus_backlog::ConsensusBacklog;

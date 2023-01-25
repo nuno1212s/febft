@@ -12,10 +12,7 @@ use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::bft::benchmarks::BatchMeta;
-use crate::bft::communication::message::{
-    ConsensusMessage, ForwardedRequestsMessage, Header, Message, ObserveEventKind, RequestMessage,
-    StoredMessage, SystemMessage,
-};
+use crate::bft::communication::message::{ConsensusMessage, CstMessage, ForwardedRequestsMessage, Header, Message, ObserveEventKind, RequestMessage, StoredMessage, SystemMessage, ViewChangeMessage};
 use crate::bft::communication::{Node, NodeConfig, NodeId};
 use crate::bft::consensus::{Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::core::server::client_replier::Replier;
@@ -35,6 +32,7 @@ use crate::bft::proposer::Proposer;
 use crate::bft::sync::{
     AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus,
 };
+use crate::bft::sync::view::ViewInfo;
 use crate::bft::timeouts::{Timeout, TimeoutKind, Timeouts};
 
 use super::SystemParams;
@@ -56,63 +54,6 @@ pub(crate) enum ReplicaPhase {
     // the replica is on the normal phase
     // of mod-smart
     NormalPhase,
-}
-
-/// This struct contains information related with an
-/// active `febft` view.
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct ViewInfo {
-    seq: SeqNo,
-    quorum: Vec<NodeId>,
-    params: SystemParams,
-}
-
-impl Orderable for ViewInfo {
-    /// Returns the sequence number of the current view.
-    fn sequence_number(&self) -> SeqNo {
-        self.seq
-    }
-}
-
-impl ViewInfo {
-    /// Creates a new instance of `ViewInfo`.
-    pub fn new(seq: SeqNo, n: usize, f: usize) -> Result<Self> {
-        //TODO: Make the quorum participants modifiable
-        let params = SystemParams::new(n, f)?;
-        Ok(ViewInfo {
-            seq,
-            quorum: NodeId::targets_u32(0..n as u32).collect(),
-            params,
-        })
-    }
-
-    /// Returns a copy of this node's `SystemParams`.
-    pub fn params(&self) -> &SystemParams {
-        &self.params
-    }
-
-    /// Returns a new view with the sequence number after
-    /// the current view's number.
-    pub fn next_view(&self) -> ViewInfo {
-        self.peek(self.seq.next())
-    }
-
-    /// Returns a new view with the specified sequence number.
-    pub fn peek(&self, seq: SeqNo) -> ViewInfo {
-        let mut view = self.clone();
-        view.seq = seq;
-        view
-    }
-
-    /// Returns the leader of the current view.
-    pub fn leader(&self) -> NodeId {
-        self.quorum[usize::from(self.seq) % self.params.n()]
-    }
-
-    pub fn quorum_members(&self) -> &Vec<NodeId> {
-        &self.quorum
-    }
 }
 
 /// Represents a replica in `febft`.
@@ -147,8 +88,9 @@ pub struct Replica<S: Service + 'static> {
     // This is completely owned by the server thread and therefore does not
     // Require any synchronization
     decided_log: DecidedLog<S>,
-    //The proposer
+    // The proposer of this replica
     proposer: Arc<Proposer<S>>,
+    // The networking layer for a Node in the network (either Client or Replica)
     node: Arc<Node<S::Data>>,
     //A handle to the observer worker thread
     observer_handle: ObserverHandle,
@@ -501,69 +443,7 @@ impl<S> Replica<S>
                         self.synchronizer.queue(header, message);
                     }
                     SystemMessage::Cst(message) => {
-                        let status = self.cst.process_message(
-                            CstProgress::Message(header, message),
-                            &self.synchronizer,
-                            &self.consensus,
-                            &self.decided_log,
-                            &self.node,
-                        );
-                        match status {
-                            CstStatus::Running => (),
-                            CstStatus::State(state) => {
-                                install_recovery_state(
-                                    state,
-                                    &self.synchronizer,
-                                    &mut self.decided_log,
-                                    &mut self.executor,
-                                    &mut self.consensus,
-                                )?;
-
-                                let next_phase =
-                                    self.phase_stack.take().unwrap_or(ReplicaPhase::NormalPhase);
-
-                                self.switch_phase(next_phase);
-                            }
-                            CstStatus::SeqNo(seq) => {
-                                if self.consensus.sequence_number() < seq {
-                                    // this step will allow us to ignore any messages
-                                    // for older consensus instances we may have had stored;
-                                    //
-                                    // after we receive the latest recovery state, we
-                                    // need to install the then latest sequence no;
-                                    // this is done with the function
-                                    // `install_recovery_state` from cst
-                                    self.consensus.install_sequence_number(seq);
-
-                                    self.cst.request_latest_state(
-                                        &self.synchronizer,
-                                        &self.timeouts,
-                                        &self.node,
-                                    );
-                                } else {
-                                    self.switch_phase(ReplicaPhase::NormalPhase);
-                                }
-                            }
-                            CstStatus::RequestLatestCid => {
-                                self.cst.request_latest_consensus_seq_no(
-                                    &self.synchronizer,
-                                    &self.timeouts,
-                                    &self.node,
-                                );
-                            }
-                            CstStatus::RequestState => {
-                                self.cst.request_latest_state(
-                                    &self.synchronizer,
-                                    &self.timeouts,
-                                    &mut self.node,
-                                );
-                            }
-                            // should not happen...
-                            CstStatus::Nil => {
-                                return Err("Invalid state reached!")
-                                    .wrapped(ErrorKind::CoreServer);
-                            }
-                        }
+                        self.adv_cst(header, message)?;
                     }
                     // FIXME: handle rogue reply messages
                     // Should never
@@ -587,6 +467,7 @@ impl<S> Replica<S>
         Ok(())
     }
 
+    /// Iterate the synchronizer state machine
     fn update_sync_phase(&mut self) -> Result<bool> {
         debug!("{:?} // Updating Sync phase", self.id());
 
@@ -617,65 +498,20 @@ impl<S> Replica<S>
                     }
                     SystemMessage::FwdConsensus(_) => {
                         //Live replicas don't accept forwarded consensus messages
+                        // These messages are destined for followers
                     }
                     SystemMessage::ForwardedRequests(requests) => {
                         self.forwarded_requests_received(requests);
                     }
                     SystemMessage::Request(request) => {
+                        //How did this get here?
                         self.request_received(header, request);
                     }
                     SystemMessage::Cst(message) => {
-                        let status = self.cst.process_message(
-                            CstProgress::Message(header, message),
-                            &self.synchronizer,
-                            &self.consensus,
-                            &self.decided_log,
-                            &mut self.node,
-                        );
-                        match status {
-                            CstStatus::Nil => (),
-                            // should not happen...
-                            _ => {
-                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer);
-                            }
-                        }
+                        self.process_off_context_cst_msg(header, message)?;
                     }
                     SystemMessage::ViewChange(message) => {
-                        let status = self.synchronizer.process_message(
-                            header,
-                            message,
-                            &self.timeouts,
-                            &mut self.decided_log,
-                            &self.pending_request_log,
-                            &mut self.consensus,
-                            &mut self.node,
-                        );
-                        self.synchronizer.signal();
-                        match status {
-                            SynchronizerStatus::Nil => return Ok(false),
-                            SynchronizerStatus::Running => (),
-                            SynchronizerStatus::NewView => {
-                                //Our current view has been updated and we have no more state operations
-                                //to perform. This happens if we are a correct replica and therefore do not need
-                                //To update our state or if we are a replica that was incorrect and whose state has
-                                //Already been updated from the Cst protocol
-                                self.switch_phase(ReplicaPhase::NormalPhase);
-                                return Ok(false);
-                            }
-                            SynchronizerStatus::RunCst => {
-                                //This happens when a new view is being introduced and we are not up to date
-                                //With the rest of the replicas. This might happen because the replica was faulty
-                                //or any other reason that might cause it to lose some updates from the other replicas
-                                self.switch_phase(ReplicaPhase::RetrievingState);
-                                //After we update the state, we go back to the sync phase (this phase) so we can check if we are missing
-                                //Anything or to finalize and go back to the normal phase
-                                self.phase_stack = Some(ReplicaPhase::SyncPhase);
-                            }
-                            // should not happen...
-                            _ => {
-                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer);
-                            }
-                        }
+                        return self.adv_sync(header, message);
                     }
                     // FIXME: handle rogue reply messages
                     SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
@@ -749,20 +585,7 @@ impl<S> Replica<S>
                         self.request_received(header, request);
                     }
                     SystemMessage::Cst(message) => {
-                        let status = self.cst.process_message(
-                            CstProgress::Message(header, message),
-                            &self.synchronizer,
-                            &self.consensus,
-                            &self.decided_log,
-                            &mut self.node,
-                        );
-                        match status {
-                            CstStatus::Nil => (),
-                            // should not happen...
-                            _ => {
-                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer);
-                            }
-                        }
+                        self.process_off_context_cst_msg(header, message)?;
                     }
                     SystemMessage::ViewChange(message) => {
                         let status = self.synchronizer.process_message(
@@ -812,6 +635,7 @@ impl<S> Replica<S>
         Ok(())
     }
 
+    /// Advance the consensus phase with a received message
     fn adv_consensus(
         &mut self,
         header: Header,
@@ -886,6 +710,147 @@ impl<S> Replica<S>
         Ok(())
     }
 
+    /// Advance the sync phase of the algorithm
+    fn adv_sync(&mut self, header: Header,
+                message: ViewChangeMessage<Request<S>>) -> Result<bool>{
+
+        let status = self.synchronizer.process_message(
+            header,
+            message,
+            &self.timeouts,
+            &mut self.decided_log,
+            &self.pending_request_log,
+            &mut self.consensus,
+            &mut self.node,
+        );
+
+        self.synchronizer.signal();
+
+        match status {
+            SynchronizerStatus::Nil => return Ok(false),
+            SynchronizerStatus::Running => (),
+            SynchronizerStatus::NewView => {
+                //Our current view has been updated and we have no more state operations
+                //to perform. This happens if we are a correct replica and therefore do not need
+                //To update our state or if we are a replica that was incorrect and whose state has
+                //Already been updated from the Cst protocol
+                self.switch_phase(ReplicaPhase::NormalPhase);
+
+                return Ok(false);
+            }
+            SynchronizerStatus::RunCst => {
+                //This happens when a new view is being introduced and we are not up to date
+                //With the rest of the replicas. This might happen because the replica was faulty
+                //or any other reason that might cause it to lose some updates from the other replicas
+                self.switch_phase(ReplicaPhase::RetrievingState);
+
+                //After we update the state, we go back to the sync phase (this phase) so we can check if we are missing
+                //Anything or to finalize and go back to the normal phase
+                self.phase_stack = Some(ReplicaPhase::SyncPhase);
+            }
+            // should not happen...
+            _ => {
+                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Advance the consensus state transfer machine
+    fn adv_cst(&mut self, header: Header, message: CstMessage<State<S>, Request<S>>) -> Result<()> {
+        let status = self.cst.process_message(
+            CstProgress::Message(header, message),
+            &self.synchronizer,
+            &self.consensus,
+            &self.decided_log,
+            &self.node,
+        );
+
+        match status {
+            CstStatus::Running => (),
+            CstStatus::State(state) => {
+                install_recovery_state(
+                    state,
+                    &self.synchronizer,
+                    &mut self.decided_log,
+                    &mut self.executor,
+                    &mut self.consensus,
+                )?;
+
+                // If we were in the middle of performing a view change, then continue that
+                // View change. If not, then proceed to the normal phase
+                let next_phase =
+                    self.phase_stack.take().unwrap_or(ReplicaPhase::NormalPhase);
+
+                self.switch_phase(next_phase);
+            }
+            CstStatus::SeqNo(seq) => {
+                if self.consensus.sequence_number() < seq {
+                    // this step will allow us to ignore any messages
+                    // for older consensus instances we may have had stored;
+                    //
+                    // after we receive the latest recovery state, we
+                    // need to install the then latest sequence no;
+                    // this is done with the function
+                    // `install_recovery_state` from cst
+                    self.consensus.install_sequence_number(seq);
+
+                    self.cst.request_latest_state(
+                        &self.synchronizer,
+                        &self.timeouts,
+                        &self.node,
+                    );
+                } else {
+                    self.switch_phase(ReplicaPhase::NormalPhase);
+                }
+            }
+            CstStatus::RequestLatestCid => {
+                self.cst.request_latest_consensus_seq_no(
+                    &self.synchronizer,
+                    &self.timeouts,
+                    &self.node,
+                );
+            }
+            CstStatus::RequestState => {
+                self.cst.request_latest_state(
+                    &self.synchronizer,
+                    &self.timeouts,
+                    &mut self.node,
+                );
+            }
+            // should not happen...
+            CstStatus::Nil => {
+                return Err("Invalid state reached!")
+                    .wrapped(ErrorKind::CoreServer);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Process a CST message that was received while we are executing another phase
+    fn process_off_context_cst_msg(&mut self, header: Header, message: CstMessage<State<S>, Request<S>>) -> Result<()>{
+
+        let status = self.cst.process_message(
+            CstProgress::Message(header, message),
+            &self.synchronizer,
+            &self.consensus,
+            &self.decided_log,
+            &mut self.node,
+        );
+
+        match status {
+            CstStatus::Nil => (),
+            // should not happen...
+            _ => {
+                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer);
+            }
+        }
+
+        Ok(())
+    }
+
     fn execution_finished_with_appstate(&mut self, seq: SeqNo, appstate: State<S>) -> Result<()> {
         self.decided_log.finalize_checkpoint(seq, appstate)?;
         if self.cst.needs_checkpoint() {
@@ -914,30 +879,8 @@ impl<S> Replica<S>
         for timeout_kind in timeouts {
             match timeout_kind {
                 TimeoutKind::Cst(cst_seq) => {
-                    //Handle the timeout of a CST message
-                    let status = self.cst.timed_out(cst_seq);
-
-                    match status {
-                        CstStatus::RequestLatestCid => {
-                            self.cst.request_latest_consensus_seq_no(
-                                &self.synchronizer,
-                                &self.timeouts,
-                                &self.node,
-                            );
-
-                            self.switch_phase(ReplicaPhase::RetrievingState);
-                        }
-                        CstStatus::RequestState => {
-                            self.cst.request_latest_state(
-                                &self.synchronizer,
-                                &self.timeouts,
-                                &self.node,
-                            );
-
-                            self.switch_phase(ReplicaPhase::RetrievingState);
-                        }
-                        // nothing to do
-                        _ => (),
+                    if self.cst.cst_request_timed_out(cst_seq) {
+                        self.switch_phase(ReplicaPhase::RetrievingState);
                     }
                 }
                 TimeoutKind::ClientRequestTimeout(timeout_seq) => {

@@ -23,7 +23,6 @@ use super::{
     consensus::{
         Consensus,
     },
-    core::server::ViewInfo,
     crypto::hash::Digest,
     executable::{Reply, Request, Service, State},
     globals::ReadOnly,
@@ -38,11 +37,13 @@ use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::decisions::{CollectData, Proof, ViewDecisionPair};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
+use crate::bft::sync::view::ViewInfo;
 use crate::bft::timeouts::{ClientRqInfo, Timeouts};
 
 
 pub mod follower_sync;
 pub mod replica_sync;
+pub mod view;
 
 /// Attempt to extract a msg from the tbo queue
 /// If the message is not null (there is a message in the tbo queue)
@@ -191,11 +192,12 @@ impl<O> TboQueue<O> {
 
 
     /// Installs a new view into the queue.
-    /// Returns the old view
     pub fn install_view(&mut self, view: ViewInfo) {
         let prev_view = std::mem::replace(&mut self.view, view);
 
         self.previous_view = Some(prev_view);
+
+        //TODO: should we move to the next instance queue
     }
 
     /// Signal this `TboQueue` that it may be able to extract new
@@ -355,7 +357,10 @@ pub struct Synchronizer<S: Service> {
     tbo: Mutex<TboQueue<Request<S>>>,
     //Stores currently received requests from other nodes
     stopped: RefCell<IntMap<Vec<StoredMessage<RequestMessage<Request<S>>>>>>,
+    //TODO: This does not require a Mutex I believe since it's only accessed when
+    // Processing messages (which is always done in the replica thread)
     collects: Mutex<CollectsType<S>>,
+    //
     finalize_state: RefCell<Option<FinalizeState<Request<S>>>>,
     accessory: SynchronizerAccessory<S>,
 }
@@ -379,7 +384,7 @@ impl<S: Service + 'static> AbstractSynchronizer<S> for Synchronizer<S> {
     /// running the view change protocol.
     fn install_view(&self, view: ViewInfo) {
         // FIXME: is the following line necessary?
-        //self.phase = ProtoPhase::Init;
+        self.phase.replace(ProtoPhase::Init);
         let mut guard = self.tbo.lock().unwrap();
 
         guard.install_view(view);
@@ -421,6 +426,8 @@ impl<S> Synchronizer<S>
 
     fn previous_view(&self) -> Option<ViewInfo> { self.tbo.lock().unwrap().previous_view().clone() }
 
+    /// Signal this `TboQueue` that it may be able to extract new
+    /// view change messages from its internal storage.
     pub fn signal(&self) {
         self.tbo.lock().unwrap().signal()
     }
@@ -432,6 +439,8 @@ impl<S> Synchronizer<S>
     }
 
     /// Check if we can process new view change messages.
+    /// If there are pending messages that are now processable (but weren't when we received them)
+    /// We return them. If there are no pending messages then we will wait for new messages from other replicas
     pub fn poll(&self) -> SynchronizerPollStatus<Request<S>> {
         let mut tbo_guard = self.tbo.lock().unwrap();
         match *self.phase.borrow() {
@@ -683,7 +692,6 @@ impl<S> Synchronizer<S>
                             // - broadcast SYNC msg with collected
                             //   STOP-DATA proofs so other replicas
                             //   can repeat the leader's computation
-
 
                             let previous_view = self.previous_view();
 
@@ -1091,9 +1099,9 @@ impl<S> Synchronizer<S>
     /// So that everyone knows about (including a leader that could still be correct, but
     /// Has not received the requests from the client)
     pub fn forward_requests(&self,
-                               timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
-                               node: &Node<S::Data>,
-                               log: &PendingRequestLog<S> )  {
+                            timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+                            node: &Node<S::Data>,
+                            log: &PendingRequestLog<S>) {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {}
             SynchronizerAccessory::Replica(rep) => {

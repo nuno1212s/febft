@@ -3,7 +3,6 @@ use log::error;
 use crate::bft::benchmarks::BatchMeta;
 
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, StoredMessage};
-use crate::bft::core::server::ViewInfo;
 use crate::bft::cst::RecoveryState;
 use crate::bft::executable::{Request, Service, State, UpdateBatch};
 use crate::bft::msg_log::{Info, operation_key, PERIOD};
@@ -13,6 +12,7 @@ use crate::bft::error::*;
 use crate::bft::globals::ReadOnly;
 use crate::bft::msg_log::deciding_log::CompletedBatch;
 use crate::bft::msg_log::persistent::{PersistentLog, WriteMode};
+use crate::bft::sync::view::ViewInfo;
 
 pub(crate) enum CheckpointState<S> {
     // no checkpoint has been performed yet
@@ -154,7 +154,6 @@ impl<S> DecidedLog<S> where S: Service + 'static {
             ConsensusMessageKind::Prepare(_) => dec_log.append_prepare(consensus_msg.clone()),
             ConsensusMessageKind::Commit(_) => dec_log.append_commit(consensus_msg.clone()),
         }
-
 
         if let Err(err) = self
             .persistent_log
@@ -325,41 +324,45 @@ impl<S> DecidedLog<S> where S: Service + 'static {
             meta
         ) = completed_batch.into();
 
-        let reqs = match pre_prepare_message.message().kind().clone() {
-            ConsensusMessageKind::PrePrepare(reqs) => {
-                reqs
+        let batch = {
+            //TODO: maybe move this to another thread?
+            let reqs = match pre_prepare_message.message().kind().clone() {
+                ConsensusMessageKind::PrePrepare(reqs) => {
+                    reqs
+                }
+                _ => {
+                    panic!("")
+                }
+            };
+
+            // let mut latest_op_guard = self.latest_op().lock();
+
+            let mut batch = UpdateBatch::new_with_cap(seq, reqs.len());
+
+            for x in reqs {
+                let (header, message) = x.into_inner();
+
+                let _key = operation_key::<Request<S>>(&header, &message);
+
+                //TODO: Maybe make this run on separate thread?
+                // let seq_no = latest_op_guard
+                //     .get(key)
+                //     .unwrap_or(&SeqNo::ZERO);
+                //
+                // if message.sequence_number() > *seq_no {
+                //     latest_op_guard.insert(key, message.sequence_number());
+                // }
+
+                batch.add(
+                    header.from(),
+                    message.session_id(),
+                    message.sequence_number(),
+                    message.into_inner_operation(),
+                );
             }
-            _ => {
-                panic!("")
-            }
+
+            batch
         };
-
-        // let mut latest_op_guard = self.latest_op().lock();
-
-        let mut batch = UpdateBatch::new_with_cap(seq, reqs.len());
-
-        for x in reqs {
-            let (header, message) = x.into_inner();
-
-            let _key = operation_key::<Request<S>>(&header, &message);
-
-            //TODO: Maybe make this run on separate thread?
-            // let seq_no = latest_op_guard
-            //     .get(key)
-            //     .unwrap_or(&SeqNo::ZERO);
-            //
-            // if message.sequence_number() > *seq_no {
-            //     latest_op_guard.insert(key, message.sequence_number());
-            // }
-
-            batch.add(
-                header.from(),
-                message.session_id(),
-                message.sequence_number(),
-                message.into_inner_operation(),
-            );
-        }
-
         // retrieve the sequence number stored within the PRE-PREPARE message
         // pertaining to the current request being executed
 

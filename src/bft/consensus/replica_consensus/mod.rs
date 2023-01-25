@@ -22,7 +22,6 @@ use crate::bft::{
     core::server::{
         follower_handling::{FollowerEvent, FollowerHandle},
         observer::{MessageType, ObserverHandle},
-        ViewInfo,
     },
     crypto::hash::Digest,
     executable::{Reply, Request, Service, State},
@@ -35,6 +34,7 @@ use crate::bft::msg_log::deciding_log::DecidingLog;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::tbo_pop_message;
+use crate::bft::sync::view::ViewInfo;
 
 use super::{
     AbstractConsensus,

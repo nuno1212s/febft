@@ -30,6 +30,10 @@ pub enum TimeoutKind {
     /// session and request sequence number
     ClientRequestTimeout(ClientRqInfo),
 
+    ///TODO: Maybe add a timeout for synchronizer messages?
+    /// Having a timeout for STOP messages is essential for liveness
+    //Sync(),
+
     /// As for CST messages, these messages aren't particularly ordered, they are just
     /// for each own node to know to what messages the peers are responding to.
     Cst(SeqNo),
@@ -133,13 +137,13 @@ impl Timeouts {
             .expect("Failed to contact timeout thread")
     }
 
+    /// Timeout a CST request
     pub fn timeout_cst_request(&self, timeout: Duration, requests_needed: u32, seq_no: SeqNo) {
         self.handle.send(TimeoutMessage::TimeoutRequest(RqTimeoutMessage {
             timeout,
             notifications_needed: requests_needed,
             timeout_info: vec![TimeoutKind::Cst(seq_no)],
-        }
-        )).expect("Failed to contact timeout thread");
+        })).expect("Failed to contact timeout thread");
     }
 
     /// Handle having received a cst request

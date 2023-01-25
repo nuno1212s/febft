@@ -22,9 +22,9 @@ use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, Uno
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::Orderable;
+use crate::bft::sync::view::ViewInfo;
 use crate::bft::timeouts::{Timeouts};
 
-use super::core::server::ViewInfo;
 use super::ordering::SeqNo;
 use super::sync::{Synchronizer, AbstractSynchronizer};
 

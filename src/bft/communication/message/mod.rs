@@ -30,12 +30,12 @@ use crate::bft::ordering::{
 
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::communication::NodeId;
-use crate::bft::core::server::ViewInfo;
 use crate::bft::timeouts::{Timeout, TimeoutKind};
 use crate::bft::sync::LeaderCollects;
 use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
 use crate::bft::msg_log::decisions::CollectData;
+use crate::bft::sync::view::ViewInfo;
 
 // convenience type
 pub type StoredSerializedSystemMessage<D> = StoredMessage<

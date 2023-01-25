@@ -7,7 +7,7 @@ use crate::bft::communication::message::{ConsensusMessage, Header, Message, Syst
 use crate::bft::communication::{Node, NodeConfig, NodeId};
 use crate::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::core::server::client_replier::Replier;
-use crate::bft::core::server::ViewInfo;
+use crate::bft::core::server::ReplicaPhase;
 use crate::bft::cst::{install_recovery_state, CollabStateTransfer, CstProgress, CstStatus};
 use crate::bft::error::*;
 use crate::bft::executable::{Executor, ExecutorHandle, FollowerReplier, Request, Service, State};
@@ -21,6 +21,7 @@ use crate::bft::proposer::follower_proposer::FollowerProposer;
 use crate::bft::sync::{
     AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus,
 };
+use crate::bft::sync::view::ViewInfo;
 use crate::bft::timeouts::{Timeout, TimeoutKind, Timeouts};
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -324,7 +325,7 @@ impl<S: Service + 'static> Follower<S> {
         Ok(())
     }
 
-    /// Iterate the
+    /// Iterate the synchronous phase
     fn update_sync_phase(&mut self) -> Result<bool> {
         // retrieve a view change message to be processed
         let message = match self.synchronizer.poll() {
@@ -668,29 +669,8 @@ impl<S: Service + 'static> Follower<S> {
         for timeout_kind in timeouts {
             match timeout_kind {
                 TimeoutKind::Cst(cst_seq) => {
-                    let status = self.cst.timed_out(cst_seq);
-
-                    match status {
-                        CstStatus::RequestLatestCid => {
-                            self.cst.request_latest_consensus_seq_no(
-                                &self.synchronizer,
-                                &self.timeouts,
-                                &self.node,
-                            );
-
-                            self.switch_phase(FollowerPhase::RetrievingStatePhase);
-                        }
-                        CstStatus::RequestState => {
-                            self.cst.request_latest_state(
-                                &self.synchronizer,
-                                &self.timeouts,
-                                &self.node,
-                            );
-
-                            self.switch_phase(FollowerPhase::RetrievingStatePhase);
-                        }
-                        // nothing to do
-                        _ => (),
+                    if self.cst.cst_request_timed_out(cst_seq) {
+                        self.switch_phase(FollowerPhase::RetrievingStatePhase);
                     }
                 }
                 TimeoutKind::ClientRequestTimeout(_timeout_seq) => {

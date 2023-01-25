@@ -27,7 +27,6 @@ use super::core::server::observer::ObserverHandle;
 use super::executable::Reply;
 use super::globals::ReadOnly;
 use super::sync::{AbstractSynchronizer, Synchronizer};
-use crate::bft::core::server::ViewInfo;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
 use crate::bft::executable::{Request, Service, State};
@@ -38,6 +37,7 @@ use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::{
     tbo_advance_message_queue, tbo_pop_message, tbo_queue_message, Orderable, SeqNo,
 };
+use crate::bft::sync::view::ViewInfo;
 use crate::bft::timeouts::Timeouts;
 
 pub mod follower_consensus;
@@ -522,6 +522,8 @@ impl<S: Service + 'static> Consensus<S> {
                 rep.handle_finalize_view_change(synchronizer);
             }
         }
+
+        self.deciding_log.reset();
 
         //Prepare the algorithm as we are already entering this phase
         self.phase = ProtoPhase::PrePreparing;
