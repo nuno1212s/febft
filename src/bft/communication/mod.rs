@@ -730,6 +730,11 @@ impl<D> Node<D>
         self.shared.peer_keys.get(id.into())
     }
 
+    /// Get my own key pair
+    pub fn get_key_pair(&self) -> &KeyPair {
+        &self.shared.my_key
+    }
+
     /// Reports the id of this `Node`.
     pub fn id(&self) -> NodeId {
         self.id
@@ -957,6 +962,8 @@ impl<D> Node<D>
     }
 
     /// Broadcast a `SystemMessage` to a group of nodes.
+    ///
+    /// This variant of broadcast does not sign the messages that are sent
     pub fn broadcast(
         &self,
         message: SystemMessage<D::State, D::Request, D::Reply>,
@@ -2712,6 +2719,7 @@ impl<D> SendTo<D>
                 }
 
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
+
                 if let Left((n, d, b)) = m {
                     Self::peers_sync(flush, my_id, peer_id, n, d, b, key, &peer_tx, sock, rq_key);
                 } else {

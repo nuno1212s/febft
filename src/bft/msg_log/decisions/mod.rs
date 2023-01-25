@@ -395,6 +395,27 @@ impl<O: Clone> DecisionLog<O> {
         }
     }
 
+    /// Clear the log from a seq_no forward
+    fn clear_log<M>(
+        in_exec: SeqNo,
+        scratch: &mut Vec<usize>,
+        log: &mut Vec<Arc<ReadOnly<StoredMessage<M>>>>,
+    ) where
+        M: Orderable,
+    {
+        for (i, stored) in log.iter().enumerate().rev() {
+            if stored.message().sequence_number() < in_exec {
+                break;
+            }
+
+            scratch.push(i);
+        }
+
+        for i in scratch.drain(..) {
+            log.remove(i);
+        }
+    }
+
     /// Clear incomplete proofs from the log, which match the consensus
     /// with sequence number `in_exec`.
     ///
@@ -406,24 +427,6 @@ impl<O: Clone> DecisionLog<O> {
         value: Option<&Digest>,
     ) -> Option<StoredMessage<ConsensusMessage<O>>> {
         let mut scratch = Vec::with_capacity(8);
-
-        fn clear_log<M>(
-            in_exec: SeqNo,
-            scratch: &mut Vec<usize>,
-            log: &mut Vec<Arc<ReadOnly<StoredMessage<M>>>>,
-        ) where
-            M: Orderable,
-        {
-            for (i, stored) in log.iter().enumerate().rev() {
-                if stored.message().sequence_number() != in_exec {
-                    break;
-                }
-                scratch.push(i);
-            }
-            for i in scratch.drain(..) {
-                log.remove(i);
-            }
-        }
 
         let pre_prepare = {
             let mut pre_prepare_i = None;
@@ -459,8 +462,8 @@ impl<O: Clone> DecisionLog<O> {
             pre_prepare
         };
 
-        clear_log(in_exec, &mut scratch, &mut self.prepares);
-        clear_log(in_exec, &mut scratch, &mut self.commits);
+        Self::clear_log(in_exec, &mut scratch, &mut self.prepares);
+        Self::clear_log(in_exec, &mut scratch, &mut self.commits);
 
         pre_prepare
     }

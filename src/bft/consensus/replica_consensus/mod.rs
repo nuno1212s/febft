@@ -150,7 +150,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
 
             let targets = NodeId::targets(0..view.params().n());
 
-            node.broadcast(message, targets);
+            node.broadcast_signed(message, targets);
         }
 
         //Notify the followers

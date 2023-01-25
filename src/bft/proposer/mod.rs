@@ -311,9 +311,9 @@ impl<S: Service + 'static> Proposer<S> {
             ConsensusMessageKind::PrePrepare(currently_accumulated),
         ));
 
-        let targets = NodeId::targets(0..view.params().n());
+        let targets = view.quorum_members().iter();
 
-        self.node_ref.broadcast(message, targets);
+        self.node_ref.broadcast_signed(message, targets);
     }
 
     /// Attempt to propose an unordered request batch

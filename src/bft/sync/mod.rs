@@ -77,6 +77,9 @@ macro_rules! stop_status {
     }};
 }
 
+/// Finalize a view change with the given arguments
+/// This will run the pre finalize, which will verify if we need to run the CST algorithm or not
+/// And then runs the appropriate protocol
 macro_rules! finalize_view_change {
     (
         $self:expr,
@@ -110,9 +113,10 @@ macro_rules! finalize_view_change {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct LeaderCollects<O> {
-    //fwd_propose: FwdConsensusMessage<O>,
-    //proposed: Vec<StoredMessage<RequestMessage<O>>>,
+    //The pre prepare message, created and signed by the leader to be executed when the view change is
+    // Done
     proposed: FwdConsensusMessage<O>,
+    // The collect messages the leader has received.
     collects: Vec<StoredMessage<ViewChangeMessage<O>>>,
 }
 
@@ -140,6 +144,7 @@ pub(super) enum FinalizeStatus<O> {
     Commit(FinalizeState<O>),
 }
 
+///
 pub(self) enum Sound {
     Unbound(bool),
     Bound(Digest),
@@ -360,7 +365,7 @@ pub struct Synchronizer<S: Service> {
     //TODO: This does not require a Mutex I believe since it's only accessed when
     // Processing messages (which is always done in the replica thread)
     collects: Mutex<CollectsType<S>>,
-    //
+    // Used to store the finalize state when we are forced to run the CST protocol
     finalize_state: RefCell<Option<FinalizeState<Request<S>>>>,
     accessory: SynchronizerAccessory<S>,
 }
@@ -623,7 +628,9 @@ impl<S> Synchronizer<S>
                         unreachable!()
                     }
                     SynchronizerAccessory::Replica(_rep) => {
+                        //Obtain the view seq no of the message
                         let msg_seq = message.sequence_number();
+
                         let current_view = self.view();
                         let seq = current_view.sequence_number();
 
@@ -662,7 +669,12 @@ impl<S> Synchronizer<S>
                                     // drop attempts to vote twice
                                     return SynchronizerStatus::Running;
                                 }
-                            ViewChangeMessageKind::StopData(_) => i + 1,
+                            ViewChangeMessageKind::StopData(_) => {
+                                // The message is related to the view we are awaiting
+                                // In order to reach this point, we must be the leader of the current view,
+                                // The vote must not be repeated
+                                i + 1
+                            }
                             ViewChangeMessageKind::Sync(_) => {
                                 let mut guard = self.tbo.lock().unwrap();
                                 //Since we are the current leader and are waiting for stop data,
@@ -696,7 +708,7 @@ impl<S> Synchronizer<S>
                             let previous_view = self.previous_view();
 
                             //Since all of these requests were done in the previous view of the algorithm
-                            // then we should also use the previous view
+                            // then we should also use the previous view to verify the validity of them
                             let view_ref = previous_view.as_ref().unwrap_or(&current_view);
 
                             let proof = Self::highest_proof(&*collects_guard,
@@ -716,7 +728,7 @@ impl<S> Synchronizer<S>
                             let sound = sound(&current_view, &normalized_collects);
 
                             if !sound.test() {
-                                // FIXME: BFT-SMaRt doesn't do anything if `sound`
+                                //FIXME: BFT-SMaRt doesn't do anything if `sound`
                                 // evaluates to false; do we keep the same behavior,
                                 // and wait for a new time out? but then, no other
                                 // consensus messages have been processed... this
@@ -728,9 +740,10 @@ impl<S> Synchronizer<S>
 
                             let p = pending_rq_log.view_change_propose();
 
+                            let node_sign = node.sign_detached();
+
                             //We create the pre-prepare here as we are the new leader,
                             //And we sign it right now
-
                             let (header, message) = {
                                 let mut buf = Buf::new();
 
@@ -743,22 +756,21 @@ impl<S> Synchronizer<S>
 
                                 let mut prng_state = prng::State::new();
 
-                                //Create a forged message as if the leader had sent this to us.
-                                //This is safe because he has actually sent these requests in the SYNC phase
+                                //Create the pre-prepare message that contains the requests
+                                //Collected during the STOPPING DATA phase
                                 let (h, _) = WireMessage::new(
                                     self.view().leader(),
                                     node.id(),
                                     buf,
                                     prng_state.next_state(),
                                     Some(digest),
-                                    //TODO: This should be signed (Replace this with an
-                                    // Actual secret key)
-                                    None,
+                                    Some(node_sign.get_key_pair()),
                                 ).into_inner();
 
                                 if let SystemMessage::Consensus(consensus) = forged_preprepare {
                                     (h, consensus)
                                 } else {
+                                    //This is basically impossible
                                     panic!("Returned random message from forge propose?")
                                 }
                             };
@@ -816,6 +828,9 @@ impl<S> Synchronizer<S>
 
                         return SynchronizerStatus::Running;
                     }
+                    ViewChangeMessageKind::StopData(_) if msg_seq != seq => {
+                        todo!()
+                    }
                     ViewChangeMessageKind::StopData(_) => {
                         match &self.accessory {
                             SynchronizerAccessory::Follower(_) => {
@@ -839,6 +854,7 @@ impl<S> Synchronizer<S>
                         return SynchronizerStatus::Running;
                     }
                     ViewChangeMessageKind::Sync(_) if header.from() != current_view.leader() => {
+                        //You're not the leader, what are you saying
                         return SynchronizerStatus::Running;
                     }
                     ViewChangeMessageKind::Sync(_) => {
@@ -865,7 +881,7 @@ impl<S> Synchronizer<S>
                 let sound = sound(&current_view, &normalized_collects);
 
                 if !sound.test() {
-                    // FIXME: BFT-SMaRt doesn't do anything if `sound`
+                    //FIXME: BFT-SMaRt doesn't do anything if `sound`
                     // evaluates to false; do we keep the same behavior,
                     // and wait for a new time out? but then, no other
                     // consensus messages have been processed... this
@@ -987,7 +1003,7 @@ impl<S> Synchronizer<S>
     {
         //If we are more than one operation behind the most recent consensus id,
         //Then we must run a consensus state transfer
-        if u32::from(log.decision_log().executing()) + 1 < u32::from(state.curr_cid) {
+        if u32::from(log.decision_log().last_execution().unwrap_or(SeqNo::ZERO)) + 1 < u32::from(state.curr_cid) {
             return FinalizeStatus::RunCst(state);
         }
 
@@ -1029,6 +1045,12 @@ impl<S> Synchronizer<S>
             .clear_last_occurrences(curr_cid, sound.value())
             .and_then(|stored| Some(stored.into_inner()))
             .unwrap_or(proposed.into_inner());
+
+        //TODO: Install the Last CID that was received in the finalize state
+        if log.decision_log().last_execution().unwrap_or(SeqNo::ZERO) + 1 == curr_cid {
+            // We are missing the last decision, which should be included in the collect data
+            // sent by the leader in the SYNC message
+        }
 
         // finalize view change by broadcasting a PREPARE msg
         consensus.finalize_view_change((header, message), self, timeouts, log, node);
@@ -1127,6 +1149,9 @@ impl<S> Synchronizer<S>
     }
 
     // collects whose in execution cid is different from the given `in_exec` become `None`
+    // A set of collects is considered normalized if or when
+    // all collects are related to the same CID. This is important because not all replicas
+    // may be executing the same CID when there is a leader change
     #[inline]
     fn normalized_collects<'a>(
         collects: &'a IntMap<StoredMessage<ViewChangeMessage<Request<S>>>>,
@@ -1262,7 +1287,6 @@ fn unbound<O>(curr_view: &ViewInfo, normalized_collects: &[Option<&CollectData<O
 // cid is the same as the one in execution;
 //
 // therefore, our code *should* be correct :)
-
 fn quorum_highest<O>(
     curr_view: &ViewInfo,
     ts: SeqNo,
@@ -1282,6 +1306,7 @@ fn quorum_highest<O>(
                 .unwrap_or(false)
         })
         .is_some();
+
     let count = normalized_collects
         .iter()
         .filter_map(Option::as_ref)
@@ -1299,6 +1324,7 @@ fn quorum_highest<O>(
                 .unwrap_or(false)
         })
         .count();
+
     appears && count >= curr_view.params().quorum()
 }
 
