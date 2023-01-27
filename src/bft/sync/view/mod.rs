@@ -1,10 +1,8 @@
 use crate::bft::communication::NodeId;
 use crate::bft::core::SystemParams;
 use crate::bft::ordering::{Orderable, SeqNo};
-use crate::bft::error::*;
 use serde::{Serialize, Deserialize};
-use crate::bft::executable::Service;
-use crate::bft::sync::Synchronizer;
+use crate::bft::error::*;
 
 /// This struct contains information related with an
 /// active `febft` view.
@@ -36,7 +34,7 @@ impl ViewInfo {
         //TODO: Make the quorum participants modifiable
         let params = SystemParams::new(n, f)?;
 
-        let quorum_members: Vec<NodeId> = NodeId::targets_u32(0..n as u32).collect();
+        let quorum_members : Vec<NodeId> = NodeId::targets_u32(0..n as u32).collect();
 
         let destined_leader = quorum_members[usize::from(seq) % n];
 
@@ -52,6 +50,7 @@ impl ViewInfo {
     pub fn with_leader_set(seq: SeqNo, n: usize, f: usize,
                            quorum_participants: Vec<NodeId>,
                            leader_set: Vec<NodeId>) -> Result<Self> {
+
         let params = SystemParams::new(n, f)?;
 
         for x in &leader_set {
@@ -65,7 +64,7 @@ impl ViewInfo {
             seq,
             quorum: quorum_participants,
             leader_set,
-            params,
+            params
         })
     }
 
@@ -92,58 +91,13 @@ impl ViewInfo {
         self.quorum[usize::from(self.seq) % self.params.n()]
     }
 
-    pub fn primary(&self) -> NodeId { self.leader() }
-
     /// The set of leaders for this view.
     pub fn leader_set(&self) -> &Vec<NodeId> {
         &self.leader_set
-    }
-
-    /// The amount of leaders currently active
-    pub fn leader_count(&self) -> usize {
-        self.leader_set.len()
     }
 
     /// The quorum members for this view
     pub fn quorum_members(&self) -> &Vec<NodeId> {
         &self.quorum
     }
-}
-
-/// Validate a given view with our own information
-fn validate_view<S>(synchronizer: &Synchronizer<S>, view_info: &ViewInfo) -> Result<()> where S: Service {
-
-    // We are currently deploying a round robin algorithm, so it's pretty simple to verify whether a given
-    // view is correct
-
-    if view_info.leader_count() > view_info.params().n() / 2 {
-        return Err(Error::simple_with_msg(ErrorKind::SyncView, "View can not have more leaders than n / 2"));
-    }
-
-    //TODO: Check if we agree with the amount of leaders chosen by the system
-
-    if !view_info.leader_set().contains(&view_info.primary()) {
-        return Err(Error::simple_with_msg(ErrorKind::SyncView, "Leader set must contain the primary of the view"));
-    }
-
-    validate_leader(view_info)?;
-
-    Ok(())
-}
-
-/// Validate a leader set to make sure primary is correctly choosing leaders
-fn validate_leader(view_info: &ViewInfo) -> Result<()> {
-    let leader_count = view_info.leader_count();
-
-    let mut calculated_leaders = view_info.leader_set().clone();
-
-    for _ in 0..leader_count {
-        let calculated_leader = view_info.leader_set()[usize::from(view_info.sequence_number()) % view_info.params().n()].clone();
-
-        if !calculated_leaders.contains(&calculated_leader) {
-            return Err(Error::simple_with_msg(ErrorKind::SyncView, "Failed, leader set does not match local calculation"));
-        }
-    }
-
-    Ok(())
 }
