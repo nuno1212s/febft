@@ -86,12 +86,13 @@ where
 
     //Update the current view we are in
     synchronizer.install_view(recovery_state.view.clone());
-    //Update the consensus phase
-    consensus.install_new_phase(&recovery_state);
+    //Update the consensus phase, we will update the decision log ahead
+    consensus.install_state(&recovery_state);
+    //Persist the newly obtained state and update the decision log
+    log.install_state(consensus.sequence_number(), recovery_state);
+
     //Update the executor phase
     executor.install_state(state, requests)?;
-    //Persist the newly obtained state
-    log.install_state(consensus.sequence_number(), recovery_state);
 
     Ok(())
 }

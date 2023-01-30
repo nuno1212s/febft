@@ -1069,7 +1069,7 @@ impl<S> Synchronizer<S>
     /// proposed, they won't timeout
     pub fn request_batch_received(
         &self,
-        pre_prepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+        pre_prepare: &StoredMessage<ConsensusMessage<Request<S>>>,
         timeouts: &Timeouts,
     ) -> Vec<Digest>
     {

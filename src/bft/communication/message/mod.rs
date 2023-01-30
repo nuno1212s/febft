@@ -496,6 +496,7 @@ impl<O> Debug for ConsensusMessage<O> {
 #[derive(Clone)]
 pub enum ConsensusMessageKind<O> {
     /// Pre-prepare a request, according to the BFT consensus protocol.
+    /// Sent by a single leader
     ///
     /// The value `Vec<Digest>` contains a batch of hash digests of the
     /// serialized client requests to be proposed.

@@ -165,7 +165,6 @@ impl<S> DecidedLog<S> where S: Service + 'static {
 
     /// Update the log state, received from the CST protocol.
     pub fn install_state(&mut self, last_seq: SeqNo, rs: RecoveryState<State<S>, Request<S>>) {
-        // FIXME: what to do with `self.deciding`..?
 
         //Replace the log
         self.dec_log = rs.declog.clone();
@@ -176,7 +175,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
 
         if let Err(err) = self.persistent_log
             .write_install_state(WriteMode::NonBlockingSync(None),
-                                 (last_seq, rs.checkpoint.clone(), rs.declog)) {
+                                 (last_seq, rs.checkpoint, rs.declog)) {
             error!("Failed to persist message {:?}", err);
         }
     }
@@ -228,11 +227,11 @@ impl<S> DecidedLog<S> where S: Service + 'static {
 
                     decided_request_count = guard.clear_until_seq(final_seq);
 
-                    if let Some(last_sq) = guard.pre_prepares().last() {
+                    if let Some(last_sq) = guard.last_decision(1) {
                         // store the id of the last received pre-prepare,
                         // which corresponds to the request currently being
                         // processed
-                        self.curr_seq = last_sq.message().sequence_number();
+                        self.curr_seq = last_sq.sequence_number();
                     } else {
                         self.curr_seq = final_seq;
                     }

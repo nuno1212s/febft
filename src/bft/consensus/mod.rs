@@ -1,17 +1,18 @@
 //! The consensus algorithm used for `febft` and other logic.
 
-use std::cell::RefCell;
+
 use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
 
 use std::ops::{Deref, DerefMut};
-use std::rc::Rc;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ::log::debug;
 use chrono::Utc;
 use either::Either::{Left, Right};
+use log::error;
 
 use crate::bft::communication::message::{
     ConsensusMessage, ConsensusMessageKind, Header, StoredMessage,
@@ -31,9 +32,10 @@ use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
 use crate::bft::executable::{Request, Service, State};
 use crate::bft::msg_log::decided_log::DecidedLog;
-use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog, ProcessedBatch};
+use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
+
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
-use crate::bft::msg_log::persistent::PersistentLogModeTrait;
+
 use crate::bft::ordering::{
     tbo_advance_message_queue, tbo_pop_message, tbo_queue_message, Orderable, SeqNo,
 };
@@ -182,7 +184,7 @@ enum ProtoPhase {
     /// Start of a new consensus instance.
     Init,
     /// Running the `PRE-PREPARE` phase.
-    PrePreparing,
+    PrePreparing(usize),
     /// A replica has accepted a `PRE-PREPARE` message, but
     /// it doesn't have the entirety of the requests it references
     /// in its log.
@@ -259,7 +261,7 @@ pub enum ConsensusStatus<S> where S: Service {
 pub trait AbstractConsensus<S: Service> {
     fn sequence_number(&self) -> SeqNo;
 
-    fn install_new_phase(&mut self, phase: &RecoveryState<State<S>, Request<S>>);
+    fn install_state(&mut self, phase: &RecoveryState<State<S>, Request<S>>);
 }
 
 ///Base consensus state machine implementation
@@ -286,16 +288,14 @@ impl<S: Service + 'static> AbstractConsensus<S> for Consensus<S> {
         self.tbo.curr_seq
     }
 
-    fn install_new_phase(&mut self, recovery_state: &RecoveryState<State<S>, Request<S>>) {
+    fn install_state(&mut self, recovery_state: &RecoveryState<State<S>, Request<S>>) {
         // get the latest seq no
         let seq_no = {
-            let pre_prepares = recovery_state.decision_log().pre_prepares();
-            if pre_prepares.is_empty() {
+            let last_exec = recovery_state.decision_log().last_execution();
+            if last_exec.is_empty() {
                 self.sequence_number()
             } else {
-                pre_prepares[pre_prepares.len() - 1]
-                    .message()
-                    .sequence_number()
+                last_exec.unwrap()
             }
         };
 
@@ -320,7 +320,7 @@ impl<S: Service + 'static> Consensus<S> {
             phase: ProtoPhase::Init,
             tbo: TboQueue::new(next_seq_num),
             deciding_log: DecidingLog::new(),
-            accessory:  ConsensusAccessory::Replica(ReplicaConsensus::new(
+            accessory: ConsensusAccessory::Replica(ReplicaConsensus::new(
                 view,
                 next_seq_num,
                 observer_handle,
@@ -335,7 +335,7 @@ impl<S: Service + 'static> Consensus<S> {
             phase: ProtoPhase::Init,
             tbo: TboQueue::new(next_seq_num),
             deciding_log: DecidingLog::new(),
-            accessory:  ConsensusAccessory::Follower,
+            accessory: ConsensusAccessory::Follower,
         }
     }
 
@@ -365,7 +365,7 @@ impl<S: Service + 'static> Consensus<S> {
             ProtoPhase::Init if self.tbo.get_queue => {
                 extract_msg!(
                     {
-                        self.phase = ProtoPhase::PrePreparing;
+                        self.phase = ProtoPhase::PrePreparing(0);
                     },
                     ConsensusPollStatus::Recv,
                     &mut self.tbo.get_queue,
@@ -394,7 +394,7 @@ impl<S: Service + 'static> Consensus<S> {
                     }
                 }
             },
-            ProtoPhase::PrePreparing if self.tbo.get_queue => {
+            ProtoPhase::PrePreparing(_) if self.tbo.get_queue => {
                 extract_msg!(&mut self.tbo.get_queue, &mut self.tbo.pre_prepares)
             }
             ProtoPhase::Preparing(_) if self.tbo.get_queue => {
@@ -455,6 +455,7 @@ impl<S: Service + 'static> Consensus<S> {
         //Move back to the init phase and prepare to process all of the
         //Pending messages so we can quickly catch up
         self.phase = ProtoPhase::Init;
+        self.deciding_log.reset();
         // FIXME: do we need to clear the missing requests buffers?
 
         match &mut self.accessory {
@@ -468,7 +469,7 @@ impl<S: Service + 'static> Consensus<S> {
     ///Advance from the initial phase
     pub fn advance_init_phase(&mut self) {
         match self.phase {
-            ProtoPhase::Init => self.phase = ProtoPhase::PrePreparing,
+            ProtoPhase::Init => self.phase = ProtoPhase::PrePreparing(0),
             _ => return,
         }
     }
@@ -526,7 +527,12 @@ impl<S: Service + 'static> Consensus<S> {
         self.deciding_log.reset();
 
         //Prepare the algorithm as we are already entering this phase
-        self.phase = ProtoPhase::PrePreparing;
+
+        //TODO: when we finalize a view change, we want to treat the pre prepare request
+        // As the only pre prepare, since it already has info provided by everyone in the network.
+        // Therefore, this should go straight to the Preparing phase instead of waiting for
+        // All the view's leaders.
+        self.phase = ProtoPhase::PrePreparing(0);
 
         self.process_message(header, message, synchronizer, timeouts, log, node);
     }
@@ -563,14 +569,14 @@ impl<S: Service + 'static> Consensus<S> {
                     }
                 };
             }
-            ProtoPhase::PrePreparing => {
+            ProtoPhase::PrePreparing(i) => {
                 // queue message if we're not pre-preparing
                 // or in the same seq as the message
                 let view = synchronizer.view();
 
                 let pre_prepare_received_time = Utc::now();
 
-                let _request_batch = match message.kind() {
+                let i = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_)
                     if message.view() != view.sequence_number() =>
                         {
@@ -580,7 +586,7 @@ impl<S: Service + 'static> Consensus<S> {
 
                             return ConsensusStatus::Deciding;
                         }
-                    ConsensusMessageKind::PrePrepare(_) if header.from() != view.leader() => {
+                    ConsensusMessageKind::PrePrepare(_) if !view.leader_set().contains(&header.from()) => {
                         // Drop proposed value since sender is not leader
                         debug!("{:?} // Dropped pre prepare message because the sender was not the leader {:?} vs {:?} (ours)",
                         self.node_id, header.from(), view.leader());
@@ -597,7 +603,7 @@ impl<S: Service + 'static> Consensus<S> {
                             return ConsensusStatus::Deciding;
                         }
                     ConsensusMessageKind::PrePrepare(request_batch) => {
-                        request_batch
+                        i + 1
                     }
                     ConsensusMessageKind::Prepare(d) => {
                         debug!(
@@ -615,15 +621,24 @@ impl<S: Service + 'static> Consensus<S> {
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
                     }
+                    ConsensusMessageKind::PrePrepared(_) => {
+                        unreachable!()
+                    }
                 };
+
+                if i == 1 {
+                    //If this is the first pre prepare message we have received.
+                    self.deciding_log.processing_new_round(&view);
+                }
 
                 //We know that from here on out we will never need to own the message again, so
                 //To prevent cloning it, wrap it into this
-                let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
+                let stored_msg = Arc::new(ReadOnly::new(
+                    StoredMessage::new(header, message)));
 
                 // Notify the synchronizer and other things that we have received this batch
                 let mut digests = request_batch_received(
-                    stored_msg.clone(),
+                    &stored_msg,
                     timeouts,
                     synchronizer,
                     &self.deciding_log,
@@ -631,40 +646,53 @@ impl<S: Service + 'static> Consensus<S> {
 
                 //Store the currently deciding batch in the deciding log.
                 //Also update the rest of the fields to reflect this
-                self.deciding_log.processing_new_batch(
+                let current_digest = self.deciding_log.processing_batch_request(
                     stored_msg.clone(),
                     stored_msg.header().digest().clone(),
                     digests,
                 );
 
+                if let Err(err) = &current_digest {
+                    error!("Failed to analyse request batch");
+                    return ConsensusStatus::Deciding;
+                }
+
+                let current_digest = current_digest.unwrap();
+
                 // add message to the log
                 log.insert_consensus(stored_msg.clone());
 
-                {
-                    //Update batch meta
-                    let mut meta_guard = self.deciding_log.batch_meta().lock().unwrap();
+                self.phase = if i == view.leader_set().len() {
+                    //We have received all pre prepare requests for this consensus instance
+                    // We are now ready to broadcast our prepare message and move to the next phase
+                    {
+                        //Update batch meta
+                        let mut meta_guard = self.deciding_log.batch_meta().lock().unwrap();
 
-                    meta_guard.prepare_sent_time = Utc::now();
-                    meta_guard.pre_prepare_received_time = pre_prepare_received_time;
-                }
-
-                let seq_no = self.sequence_number();
-                let current_digest = self.deciding_log.current_digest().unwrap();
-
-                match &mut self.accessory {
-                    ConsensusAccessory::Follower => {}
-                    ConsensusAccessory::Replica(rep) => {
-                        //Perform the rest of the necessary operations to handle the received message
-                        //If we are a replica
-                        rep.handle_preprepare_sucessfull(seq_no,
-                                                         current_digest,
-                                                         view, stored_msg, node);
+                        meta_guard.prepare_sent_time = Utc::now();
+                        meta_guard.pre_prepare_received_time = pre_prepare_received_time;
                     }
-                }
 
-                //Start the count at one since the leader always agrees with his own pre-prepare message
-                //So, even if we are not the leader, we count the preprepare message as a prepare message as well
-                self.phase = ProtoPhase::Preparing(1);
+                    let seq_no = self.sequence_number();
+                    let current_digest = current_digest.expect("Received all messages but still can't calculate batch digest?");
+
+                    match &mut self.accessory {
+                        ConsensusAccessory::Follower => {}
+                        ConsensusAccessory::Replica(rep) => {
+                            //Perform the rest of the necessary operations to handle the received message
+                            //If we are a replica
+                            rep.handle_pre_prepare_successful(seq_no,
+                                                              current_digest,
+                                                              view, stored_msg, node);
+                        }
+                    }
+
+                    // We no longer start the count at 1 since all leaders must also send the prepare
+                    // message with the digest of the entire batch
+                    ProtoPhase::Preparing(0)
+                } else {
+                    ProtoPhase::PrePreparing(i)
+                };
 
                 ConsensusStatus::Deciding
             }
@@ -759,7 +787,8 @@ impl<S: Service + 'static> Consensus<S> {
                     }
                 };
 
-                let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
+                let stored_msg = Arc::new(ReadOnly::new(
+                    StoredMessage::new(header, message)));
 
                 //Add the message to the messages that must be saved before 
                 //We are able to execute the consensus instance
@@ -872,7 +901,7 @@ impl<S: Service + 'static> Consensus<S> {
 
                 // check if we have gathered enough votes,
                 // and transition to a new phase
-                if i == synchronizer.view().params().quorum() {
+                if i == curr_view.quorum() {
                     // we have reached a decision,
                     // notify core protocol
                     self.phase = ProtoPhase::Init;
@@ -938,7 +967,7 @@ impl<S> DerefMut for Consensus<S>
 
 #[inline]
 fn request_batch_received<S>(
-    preprepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+    pre_prepare: &StoredMessage<ConsensusMessage<Request<S>>>,
     timeouts: &Timeouts,
     synchronizer: &Synchronizer<S>,
     log: &DecidingLog<S>,
@@ -951,7 +980,7 @@ fn request_batch_received<S>(
 {
     let mut batch_guard = log.batch_meta().lock().unwrap();
 
-    batch_guard.batch_size = match preprepare.message().kind() {
+    batch_guard.batch_size = match pre_prepare.message().kind() {
         ConsensusMessageKind::PrePrepare(req) => {
             req.len()
         }
@@ -960,5 +989,5 @@ fn request_batch_received<S>(
     batch_guard.reception_time = Utc::now();
 
     //Tell the synchronizer to watch this request batch
-    synchronizer.request_batch_received(preprepare, timeouts)
+    synchronizer.request_batch_received(pre_prepare, timeouts)
 }

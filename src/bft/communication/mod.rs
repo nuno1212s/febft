@@ -928,20 +928,18 @@ impl<D> Node<D>
                 // Left -> peer turn
                 match send_to.socket_type().unwrap() {
                     ConnectionHandle::Async(_) => {
-                        rt::spawn(async move {
-                            //Measuring time taken to get to the point of sending the message
-                            //We don't actually want to measure how long it takes to send the message
-                            let before_send_time = Instant::now();
+                        //Measuring time taken to get to the point of sending the message
+                        //We don't actually want to measure how long it takes to send the message
+                        let before_send_time = Instant::now();
 
-                            send_to.value(Left((nonce, digest, buf))).await;
+                        rt::block_on(send_to.value(Left((nonce, digest, buf))));
 
-                            if let Some((comm_stats, start_time)) = &comm_stats {
-                                let dur_since =
-                                    before_send_time.duration_since(*start_time).as_nanos();
+                        if let Some((comm_stats, start_time)) = &comm_stats {
+                            let dur_since =
+                                before_send_time.duration_since(*start_time).as_nanos();
 
-                                comm_stats.insert_message_passing_latency(target, dur_since);
-                            }
-                        });
+                            comm_stats.insert_message_passing_latency(target, dur_since);
+                        }
                     }
                     ConnectionHandle::Sync(_) => {
                         //Measuring time taken to get to the point of sending the message
@@ -1079,20 +1077,18 @@ impl<D> Node<D>
 
                 match send_to.socket_type().unwrap() {
                     ConnectionHandle::Async(_) => {
-                        rt::spawn(async move {
-                            //Measuring time taken to get to the point of sending the message
-                            //We don't actually want to measure how long it takes to send the message
-                            let before_sending = Instant::now();
+                        //Measuring time taken to get to the point of sending the message
+                        //We don't actually want to measure how long it takes to send the message
+                        let before_sending = Instant::now();
 
-                            send_to.value(header, message).await;
+                        rt::block_on(send_to.value(header, message));
 
-                            if let Some((comm_stats, start_send)) = &comm_stats {
-                                let dur_since =
-                                    before_sending.duration_since(*start_send).as_nanos();
+                        if let Some((comm_stats, start_send)) = &comm_stats {
+                            let dur_since =
+                                before_sending.duration_since(*start_send).as_nanos();
 
-                                comm_stats.insert_message_passing_latency(id, dur_since);
-                            }
-                        });
+                            comm_stats.insert_message_passing_latency(id, dur_since);
+                        }
                     }
                     ConnectionHandle::Sync(_) => {
                         //Measuring time taken to get to the point of sending the message
@@ -1197,10 +1193,8 @@ impl<D> Node<D>
 
                 match send_to.socket_type().unwrap() {
                     ConnectionHandle::Async(_) => {
-                        rt::spawn(async move {
-                            // Left -> peer turn
-                            send_to.value(Left((nonce, digest, buf))).await;
-                        });
+                        // Left -> peer turn
+                        rt::block_on(send_to.value(Left((nonce, digest, buf))));
                     }
                     ConnectionHandle::Sync { .. } => {
                         //Measuring time taken to get to the point of sending the message

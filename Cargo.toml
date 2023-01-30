@@ -140,6 +140,7 @@ log4rs = {version = "1.1.1", features = ["file_appender"]}
 #tracing-subscriber = { version = "0.3.11", features = ["fmt"] }
 
 thiserror="1.0.32"
+num-bigint = "0.4.3"
 
 # https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.release]

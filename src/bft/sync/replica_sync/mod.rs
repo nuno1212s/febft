@@ -185,7 +185,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     /// proposed, they won't timeout
     pub fn received_request_batch(
         &self,
-        pre_prepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+        pre_prepare: &StoredMessage<ConsensusMessage<Request<S>>>,
         timeouts: &Timeouts,
     ) -> Vec<Digest> {
         let requests = match pre_prepare.message().kind() {

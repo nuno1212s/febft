@@ -71,13 +71,14 @@ pub struct ReplicaConsensus<S: Service> {
     follower_handle: Option<FollowerHandle<S>>,
 }
 
+/// Preparing requests phase (This is no longer used, maybe remove it?)
 pub(super) enum ReplicaPreparingPollStatus {
     Recv,
-    MoveToPreparing
+    MoveToPreparing,
 }
 
 impl<S: Service + 'static> ReplicaConsensus<S> {
-    pub(super) fn handle_preprepare_sucessfull(
+    pub(super) fn handle_pre_prepare_successful(
         &mut self,
         seq: SeqNo,
         current_digest: Digest,
@@ -126,8 +127,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
                     0,
                     Some(digest),
                     Some(sign_detached.key_pair()),
-                )
-                    .into_inner();
+                ).into_inner();
 
                 // store serialized header + message
                 let serialized = SerializedMessage::new(message.clone(), buf.clone());
@@ -135,23 +135,26 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
                 let stored = StoredMessage::new(header, serialized);
 
                 let mut map = speculative_commits.lock().unwrap();
+
                 map.insert(peer_id.into(), stored);
             }
         });
 
-        // leader can't vote for a PREPARE
-        // Since the preprepare message is already "equivalent" to the leaders prepare message
-        if my_id != view.leader() {
-            let message = SystemMessage::Consensus(ConsensusMessage::new(
-                seq,
-                view.sequence_number(),
-                ConsensusMessageKind::Prepare(current_digest),
-            ));
+        // Vote for the received batch.
+        // Leaders in this protocol must vote as they need to ack all
+        // other request batches we have received and that are also a part of this instance
+        // Also, since we can have # Leaders > f, if the leaders didn't partake in this
+        // Instance we would have situations where faults joined with leaders would cause
+        // Unresponsiveness
+        let message = SystemMessage::Consensus(ConsensusMessage::new(
+            seq,
+            view.sequence_number(),
+            ConsensusMessageKind::Prepare(current_digest),
+        ));
 
-            let targets = NodeId::targets(0..view.params().n());
+        let targets = NodeId::targets(0..view.params().n());
 
-            node.broadcast_signed(message, targets);
-        }
+        node.broadcast_signed(message, targets);
 
         //Notify the followers
         if let Some(follower_handle) = &self.follower_handle {

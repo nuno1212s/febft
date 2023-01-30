@@ -18,7 +18,7 @@ impl<S: Service + 'static> FollowerSynchronizer<S> {
     /// proposed, they won't timeout
     pub fn watch_request_batch(
         &self,
-        pre_prepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+        pre_prepare: &StoredMessage<ConsensusMessage<Request<S>>>,
     ) -> Vec<Digest> {
 
         let requests = match pre_prepare.message().kind() {
