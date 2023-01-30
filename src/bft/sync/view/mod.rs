@@ -185,7 +185,8 @@ fn divide_hash_space(size: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     // The final slices for each member
     let mut slices = Vec::with_capacity(count);
 
-    for i in 0..count {
+    // Get the slices
+    for i in 1..=count {
 
         let slice_start = start.to_bytes_be();
 

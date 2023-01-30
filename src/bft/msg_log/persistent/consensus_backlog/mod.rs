@@ -13,20 +13,23 @@ use crate::bft::{
 };
 
 use crate::bft::error::*;
+use crate::bft::msg_log::decided_log::BatchExecutionInfo;
 use crate::bft::msg_log::Info;
 
 use super::{ResponseMessage, ResponseMsg};
 
-pub type BatchInfo<S> = (Info, UpdateBatch<Request<S>>, BatchMeta);
+struct AwaitingPersistence<S: Service> {
 
-///Composed of the decided request batch and the messages that have to be delivered
-pub type PendingBatch<S> = (BatchInfo<S>, Vec<Digest>);
+    info: BatchExecutionInfo<S>,
+    pending_requests: Vec<Digest>
+
+}
 
 ///This is made to handle the backlog when the consensus is working faster than the persistent storage layer.
 /// It holds update batches that are yet to be executed since they are still waiting for the confirmation of the persistent log
 /// This is only needed (and only instantiated) when the persistency mode is strict
 pub struct ConsensusBacklog<S: Service> {
-    rx: ChannelSyncRx<PendingBatch<S>>,
+    rx: ChannelSyncRx<BatchExecutionInfo<S>>,
 
     //Receives messages from the persistent log
     logger_rx: ChannelSyncRx<ResponseMsg>,
@@ -38,7 +41,7 @@ pub struct ConsensusBacklog<S: Service> {
     //Even if we already persisted the consensus instance that came after it (for some reason)
     // We can only deliver it when all the previous ones have been delivered,
     // As it must be ordered
-    currently_waiting_for: Option<PendingBatch<S>>,
+    currently_waiting_for: Option<AwaitingPersistence<S>>,
 
     //Message confirmations that we have already received but pertain to a further ahead consensus instance
     messages_received_ahead: BTreeMap<SeqNo, Vec<Digest>>,
@@ -47,7 +50,7 @@ pub struct ConsensusBacklog<S: Service> {
 ///A detachable handle so we deliver work to the
 /// consensus back log thread
 pub struct ConsensusBackLogHandle<S: Service> {
-    rq_tx: ChannelSyncTx<PendingBatch<S>>,
+    rq_tx: ChannelSyncTx<BatchExecutionInfo<S>>,
     logger_tx: ChannelSyncTx<ResponseMsg>,
 }
 
@@ -116,18 +119,18 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
 
     fn run(mut self) {
         loop {
-            if let Some((msg, pending_msgs)) = &mut self.currently_waiting_for {
-                let notif = match self.logger_rx.recv() {
-                    Ok(notif) => notif,
+            if let Some(info) = &mut self.currently_waiting_for {
+                let notification = match self.logger_rx.recv() {
+                    Ok(notification) => notification,
                     Err(_) => break,
                 };
 
-                let curr_seq = msg.1.sequence_number();
+                let curr_seq = info.info().update_batch().sequence_number();
 
-                match notif {
+                match notification {
                     ResponseMessage::WroteMessage(seq, digest) => {
                         if curr_seq == seq {
-                            if !Self::remove_from_vec(pending_msgs, &digest) {
+                            if !Self::remove_from_vec(&mut info.pending_requests, &digest) {
                                 warn!("Received message for consensus instance {:?} but was not expecting it?",curr_seq);
                                 continue;
                             }
@@ -144,13 +147,13 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
                     }
                 }
 
-                if pending_msgs.is_empty() {
+                if info.pending_requests().is_empty() {
                     let finished_batch = self.currently_waiting_for.take().unwrap();
 
-                    self.dispatch_batch((finished_batch).0);
+                    self.dispatch_batch(finished_batch.into());
                 }
             } else {
-                let (batch_info, mut missing_msgs) = match self.rx.recv() {
+                let batch_info = match self.rx.recv() {
                     Ok(rcved) => rcved,
                     Err(err) => {
                         error!("{:?}", err);
@@ -159,38 +162,42 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
                     }
                 };
 
-                let seq_num = batch_info.1.sequence_number();
+                let mut awaiting = AwaitingPersistence::from(batch_info);
+
+                let seq_num = awaiting.info().update_batch().sequence_number();
 
                 //Remove the messages that we have already received
                 let messages_ahead = self.messages_received_ahead.remove(&seq_num);
 
                 if let Some(messages_ahead) = messages_ahead {
                     for persisted_message in messages_ahead {
-                        if !Self::remove_from_vec(&mut missing_msgs, &persisted_message) {
+                        if !Self::remove_from_vec(&mut awaiting.pending_requests, &persisted_message) {
                             warn!("Received message for consensus instance {:?} but was not expecting it?",
                             seq_num);
                         }
                     }
                 }
 
-                if missing_msgs.is_empty() {
-                    //If we have already received everything, dispatch the batch immediatly
-                    self.dispatch_batch(batch_info);
+                if awaiting.pending_requests().is_empty() {
+
+                    //If we have already received everything, dispatch the batch immediately
+                    self.dispatch_batch(awaiting.into());
 
                     continue;
                 }
 
-                self.currently_waiting_for = Some((batch_info, missing_msgs));
+                self.currently_waiting_for = Some(awaiting);
             }
         }
     }
 
-    fn dispatch_batch(&self, (should_checkpoint, batch, meta): BatchInfo<S>) {
-        let checkpoint = match should_checkpoint {
-            Info::Nil => self.executor_handle.queue_update(meta, batch),
+    fn dispatch_batch(&self, batch: BatchExecutionInfo<S>) {
+        let (info, requests, batch) = batch.into();
+        let checkpoint = match info {
+            Info::Nil => self.executor_handle.queue_update(meta, requests),
             Info::BeginCheckpoint => self
                 .executor_handle
-                .queue_update_and_get_appstate(meta, batch),
+                .queue_update_and_get_appstate(meta, requests),
         };
 
         if let Err(err) = checkpoint {
@@ -207,5 +214,30 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
             }
             None => false,
         }
+    }
+}
+
+impl<S> From<BatchExecutionInfo<S>> for AwaitingPersistence<S> where S: Service
+{
+    fn from(value: BatchExecutionInfo<S>) -> Self {
+        AwaitingPersistence {
+            info: value,
+            pending_requests: value.completed_batch().messages_to_persist().clone(),
+        }
+    }
+}
+
+impl<S> Into<BatchExecutionInfo<S>>  for AwaitingPersistence<S> where S: Service{
+    fn into(self) -> BatchExecutionInfo<S> {
+        self.info
+    }
+}
+
+impl<S> AwaitingPersistence<S> where S: Service {
+    pub fn info(&self) -> &BatchExecutionInfo<S> {
+        &self.info
+    }
+    pub fn pending_requests(&self) -> &Vec<Digest> {
+        &self.pending_requests
     }
 }

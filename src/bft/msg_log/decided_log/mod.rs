@@ -3,6 +3,7 @@ use log::error;
 use crate::bft::benchmarks::BatchMeta;
 
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, StoredMessage};
+use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
 use crate::bft::executable::{Request, Service, State, UpdateBatch};
 use crate::bft::msg_log::{Info, operation_key, PERIOD};
@@ -12,6 +13,7 @@ use crate::bft::error::*;
 use crate::bft::globals::ReadOnly;
 use crate::bft::msg_log::deciding_log::CompletedBatch;
 use crate::bft::msg_log::persistent::{PersistentLog, WriteMode};
+use crate::bft::msg_log::persistent::consensus_backlog::BatchInfo;
 use crate::bft::sync::view::ViewInfo;
 
 pub(crate) enum CheckpointState<S> {
@@ -54,8 +56,13 @@ pub struct DecidedLog<S> where S: Service + 'static {
     persistent_log: PersistentLog<S>,
 }
 
-impl<S> DecidedLog<S> where S: Service + 'static {
+pub struct BatchExecutionInfo<S> where S: Service {
+    info: Info,
+    update_batch: UpdateBatch<Request<S>>,
+    completed_batch: CompletedBatch<S>,
+}
 
+impl<S> DecidedLog<S> where S: Service + 'static {
     pub(crate) fn init_decided_log(persistent_log: PersistentLog<S>) -> Self {
 
         //TODO: Maybe read state from local storage?
@@ -65,9 +72,8 @@ impl<S> DecidedLog<S> where S: Service + 'static {
             dec_log: DecisionLog::new(),
             checkpoint: CheckpointState::None,
 
-            persistent_log
+            persistent_log,
         }
-
     }
 
     /// Returns a reference to a subset of this log, containing only
@@ -297,6 +303,10 @@ impl<S> DecidedLog<S> where S: Service + 'static {
         }
     }
 
+    /// Register that all the batches for a given decision have already been received
+    pub fn all_batches_received(&mut self, digest: Digest, pre_prepare_ordering: Vec<Digest>) {
+        self.dec_log.all_batches_received(digest, pre_prepare_ordering)
+    }
 
     /// Finalize a batch of client requests decided on the consensus instance
     /// with sequence number `seq`, retrieving the payload associated with their
@@ -312,52 +322,40 @@ impl<S> DecidedLog<S> where S: Service + 'static {
         &mut self,
         seq: SeqNo,
         completed_batch: CompletedBatch<S>,
-    ) -> Result<Option<(Info, UpdateBatch<Request<S>>, BatchMeta)>> {
+    ) -> Result<Option<BatchExecutionInfo<S>>> {
         //println!("Finalized batch of OPS seq {:?} on Node {:?}", seq, self.node_id);
 
-        let (
-            pre_prepare_message,
-            _batch_digest,
-            _request_digests,
-            needed_messages,
-            meta
-        ) = completed_batch.into();
-
         let batch = {
-            //TODO: maybe move this to another thread?
-            let reqs = match pre_prepare_message.message().kind().clone() {
-                ConsensusMessageKind::PrePrepare(reqs) => {
-                    reqs
+            let mut batch = UpdateBatch::new_with_cap(seq, completed_batch.request_count());
+
+            for message in completed_batch.pre_prepare_messages() {
+                let reqs = {
+                    if let ConsensusMessageKind::PrePrepare(reqs) = (*message.message().kind()).clone() {
+                        reqs
+                    } else { panic!() }
+                };
+
+                for (header, message) in reqs.iter()
+                    .map(|x| x.into_inner()) {
+
+                    let _key = operation_key::<Request<S>>(&header, &message);
+
+                    //TODO: Maybe make this run on separate thread?
+                    // let seq_no = latest_op_guard
+                    //     .get(key)
+                    //     .unwrap_or(&SeqNo::ZERO);
+                    //
+                    // if message.sequence_number() > *seq_no {
+                    //     latest_op_guard.insert(key, message.sequence_number());
+                    // }
+
+                    batch.add(
+                        header.from(),
+                        message.session_id(),
+                        message.sequence_number(),
+                        message.into_inner_operation(),
+                    );
                 }
-                _ => {
-                    panic!("")
-                }
-            };
-
-            // let mut latest_op_guard = self.latest_op().lock();
-
-            let mut batch = UpdateBatch::new_with_cap(seq, reqs.len());
-
-            for x in reqs {
-                let (header, message) = x.into_inner();
-
-                let _key = operation_key::<Request<S>>(&header, &message);
-
-                //TODO: Maybe make this run on separate thread?
-                // let seq_no = latest_op_guard
-                //     .get(key)
-                //     .unwrap_or(&SeqNo::ZERO);
-                //
-                // if message.sequence_number() > *seq_no {
-                //     latest_op_guard.insert(key, message.sequence_number());
-                // }
-
-                batch.add(
-                    header.from(),
-                    message.session_id(),
-                    message.sequence_number(),
-                    message.into_inner_operation(),
-                );
             }
 
             batch
@@ -388,9 +386,33 @@ impl<S> DecidedLog<S> where S: Service + 'static {
         };
 
         // the last executed sequence number
-        self.dec_log.finished_quorum_execution(last_seq_no);
+        let f = 1;
+
+        self.dec_log.finished_quorum_execution(last_seq_no, f).expect("Failed to create proof for the current instance");
 
         // Queue the batch for the execution
-        self.persistent_log.wait_for_batch_persistency_and_execute(((info, batch, meta), needed_messages))
+        self.persistent_log.wait_for_batch_persistency_and_execute(BatchExecutionInfo {
+            info,
+            update_batch: batch,
+            completed_batch,
+        })
+    }
+}
+
+impl<S> BatchExecutionInfo<S> where S: Service {
+    pub fn info(&self) -> &Info {
+        &self.info
+    }
+    pub fn update_batch(&self) -> &UpdateBatch<Request<S>> {
+        &self.update_batch
+    }
+    pub fn completed_batch(&self) -> &CompletedBatch<S> {
+        &self.completed_batch
+    }
+}
+
+impl<S> Into<(Info, UpdateBatch<S>, CompletedBatch<S>)> for BatchExecutionInfo<S> where S: Service {
+    fn into(self) -> (Info, UpdateBatch<S>, CompletedBatch<S>) {
+        (self.info, self.update_batch, self.completed_batch)
     }
 }

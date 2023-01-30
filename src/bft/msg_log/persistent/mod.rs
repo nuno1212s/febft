@@ -33,6 +33,7 @@ use crate::bft::{
 };
 use crate::bft::cst::CstProgress::Message;
 use crate::bft::cst::install_recovery_state;
+use crate::bft::msg_log::decided_log::BatchExecutionInfo;
 use crate::bft::msg_log::persistent::consensus_backlog::{BatchInfo, PendingBatch};
 use crate::bft::sync::view::ViewInfo;
 
@@ -354,7 +355,7 @@ impl<S: Service + 'static> PersistentLog<S>
     ///Attempt to queue a batch into waiting for persistent logging
     /// If the batch does not have to wait, it's returned to it can be instantly
     /// passed to the executor
-    pub fn wait_for_batch_persistency_and_execute(&self, batch: PendingBatch<S>) -> Result<Option<BatchInfo<S>>> {
+    pub fn wait_for_batch_persistency_and_execute(&self, batch: BatchExecutionInfo<S>) -> Result<Option<BatchExecutionInfo<S>>> {
         match &self.persistency_mode {
             PersistentLogMode::Strict(consensus_backlog) => {
                 consensus_backlog.queue_batch(batch)?;
@@ -362,7 +363,7 @@ impl<S: Service + 'static> PersistentLog<S>
                 Ok(None)
             }
             PersistentLogMode::Optimistic | PersistentLogMode::None => {
-                Ok(Some(batch.0))
+                Ok(Some(batch))
             }
         }
     }

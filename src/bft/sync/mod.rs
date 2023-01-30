@@ -136,6 +136,7 @@ pub(super) struct FinalizeState<O> {
     curr_cid: SeqNo,
     sound: Sound,
     proposed: FwdConsensusMessage<O>,
+    last_proof: Option<Proof<O>>
 }
 
 pub(super) enum FinalizeStatus<O> {
@@ -709,10 +710,10 @@ impl<S> Synchronizer<S>
 
                             //Since all of these requests were done in the previous view of the algorithm
                             // then we should also use the previous view to verify the validity of them
-                            let view_ref = previous_view.as_ref().unwrap_or(&current_view);
+                            let previous_view_ref = previous_view.as_ref().unwrap_or(&current_view);
 
                             let proof = Self::highest_proof(&*collects_guard,
-                                                            view_ref, node);
+                                                            previous_view_ref, node);
 
                             let curr_cid = proof
                                 .map(|p| p.pre_prepare().message().sequence_number())
@@ -747,10 +748,10 @@ impl<S> Synchronizer<S>
                             let (header, message) = {
                                 let mut buf = Buf::new();
 
-                                let forged_preprepare = consensus.forge_propose(p.clone(), self);
+                                let forged_pre_prepare = consensus.forge_propose(p.clone(), self);
 
                                 let digest = <S::Data as DigestData>::serialize_digest(
-                                    &forged_preprepare,
+                                    &forged_pre_prepare,
                                     &mut buf,
                                 ).unwrap();
 
@@ -767,7 +768,7 @@ impl<S> Synchronizer<S>
                                     Some(node_sign.get_key_pair()),
                                 ).into_inner();
 
-                                if let SystemMessage::Consensus(consensus) = forged_preprepare {
+                                if let SystemMessage::Consensus(consensus) = forged_pre_prepare {
                                     (h, consensus)
                                 } else {
                                     //This is basically impossible
@@ -798,6 +799,7 @@ impl<S> Synchronizer<S>
                                 curr_cid,
                                 sound,
                                 proposed: fwd_request,
+                                last_proof: proof
                             };
 
                             finalize_view_change!(
@@ -1050,6 +1052,8 @@ impl<S> Synchronizer<S>
         if log.decision_log().last_execution().unwrap_or(SeqNo::ZERO) + 1 == curr_cid {
             // We are missing the last decision, which should be included in the collect data
             // sent by the leader in the SYNC message
+
+
         }
 
         // finalize view change by broadcasting a PREPARE msg
@@ -1429,7 +1433,7 @@ fn highest_proof<'a, S, I>(
         // check if COMMIT msgs are signed, and all have the same digest
         //
         .filter(move |proof| {
-            let digest = proof.pre_prepare().header().digest();
+            let digest = proof.batch_digest();
 
             let commits_valid = proof
                 .commits()
@@ -1437,7 +1441,7 @@ fn highest_proof<'a, S, I>(
                 .filter(|stored| {
                     stored
                         .message()
-                        .has_proposed_digest(digest)
+                        .has_proposed_digest(&digest)
                         //If he does not have the digest, then it is not valid
                         .unwrap_or(false)
                 })
@@ -1451,7 +1455,7 @@ fn highest_proof<'a, S, I>(
                 .filter(|stored| {
                     stored
                         .message()
-                        .has_proposed_digest(digest)
+                        .has_proposed_digest(&digest)
                         //If he does not have the digest, then it is not valid
                         .unwrap_or(false)
                 })

@@ -653,7 +653,9 @@ impl<S: Service + 'static> Consensus<S> {
                 );
 
                 if let Err(err) = &current_digest {
-                    error!("Failed to analyse request batch");
+                    //There was an error when analysing the batch of requests, so it won't be counted
+                    error!("Failed to analyse request batch {:?}", err);
+
                     return ConsensusStatus::Deciding;
                 }
 
@@ -663,8 +665,9 @@ impl<S: Service + 'static> Consensus<S> {
                 log.insert_consensus(stored_msg.clone());
 
                 self.phase = if i == view.leader_set().len() {
+
                     //We have received all pre prepare requests for this consensus instance
-                    // We are now ready to broadcast our prepare message and move to the next phase
+                    //We are now ready to broadcast our prepare message and move to the next phase
                     {
                         //Update batch meta
                         let mut meta_guard = self.deciding_log.batch_meta().lock().unwrap();
@@ -674,13 +677,18 @@ impl<S: Service + 'static> Consensus<S> {
                     }
 
                     let seq_no = self.sequence_number();
-                    let current_digest = current_digest.expect("Received all messages but still can't calculate batch digest?");
+                    let (current_digest, pre_prepare_ordering) =
+                        current_digest.expect("Received all messages but still can't calculate batch digest?");
+
+                    // Register that all of the batches have been received
+                    // The digest of the batch and the order of the batches
+                    log.all_batches_received(current_digest, pre_prepare_ordering);
 
                     match &mut self.accessory {
                         ConsensusAccessory::Follower => {}
                         ConsensusAccessory::Replica(rep) => {
                             //Perform the rest of the necessary operations to handle the received message
-                            //If we are a replica
+                            //If we are a replica (In particular, bcast the messages)
                             rep.handle_pre_prepare_successful(seq_no,
                                                               current_digest,
                                                               view, stored_msg, node);

@@ -71,8 +71,8 @@ pub struct CompletedBatch<S> where S: Service {
     // The prepare message of the batch
     pre_prepare_messages: Vec<StoredConsensusMessage<S>>,
 
-    //The digests of all the requests in the batch
-    request_digests: Vec<Digest>,
+    //The amount of requests contained in this batch
+    request_count: usize,
 
     //The messages that must be persisted for this consensus decision to be executable
     //This should contain the pre prepare, quorum of prepares and quorum of commits
@@ -82,11 +82,17 @@ pub struct CompletedBatch<S> where S: Service {
     batch_meta: BatchMeta,
 }
 
-pub type CompletedBatchInto<S> = (Digest, Vec<Digest>, Vec<StoredConsensusMessage<S>>,
+/// The complete batch digest, the order of the batch messages,
+/// the prepare messages, the digests of all requests in all batches,
+/// messages to persist, the meta of the batch
+pub type CompletedConsensus<S> = (Digest, Vec<Digest>, Vec<StoredConsensusMessage<S>>,
                                   Vec<Digest>, Vec<Digest>, BatchMeta);
 
-impl<S> Into<CompletedBatchInto<S>> for CompletedBatch<S> where S: Service {
-    fn into(self) -> CompletedBatchInto<S> {
+/// Information about a full batch
+pub type FullBatch = (Digest, Vec<Digest>);
+
+impl<S> Into<CompletedConsensus<S>> for CompletedBatch<S> where S: Service {
+    fn into(self) -> CompletedConsensus<S> {
         (self.batch_digest, self.pre_prepare_ordering, self.pre_prepare_messages,
          self.request_digests, self.messages_to_persist, self.batch_meta)
     }
@@ -131,7 +137,7 @@ impl<S> DecidingLog<S> where S: Service {
     pub fn processing_batch_request(&mut self,
                                     request_batch: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
                                     digest: Digest,
-                                    mut batch_rq_digests: Vec<Digest>) -> Result<Option<Digest>> {
+                                    mut batch_rq_digests: Vec<Digest>) -> Result<Option<FullBatch>> {
 
         let sending_leader = request_batch.header().from();
 
@@ -169,9 +175,11 @@ impl<S> DecidingLog<S> where S: Service {
         // if we have received all of the messages in the set, calculate the digest.
         Ok(if self.current_received_pre_prepares == self.leader_set.len() {
             // We have received all of the required batches
-            self.current_digest = self.calculate_instance_digest();
+            let (digest, ordering) = self.calculate_instance_digest()?;
 
-            self.current_digest.clone()
+            self.current_digest = Some(digest.clone());
+
+            Some((digest, ordering))
         } else {
             None
         })
@@ -184,14 +192,17 @@ impl<S> DecidingLog<S> where S: Service {
 
     /// Calculate the instance of a completed consensus pre prepare phase with
     /// all the batches received
-    fn calculate_instance_digest(&self) -> Option<Digest> {
+    fn calculate_instance_digest(&self) -> Option<(Digest, Vec<Digest>)> {
         let mut ctx = Context::new();
+
+        let mut batch_ordered_digests = Vec::with_capacity(self.pre_prepare_ordering.len());
 
         for order_digest in &self.pre_prepare_ordering {
             ctx.update(order_digest?[..]);
+            batch_ordered_digests.push(order_digest.clone()?);
         }
 
-        Some(ctx.finish())
+        Some((ctx.finish(), batch_ordered_digests))
     }
 
     /// Register a message that is important to this consensus instance
@@ -222,6 +233,7 @@ impl<S> DecidingLog<S> where S: Service {
         let new_meta = BatchMeta::new();
         let batch_meta = std::mem::replace(&mut *self.batch_meta().lock().unwrap(), new_meta);
 
+        //TODO: Do I even need this here since reset is always called
         self.received_leader_messages.clear();
         self.request_space_slices.clear();
 
@@ -229,7 +241,7 @@ impl<S> DecidingLog<S> where S: Service {
             batch_digest: current_digest,
             pre_prepare_ordering,
             pre_prepare_messages,
-            request_digests: vec![],
+            request_count: self.current_batch_size,
             messages_to_persist,
             batch_meta,
         })
@@ -280,5 +292,27 @@ impl<S> DecidingLog<S> where S: Service {
     /// considered executable
     pub fn current_messages(&self) -> &Vec<Digest> {
         &self.current_messages_to_persist
+    }
+}
+
+impl<S> CompletedBatch<S> where S: Service {
+    pub fn batch_digest(&self) -> Digest {
+        self.batch_digest
+    }
+    pub fn pre_prepare_ordering(&self) -> &Vec<Digest> {
+        &self.pre_prepare_ordering
+    }
+    pub fn pre_prepare_messages(&self) -> &Vec<StoredConsensusMessage<S>> {
+        &self.pre_prepare_messages
+    }
+
+    pub fn messages_to_persist(&self) -> &Vec<Digest> {
+        &self.messages_to_persist
+    }
+    pub fn batch_meta(&self) -> &BatchMeta {
+        &self.batch_meta
+    }
+    pub fn request_count(&self) -> usize {
+        self.request_count
     }
 }
