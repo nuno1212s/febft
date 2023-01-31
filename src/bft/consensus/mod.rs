@@ -33,6 +33,8 @@ use crate::bft::cst::RecoveryState;
 use crate::bft::executable::{Request, Service, State};
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
+use crate::bft::msg_log::decisions::Proof;
+use crate::bft::error::*;
 
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 
@@ -507,6 +509,22 @@ impl<S: Service + 'static> Consensus<S> {
             synchronizer.view().sequence_number(),
             ConsensusMessageKind::PrePrepare(requests),
         ))
+    }
+
+    pub fn catch_up_to_quorum(&mut self,
+                              seq: SeqNo,
+                              proof: Proof<Request<S>>,
+                              dec_log: &mut DecidedLog<S>) -> Result<()> {
+
+        // If this is successful, it means that we are all caught up and can now start executing the
+        // batch
+
+        dec_log.install_proof(seq, proof)?;
+
+        // Move to the next instance as this one has been finalized
+        self.next_instance();
+
+        Ok(())
     }
 
     pub fn finalize_view_change(

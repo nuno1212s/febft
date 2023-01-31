@@ -289,6 +289,13 @@ impl<O> DecisionLog<O> {
         self.currently_deciding.commits.push(commit);
     }
 
+    /// Append a proof to the end of the log. Assumes all prior checks have been done
+    pub(crate) fn append_proof(&mut self, proof: Proof<O>) {
+        self.last_exec = Some(proof.seq_no());
+
+        self.decided.push(proof);
+    }
+
     /// Register that all the batches have been received
     pub(crate) fn all_batches_received(&mut self, digest: Digest, pre_prepare_ordering: Vec<Digest>) {
         self.currently_deciding.batch_digest = Some(digest);
@@ -328,7 +335,7 @@ impl<O> DecisionLog<O> {
 
     /// Returns the proof of the last executed consensus
     /// instance registered in this `DecisionLog`.
-    pub fn last_decision(&self, f: usize) -> Option<Proof<O>> {
+    pub fn last_decision(&self) -> Option<Proof<O>> {
         self.decided.get(self.decided.len() - 1).map(|p| *p.clone())
     }
 

@@ -799,7 +799,7 @@ impl<S> Synchronizer<S>
                                 curr_cid,
                                 sound,
                                 proposed: fwd_request,
-                                last_proof: proof
+                                last_proof: proof.copied()
                             };
 
                             finalize_view_change!(
@@ -895,6 +895,7 @@ impl<S> Synchronizer<S>
                     curr_cid,
                     sound,
                     proposed,
+                    last_proof: proof.copied(),
                 };
 
                 finalize_view_change!(
@@ -1038,22 +1039,33 @@ impl<S> Synchronizer<S>
             curr_cid,
             proposed,
             sound,
+            last_proof
         } = state;
 
         // we will get some value to be proposed because of the
         // check we did in `pre_finalize()`, guarding against no values
-        let (header, message) = log
-            .mut_decision_log()
-            .clear_last_occurrences(curr_cid, sound.value())
-            .and_then(|stored| Some(stored.into_inner()))
-            .unwrap_or(proposed.into_inner());
+        log.clear_last_occurrence(curr_cid);
+
+        let (header, message) = proposed.into_inner();
 
         //TODO: Install the Last CID that was received in the finalize state
         if log.decision_log().last_execution().unwrap_or(SeqNo::ZERO) + 1 == curr_cid {
             // We are missing the last decision, which should be included in the collect data
             // sent by the leader in the SYNC message
+            if let Some(last_proof) = last_proof {
+
+                log.install_proof(last_proof.seq_no(), last_proof);
 
 
+
+                //TODO: Now we must replay this in the executor.
+                // Maybe do a sync write so we can make sure we only execute when it is done
+
+            } else {
+                // This maybe happens when a checkpoint is done and the first execution after it
+                // fails, leading to a view change? Don't really know how this would be possible
+                // FIXME:
+            }
         }
 
         // finalize view change by broadcasting a PREPARE msg

@@ -2,13 +2,13 @@ pub mod consensus_backlog;
 
 use std::convert::TryInto;
 
-use std::marker::PhantomData;
 use std::ops::Deref;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::{Arc};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use log::error;
+use serde::{Deserialize, Serialize};
 
 use crate::bft::communication::channel;
 use crate::bft::communication::channel::{ChannelSyncRx, SendError};
@@ -31,10 +31,8 @@ use crate::bft::{
     ordering::SeqNo,
     persistentdb::KVDB,
 };
-use crate::bft::cst::CstProgress::Message;
-use crate::bft::cst::install_recovery_state;
 use crate::bft::msg_log::decided_log::BatchExecutionInfo;
-use crate::bft::msg_log::persistent::consensus_backlog::{BatchInfo, PendingBatch};
+use crate::bft::msg_log::decisions::Proof;
 use crate::bft::sync::view::ViewInfo;
 
 use self::consensus_backlog::ConsensusBackLogHandle;
@@ -44,18 +42,19 @@ use super::Checkpoint;
 use super::DecisionLog;
 
 ///Latest checkpoint made by febft
-pub const LATEST_STATE: &str = "latest_state";
+const LATEST_STATE: &str = "latest_state";
 ///First sequence number (committed) since the last checkpoint
-pub const FIRST_SEQ: &str = "first_seq";
+const FIRST_SEQ: &str = "first_seq";
 ///Last sequence number (committed) since the last checkpoint
-pub const LATEST_SEQ: &str = "latest_seq";
+const LATEST_SEQ: &str = "latest_seq";
 ///Latest known view sequence number
-pub const LATEST_VIEW_SEQ: &str = "latest_view_seq";
+const LATEST_VIEW_SEQ: &str = "latest_view_seq";
 
-pub const CF_OTHER: &str = "others";
-pub const CF_PRE_PREPARES: &str = "preprepares";
-pub const CF_PREPARES: &str = "prepares";
-pub const CF_COMMITS: &str = "commits";
+const CF_PROOF_INFO: &str = "proof_info";
+const CF_OTHER: &str = "others";
+const CF_PRE_PREPARES: &str = "preprepares";
+const CF_PREPARES: &str = "prepares";
+const CF_COMMITS: &str = "commits";
 
 ///The general type for a callback.
 /// Callbacks are optional and can be used when you want to
@@ -178,7 +177,7 @@ impl<S: Service + 'static> PersistentLog<S>
             K: AsRef<Path>,
             T: PersistentLogModeTrait
     {
-        let prefixes = vec![CF_OTHER, CF_PRE_PREPARES, CF_PREPARES, CF_COMMITS];
+        let prefixes = vec![CF_PROOF_INFO, CF_OTHER, CF_PRE_PREPARES, CF_PREPARES, CF_COMMITS];
 
         let log_mode = T::init_persistent_log(executor);
 
@@ -343,7 +342,25 @@ impl<S: Service + 'static> PersistentLog<S>
                     }
                     WriteMode::BlockingSync => {
                         write_state::<S>(&self.db, state)
-                    },
+                    }
+                }
+            }
+            PersistentLogMode::None => {
+                Ok(())
+            }
+        }
+    }
+
+    pub fn write_proof(&self, write_mode: WriteMode, proof: Proof<Request<S>>) -> Result<()> {
+        match self.persistency_mode {
+            PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
+                match write_mode {
+                    WriteMode::NonBlockingSync(callback) => {
+                        self.worker_handle.queue_proof(proof, callback)
+                    }
+                    WriteMode::BlockingSync => {
+                        write_proof::<S>(&self.db, proof)
+                    }
                 }
             }
             PersistentLogMode::None => {
@@ -374,7 +391,7 @@ impl<S: Service> Clone for PersistentLog<S> {
         Self {
             persistency_mode: self.persistency_mode.clone(),
             worker_handle: self.worker_handle.clone(),
-            db: self.db.clone()
+            db: self.db.clone(),
         }
     }
 }
@@ -411,7 +428,7 @@ impl<S: Service> PersistentLogWorkerHandle<S> {
         self.tx.get(counter % self.tx.len()).unwrap()
     }
 
-    fn translate_error<V,T>(result: std::result::Result<V, SendError<T>>) -> Result<V> {
+    fn translate_error<V, T>(result: std::result::Result<V, SendError<T>>) -> Result<V> {
         match result {
             Ok(v) => {
                 Ok(v)
@@ -453,6 +470,10 @@ impl<S: Service> PersistentLogWorkerHandle<S> {
 
     fn queue_install_state(&self, install_state: InstallState<S>, callback: Option<CallbackType>) -> Result<()> {
         Self::translate_error(self.next_worker().send((PWMessage::InstallState(install_state), callback)))
+    }
+
+    fn queue_proof(&self, proof: Proof<Request<S>>, callback: Option<CallbackType>) -> Result<()> {
+        Self::translate_error(self.next_worker().send((PWMessage::Proof(proof), callback)))
     }
 }
 
@@ -535,6 +556,7 @@ impl<S: Service> PersistentLogWorker<S> {
 
                 ResponseMsg::InstalledState(seq_no)
             }
+            PWMessage::Proof(proof) => {}
             PWMessage::RegisterCallbackReceiver(receiver) => {
                 self.response_txs.push(receiver);
 
@@ -572,6 +594,9 @@ pub(crate) enum PWMessage<S: Service> {
 
     //Remove all associated stored messages for this given seq number
     Invalidate(SeqNo),
+    
+    // Register a proof of the decision log
+    Proof(Proof<S>),
 
     //Install a recovery state received from CST or produced by us
     InstallState(InstallState<S>),
@@ -603,7 +628,16 @@ pub enum ResponseMessage {
     /// Notifies that the given checkpoint was persisted into the database
     Checkpointed(SeqNo),
 
-    RegisteredCallback
+    // Stored the proof with the given sequence
+    Proof(SeqNo),
+
+    RegisteredCallback,
+}
+
+struct ProofInfo {
+    batch_digest: Digest,
+
+    pre_prepare_ordering: Vec<Digest>
 }
 
 ///Write a state provided by the CST protocol into the persistent DB
@@ -769,6 +803,42 @@ fn read_message_for_range<S: Service>(
     Ok(messages)
 }
 
+fn finalize_instance(db: &KVDB, seq_no: SeqNo, digest: Digest, pre_prepare_ordering: Vec<Digest>) -> Result<()> {
+    
+     let pi = ProofInfo {
+         batch_digest: digest,
+         pre_prepare_ordering,
+     };
+    
+    db.set(CF_PROOF_INFO, make_seq(seq_no), pi)?;
+    
+    Ok(())
+}
+
+fn write_proof<S: Service>(db: &KVDB, proof: Proof<Request<S>>) -> Result<()> {
+
+    let pi = ProofInfo {
+        batch_digest: proof.batch_digest(),
+        pre_prepare_ordering: proof.pre_prepare_ordering().clone(),
+    };
+
+    db.set(CF_PROOF_INFO, make_seq(proof.seq_no()), pi)?;
+
+    for pre_prepare in proof.pre_prepares() {
+        write_message::<S>(db, pre_prepare)?;
+    }
+
+    for prepare in proof.prepares() {
+        write_message(db, prepare)?;
+    }
+
+    for commits in proof.commits() {
+        write_message(db, commits)?;
+    }
+
+    Ok(())
+}
+
 ///Read all the messages for a given consensus instance
 fn read_messages_for_seq<S: Service>(
     db: &KVDB,
@@ -805,6 +875,15 @@ fn read_messages_for_seq<S: Service>(
     }
 
     Ok(messages)
+}
+
+fn read_proof<S: Service>(db: &KVDB, seq_no: SeqNo) -> Result<Proof<Request<S>>> {
+
+    let start_key = make_msg_seq(seq_no, None);
+
+    let end_key = make_msg_seq(seq_no.next(), None);
+
+
 }
 
 ///Parse a given message from its bytes representation
@@ -904,13 +983,19 @@ fn read_latest_view_seq(db: &KVDB) -> Result<Option<SeqNo>> {
     }
 }
 
+pub fn make_seq(seq: SeqNo) -> Vec<u8> {
+    let msg_u32: u32 = seq.into();
+
+    Vec::from(msg_u32.to_be_bytes())
+}
+
 fn read_seq_from_vec(data: Vec<u8>) -> Result<SeqNo> {
     let seq_cast: [u8; 4] = data
         .as_slice()
         .try_into()
         .wrapped(ErrorKind::MsgLogPersistent)?;
 
-    let seq = u32::from_le_bytes(seq_cast);
+    let seq = u32::from_be_bytes(seq_cast);
 
     Ok(seq.into())
 }
@@ -918,7 +1003,7 @@ fn read_seq_from_vec(data: Vec<u8>) -> Result<SeqNo> {
 fn write_latest_view_seq(db: &KVDB, seq: SeqNo) -> Result<()> {
     let seq_no: u32 = seq.into();
 
-    db.set(CF_OTHER, LATEST_VIEW_SEQ, seq_no.to_le_bytes())
+    db.set(CF_OTHER, LATEST_VIEW_SEQ, seq_no.to_be_bytes())
 }
 
 pub fn make_msg_seq(msg_seq: SeqNo, from: Option<NodeId>) -> Vec<u8> {
@@ -930,5 +1015,5 @@ pub fn make_msg_seq(msg_seq: SeqNo, from: Option<NodeId>) -> Vec<u8> {
         0
     };
 
-    [msg_u32.to_le_bytes(), from_u32.to_le_bytes()].concat()
+    [msg_u32.to_be_bytes(), from_u32.to_be_bytes()].concat()
 }

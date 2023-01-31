@@ -1,19 +1,17 @@
 use std::sync::Arc;
 use log::error;
-use crate::bft::benchmarks::BatchMeta;
 
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, StoredMessage};
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
 use crate::bft::executable::{Request, Service, State, UpdateBatch};
 use crate::bft::msg_log::{Info, operation_key, PERIOD};
-use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog};
+use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog, Proof};
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::error::*;
 use crate::bft::globals::ReadOnly;
 use crate::bft::msg_log::deciding_log::CompletedBatch;
 use crate::bft::msg_log::persistent::{PersistentLog, WriteMode};
-use crate::bft::msg_log::persistent::consensus_backlog::BatchInfo;
 use crate::bft::sync::view::ViewInfo;
 
 pub(crate) enum CheckpointState<S> {
@@ -169,6 +167,42 @@ impl<S> DecidedLog<S> where S: Service + 'static {
         }
     }
 
+    /// Install a proof of a consensus instance into the log.
+    /// This is done when we receive the final SYNC message from the leader
+    /// which contains all of the collects
+    /// If we are missing the request determined by the
+    /// TODO: Maybe add this to the consensus backlog so it can be correctly executed
+    pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<Request<S>>) -> Result<()>{
+        if let Some(decision) = self.decision_log().last_decision() {
+            if decision.seq_no() == seq {
+                // Well well well, if it isn't what I'm trying to add?
+                //This should not be possible
+
+                return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidedLog,
+                                                  "Already have decision at that seq no"));
+            } else {
+                self.decision_log().append_proof(proof.clone());
+            }
+        }
+
+        if let Err(err) = self.persistent_log
+            .write_proof(WriteMode::NonBlockingSync(None), proof) {
+            error!("Failed to persist proof {:?}", err);
+        }
+
+        Ok(())
+    }
+
+    /// Clear the occurences of a seq no from the decision log
+    pub fn clear_last_occurrence(&mut self, seq: SeqNo) {
+        self.mut_decision_log().clear_last_occurrences(seq, None);
+
+
+        if let Err(err)  = self.persistent_log.write_invalidate(WriteMode::NonBlockingSync(None), seq) {
+            error!("Failed to invalidate last occurrence {:?}", err);
+        }
+    }
+
     /// Update the log state, received from the CST protocol.
     pub fn install_state(&mut self, last_seq: SeqNo, rs: RecoveryState<State<S>, Request<S>>) {
 
@@ -233,7 +267,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
 
                     decided_request_count = guard.clear_until_seq(final_seq);
 
-                    if let Some(last_sq) = guard.last_decision(1) {
+                    if let Some(last_sq) = guard.last_decision() {
                         // store the id of the last received pre-prepare,
                         // which corresponds to the request currently being
                         // processed
@@ -337,7 +371,6 @@ impl<S> DecidedLog<S> where S: Service + 'static {
 
                 for (header, message) in reqs.iter()
                     .map(|x| x.into_inner()) {
-
                     let _key = operation_key::<Request<S>>(&header, &message);
 
                     //TODO: Maybe make this run on separate thread?

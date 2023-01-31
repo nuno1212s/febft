@@ -2,7 +2,6 @@ use std::io::Read;
 use std::io::Write;
 
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, ObserveEventKind, ObserverMessage, PingMessage, ReplyMessage, RequestMessage, StoredMessage, SystemMessage};
-use crate::bft::communication::serialize::Persister;
 
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
