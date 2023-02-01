@@ -31,10 +31,11 @@ use super::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
 use crate::bft::executable::{Request, Service, State};
-use crate::bft::msg_log::decided_log::DecidedLog;
+use crate::bft::msg_log::decided_log::{BatchExecutionInfo, DecidedLog};
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
 use crate::bft::msg_log::decisions::Proof;
 use crate::bft::error::*;
+use crate::bft::msg_log::Info;
 
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 
@@ -237,7 +238,7 @@ impl ConsensusGuard {
     /// This is for the proposer to check if he can propose a new batch at this time.
     /// The user of the function is then bound to propose a new batch or the
     /// whole system can go unresponsive
-    pub fn attempt_to_propose_message(&self) -> Result<bool, bool> {
+    pub fn attempt_to_propose_message(&self) -> std::error::Result<bool, bool> {
         self.consensus_guard.compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed)
     }
 }
@@ -516,9 +517,10 @@ impl<S: Service + 'static> Consensus<S> {
                               proof: Proof<Request<S>>,
                               dec_log: &mut DecidedLog<S>) -> Result<()> {
 
+        let batch_execution_info = BatchExecutionInfo::from(proof);
+
         // If this is successful, it means that we are all caught up and can now start executing the
         // batch
-
         dec_log.install_proof(seq, proof)?;
 
         // Move to the next instance as this one has been finalized

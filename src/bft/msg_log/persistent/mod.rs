@@ -822,6 +822,7 @@ fn write_proof<S: Service>(db: &KVDB, proof: Proof<Request<S>>) -> Result<()> {
         pre_prepare_ordering: proof.pre_prepare_ordering().clone(),
     };
 
+    //TODO: Serialization of the proof info
     db.set(CF_PROOF_INFO, make_seq(proof.seq_no()), pi)?;
 
     for pre_prepare in proof.pre_prepares() {
@@ -850,13 +851,13 @@ fn read_messages_for_seq<S: Service>(
 
     let mut messages = Vec::new();
 
-    let preprepares = db.iter_range(CF_PRE_PREPARES, Some(&start_key), Some(&end_key))?;
+    let pre_prepares = db.iter_range(CF_PRE_PREPARES, Some(&start_key), Some(&end_key))?;
 
     let prepares = db.iter_range(CF_PREPARES, Some(&start_key), Some(&end_key))?;
 
     let commits = db.iter_range(CF_COMMITS, Some(&start_key), Some(&end_key))?;
 
-    for res in preprepares {
+    for res in pre_prepares {
         if let Ok((key, value)) = res {
             messages.push(parse_message::<S, Box<[u8]>>(key, value)?);
         }

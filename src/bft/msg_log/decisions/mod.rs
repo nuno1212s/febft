@@ -136,7 +136,7 @@ impl<O> Proof<O> {
 
     /// Returns the `PRE-PREPARE` message of this `Proof`.
     pub fn pre_prepares(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
-        &self.pre_prepares
+        &self.pre_prepares[..]
     }
 
     /// Returns the `PREPARE` message of this `Proof`.
@@ -159,6 +159,57 @@ impl<O> Proof<O> {
 
     pub fn batch_digest(&self) -> Digest {
         self.batch_digest
+    }
+
+    fn check_pre_prepare_sizes(&self) -> Result<()> {
+        if self.pre_prepare_ordering.len() != self.pre_prepares.len() {
+            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
+                                              "Wrong number of pre prepares."));
+        }
+        Ok(())
+    }
+
+    /// Check if the pre prepares stored here are ordered correctly according
+    /// to the [pre_prepare_ordering] in this same proof.
+    pub fn are_pre_prepares_ordered(&self) -> Result<bool> {
+        self.check_pre_prepare_sizes()?;
+
+        for index in 0..self.pre_prepare_ordering.len() {
+            if self.pre_prepare_ordering[index] != *self.pre_prepares[index].header().digest() {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Order the pre prepares on this proof
+    pub fn order_pre_prepares(&mut self) -> Result<()> {
+        self.check_pre_prepare_sizes()?;
+
+        let mut ordered_pre_prepares = Vec::with_capacity(self.pre_prepare_ordering.len());
+
+        for index in 0..self.pre_prepare_ordering.len() {
+            let digest = self.pre_prepare_ordering[index];
+
+            let pre_prepare = self.pre_prepares.iter().position(|msg| *msg.header().digest() == digest);
+
+            match pre_prepare {
+                Some(index) => {
+                    let message = self.pre_prepares.swap_remove(index);
+
+                    ordered_pre_prepares.push(message);
+                }
+                None => {
+                    return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
+                                                      "Proof's batches do not match with the digests provided."))
+                }
+            }
+        }
+
+        self.pre_prepares = ordered_pre_prepares;
+
+        Ok(())
     }
 }
 
@@ -221,6 +272,8 @@ impl<O> OnGoingDecision<O> {
         }
     }
 
+
+
     fn proof(self, quorum: usize) -> Result<Proof<O>> {
 
         //TODO: Order the pre prepares to match the ordering of the vector
@@ -267,6 +320,26 @@ impl<O> OnGoingDecision<O> {
             prepares: self.prepares,
             commits: self.commits,
         })
+    }
+
+    pub fn seq_no(&self) -> SeqNo {
+        self.seq_no
+    }
+
+    pub fn batch_digest(&self) -> Option<Digest> {
+        self.batch_digest
+    }
+    pub fn pre_prepare_ordering(&self) -> &Option<Vec<Digest>> {
+        &self.pre_prepare_ordering
+    }
+    pub fn pre_prepares(&self) -> &Vec<StoredConsensusMessage<O>> {
+        &self.pre_prepares
+    }
+    pub fn prepares(&self) -> &Vec<StoredConsensusMessage<O>> {
+        &self.prepares
+    }
+    pub fn commits(&self) -> &Vec<StoredConsensusMessage<O>> {
+        &self.commits
     }
 }
 
@@ -322,7 +395,7 @@ impl<O> DecisionLog<O> {
     pub fn collect_data(&self, f: usize) -> CollectData<O> {
         CollectData {
             incomplete_proof: self.to_be_decided(f),
-            last_proof: self.last_decision(f),
+            last_proof: self.last_decision(),
         }
     }
     /// Returns the sequence number of the consensus instance
@@ -331,6 +404,11 @@ impl<O> DecisionLog<O> {
         // we haven't called `finalize_batch` yet, so the in execution
         // seq no will be the last + 1 or 0
         self.currently_deciding.seq_no
+    }
+
+    /// Get a reference to the current on going decision
+    pub fn current_execution(&self) -> &OnGoingDecision<O> {
+        &self.currently_deciding
     }
 
     /// Returns the proof of the last executed consensus

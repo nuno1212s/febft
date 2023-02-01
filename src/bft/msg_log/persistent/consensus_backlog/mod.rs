@@ -60,7 +60,7 @@ impl<S: Service> ConsensusBackLogHandle<S> {
         self.logger_tx.clone()
     }
 
-    pub fn queue_batch(&self, batch: PendingBatch<S>) -> Result<()> {
+    pub fn queue_batch(&self, batch: BatchExecutionInfo<S>) -> Result<()> {
         if let Err(err) =  self.rq_tx.send(batch) {
             Err(Error::simple_with_msg(ErrorKind::MsgLogPersistent, format!("{:?}", err).as_str()))
         } else {

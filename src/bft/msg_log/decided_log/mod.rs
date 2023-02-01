@@ -2,6 +2,7 @@ use std::sync::Arc;
 use log::error;
 
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, StoredMessage};
+use crate::bft::communication::serialize::SharedData;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
 use crate::bft::executable::{Request, Service, State, UpdateBatch};
@@ -172,7 +173,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
     /// which contains all of the collects
     /// If we are missing the request determined by the
     /// TODO: Maybe add this to the consensus backlog so it can be correctly executed
-    pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<Request<S>>) -> Result<()>{
+    pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<Request<S>>) -> Result<()> {
         if let Some(decision) = self.decision_log().last_decision() {
             if decision.seq_no() == seq {
                 // Well well well, if it isn't what I'm trying to add?
@@ -193,12 +194,11 @@ impl<S> DecidedLog<S> where S: Service + 'static {
         Ok(())
     }
 
-    /// Clear the occurences of a seq no from the decision log
+    /// Clear the occurrences of a seq no from the decision log
     pub fn clear_last_occurrence(&mut self, seq: SeqNo) {
         self.mut_decision_log().clear_last_occurrences(seq, None);
 
-
-        if let Err(err)  = self.persistent_log.write_invalidate(WriteMode::NonBlockingSync(None), seq) {
+        if let Err(err) = self.persistent_log.write_invalidate(WriteMode::NonBlockingSync(None), seq) {
             error!("Failed to invalidate last occurrence {:?}", err);
         }
     }
@@ -393,27 +393,12 @@ impl<S> DecidedLog<S> where S: Service + 'static {
 
             batch
         };
-        // retrieve the sequence number stored within the PRE-PREPARE message
-        // pertaining to the current request being executed
 
-        let pre_prepares = self.dec_log.pre_prepares();
-
-        let last_seq_no = if pre_prepares.len() > 0 {
-            let stored_pre_prepare =
-                pre_prepares[pre_prepares.len() - 1].message();
-
-            stored_pre_prepare.sequence_number()
-        } else {
-            // the log was cleared concurrently, retrieve
-            // the seq number stored before the log was cleared
-            self.curr_seq
-        };
-
-        let last_seq_no_u32 = u32::from(last_seq_no);
+        let last_seq_no_u32 = u32::from(seq);
 
         let info = if last_seq_no_u32 > 0 && last_seq_no_u32 % PERIOD == 0 {
             //We check that % == 0 so we don't start multiple checkpoints
-            self.begin_checkpoint(last_seq_no)?
+            self.begin_checkpoint(seq)?
         } else {
             Info::Nil
         };
@@ -421,6 +406,9 @@ impl<S> DecidedLog<S> where S: Service + 'static {
         // the last executed sequence number
         let f = 1;
 
+        //
+        // Finalize the execution and store the proof in the log as a proof
+        // instead of an ongoing decision
         self.dec_log.finished_quorum_execution(last_seq_no, f).expect("Failed to create proof for the current instance");
 
         // Queue the batch for the execution
@@ -447,5 +435,39 @@ impl<S> BatchExecutionInfo<S> where S: Service {
 impl<S> Into<(Info, UpdateBatch<S>, CompletedBatch<S>)> for BatchExecutionInfo<S> where S: Service {
     fn into(self) -> (Info, UpdateBatch<S>, CompletedBatch<S>) {
         (self.info, self.update_batch, self.completed_batch)
+    }
+}
+
+impl<S, T> From<T> for BatchExecutionInfo<S> where S: Service, T: AsRef<Proof<Request<S>>> {
+    fn from(value: T) -> Self {
+        let mut update_batch = UpdateBatch::new(value.as_ref().seq_no());
+
+        if !value.as_ref().are_pre_prepares_ordered().unwrap() {
+            //The batch should be provided to this already ordered.
+            todo!()
+        }
+
+        for pre_prepare in value.as_ref().pre_prepares() {
+            let reqs = match pre_prepare.message().kind().clone() {
+                ConsensusMessageKind::PrePrepare(reqs) => { reqs }
+                _ => {}
+            };
+
+            for request in reqs {
+                let (header, message) = request.into_inner();
+
+                update_batch.add(header.from(),
+                                 message.session_id(),
+                                 message.sequence_number(),
+                                 message.into_inner_operation());
+            }
+        }
+
+
+        Self {
+            info: Info::Nil,
+            update_batch,
+            completed_batch:,
+        }
     }
 }
