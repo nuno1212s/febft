@@ -716,7 +716,7 @@ impl<S> Synchronizer<S>
                                                             previous_view_ref, node);
 
                             let curr_cid = proof
-                                .map(|p| p.pre_prepare().message().sequence_number())
+                                .map(|p| p.sequence_number())
                                 .map(|seq| SeqNo::from(u32::from(seq) + 1))
                                 .unwrap_or(SeqNo::ZERO);
 
@@ -765,7 +765,7 @@ impl<S> Synchronizer<S>
                                     buf,
                                     prng_state.next_state(),
                                     Some(digest),
-                                    Some(node_sign.get_key_pair()),
+                                    Some(node_sign.key_pair()),
                                 ).into_inner();
 
                                 if let SystemMessage::Consensus(consensus) = forged_pre_prepare {
@@ -799,7 +799,7 @@ impl<S> Synchronizer<S>
                                 curr_cid,
                                 sound,
                                 proposed: fwd_request,
-                                last_proof: proof.copied()
+                                last_proof: proof.cloned()
                             };
 
                             finalize_view_change!(
@@ -873,8 +873,8 @@ impl<S> Synchronizer<S>
                 let proof = highest_proof::<S, _>(&current_view, node, signed.iter());
 
                 let curr_cid = proof
-                    .map(|p| p.pre_prepare().message().sequence_number())
-                    .map(|seq| SeqNo::from(u32::from(seq) + 1))
+                    .map(|p| p.sequence_number())
+                    .map(|seq| seq.next())
                     .unwrap_or(SeqNo::ZERO);
 
                 let normalized_collects: Vec<_> =
@@ -895,7 +895,7 @@ impl<S> Synchronizer<S>
                     curr_cid,
                     sound,
                     proposed,
-                    last_proof: proof.copied(),
+                    last_proof: proof.cloned(),
                 };
 
                 finalize_view_change!(
@@ -1049,7 +1049,8 @@ impl<S> Synchronizer<S>
         let (header, message) = proposed.into_inner();
 
         //TODO: Install the Last CID that was received in the finalize state
-        if log.decision_log().last_execution().unwrap_or(SeqNo::ZERO) + 1 == curr_cid {
+        if u32::from(log.decision_log().last_execution().unwrap_or(SeqNo::ZERO)) + 1 == u32::from(curr_cid) {
+
             // We are missing the last decision, which should be included in the collect data
             // sent by the leader in the SYNC message
             if let Some(last_proof) = last_proof {
@@ -1477,5 +1478,5 @@ fn highest_proof<'a, S, I>(
 
             commits_valid && prepares_valid
         })
-        .max_by_key(|proof| proof.pre_prepare().message().sequence_number())
+        .max_by_key(|proof| proof.sequence_number())
 }

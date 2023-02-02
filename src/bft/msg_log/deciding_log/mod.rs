@@ -34,7 +34,7 @@ pub struct DecidingLog<S> where S: Service {
     //ones that are still missing
     pre_prepare_ordering: Vec<Option<Digest>>,
     //Pre prepare messages that will then compose the entire pre prepare
-    pre_prepare_messages: Vec<Option<StoredConsensusMessage<S>>>,
+    pre_prepare_messages: Vec<Option<StoredConsensusMessage<Request<S>>>>,
 
     // Received messages from these leaders
     received_leader_messages: BTreeSet<NodeId>,
@@ -69,7 +69,7 @@ pub struct CompletedBatch<S> where S: Service {
     // The ordering of the pre prepares
     pre_prepare_ordering: Vec<Digest>,
     // The prepare message of the batch
-    pre_prepare_messages: Vec<StoredConsensusMessage<S>>,
+    pre_prepare_messages: Vec<StoredConsensusMessage<Request<S>>>,
 
     //The amount of requests contained in this batch
     request_count: usize,
@@ -83,10 +83,10 @@ pub struct CompletedBatch<S> where S: Service {
 }
 
 /// The complete batch digest, the order of the batch messages,
-/// the prepare messages, the digests of all requests in all batches,
+/// the prepare messages,
 /// messages to persist, the meta of the batch
-pub type CompletedConsensus<S> = (Digest, Vec<Digest>, Vec<StoredConsensusMessage<S>>,
-                                  Vec<Digest>, Vec<Digest>, BatchMeta);
+pub type CompletedConsensus<S> = (Digest, Vec<Digest>, Vec<StoredConsensusMessage<Request<S>>>,
+                                  Vec<Digest>, BatchMeta);
 
 /// Information about a full batch
 pub type FullBatch = (Digest, Vec<Digest>);
@@ -94,7 +94,7 @@ pub type FullBatch = (Digest, Vec<Digest>);
 impl<S> Into<CompletedConsensus<S>> for CompletedBatch<S> where S: Service {
     fn into(self) -> CompletedConsensus<S> {
         (self.batch_digest, self.pre_prepare_ordering, self.pre_prepare_messages,
-         self.request_digests, self.messages_to_persist, self.batch_meta)
+         self.messages_to_persist, self.batch_meta)
     }
 }
 
@@ -175,7 +175,10 @@ impl<S> DecidingLog<S> where S: Service {
         // if we have received all of the messages in the set, calculate the digest.
         Ok(if self.current_received_pre_prepares == self.leader_set.len() {
             // We have received all of the required batches
-            let (digest, ordering) = self.calculate_instance_digest()?;
+            let result = self.calculate_instance_digest();
+
+            let (digest, ordering) = result
+                .ok_or(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog, "Failed to calculate instance digest"))?;
 
             self.current_digest = Some(digest.clone());
 
@@ -198,8 +201,12 @@ impl<S> DecidingLog<S> where S: Service {
         let mut batch_ordered_digests = Vec::with_capacity(self.pre_prepare_ordering.len());
 
         for order_digest in &self.pre_prepare_ordering {
-            ctx.update(order_digest?[..]);
-            batch_ordered_digests.push(order_digest.clone()?);
+            if let Some(digest) = order_digest.clone() {
+                ctx.update(digest.as_ref());
+                batch_ordered_digests.push(digest);
+            } else {
+                return None;
+            }
         }
 
         Some((ctx.finish(), batch_ordered_digests))
@@ -214,11 +221,11 @@ impl<S> DecidingLog<S> where S: Service {
     /// return the relevant information for it
     pub fn finish_processing_batch(&mut self) -> Option<ProcessedBatch<S>> {
         let pre_prepare_ordering: Vec<Digest> = self.pre_prepare_ordering.into_iter()
-            .map(|order| order?)
+            .map(|order| order.unwrap())
             .collect();
 
-        let pre_prepare_messages: Vec<StoredConsensusMessage<S>> = self.pre_prepare_messages.into_iter()
-            .map(|msg| msg?)
+        let pre_prepare_messages: Vec<StoredConsensusMessage<Request<S>>> = self.pre_prepare_messages.into_iter()
+            .map(|msg| msg.unwrap())
             .collect();
 
         let current_digest = self.current_digest?;
@@ -264,11 +271,6 @@ impl<S> DecidingLog<S> where S: Service {
         !self.pre_prepare_ordering.is_empty()
     }
 
-    /// Get a reference to the pre prepare message of the batch that we are currently processing
-    pub fn pre_prepare_message(&self) -> &Option<Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>> {
-        &self.pre_prepare_message
-    }
-
     /// The digest of the batch that is currently being processed
     pub fn current_digest(&self) -> Option<Digest> {
         self.current_digest
@@ -293,6 +295,18 @@ impl<S> DecidingLog<S> where S: Service {
     pub fn current_messages(&self) -> &Vec<Digest> {
         &self.current_messages_to_persist
     }
+
+    pub fn pre_prepare_ordering(&self) -> &Vec<Option<Digest>> {
+        &self.pre_prepare_ordering
+    }
+
+    pub fn pre_prepare_messages(&self) -> &Vec<Option<StoredConsensusMessage<Request<S>>>> {
+        &self.pre_prepare_messages
+    }
+
+    pub fn received_leader_messages(&self) -> &BTreeSet<NodeId> {
+        &self.received_leader_messages
+    }
 }
 
 impl<S> CompletedBatch<S> where S: Service {
@@ -302,7 +316,7 @@ impl<S> CompletedBatch<S> where S: Service {
     pub fn pre_prepare_ordering(&self) -> &Vec<Digest> {
         &self.pre_prepare_ordering
     }
-    pub fn pre_prepare_messages(&self) -> &Vec<StoredConsensusMessage<S>> {
+    pub fn pre_prepare_messages(&self) -> &Vec<StoredConsensusMessage<Request<S>>> {
         &self.pre_prepare_messages
     }
 

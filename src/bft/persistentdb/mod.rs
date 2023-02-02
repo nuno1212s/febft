@@ -7,6 +7,10 @@ use crate::bft::error::*;
 pub mod rocksdb;
 
 pub mod disabled;
+
+/// The basic implementation for the Key-Value DB used by this middleware
+/// This was abstracted so we could use multiple types of databases without having
+/// to perform any alterations in the code
 #[derive(Clone)]
 pub struct KVDB {
     _prefixes: Vec<&'static str>,

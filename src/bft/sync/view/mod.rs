@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::iter;
 use std::ops::{Add, Sub};
 use num_bigint::{BigInt, BigUint, ToBigInt, ToBigUint};
+use num_traits::identities::Zero;
 use crate::bft::communication::NodeId;
 use crate::bft::core::SystemParams;
 use crate::bft::ordering::{Orderable, SeqNo};
@@ -151,7 +152,7 @@ pub fn is_request_in_hash_space(rq: &Digest, hash_space: &(Vec<u8>, Vec<u8>)) ->
     let start_bi = BigUint::from_bytes_be(start);
     let end_bi = BigUint::from_bytes_be(end);
 
-    let rq_digest = BigUint::from_bytes_be(rq[..]);
+    let rq_digest = BigUint::from_bytes_be(rq.as_ref());
 
     start_bi <= rq_digest && rq_digest <= end_bi
 }
@@ -165,7 +166,7 @@ fn divide_hash_space(size: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     let slice_size_bits = size / count;
 
     // How many bytes does it take to represent a digest in this hash space
-    let size_bytes = size / u8::BITS;
+    let size_bytes = size / u8::BITS as usize;
 
     let start = BigUint::zero();
 

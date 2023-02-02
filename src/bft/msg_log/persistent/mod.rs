@@ -621,7 +621,7 @@ pub(crate) enum PWMessage<S: Service> {
     Invalidate(SeqNo),
     
     // Register a proof of the decision log
-    Proof(Proof<S>),
+    Proof(Proof<Request<S>>),
 
     //Install a recovery state received from CST or produced by us
     InstallState(InstallState<S>),
@@ -674,16 +674,18 @@ fn write_state<S: Service>(db: &KVDB, (view, checkpoint, dec_log): InstallState<
     //Messages that were stored as they will be replaced by the new log
     write_checkpoint::<S>(db, checkpoint.state(), checkpoint.sequence_number())?;
 
-    for ele in dec_log.pre_prepares() {
-        write_message::<S>(db, ele)?;
-    }
+    for proof in dec_log.proofs() {
+        for ele in proof.pre_prepares() {
+            write_message::<S>(db, ele)?;
+        }
 
-    for ele in dec_log.prepares() {
-        write_message::<S>(db, ele)?;
-    }
+        for ele in proof.prepares() {
+            write_message::<S>(db, ele)?;
+        }
 
-    for ele in dec_log.commits() {
-        write_message::<S>(db, ele)?;
+        for ele in proof.commits() {
+            write_message::<S>(db, ele)?;
+        }
     }
 
     Ok(())
@@ -909,6 +911,7 @@ fn read_proof<S: Service>(db: &KVDB, seq_no: SeqNo) -> Result<Proof<Request<S>>>
 
     let end_key = make_msg_seq(seq_no.next(), None);
 
+    todo!()
 
 }
 

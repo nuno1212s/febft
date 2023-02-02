@@ -137,17 +137,17 @@ impl WriteSet {
 impl<O> Proof<O> {
 
     /// Returns the `PRE-PREPARE` message of this `Proof`.
-    pub fn pre_prepares(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
+    pub fn pre_prepares(&self) -> &[StoredConsensusMessage<O>] {
         &self.pre_prepares[..]
     }
 
     /// Returns the `PREPARE` message of this `Proof`.
-    pub fn prepares(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
+    pub fn prepares(&self) -> &[StoredConsensusMessage<O>] {
         &self.prepares[..]
     }
 
     /// Returns the `COMMIT` message of this `Proof`.
-    pub fn commits(&self) -> &[StoredMessage<ConsensusMessage<O>>] {
+    pub fn commits(&self) -> &[StoredConsensusMessage<O>] {
         &self.commits[..]
     }
 
@@ -274,8 +274,6 @@ impl<O> OnGoingDecision<O> {
         }
     }
 
-
-
     fn proof(self, quorum: usize) -> Result<Proof<O>> {
 
         //TODO: Order the pre prepares to match the ordering of the vector
@@ -352,15 +350,20 @@ impl<O> DecisionLog<O> {
         self.last_exec
     }
 
-    pub(crate) fn append_pre_prepare(&mut self, pre_prepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>) {
+    /// Get all of the decided proofs in this decisionn log
+    pub fn proofs(&self) -> &[Proof<O>] {
+        &self.decided[..]
+    }
+
+    pub(crate) fn append_pre_prepare(&mut self, pre_prepare: StoredConsensusMessage<O>) {
         self.currently_deciding.pre_prepares.push(pre_prepare);
     }
 
-    pub(crate) fn append_prepare(&mut self, prepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>) {
+    pub(crate) fn append_prepare(&mut self, prepare: StoredConsensusMessage<O>) {
         self.currently_deciding.prepares.push(prepare);
     }
 
-    pub(crate) fn append_commit(&mut self, commit: Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>) {
+    pub(crate) fn append_commit(&mut self, commit: StoredConsensusMessage<O>) {
         self.currently_deciding.commits.push(commit);
     }
 
@@ -499,7 +502,7 @@ impl<O> DecisionLog<O> {
         in_exec: SeqNo,
         value: Option<&Digest>,
     ) -> Option<StoredMessage<ConsensusMessage<O>>> {
-        let mut scratch = Vec::with_capacity(8);
+        // let mut scratch = Vec::with_capacity(8);
 
         if self.currently_deciding.seq_no == in_exec {
             let ongoing_decision = std::mem::replace(&mut self.currently_deciding, OnGoingDecision::init_blank(in_exec));

@@ -246,7 +246,7 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
         match result {
             Ok(result) => {
                 if !result {
-                    warn!("Received message for consensus instance {:?} but was not expecting it?", seq_num);
+                    warn!("Received message for consensus instance {:?} but was not expecting it?", awaiting.info.update_batch().sequence_number());
                 }
             }
             Err(err) => {
@@ -254,22 +254,20 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
             }
         }
     }
-
 }
 
 impl<S> From<BacklogMessage<S>> for AwaitingPersistence<S> where S: Service
 {
     fn from(value: BacklogMessage<S>) -> Self {
-        let pending_rq =
-            match &value {
-                BacklogMsg::Batch(info) => {
-                    // We can unwrap the completed batch as this was received here
-                    PendingRq::Batch(info.completed_batch().unwrap().messages_to_persist().clone())
-                }
-                BacklogMsg::Proof(info) => {
-                    PendingRq::Proof(Some(info.update_batch().sequence_number()));
-                }
-            };
+        let pending_rq = match &value {
+            BacklogMsg::Batch(info) => {
+                // We can unwrap the completed batch as this was received here
+                PendingRq::Batch(info.completed_batch().unwrap().messages_to_persist().clone())
+            }
+            BacklogMsg::Proof(info) => {
+                PendingRq::Proof(Some(info.update_batch().sequence_number()))
+            }
+        };
 
         AwaitingPersistence {
             info: value.into(),
@@ -314,10 +312,14 @@ impl<S> AwaitingPersistence<S> where S: Service {
     }
 
     pub fn handle_incoming_message(&mut self, msg: ResponseMessage) -> Result<bool> {
+        if self.is_ready_for_execution() {
+            return Ok(false);
+        }
+
         match &mut self.pending_rq {
             PendingRq::Proof(sq_no) => {
                 if let ResponseMessage::Proof(seq) = msg {
-                    if seq == *sq_no {
+                    if seq == sq_no.unwrap() {
                         sq_no.take();
 
                         Ok(true)

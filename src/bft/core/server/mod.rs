@@ -672,15 +672,13 @@ impl<S> Replica<S>
             // attributed by the consensus layer to each op,
             // to execute in order
             ConsensusStatus::Decided(batch_digest) => {
-
                 if let Some(exec_info) =
                     //Should the execution be scheduled here or will it be scheduled by the persistent log?
                     self.decided_log.finalize_batch(seq, batch_digest)? {
-
                     let (info, batch, completed_batch) = exec_info.into();
 
                     match info {
-                        Info::Nil => self.executor.queue_update( batch),
+                        Info::Nil => self.executor.queue_update(batch),
                         // execute and begin local checkpoint
                         Info::BeginCheckpoint => {
                             self.executor.queue_update_and_get_appstate(batch)
@@ -711,8 +709,7 @@ impl<S> Replica<S>
 
     /// Advance the sync phase of the algorithm
     fn adv_sync(&mut self, header: Header,
-                message: ViewChangeMessage<Request<S>>) -> Result<bool>{
-
+                message: ViewChangeMessage<Request<S>>) -> Result<bool> {
         let status = self.synchronizer.process_message(
             header,
             message,
@@ -829,8 +826,7 @@ impl<S> Replica<S>
     }
 
     /// Process a CST message that was received while we are executing another phase
-    fn process_off_context_cst_msg(&mut self, header: Header, message: CstMessage<State<S>, Request<S>>) -> Result<()>{
-
+    fn process_off_context_cst_msg(&mut self, header: Header, message: CstMessage<State<S>, Request<S>>) -> Result<()> {
         let status = self.cst.process_message(
             CstProgress::Message(header, message),
             &self.synchronizer,
@@ -878,7 +874,10 @@ impl<S> Replica<S>
         for timeout_kind in timeouts {
             match timeout_kind {
                 TimeoutKind::Cst(cst_seq) => {
-                    if self.cst.cst_request_timed_out(cst_seq) {
+                    if self.cst.cst_request_timed_out(cst_seq,
+                                                      &self.synchronizer,
+                                                      &self.timeouts,
+                                                      &self.node) {
                         self.switch_phase(ReplicaPhase::RetrievingState);
                     }
                 }

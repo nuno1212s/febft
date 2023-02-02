@@ -23,6 +23,7 @@ use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog};
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::ordering::{Orderable, SeqNo};
+use crate::bft::sync::Synchronizer;
 use crate::bft::sync::view::ViewInfo;
 use crate::bft::timeouts::{TimeoutKind, Timeouts};
 
@@ -38,7 +39,7 @@ enum ProtoPhase<S, O> {
 }
 
 /// Contains state used by a recovering node.
-/// 
+///
 /// Cloning this is better than it was because of the read only checkpoint, 
 /// and because decision log also got a lot easier to clone, but we still have
 /// to be very careful thanks to the requests vector, which can be VERY large
@@ -63,13 +64,13 @@ pub fn install_recovery_state<S, T, K>(
     executor: &mut ExecutorHandle<S>,
     consensus: &mut K,
 ) -> Result<()>
-where
-    S: Service + Send + 'static,
-    State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
-    Reply<S>: Send + 'static,
-    T: AbstractSynchronizer<S>,
-    K: AbstractConsensus<S>
+    where
+        S: Service + Send + 'static,
+        State<S>: Send + Clone + 'static,
+        Request<S>: Send + Clone + 'static,
+        Reply<S>: Send + 'static,
+        T: AbstractSynchronizer<S>,
+        K: AbstractConsensus<S>
 {
     // TODO: maybe try to optimize this, to avoid clone(),
     // which may be quite expensive depending on the size
@@ -207,11 +208,11 @@ macro_rules! getmessage {
 
 // TODO: request timeouts
 impl<S> CollabStateTransfer<S>
-where
-    S: Service + Send + 'static,
-    State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
-    Reply<S>: Send + 'static,
+    where
+        S: Service + Send + 'static,
+        State<S>: Send + Clone + 'static,
+        Request<S>: Send + Clone + 'static,
+        Reply<S>: Send + 'static,
 {
     /// Craete a new instance of `CollabStateTransfer`.
     pub fn new(base_timeout: Duration) -> Self {
@@ -267,9 +268,9 @@ where
         log: &DecidedLog<S>,
         node: &Node<S::Data>,
     ) -> CstStatus<State<S>, Request<S>>
-    where
-        T: AbstractSynchronizer<S>,
-        K: AbstractConsensus<S>,
+        where
+            T: AbstractSynchronizer<S>,
+            K: AbstractConsensus<S>,
     {
         match self.phase {
             ProtoPhase::WaitingCheckpoint(_, _) => {
@@ -429,24 +430,25 @@ where
     /// Handle a timeout received from the timeouts layer.
     /// Returns a bool to signify if we must move to the Retrieving state
     /// If the timeout is no longer relevant, returns false (Can remain in current phase)
-    pub fn cst_request_timed_out(&mut self, seq: SeqNo) -> bool {
-        let status = self.cst.timed_out(seq);
+    pub fn cst_request_timed_out(&mut self, seq: SeqNo, synchronizer: &Arc<Synchronizer<S>>,
+                                 timeouts: &Timeouts, node: &Node<S::Data>) -> bool {
+        let status = self.timed_out(seq);
 
         match status {
             CstStatus::RequestLatestCid => {
-                self.cst.request_latest_consensus_seq_no(
-                    &self.synchronizer,
-                    &self.timeouts,
-                    &self.node,
+                self.request_latest_consensus_seq_no(
+                    synchronizer,
+                    timeouts,
+                    node,
                 );
 
                 true
             }
             CstStatus::RequestState => {
-                self.cst.request_latest_state(
-                    &self.synchronizer,
-                    &self.timeouts,
-                    &self.node,
+                self.request_latest_state(
+                    synchronizer,
+                    timeouts,
+                    node,
                 );
 
                 true

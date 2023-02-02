@@ -102,17 +102,22 @@ impl<S> DecidedLog<S> where S: Service + 'static {
 
             let mut requests = Vec::new();
 
-            for request in state.2.pre_prepares() {
-                let pre_prepare_rqs = match request.message().kind() {
-                    ConsensusMessageKind::PrePrepare(requests) => {
-                        requests.clone()
-                    }
-                    ConsensusMessageKind::Prepare(_) => { unreachable!() }
-                    ConsensusMessageKind::Commit(_) => { unreachable!() }
-                };
+            for proof in state.2.proofs() {
+                if !proof.are_pre_prepares_ordered()? {
+                    todo!()
+                }
 
-                for request in pre_prepare_rqs {
-                    requests.push(request.into_inner().1.into_inner_operation());
+                for request in proof.pre_prepares() {
+                    let pre_prepare_rqs = match request.message().kind() {
+                        ConsensusMessageKind::PrePrepare(requests) => {
+                            requests.clone()
+                        }
+                        _ => { unreachable!() }
+                    };
+
+                    for request in pre_prepare_rqs {
+                        requests.push(request.into_inner().1.into_inner_operation());
+                    }
                 }
             }
 
@@ -178,9 +183,8 @@ impl<S> DecidedLog<S> where S: Service + 'static {
     /// This is done when we receive the final SYNC message from the leader
     /// which contains all of the collects
     /// If we are missing the request determined by the
-    /// TODO: Maybe add this to the consensus backlog so it can be correctly executed
     pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<Request<S>>) -> Result<Option<BatchExecutionInfo<S>>> {
-        let batch_execution_info = BatchExecutionInfo::from(&proof);
+        let batch_execution_info = BatchExecutionInfo::from(proof);
 
         if let Some(decision) = self.decision_log().last_decision() {
             if decision.seq_no() == seq {
@@ -199,6 +203,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
             error!("Failed to persist proof {:?}", err);
         }
 
+        // Communicate with the persistent log about persisting this batch and then executing it
         self.persistent_log.wait_for_proof_persistency_and_execute(batch_execution_info)
     }
 
@@ -374,7 +379,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
                 let reqs = {
                     if let ConsensusMessageKind::PrePrepare(reqs) = (*message.message().kind()).clone() {
                         reqs
-                    } else { panic!() }
+                    } else { unreachable!() }
                 };
 
                 for (header, message) in reqs.iter()
@@ -459,7 +464,9 @@ impl<S, T> From<T> for BatchExecutionInfo<S> where S: Service, T: AsRef<Proof<Re
         for pre_prepare in value.as_ref().pre_prepares() {
             let reqs = match pre_prepare.message().kind().clone() {
                 ConsensusMessageKind::PrePrepare(reqs) => { reqs }
-                _ => {}
+                _ => {
+                    unreachable!()
+                }
             };
 
             for request in reqs {
@@ -475,7 +482,7 @@ impl<S, T> From<T> for BatchExecutionInfo<S> where S: Service, T: AsRef<Proof<Re
         Self {
             info: Info::Nil,
             update_batch,
-            completed_batch: None
+            completed_batch: None,
         }
     }
 }

@@ -66,7 +66,7 @@ struct DebugStats {
 }
 
 struct ProposeStats<S> where S: Service {
-    currently_accumulated: Vec<StoredMessage<RequestMessage<S>>>,
+    currently_accumulated: Vec<StoredMessage<RequestMessage<Request<S>>>>,
     last_proposal: Instant,
 }
 
@@ -259,7 +259,7 @@ impl<S: Service + 'static> Proposer<S> {
 
             let should_exec = if current_batch_size < self.target_global_batch_size {
                 let micros_since_last_batch = Instant::now()
-                    .duration_since(*propose.last_proposal)
+                    .duration_since(propose.last_proposal)
                     .as_micros();
 
                 if micros_since_last_batch <= self.global_batch_time_limit {
@@ -328,11 +328,11 @@ impl<S: Service + 'static> Proposer<S> {
                        debug: &mut DebugStats) {
 
         //Now let's deal with ordered requests
-        if is_leader && !propose.current_batch.is_empty() {
-            let current_batch_size = propose.current_batch.len();
+        if is_leader && !propose.currently_accumulated.is_empty() {
+            let current_batch_size = propose.currently_accumulated.len();
 
             if current_batch_size < self.target_global_batch_size {
-                let micros_since_last_batch = Instant::now().duration_since(propose.last_batch).as_micros();
+                let micros_since_last_batch = Instant::now().duration_since(propose.last_proposal).as_micros();
 
                 if micros_since_last_batch <= self.global_batch_time_limit {
                     //Yield to prevent active waiting
@@ -346,7 +346,7 @@ impl<S: Service + 'static> Proposer<S> {
             //Attempt to propose new batch
             match self.consensus_guard.attempt_to_propose_message() {
                 Ok(_) => {
-                    propose.last_batch = Instant::now();
+                    propose.last_proposal = Instant::now();
 
                     debug.batches_made += 1;
 
@@ -367,7 +367,7 @@ impl<S: Service + 'static> Proposer<S> {
 
                     *last_seq = Some(*seq);
 
-                    let current_batch = std::mem::replace(propose.current_batch,
+                    let current_batch = std::mem::replace(&mut propose.currently_accumulated,
                                                           Vec::with_capacity(self.node_ref.batch_size() * 2));
 
                     self.propose(*seq, view, current_batch);
@@ -404,7 +404,7 @@ impl<S: Service + 'static> Proposer<S> {
             ConsensusMessageKind::PrePrepare(currently_accumulated),
         ));
 
-        let targets = view.quorum_members().iter();
+        let targets = view.quorum_members().iter().copied();
 
         self.node_ref.broadcast_signed(message, targets);
     }

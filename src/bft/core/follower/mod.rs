@@ -601,15 +601,12 @@ impl<S: Service + 'static> Follower<S> {
             // attributed by the consensus layer to each op,
             // to execute in order
             ConsensusStatus::Decided(completed_batch) => {
-
-                // for digest in digests.iter() {
-                //     self.synchronizer.unwatch_request(digest);
-                // }
-
-                if let Some((info, batch, meta)) =
+                if let Some(batch) =
                     self.decided_log
-                        .finalize_batch(seq, completed_batch).into()?
+                        .finalize_batch(seq, completed_batch)?
                 {
+                    let (info, batch, _) = batch.into();
+
                     //Send the finalized batch to the rq finalizer
                     //So everything can be removed from the correct logs and
                     //Given to the service thread to execute
@@ -620,8 +617,7 @@ impl<S: Service + 'static> Follower<S> {
                         Info::BeginCheckpoint => {
                             self.executor.queue_update_and_get_appstate(batch)
                         }
-                    }
-                        .unwrap();
+                    }.unwrap();
                 }
 
                 self.consensus.next_instance();
@@ -669,8 +665,13 @@ impl<S: Service + 'static> Follower<S> {
         for timeout_kind in timeouts {
             match timeout_kind {
                 TimeoutKind::Cst(cst_seq) => {
-                    if self.cst.cst_request_timed_out(cst_seq) {
+                    if self.cst.cst_request_timed_out(cst_seq,
+                                                      &self.synchronizer,
+                                                      &self.timeouts,
+                                                      &self.node) {
+
                         self.switch_phase(FollowerPhase::RetrievingStatePhase);
+
                     }
                 }
                 TimeoutKind::ClientRequestTimeout(_timeout_seq) => {

@@ -659,9 +659,6 @@ impl<S: Service + 'static> Consensus<S> {
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
                     }
-                    ConsensusMessageKind::PrePrepared(_) => {
-                        unreachable!()
-                    }
                 };
 
                 if i == 1 {
@@ -947,7 +944,7 @@ impl<S: Service + 'static> Consensus<S> {
 
                 // check if we have gathered enough votes,
                 // and transition to a new phase
-                if i == curr_view.quorum() {
+                if i == curr_view.params().quorum() {
                     // we have reached a decision,
                     // notify core protocol
                     self.phase = ProtoPhase::Init;
