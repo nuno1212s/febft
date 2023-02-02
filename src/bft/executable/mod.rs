@@ -61,10 +61,10 @@ pub enum ExecutionRequest<S, O> {
     // install state from state transfer protocol
     InstallState(S, Vec<O>),
     // update the state of the service
-    Update(BatchMeta, UpdateBatch<O>),
+    Update(UpdateBatch<O>),
     // same as above, and include the application state
     // in the reply, used for local checkpoints
-    UpdateAndGetAppstate(BatchMeta, UpdateBatch<O>),
+    UpdateAndGetAppstate(UpdateBatch<O>),
 
     //Execute an un ordered batch of requests
     ExecuteUnordered(UnorderedBatch<O>),
@@ -168,7 +168,6 @@ pub trait Service: Send {
         &mut self,
         state: &mut State<Self>,
         batch: UpdateBatch<Request<Self>>,
-        _meta: BatchMeta,
     ) -> BatchReplies<Reply<Self>> {
         let mut reply_batch = BatchReplies::with_capacity(batch.len());
 
@@ -291,14 +290,16 @@ impl<S: Service> ExecutorHandle<S>
     }
 
     /// Queues a batch of requests `batch` for execution.
-    pub fn queue_update(&self, meta: BatchMeta, batch: UpdateBatch<Request<S>>) -> Result<()> {
+    pub fn queue_update(&self, batch: UpdateBatch<Request<S>>)
+                        -> Result<()> {
         self.e_tx
-            .send(ExecutionRequest::Update(meta, batch))
+            .send(ExecutionRequest::Update(batch))
             .simple(ErrorKind::Executable)
     }
 
     /// Queues a batch of unordered requests for execution
-    pub fn queue_update_unordered(&self, requests: UnorderedBatch<Request<S>>) -> Result<()> {
+    pub fn queue_update_unordered(&self, requests: UnorderedBatch<Request<S>>)
+        -> Result<()> {
         self.e_tx
             .send(ExecutionRequest::ExecuteUnordered(requests))
             .simple(ErrorKind::Executable)
@@ -310,11 +311,10 @@ impl<S: Service> ExecutorHandle<S>
     /// This is useful during local checkpoints.
     pub fn queue_update_and_get_appstate(
         &self,
-        meta: BatchMeta,
         batch: UpdateBatch<Request<S>>,
     ) -> Result<()> {
         self.e_tx
-            .send(ExecutionRequest::UpdateAndGetAppstate(meta, batch))
+            .send(ExecutionRequest::UpdateAndGetAppstate(batch))
             .simple(ErrorKind::Executable)
     }
 }
@@ -348,12 +348,9 @@ impl<S, T> Executor<S, T>
         send_node: SendNode<S::Data>,
         observer: Option<ObserverHandle>,
     ) -> Result<()> {
-
         let (state, requests) = if let Some((state, requests)) = current_state {
-
             (state, Some(requests))
-
-        } else {( service.initial_state()?, None )};
+        } else { (service.initial_state()?, None) };
 
         let id = send_node.id();
 
@@ -390,20 +387,20 @@ impl<S, T> Executor<S, T>
                                 exec.service.update(&mut exec.state, req);
                             }
                         }
-                        ExecutionRequest::Update(meta, batch) => {
+                        ExecutionRequest::Update(batch) => {
                             let seq_no = batch.seq_no.clone();
 
                             let reply_batch =
-                                exec.service.update_batch(&mut exec.state, batch, meta);
+                                exec.service.update_batch(&mut exec.state, batch);
 
                             // deliver replies
                             exec.execution_finished(Some(seq_no), reply_batch);
                         }
-                        ExecutionRequest::UpdateAndGetAppstate(meta, batch) => {
+                        ExecutionRequest::UpdateAndGetAppstate(batch) => {
                             let seq_no = batch.seq_no.clone();
 
                             let reply_batch =
-                                exec.service.update_batch(&mut exec.state, batch, meta);
+                                exec.service.update_batch(&mut exec.state, batch);
 
                             // deliver checkpoint state to the replica
                             exec.deliver_checkpoint_state(seq_no);

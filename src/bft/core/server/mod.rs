@@ -231,6 +231,7 @@ impl<S> Replica<S>
             node.id(),
             view.clone(),
             next_consensus_seq,
+            executor.clone(),
             observer_handle.clone(),
             None,
         );
@@ -671,22 +672,20 @@ impl<S> Replica<S>
             // attributed by the consensus layer to each op,
             // to execute in order
             ConsensusStatus::Decided(batch_digest) => {
-                // for digest in digests.iter() {
-                //     self.synchronizer.unwatch_request(digest);
-                // }
 
-
-                if let Some((info, batch, meta)) =
+                if let Some(exec_info) =
                     //Should the execution be scheduled here or will it be scheduled by the persistent log?
                     self.decided_log.finalize_batch(seq, batch_digest)? {
+
+                    let (info, batch, completed_batch) = exec_info.into();
+
                     match info {
-                        Info::Nil => self.executor.queue_update(meta, batch),
+                        Info::Nil => self.executor.queue_update( batch),
                         // execute and begin local checkpoint
                         Info::BeginCheckpoint => {
-                            self.executor.queue_update_and_get_appstate(meta, batch)
+                            self.executor.queue_update_and_get_appstate(batch)
                         }
-                    }
-                        .unwrap();
+                    }.unwrap();
                 }
 
                 self.consensus.next_instance();

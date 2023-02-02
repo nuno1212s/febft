@@ -157,7 +157,9 @@ impl<S: Service + 'static> Follower<S> {
             None,
         )?;
 
-        let consensus = Consensus::new_follower(node.id(), seq);
+        let consensus = Consensus::new_follower(node.id(),
+                                                seq,
+                                                executor.clone());
 
         const CST_BASE_DUR: Duration = Duration::from_secs(30);
 
@@ -512,7 +514,7 @@ impl<S: Service + 'static> Follower<S> {
                                     self.cst.request_latest_state(
                                         &self.synchronizer,
                                         &self.timeouts,
-                                        &self.node
+                                        &self.node,
                                     );
                                 } else {
                                     self.switch_phase(FollowerPhase::NormalPhase);
@@ -522,14 +524,14 @@ impl<S: Service + 'static> Follower<S> {
                                 self.cst.request_latest_consensus_seq_no(
                                     &self.synchronizer,
                                     &self.timeouts,
-                                    &self.node
+                                    &self.node,
                                 );
                             }
                             CstStatus::RequestState => {
                                 self.cst.request_latest_state(
                                     &self.synchronizer,
                                     &self.timeouts,
-                                    &mut self.node
+                                    &mut self.node,
                                 );
                             }
                             // should not happen...
@@ -549,9 +551,7 @@ impl<S: Service + 'static> Follower<S> {
                     SystemMessage::UnOrderedReply(_) => {
                         warn!("How can I receive a reply here?")
                     }
-                    SystemMessage::Ping(_) => {
-
-                    }
+                    SystemMessage::Ping(_) => {}
                 }
             }
             Message::Timeout(timeout_kind) => {
@@ -608,20 +608,20 @@ impl<S: Service + 'static> Follower<S> {
 
                 if let Some((info, batch, meta)) =
                     self.decided_log
-                        .finalize_batch(seq, completed_batch)?
+                        .finalize_batch(seq, completed_batch).into()?
                 {
                     //Send the finalized batch to the rq finalizer
                     //So everything can be removed from the correct logs and
                     //Given to the service thread to execute
                     //self.rq_finalizer.queue_finalize(info, meta, rqs);
                     match info {
-                        Info::Nil => self.executor.queue_update(meta, batch),
+                        Info::Nil => self.executor.queue_update(batch),
                         // execute and begin local checkpoint
                         Info::BeginCheckpoint => {
-                            self.executor.queue_update_and_get_appstate(meta, batch)
+                            self.executor.queue_update_and_get_appstate(batch)
                         }
                     }
-                    .unwrap();
+                        .unwrap();
                 }
 
                 self.consensus.next_instance();

@@ -1054,8 +1054,8 @@ impl<S> Synchronizer<S>
             // sent by the leader in the SYNC message
             if let Some(last_proof) = last_proof {
 
-                log.install_proof(last_proof.seq_no(), last_proof);
-
+                consensus.catch_up_to_quorum(last_proof.seq_no(), last_proof, log)
+                    .expect("Failed to catch up to quorum");
 
 
                 //TODO: Now we must replay this in the executor.

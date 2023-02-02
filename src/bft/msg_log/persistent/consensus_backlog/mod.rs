@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use log::{error, warn};
+use log4rs::filter::Response;
 
 use crate::bft::{
     benchmarks::BatchMeta,
@@ -18,18 +19,11 @@ use crate::bft::msg_log::Info;
 
 use super::{ResponseMessage, ResponseMsg};
 
-struct AwaitingPersistence<S: Service> {
-
-    info: BatchExecutionInfo<S>,
-    pending_requests: Vec<Digest>
-
-}
-
 ///This is made to handle the backlog when the consensus is working faster than the persistent storage layer.
 /// It holds update batches that are yet to be executed since they are still waiting for the confirmation of the persistent log
 /// This is only needed (and only instantiated) when the persistency mode is strict
 pub struct ConsensusBacklog<S: Service> {
-    rx: ChannelSyncRx<BatchExecutionInfo<S>>,
+    rx: ChannelSyncRx<BacklogMessage<S>>,
 
     //Receives messages from the persistent log
     logger_rx: ChannelSyncRx<ResponseMsg>,
@@ -44,37 +38,65 @@ pub struct ConsensusBacklog<S: Service> {
     currently_waiting_for: Option<AwaitingPersistence<S>>,
 
     //Message confirmations that we have already received but pertain to a further ahead consensus instance
-    messages_received_ahead: BTreeMap<SeqNo, Vec<Digest>>,
+    messages_received_ahead: BTreeMap<SeqNo, Vec<ResponseMessage>>,
+}
+
+type BacklogMessage<S> = BacklogMsg<S>;
+
+enum BacklogMsg<S: Service> {
+    Batch(BatchExecutionInfo<S>),
+    Proof(BatchExecutionInfo<S>),
+}
+
+struct AwaitingPersistence<S: Service> {
+    info: BatchExecutionInfo<S>,
+    pending_rq: PendingRq,
+}
+
+/// Information about the current pending request
+enum PendingRq {
+    Proof(Option<SeqNo>),
+    Batch(Vec<Digest>),
 }
 
 ///A detachable handle so we deliver work to the
 /// consensus back log thread
 pub struct ConsensusBackLogHandle<S: Service> {
-    rq_tx: ChannelSyncTx<BatchExecutionInfo<S>>,
+    rq_tx: ChannelSyncTx<BacklogMessage<S>>,
     logger_tx: ChannelSyncTx<ResponseMsg>,
 }
 
 impl<S: Service> ConsensusBackLogHandle<S> {
-
     pub fn logger_tx(&self) -> ChannelSyncTx<ResponseMsg> {
         self.logger_tx.clone()
     }
 
+    /// Queue a normal processed batch, where we received all messages individually and persisted
+    /// them individually
     pub fn queue_batch(&self, batch: BatchExecutionInfo<S>) -> Result<()> {
-        if let Err(err) =  self.rq_tx.send(batch) {
+        if let Err(err) = self.rq_tx.send(BacklogMsg::Batch(batch)) {
             Err(Error::simple_with_msg(ErrorKind::MsgLogPersistent, format!("{:?}", err).as_str()))
         } else {
             Ok(())
         }
     }
 
+    /// Queue a batch that we received via a proof and therefore only need to wait for the persistence
+    /// of the entire proof, instead of the individual messages
+    pub fn queue_batch_proof(&self, batch: BatchExecutionInfo<S>) -> Result<()> {
+        if let Err(err) = self.rq_tx.send(BacklogMsg::Proof(batch)) {
+            Err(Error::simple_with_msg(ErrorKind::MsgLogPersistent, format!("{:?}", err).as_str()))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl<S: Service> Clone for ConsensusBackLogHandle<S> {
     fn clone(&self) -> Self {
         Self {
             rq_tx: self.rq_tx.clone(),
-            logger_tx: self.logger_tx.clone()
+            logger_tx: self.logger_tx.clone(),
         }
     }
 }
@@ -125,29 +147,9 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
                     Err(_) => break,
                 };
 
-                let curr_seq = info.info().update_batch().sequence_number();
+                self.handle_received_message(info, notification);
 
-                match notification {
-                    ResponseMessage::WroteMessage(seq, digest) => {
-                        if curr_seq == seq {
-                            if !Self::remove_from_vec(&mut info.pending_requests, &digest) {
-                                warn!("Received message for consensus instance {:?} but was not expecting it?",curr_seq);
-                                continue;
-                            }
-                        } else {
-                            if let Some(received_msg) = self.messages_received_ahead.get_mut(&seq) {
-                                received_msg.push(digest);
-                            } else {
-                                self.messages_received_ahead.insert(seq, vec![digest]);
-                            }
-                        }
-                    }
-                    _ => {
-                        //TODO: Well, what do we want to do with this?
-                    }
-                }
-
-                if info.pending_requests().is_empty() {
+                if info.is_ready_for_execution() {
                     let finished_batch = self.currently_waiting_for.take().unwrap();
 
                     self.dispatch_batch(finished_batch.into());
@@ -164,21 +166,9 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
 
                 let mut awaiting = AwaitingPersistence::from(batch_info);
 
-                let seq_num = awaiting.info().update_batch().sequence_number();
+                self.process_pending_messages_for_current(&mut awaiting);
 
-                //Remove the messages that we have already received
-                let messages_ahead = self.messages_received_ahead.remove(&seq_num);
-
-                if let Some(messages_ahead) = messages_ahead {
-                    for persisted_message in messages_ahead {
-                        if !Self::remove_from_vec(&mut awaiting.pending_requests, &persisted_message) {
-                            warn!("Received message for consensus instance {:?} but was not expecting it?",
-                            seq_num);
-                        }
-                    }
-                }
-
-                if awaiting.pending_requests().is_empty() {
+                if awaiting.is_ready_for_execution() {
 
                     //If we have already received everything, dispatch the batch immediately
                     self.dispatch_batch(awaiting.into());
@@ -191,13 +181,58 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
         }
     }
 
+    fn handle_received_message(&mut self, info: &mut AwaitingPersistence<S>, notification: ResponseMessage) {
+        let curr_seq = info.info().update_batch().sequence_number();
+
+        match &notification {
+            ResponseMessage::WroteMessage(seq, _) => {
+                if curr_seq == *seq {
+                    Self::process_incoming_message(info, notification);
+                } else {
+                    if let Some(received_msg) = self.messages_received_ahead.get_mut(seq) {
+                        received_msg.push(notification);
+                    } else {
+                        self.messages_received_ahead.insert(seq.clone(), vec![notification]);
+                    }
+                }
+            }
+            ResponseMessage::Proof(seq) => {
+                if curr_seq == *seq {
+                    Self::process_incoming_message(info, notification);
+                } else {
+                    if let Some(received_msg) = self.messages_received_ahead.get_mut(seq) {
+                        received_msg.push(notification);
+                    } else {
+                        self.messages_received_ahead.insert(seq.clone(), vec![notification]);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn process_pending_messages_for_current(&mut self, awaiting: &mut AwaitingPersistence<S>) {
+        let seq_num = awaiting.info().update_batch().sequence_number();
+
+        //Remove the messages that we have already received
+        let messages_ahead = self.messages_received_ahead.remove(&seq_num);
+
+        if let Some(messages_ahead) = messages_ahead {
+            for persisted_message in messages_ahead {
+                Self::process_incoming_message(awaiting, persisted_message);
+            }
+        }
+    }
+
     fn dispatch_batch(&self, batch: BatchExecutionInfo<S>) {
         let (info, requests, batch) = batch.into();
+
+
         let checkpoint = match info {
-            Info::Nil => self.executor_handle.queue_update(meta, requests),
+            Info::Nil => self.executor_handle.queue_update(requests),
             Info::BeginCheckpoint => self
                 .executor_handle
-                .queue_update_and_get_appstate(meta, requests),
+                .queue_update_and_get_appstate(requests),
         };
 
         if let Err(err) = checkpoint {
@@ -205,31 +240,60 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
         }
     }
 
-    fn remove_from_vec(missing_msgs: &mut Vec<Digest>, persisted_message: &Digest) -> bool {
-        match missing_msgs.iter().position(|p| *p == *persisted_message) {
-            Some(msg_index) => {
-                missing_msgs.swap_remove(msg_index);
+    fn process_incoming_message(awaiting: &mut AwaitingPersistence<S>, msg: ResponseMessage) {
+        let result = awaiting.handle_incoming_message(msg);
 
-                true
+        match result {
+            Ok(result) => {
+                if !result {
+                    warn!("Received message for consensus instance {:?} but was not expecting it?", seq_num);
+                }
             }
-            None => false,
+            Err(err) => {
+                error!("Received message that does not match up with what we were expecting {:?}", err);
+            }
         }
     }
+
 }
 
-impl<S> From<BatchExecutionInfo<S>> for AwaitingPersistence<S> where S: Service
+impl<S> From<BacklogMessage<S>> for AwaitingPersistence<S> where S: Service
 {
-    fn from(value: BatchExecutionInfo<S>) -> Self {
+    fn from(value: BacklogMessage<S>) -> Self {
+        let pending_rq =
+            match &value {
+                BacklogMsg::Batch(info) => {
+                    // We can unwrap the completed batch as this was received here
+                    PendingRq::Batch(info.completed_batch().unwrap().messages_to_persist().clone())
+                }
+                BacklogMsg::Proof(info) => {
+                    PendingRq::Proof(Some(info.update_batch().sequence_number()));
+                }
+            };
+
         AwaitingPersistence {
-            info: value,
-            pending_requests: value.completed_batch().messages_to_persist().clone(),
+            info: value.into(),
+            pending_rq,
         }
     }
 }
 
-impl<S> Into<BatchExecutionInfo<S>>  for AwaitingPersistence<S> where S: Service{
+impl<S> Into<BatchExecutionInfo<S>> for AwaitingPersistence<S> where S: Service {
     fn into(self) -> BatchExecutionInfo<S> {
         self.info
+    }
+}
+
+impl<S> Into<BatchExecutionInfo<S>> for BacklogMsg<S> where S: Service {
+    fn into(self) -> BatchExecutionInfo<S> {
+        match self {
+            BacklogMsg::Batch(info) => {
+                info
+            }
+            BacklogMsg::Proof(info) => {
+                info
+            }
+        }
     }
 }
 
@@ -237,7 +301,47 @@ impl<S> AwaitingPersistence<S> where S: Service {
     pub fn info(&self) -> &BatchExecutionInfo<S> {
         &self.info
     }
-    pub fn pending_requests(&self) -> &Vec<Digest> {
-        &self.pending_requests
+
+    pub fn is_ready_for_execution(&self) -> bool {
+        match &self.pending_rq {
+            PendingRq::Proof(opt) => {
+                opt.is_none()
+            }
+            PendingRq::Batch(persistent) => {
+                persistent.is_empty()
+            }
+        }
+    }
+
+    pub fn handle_incoming_message(&mut self, msg: ResponseMessage) -> Result<bool> {
+        match &mut self.pending_rq {
+            PendingRq::Proof(sq_no) => {
+                if let ResponseMessage::Proof(seq) = msg {
+                    if seq == *sq_no {
+                        sq_no.take();
+
+                        Ok(true)
+                    } else {
+                        Ok(false)
+                    }
+                } else {
+                    Err(Error::simple_with_msg(ErrorKind::MsgLogPersistentConsensusBacklog, "Message received does not match up with the batch that we have received."))
+                }
+            }
+            PendingRq::Batch(rqs) => {
+                if let ResponseMessage::WroteMessage(_, persisted_message) = msg {
+                    match rqs.iter().position(|p| *p == persisted_message) {
+                        Some(msg_index) => {
+                            rqs.swap_remove(msg_index);
+
+                            Ok(true)
+                        }
+                        None => Ok(false),
+                    }
+                } else {
+                    Err(Error::simple_with_msg(ErrorKind::MsgLogPersistentConsensusBacklog, "Message received does not match up with the batch that we have received."))
+                }
+            }
+        }
     }
 }

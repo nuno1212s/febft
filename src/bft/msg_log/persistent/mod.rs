@@ -384,6 +384,25 @@ impl<S: Service + 'static> PersistentLog<S>
             }
         }
     }
+
+    ///Attempt to queue a batch that was received in the form of a completed proof
+    /// into waiting for persistent logging, instead of receiving message by message (Received in
+    /// a view change)
+    /// If the batch does not have to wait, it's returned to it can be instantly
+    /// passed to the executor
+    pub fn wait_for_proof_persistency_and_execute(&self, batch: BatchExecutionInfo<S>) -> Result<Option<BatchExecutionInfo<S>>> {
+        match &self.persistency_mode {
+            PersistentLogMode::Strict(backlog) => {
+
+                backlog.queue_batch_proof(batch)?;
+
+                Ok(None)
+            }
+            _ => {
+                Ok(Some(batch))
+            }
+        }
+    }
 }
 
 impl<S: Service> Clone for PersistentLog<S> {
@@ -556,7 +575,13 @@ impl<S: Service> PersistentLogWorker<S> {
 
                 ResponseMsg::InstalledState(seq_no)
             }
-            PWMessage::Proof(proof) => {}
+            PWMessage::Proof(proof) => {
+                let seq_no = proof.seq_no();
+
+                write_proof::<S>(&self.db, proof)?;
+
+                ResponseMessage::Proof(seq_no)
+            }
             PWMessage::RegisterCallbackReceiver(receiver) => {
                 self.response_txs.push(receiver);
 

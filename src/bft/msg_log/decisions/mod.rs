@@ -69,6 +69,8 @@ pub struct Decision<O> {
 /// Cloning this decision log is actually pretty cheap (compared to the alternative of cloning
 /// all requests executed since the last checkpoint) since it only has to clone the arcs (which is one atomic operation)
 /// We can't wrap the entire vector since the decision log is actually constantly modified by the consensus
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
 pub struct DecisionLog<O> {
     last_exec: Option<SeqNo>,
     currently_deciding: OnGoingDecision<O>,

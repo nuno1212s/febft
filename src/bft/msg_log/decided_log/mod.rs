@@ -55,10 +55,16 @@ pub struct DecidedLog<S> where S: Service + 'static {
     persistent_log: PersistentLog<S>,
 }
 
+/// Execution data for the given batch
+/// Info: Whether we need to ask the executor for a checkpoint in order to reset the current message log
+/// Update Batch: All of the requests that should be executed, in the correct order
+/// Completed Batch: The information collected by the [DecidingLog], if applicable. (We can receive a batch
+/// via a complete proof which means this will be [None] or we can process a batch normally, which means
+/// this will be [Some(CompletedBatch<S>)])
 pub struct BatchExecutionInfo<S> where S: Service {
     info: Info,
     update_batch: UpdateBatch<Request<S>>,
-    completed_batch: CompletedBatch<S>,
+    completed_batch: Option<CompletedBatch<S>>,
 }
 
 impl<S> DecidedLog<S> where S: Service + 'static {
@@ -173,7 +179,9 @@ impl<S> DecidedLog<S> where S: Service + 'static {
     /// which contains all of the collects
     /// If we are missing the request determined by the
     /// TODO: Maybe add this to the consensus backlog so it can be correctly executed
-    pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<Request<S>>) -> Result<()> {
+    pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<Request<S>>) -> Result<Option<BatchExecutionInfo<S>>> {
+        let batch_execution_info = BatchExecutionInfo::from(&proof);
+
         if let Some(decision) = self.decision_log().last_decision() {
             if decision.seq_no() == seq {
                 // Well well well, if it isn't what I'm trying to add?
@@ -191,7 +199,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
             error!("Failed to persist proof {:?}", err);
         }
 
-        Ok(())
+        self.persistent_log.wait_for_proof_persistency_and_execute(batch_execution_info)
     }
 
     /// Clear the occurrences of a seq no from the decision log
@@ -409,14 +417,15 @@ impl<S> DecidedLog<S> where S: Service + 'static {
         //
         // Finalize the execution and store the proof in the log as a proof
         // instead of an ongoing decision
-        self.dec_log.finished_quorum_execution(last_seq_no, f).expect("Failed to create proof for the current instance");
+        self.dec_log.finished_quorum_execution(seq, f).expect("Failed to create proof for the current instance");
 
         // Queue the batch for the execution
-        self.persistent_log.wait_for_batch_persistency_and_execute(BatchExecutionInfo {
+        let result = self.persistent_log.wait_for_batch_persistency_and_execute(BatchExecutionInfo {
             info,
             update_batch: batch,
-            completed_batch,
-        })
+            completed_batch: Some(completed_batch),
+        });
+        result
     }
 }
 
@@ -427,13 +436,13 @@ impl<S> BatchExecutionInfo<S> where S: Service {
     pub fn update_batch(&self) -> &UpdateBatch<Request<S>> {
         &self.update_batch
     }
-    pub fn completed_batch(&self) -> &CompletedBatch<S> {
+    pub fn completed_batch(&self) -> &Option<CompletedBatch<S>> {
         &self.completed_batch
     }
 }
 
-impl<S> Into<(Info, UpdateBatch<S>, CompletedBatch<S>)> for BatchExecutionInfo<S> where S: Service {
-    fn into(self) -> (Info, UpdateBatch<S>, CompletedBatch<S>) {
+impl<S> Into<(Info, UpdateBatch<Request<S>>, Option<CompletedBatch<S>>)> for BatchExecutionInfo<S> where S: Service {
+    fn into(self) -> (Info, UpdateBatch<Request<S>>, Option<CompletedBatch<S>>) {
         (self.info, self.update_batch, self.completed_batch)
     }
 }
@@ -463,11 +472,10 @@ impl<S, T> From<T> for BatchExecutionInfo<S> where S: Service, T: AsRef<Proof<Re
             }
         }
 
-
         Self {
             info: Info::Nil,
             update_batch,
-            completed_batch:,
+            completed_batch: None
         }
     }
 }

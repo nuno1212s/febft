@@ -30,7 +30,7 @@ use super::globals::ReadOnly;
 use super::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
-use crate::bft::executable::{Request, Service, State};
+use crate::bft::executable::{ExecutorHandle, Request, Service, State};
 use crate::bft::msg_log::decided_log::{BatchExecutionInfo, DecidedLog};
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
 use crate::bft::msg_log::decisions::Proof;
@@ -238,7 +238,7 @@ impl ConsensusGuard {
     /// This is for the proposer to check if he can propose a new batch at this time.
     /// The user of the function is then bound to propose a new batch or the
     /// whole system can go unresponsive
-    pub fn attempt_to_propose_message(&self) -> std::error::Result<bool, bool> {
+    pub fn attempt_to_propose_message(&self) -> std::result::Result<bool, bool> {
         self.consensus_guard.compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed)
     }
 }
@@ -276,6 +276,9 @@ pub struct Consensus<S: Service> {
     // The information about the log that is currently being processed
     deciding_log: DecidingLog<S>,
 
+    // The handle for the executor
+    executor_handle: ExecutorHandle<S>,
+
     accessory: ConsensusAccessory<S>,
 }
 
@@ -295,7 +298,7 @@ impl<S: Service + 'static> AbstractConsensus<S> for Consensus<S> {
         // get the latest seq no
         let seq_no = {
             let last_exec = recovery_state.decision_log().last_execution();
-            if last_exec.is_empty() {
+            if last_exec.is_none() {
                 self.sequence_number()
             } else {
                 last_exec.unwrap()
@@ -315,6 +318,7 @@ impl<S: Service + 'static> Consensus<S> {
         node_id: NodeId,
         view: ViewInfo,
         next_seq_num: SeqNo,
+        executor_handle: ExecutorHandle<S>,
         observer_handle: ObserverHandle,
         follower_handle: Option<FollowerHandle<S>>,
     ) -> Self {
@@ -323,6 +327,7 @@ impl<S: Service + 'static> Consensus<S> {
             phase: ProtoPhase::Init,
             tbo: TboQueue::new(next_seq_num),
             deciding_log: DecidingLog::new(),
+            executor_handle,
             accessory: ConsensusAccessory::Replica(ReplicaConsensus::new(
                 view,
                 next_seq_num,
@@ -332,12 +337,14 @@ impl<S: Service + 'static> Consensus<S> {
         }
     }
 
-    pub fn new_follower(node_id: NodeId, next_seq_num: SeqNo) -> Self {
+    pub fn new_follower(node_id: NodeId, next_seq_num: SeqNo,
+                        executor_handle: ExecutorHandle<S>,) -> Self {
         Self {
             node_id,
             phase: ProtoPhase::Init,
             tbo: TboQueue::new(next_seq_num),
             deciding_log: DecidingLog::new(),
+            executor_handle,
             accessory: ConsensusAccessory::Follower,
         }
     }
@@ -517,11 +524,22 @@ impl<S: Service + 'static> Consensus<S> {
                               proof: Proof<Request<S>>,
                               dec_log: &mut DecidedLog<S>) -> Result<()> {
 
-        let batch_execution_info = BatchExecutionInfo::from(proof);
-
         // If this is successful, it means that we are all caught up and can now start executing the
         // batch
-        dec_log.install_proof(seq, proof)?;
+        let should_execute = dec_log.install_proof(seq, proof)?;
+
+        if let Some(to_execute) = should_execute {
+            let (info, update, _) = to_execute.into();
+
+            match info {
+                Info::Nil => {
+                    self.executor_handle.queue_update(update)
+                }
+                Info::BeginCheckpoint => {
+                    self.executor_handle.queue_update_and_get_appstate(update)
+                }
+            }.unwrap();
+        }
 
         // Move to the next instance as this one has been finalized
         self.next_instance();
