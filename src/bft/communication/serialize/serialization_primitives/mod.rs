@@ -522,13 +522,10 @@ pub fn serialize_consensus<W, S>(w: &mut W, message: &ConsensusMessage<S::Reques
     )
 }
 
-
-
-
 mod messages_capnp {
     #![allow(unused)]
     include!(concat!(
     env!("OUT_DIR"),
-    "/src/bft/communication/serialize/serialization_primitives/messages_capnp.rs"
+    "/messages_capnp.rs"
     ));
 }

@@ -141,15 +141,15 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
 
     fn run(mut self) {
         loop {
-            if let Some(info) = &mut self.currently_waiting_for {
+            if self.currently_waiting_for.is_some() {
                 let notification = match self.logger_rx.recv() {
                     Ok(notification) => notification,
                     Err(_) => break,
                 };
 
-                self.handle_received_message(info, notification);
+                self.handle_received_message(notification);
 
-                if info.is_ready_for_execution() {
+                if self.currently_waiting_for.as_ref().unwrap().is_ready_for_execution() {
                     let finished_batch = self.currently_waiting_for.take().unwrap();
 
                     self.dispatch_batch(finished_batch.into());
@@ -181,7 +181,9 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
         }
     }
 
-    fn handle_received_message(&mut self, info: &mut AwaitingPersistence<S>, notification: ResponseMessage) {
+    fn handle_received_message(&mut self,  notification: ResponseMessage) {
+        let info = self.currently_waiting_for.as_mut().unwrap();
+
         let curr_seq = info.info().update_batch().sequence_number();
 
         match &notification {
@@ -262,7 +264,7 @@ impl<S> From<BacklogMessage<S>> for AwaitingPersistence<S> where S: Service
         let pending_rq = match &value {
             BacklogMsg::Batch(info) => {
                 // We can unwrap the completed batch as this was received here
-                PendingRq::Batch(info.completed_batch().unwrap().messages_to_persist().clone())
+                PendingRq::Batch(info.completed_batch().as_ref().unwrap().messages_to_persist().clone())
             }
             BacklogMsg::Proof(info) => {
                 PendingRq::Proof(Some(info.update_batch().sequence_number()))

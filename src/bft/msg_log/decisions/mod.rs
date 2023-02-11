@@ -91,7 +91,6 @@ pub struct OnGoingDecision<O> {
 
 /// Represents a single decision from the `DecisionLog`.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
 pub struct Proof<O> {
     seq_no: SeqNo,
     batch_digest: Digest,
@@ -135,7 +134,6 @@ impl WriteSet {
 }
 
 impl<O> Proof<O> {
-
     /// Returns the `PRE-PREPARE` message of this `Proof`.
     pub fn pre_prepares(&self) -> &[StoredConsensusMessage<O>] {
         &self.pre_prepares[..]
@@ -204,7 +202,7 @@ impl<O> Proof<O> {
                 }
                 None => {
                     return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
-                                                      "Proof's batches do not match with the digests provided."))
+                                                      "Proof's batches do not match with the digests provided."));
                 }
             }
         }
@@ -274,7 +272,7 @@ impl<O> OnGoingDecision<O> {
         }
     }
 
-    fn proof(self, quorum: usize) -> Result<Proof<O>> {
+    fn proof(mut self, quorum: usize) -> Result<Proof<O>> {
 
         //TODO: Order the pre prepares to match the ordering of the vector
 
@@ -295,9 +293,13 @@ impl<O> OnGoingDecision<O> {
         let mut ordered_pre_prepares = Vec::with_capacity(leader_count);
 
         for digest in &order {
-            for message in self.pre_prepares {
+            for i in 0..self.pre_prepares.len() {
+                let message = self.pre_prepares.get(i).unwrap();
+
                 if *message.header().digest() == *digest {
-                    ordered_pre_prepares.push(message)
+                    ordered_pre_prepares.push(self.pre_prepares.swap_remove(i));
+
+                    break
                 }
             }
         }
@@ -344,7 +346,6 @@ impl<O> OnGoingDecision<O> {
 }
 
 impl<O> DecisionLog<O> {
-
     pub fn new() -> Self {
         Self {
             last_exec: None,
@@ -435,7 +436,7 @@ impl<O> DecisionLog<O> {
     /// Returns the proof of the last executed consensus
     /// instance registered in this `DecisionLog`.
     pub fn last_decision(&self) -> Option<Proof<O>> {
-        self.decided.get(self.decided.len() - 1).map(|p| *p.clone())
+        self.decided.get(self.decided.len() - 1).map(|p| (*p).clone())
     }
 
     /// Returns an incomplete proof of the consensus
@@ -507,7 +508,6 @@ impl<O> DecisionLog<O> {
     }
 
 
-
     /// Clear incomplete proofs from the log, which match the consensus
     /// with sequence number `in_exec`.
     ///
@@ -535,7 +535,9 @@ impl<O> DecisionLog<O> {
 
         let mut decided_request_count = 0;
 
-        for proof in self.decided.into_iter().rev() {
+        let prev_decided = std::mem::replace(&mut self.decided, net_decided);
+
+        for proof in prev_decided.into_iter().rev() {
             if proof.seq_no <= seq_no {
                 for pre_prepare in &proof.pre_prepares {
                     //Mark the requests contained in this message for removal
@@ -544,17 +546,46 @@ impl<O> DecisionLog<O> {
                         _ => 0,
                     };
                 }
-
             } else {
-                net_decided.push(proof);
+                self.decided.push(proof);
             }
         }
 
-        net_decided.reverse();
-
-        self.decided = net_decided;
+        self.decided.reverse();
 
         decided_request_count
     }
+}
 
+impl<O> Clone for Proof<O> {
+    fn clone(&self) -> Self {
+
+        let mut new_pre_prepares = Vec::with_capacity(self.pre_prepares.len());
+
+        let mut new_prepares = Vec::with_capacity(self.prepares.len());
+
+        let mut new_commits = Vec::with_capacity(self.commits.len());
+
+        for pre_prepare in &self.pre_prepares {
+            new_pre_prepares.push(pre_prepare.clone());
+        }
+
+        for prepare in &self.prepares {
+            new_prepares.push(prepare.clone());
+        }
+
+        for commit in &self.commits {
+            new_commits.push(commit.clone());
+        }
+
+        Self {
+            seq_no: self.seq_no,
+            batch_digest: self.batch_digest.clone(),
+            pre_prepare_ordering: self.pre_prepare_ordering.clone(),
+            pre_prepares: new_pre_prepares,
+            prepares: new_prepares,
+            commits: new_commits,
+        }
+
+    }
 }

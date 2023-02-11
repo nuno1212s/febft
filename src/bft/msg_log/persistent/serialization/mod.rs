@@ -1,6 +1,6 @@
 use std::borrow::BorrowMut;
 use std::io::{Read, Write};
-use log::kv::Source;
+use std::mem::size_of;
 use crate::bft::communication::message::ConsensusMessage;
 use crate::bft::communication::NodeId;
 use crate::bft::communication::serialize::{serialization_primitives, SharedData};
@@ -41,12 +41,20 @@ pub trait Persister: SharedData {
 }
 
 
-pub(super) fn make_seq<W>(w: &mut W, seq: SeqNo) -> Result<()> where W: Write {
+pub(super) fn make_seq(seq: SeqNo) -> Result<Vec<u8>> {
+    let mut seq_no = Vec::with_capacity(size_of::<SeqNo>());
+
+    write_seq(&mut seq_no, seq)?;
+
+    Ok(seq_no)
+}
+
+fn write_seq<W>(w: &mut W, seq: SeqNo) -> Result<()> where W: Write {
     let mut root = capnp::message::Builder::new(capnp::message::HeapAllocator::new());
 
     let mut seq_no: objects_capnp::seq::Builder = root.init_root();
 
-    seq_no.set_seq(seq.into());
+    seq_no.set_seq_no(seq.into());
 
     capnp::serialize::write_message(w, &root).wrapped_msg(
         ErrorKind::MsgLogPersistentSerialization,
@@ -54,13 +62,22 @@ pub(super) fn make_seq<W>(w: &mut W, seq: SeqNo) -> Result<()> where W: Write {
     )
 }
 
-pub (super) fn make_message_key<W>(w: &mut W, seq: SeqNo, from: Option<NodeId>) -> Result<()> where W: Write {
+pub(super) fn make_message_key(seq: SeqNo, from: Option<NodeId>) -> Result<Vec<u8>> {
+
+    let mut key = Vec::with_capacity(size_of::<SeqNo>() + size_of::<NodeId>());
+
+    write_message_key(&mut key, seq, from)?;
+
+    Ok(key)
+}
+
+fn write_message_key<W>(w: &mut W, seq: SeqNo, from: Option<NodeId>) -> Result<()> where W: Write {
     let mut root = capnp::message::Builder::new(capnp::message::HeapAllocator::new());
 
     let mut seq_no: objects_capnp::message_key::Builder = root.init_root();
 
-    todo!()
-
+    todo!();
+/*
     let seq = seq_no.init_seq();
 
     seq_no.init_from();
@@ -68,7 +85,7 @@ pub (super) fn make_message_key<W>(w: &mut W, seq: SeqNo, from: Option<NodeId>) 
     capnp::serialize::write_message(w, &root).wrapped_msg(
         ErrorKind::MsgLogPersistentSerialization,
         "Failed to serialize using capnp",
-    )
+    ) */
 }
 
 pub(super) fn read_seq<R>(r: R) -> Result<SeqNo> where R: Read {
@@ -98,7 +115,7 @@ pub fn serialize_proof_info<W>(w: &mut W, proof: &ProofInfo) -> Result<()>
     }
 
     {
-        let mut ordering_builder = proof_info.borrow_mut().init_batch_ordering(proof.pre_prepare_ordering.len() as u32);
+        let mut ordering_builder = proof_info.reborrow().init_batch_ordering(proof.pre_prepare_ordering.len() as u32);
 
         for (i, digest) in proof.pre_prepare_ordering.iter().enumerate() {
             let mut batch_digest = ordering_builder.reborrow().get(i as u32);
@@ -124,7 +141,7 @@ pub fn deserialize_proof_info<R>(reader: R) -> Result<ProofInfo> where R: Read {
         "Failed to get system msg root",
     )?;
 
-    let batch_digest_reader = proof_info.get_batch_digest().wrapped_msg(ErrorKind::MsgLogPersistentSerialization)?;
+    let batch_digest_reader = proof_info.get_batch_digest().wrapped(ErrorKind::MsgLogPersistentSerialization)?;
 
     let digest_bytes = batch_digest_reader.get_digest().wrapped(ErrorKind::MsgLogPersistentSerialization)?
         .to_vec();
@@ -158,6 +175,6 @@ mod objects_capnp {
     #![allow(unused)]
     include!(concat!(
     env!("OUT_DIR"),
-    "/src/bft/msg_log/persistent/serialization/objects_capnp.rs"
+    "/objects_capnp.rs"
     ));
 }

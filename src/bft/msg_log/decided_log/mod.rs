@@ -184,7 +184,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
     /// which contains all of the collects
     /// If we are missing the request determined by the
     pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<Request<S>>) -> Result<Option<BatchExecutionInfo<S>>> {
-        let batch_execution_info = BatchExecutionInfo::from(proof);
+        let batch_execution_info = BatchExecutionInfo::from(&proof);
 
         if let Some(decision) = self.decision_log().last_decision() {
             if decision.seq_no() == seq {
@@ -194,7 +194,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
                 return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidedLog,
                                                   "Already have decision at that seq no"));
             } else {
-                self.decision_log().append_proof(proof.clone());
+                self.mut_decision_log().append_proof(proof.clone());
             }
         }
 
@@ -382,7 +382,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
                     } else { unreachable!() }
                 };
 
-                for (header, message) in reqs.iter()
+                for (header, message) in reqs.into_iter()
                     .map(|x| x.into_inner()) {
                     let _key = operation_key::<Request<S>>(&header, &message);
 
@@ -452,16 +452,16 @@ impl<S> Into<(Info, UpdateBatch<Request<S>>, Option<CompletedBatch<S>>)> for Bat
     }
 }
 
-impl<S, T> From<T> for BatchExecutionInfo<S> where S: Service, T: AsRef<Proof<Request<S>>> {
-    fn from(value: T) -> Self {
-        let mut update_batch = UpdateBatch::new(value.as_ref().seq_no());
+impl<S> From<&Proof<Request<S>>> for BatchExecutionInfo<S> where S: Service {
+    fn from(value: &Proof<Request<S>>) -> Self {
+        let mut update_batch = UpdateBatch::new(value.seq_no());
 
-        if !value.as_ref().are_pre_prepares_ordered().unwrap() {
+        if !value.are_pre_prepares_ordered().unwrap() {
             //The batch should be provided to this already ordered.
             todo!()
         }
 
-        for pre_prepare in value.as_ref().pre_prepares() {
+        for pre_prepare in value.pre_prepares() {
             let reqs = match pre_prepare.message().kind().clone() {
                 ConsensusMessageKind::PrePrepare(reqs) => { reqs }
                 _ => {

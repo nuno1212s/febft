@@ -168,7 +168,7 @@ fn divide_hash_space(size: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     // How many bytes does it take to represent a digest in this hash space
     let size_bytes = size / u8::BITS as usize;
 
-    let start = BigUint::zero();
+    let mut start = BigUint::zero();
 
     let last_hash : Vec<u8> = iter::repeat(0xFF).take(size_bytes).collect();
 
@@ -191,7 +191,7 @@ fn divide_hash_space(size: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
 
         let slice_start = start.to_bytes_be();
 
-        start.add(&increment);
+        start = start.add(&increment);
 
         let slice_end = if i == count {
             // Assign the last slice the rest of the space
@@ -201,7 +201,7 @@ fn divide_hash_space(size: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
         };
 
         // Move the start to the start of the next interval
-        start.add(1.to_biguint().unwrap());
+        start = start.add(1.to_biguint().unwrap());
 
         slices.push((slice_start, slice_end))
     }

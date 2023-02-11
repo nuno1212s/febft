@@ -6,8 +6,8 @@ use itertools::Itertools;
 
 const ERROR_KIND_DST: &str = "error_kind.rs";
 
-const MESSAGE_CAPNP_SRC: &str = "src/bft/communication/serialize/serialization_primitives/messages.capnp";
-const PERSISTENT_CAPNP_SRC: &str = "src/bft/msg_log/persistent/serialization/objects.capnp";
+const MESSAGE_CAPNP_SRC: &str = "src/schemas/messages.capnp";
+const PERSISTENT_CAPNP_SRC: &str = "src/schemas/objects.capnp";
 
 
 fn main() {
@@ -17,11 +17,8 @@ fn main() {
     println!("cargo:rerun-if-changed={}", MESSAGE_CAPNP_SRC);
 
     capnpc::CompilerCommand::new()
+        .src_prefix("src/schemas")
         .file(MESSAGE_CAPNP_SRC)
-        .run()
-        .unwrap();
-    
-    capnpc::CompilerCommand::new()
         .file(PERSISTENT_CAPNP_SRC)
         .run()
         .unwrap();

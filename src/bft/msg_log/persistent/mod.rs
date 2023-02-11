@@ -802,12 +802,8 @@ fn read_message_for_range<S: Service>(
     msg_seq_start: SeqNo,
     msg_seq_end: SeqNo,
 ) -> Result<Vec<StoredMessage<ConsensusMessage<Request<S>>>>> {
-    let mut start_key = Vec::with_capacity(8);
-    let mut end_key = Vec::with_capacity(8);
-
-    serialization::make_message_key(&mut start_key[..], msg_seq_start, None)?;
-
-    serialization::make_message_key(&mut end_key[..], msg_seq_end, None)?;
+    let mut start_key = serialization::make_message_key(msg_seq_start, None)?;
+    let mut end_key = serialization::make_message_key(msg_seq_end, None)?;
 
     let mut messages = Vec::new();
 
@@ -844,11 +840,13 @@ fn finalize_instance(db: &KVDB, seq_no: SeqNo, digest: Digest, pre_prepare_order
         pre_prepare_ordering,
     };
 
-    let key = Vec::with_capacity(8);
+    let mut key = serialization::make_seq(seq_no)?;
 
-    serialization::make_seq(&mut key[..], seq_no)?;
+    let mut proof_info = Vec::new();
 
-    db.set(CF_PROOF_INFO, key, pi)?;
+    serialization::serialize_proof_info(&mut proof_info, &pi)?;
+
+    db.set(CF_PROOF_INFO, key, proof_info)?;
 
     Ok(())
 }
@@ -860,22 +858,24 @@ fn write_proof<S: Service>(db: &KVDB, proof: Proof<Request<S>>) -> Result<()> {
     };
 
     //TODO: Serialization of the proof info
-    let mut key = Vec::with_capacity(8);
+    let mut key = serialization::make_seq(proof.seq_no())?;
 
-    serialization::make_seq(&mut key[..], proof.seq_no())?;
+    let mut proof_info = Vec::new();
 
-    db.set(CF_PROOF_INFO, key, pi)?;
+    serialization::serialize_proof_info(&mut proof_info, &pi)?;
+
+    db.set(CF_PROOF_INFO, key, proof_info)?;
 
     for pre_prepare in proof.pre_prepares() {
         write_message::<S>(db, pre_prepare)?;
     }
 
     for prepare in proof.prepares() {
-        write_message(db, prepare)?;
+        write_message::<S>(db, prepare)?;
     }
 
     for commits in proof.commits() {
-        write_message(db, commits)?;
+        write_message::<S>(db, commits)?;
     }
 
     Ok(())
@@ -886,12 +886,11 @@ fn read_messages_for_seq<S: Service>(
     db: &KVDB,
     msg_seq: SeqNo,
 ) -> Result<Vec<StoredMessage<ConsensusMessage<Request<S>>>>> {
-    let mut start_key = Vec::with_capacity(8);
-    let mut end_key = Vec::with_capacity(8);
+    let mut start_key =
+        serialization::make_message_key(msg_seq, None)?;
+    let mut end_key =
+        serialization::make_message_key(msg_seq.next(), None)?;
 
-    serialization::make_message_key(&mut start_key[..], msg_seq, None)?;
-
-    serialization::make_message_key(&mut end_key[..], msg_seq.next(), None)?;
 
     let mut messages = Vec::new();
 
@@ -923,12 +922,9 @@ fn read_messages_for_seq<S: Service>(
 }
 
 fn read_proof<S: Service>(db: &KVDB, seq_no: SeqNo) -> Result<Proof<Request<S>>> {
-    let mut start_key = Vec::with_capacity(8);
-    let mut end_key = Vec::with_capacity(8);
+    let mut start_key = serialization::make_message_key(seq_no, None)?;
+    let mut end_key = serialization::make_message_key(seq_no.next(), None)?;
 
-    serialization::make_message_key(&mut start_key[..], seq_no, None)?;
-
-    serialization::make_message_key(&mut end_key[..], seq_no.next(), None)?;
 
     todo!()
 }
@@ -958,9 +954,7 @@ fn write_message<S: Service>(
 
     let msg_seq = message.message().sequence_number();
 
-    let mut key = Vec::with_capacity(8);
-
-    serialization::make_message_key(&mut key[..], msg_seq, Some(message.header().from()))?;
+    let mut key = serialization::make_message_key(msg_seq, Some(message.header().from()))?;
 
     match message.message().kind() {
         ConsensusMessageKind::PrePrepare(_) => db.set(CF_PRE_PREPARES, key, buf)?,
@@ -973,12 +967,10 @@ fn write_message<S: Service>(
 
 ///Delete all msgs relating to a given sequence number
 fn delete_all_msgs_for_seq<S: Service>(db: &KVDB, msg_seq: SeqNo) -> Result<()> {
-    let mut start_key = Vec::with_capacity(8);
-    let mut end_key = Vec::with_capacity(8);
-
-    serialization::make_message_key(&mut start_key[..], msg_seq, None)?;
-
-    serialization::make_message_key(&mut end_key[..], msg_seq.next(), None)?;
+    let mut start_key =
+        serialization::make_message_key(msg_seq, None)?;
+    let mut end_key =
+        serialization::make_message_key(msg_seq.next(), None)?;
 
     db.erase_range(CF_PRE_PREPARES, &start_key, &end_key)?;
 
@@ -1002,15 +994,13 @@ fn read_latest_seq(db: &KVDB) -> Result<Option<SeqNo>> {
 }
 
 fn write_latest_seq(db: &KVDB, seq: SeqNo) -> Result<()> {
-    let mut f_seq_no = Vec::with_capacity(8);
-
-    serialization::make_seq(&mut f_seq_no[..], seq)?;
+    let mut f_seq_no = serialization::make_seq(seq)?;
 
     if !db.exists(CF_OTHER, FIRST_SEQ)? {
-        db.set(CF_OTHER, FIRST_SEQ, &f_seq_no [..])?;
+        db.set(CF_OTHER, FIRST_SEQ, &f_seq_no[..])?;
     }
 
-    db.set(CF_OTHER, LATEST_SEQ, &f_seq_no [..])
+    db.set(CF_OTHER, LATEST_SEQ, &f_seq_no[..])
 }
 
 fn read_latest_view_seq(db: &KVDB) -> Result<Option<SeqNo>> {
@@ -1019,12 +1009,11 @@ fn read_latest_view_seq(db: &KVDB) -> Result<Option<SeqNo>> {
     get_seq_from_result(result)
 }
 
-
 fn write_latest_view_seq(db: &KVDB, seq: SeqNo) -> Result<()> {
-    let mut f_seq_no = Vec::with_capacity(8);
-    serialization::make_seq(&mut f_seq_no[..], seq)?;
+    let mut f_seq_no =
+        serialization::make_seq(seq)?;
 
-    db.set(CF_OTHER, LATEST_VIEW_SEQ, &f_seq_no [..])
+    db.set(CF_OTHER, LATEST_VIEW_SEQ, &f_seq_no[..])
 }
 
 fn get_seq_from_result(res: Option<Vec<u8>>) -> Result<Option<SeqNo>> {

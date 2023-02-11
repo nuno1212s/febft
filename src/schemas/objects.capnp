@@ -1,4 +1,4 @@
-@0x94a43df6c359e805;
+@0xa727178701f914c8;
 
 using Rust = import "rust.capnp";
 

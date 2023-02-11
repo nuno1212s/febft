@@ -138,23 +138,21 @@ impl<S> DecidingLog<S> where S: Service {
                                     request_batch: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
                                     digest: Digest,
                                     mut batch_rq_digests: Vec<Digest>) -> Result<Option<FullBatch>> {
-
         let sending_leader = request_batch.header().from();
 
         let slice = self.request_space_slices.get(&sending_leader).unwrap();
 
-        for request in batch_rq_digests {
-
-            if !crate::bft::sync::view::is_request_in_hash_space(&request, slice) {
+        for request in &batch_rq_digests {
+            if !crate::bft::sync::view::is_request_in_hash_space(request, slice) {
                 return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
-                                                  "This batch contains requests that are not in the hash space of the leader."))
+                                                  "This batch contains requests that are not in the hash space of the leader."));
             }
         }
 
         // Check if we have already received messages from this leader
         if !self.received_leader_messages.insert(sending_leader.clone()) {
             return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
-                                              "We have already received a message from that leader."))
+                                              "We have already received a message from that leader."));
         }
 
         // Get the correct index for this batch
@@ -163,7 +161,7 @@ impl<S> DecidingLog<S> where S: Service {
 
         self.pre_prepare_ordering[leader_index] = Some(digest.clone());
 
-        self.pre_prepare_messages[leader_index] = Some(request_batch);
+        self.pre_prepare_messages[leader_index] = Some(request_batch.clone());
 
         self.current_received_pre_prepares += 1;
 
@@ -220,13 +218,13 @@ impl<S> DecidingLog<S> where S: Service {
     /// Indicate that the batch is finished processing and
     /// return the relevant information for it
     pub fn finish_processing_batch(&mut self) -> Option<ProcessedBatch<S>> {
-        let pre_prepare_ordering: Vec<Digest> = self.pre_prepare_ordering.into_iter()
-            .map(|order| order.unwrap())
-            .collect();
+        let pre_prepare_ordering = std::mem::replace(&mut self.pre_prepare_ordering,
+                                                     Vec::new())
+            .into_iter().map(|x| x.unwrap()).collect();
 
-        let pre_prepare_messages: Vec<StoredConsensusMessage<Request<S>>> = self.pre_prepare_messages.into_iter()
-            .map(|msg| msg.unwrap())
-            .collect();
+        let pre_prepare_messages = std::mem::replace(&mut self.pre_prepare_messages,
+                                                     Vec::new())
+            .into_iter().map(|x| x.unwrap()).collect();
 
         let current_digest = self.current_digest?;
 
