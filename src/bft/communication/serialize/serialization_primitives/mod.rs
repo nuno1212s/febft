@@ -5,6 +5,7 @@ use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind,
 
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
+use crate::bft::msg_log::persistent::ProofInfo;
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::sync::view::ViewInfo;
 
@@ -21,9 +22,9 @@ pub fn serialize_message<W, S>(
     w: &mut W,
     m: &SystemMessage<S::State, S::Request, S::Reply>,
 ) -> Result<()>
-where
-    W: Write,
-    S: SharedData + ?Sized,
+    where
+        W: Write,
+        S: SharedData + ?Sized,
 {
     let mut root = capnp::message::Builder::new(capnp::message::HeapAllocator::new());
 
@@ -52,7 +53,7 @@ where
 
             S::serialize_request(&mut rq, req.operation())?;
 
-             request.set_request(&rq[..]);
+            request.set_request(&rq[..]);
         }
         SystemMessage::Reply(reply) => {
             let mut reply_obj = sys_msg.init_reply();
@@ -81,7 +82,7 @@ where
         SystemMessage::Consensus(m) => {
             let mut consensus = sys_msg.init_consensus();
 
-            serialize_consensus_message::<S>(&mut consensus, m) ?;
+            serialize_consensus_message::<S>(&mut consensus, m)?;
         }
         SystemMessage::ObserverMessage(observer_message) => {
             let capnp_observer = sys_msg.init_observer_message();
@@ -165,8 +166,8 @@ where
 fn deserialize_request<S>(
     req: messages_capnp::request::Reader,
 ) -> Result<RequestMessage<S::Request>>
-where
-    S: SharedData + ?Sized,
+    where
+        S: SharedData + ?Sized,
 {
     let session_id: SeqNo = req.get_session_id().into();
     let op_id: SeqNo = req.get_operation_id().into();
@@ -185,8 +186,8 @@ where
 fn deserialize_unordered_request<S>(
     req: messages_capnp::unordered_request::Reader,
 ) -> Result<RequestMessage<S::Request>>
-where
-    S: SharedData + ?Sized,
+    where
+        S: SharedData + ?Sized,
 {
     let session_id: SeqNo = req.get_session_id().into();
     let op_id: SeqNo = req.get_operation_id().into();
@@ -203,8 +204,8 @@ where
 }
 
 fn deserialize_reply<S>(req: messages_capnp::reply::Reader) -> Result<ReplyMessage<S::Reply>>
-where
-    S: SharedData + ?Sized,
+    where
+        S: SharedData + ?Sized,
 {
     let session_id: SeqNo = req.get_session_id().into();
     let op_id: SeqNo = req.get_operation_id().into();
@@ -221,8 +222,8 @@ where
 fn deserialize_unordered_reply<S>(
     req: messages_capnp::unordered_reply::Reader,
 ) -> Result<ReplyMessage<S::Reply>>
-where
-    S: SharedData + ?Sized,
+    where
+        S: SharedData + ?Sized,
 {
     let session_id: SeqNo = req.get_session_id().into();
     let op_id: SeqNo = req.get_operation_id().into();
@@ -239,8 +240,8 @@ where
 fn deserialize_consensus_message<S>(
     consensus_msg: messages_capnp::consensus::Reader,
 ) -> Result<ConsensusMessage<S::Request>>
-where
-    S: SharedData + ?Sized,
+    where
+        S: SharedData + ?Sized,
 {
     let seq_no: SeqNo = consensus_msg.get_seq_no().into();
     let view: SeqNo = consensus_msg.get_view().into();
@@ -299,9 +300,9 @@ where
 
 /// Deserialize a persistent consensus message from the log
 pub fn deserialize_consensus<R, S>(r: R) -> Result<ConsensusMessage<S::Request>>
-where
-    R: Read,
-    S: SharedData + ?Sized,
+    where
+        R: Read,
+        S: SharedData + ?Sized,
 {
     let reader = capnp::serialize::read_message(r, Default::default()).wrapped_msg(
         ErrorKind::CommunicationSerialize,
@@ -318,9 +319,9 @@ where
 
 /// Deserialize a wire message from a reader `R`.
 pub fn deserialize_message<R, S>(r: R) -> Result<SystemMessage<S::State, S::Request, S::Reply>>
-where
-    R: Read,
-    S: SharedData + ?Sized,
+    where
+        R: Read,
+        S: SharedData + ?Sized,
 {
     let reader = capnp::serialize::read_message(r, Default::default()).wrapped_msg(
         ErrorKind::CommunicationSerialize,
@@ -461,8 +462,8 @@ fn serialize_consensus_message<S>(
     consensus: &mut messages_capnp::consensus::Builder,
     m: &ConsensusMessage<S::Request>,
 ) -> Result<()>
-where
-    S: SharedData + ?Sized,
+    where
+        S: SharedData + ?Sized,
 {
     consensus.set_seq_no(m.sequence_number().into());
     consensus.set_view(m.view().into());
@@ -505,9 +506,9 @@ where
 }
 
 pub fn serialize_consensus<W, S>(w: &mut W, message: &ConsensusMessage<S::Request>) -> Result<()>
-where
-    W: Write,
-    S: SharedData + ?Sized,
+    where
+        W: Write,
+        S: SharedData + ?Sized,
 {
     let mut root = capnp::message::Builder::new(capnp::message::HeapAllocator::new());
 
@@ -521,10 +522,13 @@ where
     )
 }
 
+
+
+
 mod messages_capnp {
     #![allow(unused)]
     include!(concat!(
-        env!("OUT_DIR"),
-        "/src/bft/communication/serialize/serialization_primitives/messages_capnp.rs"
+    env!("OUT_DIR"),
+    "/src/bft/communication/serialize/serialization_primitives/messages_capnp.rs"
     ));
 }

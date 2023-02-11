@@ -181,7 +181,7 @@ fn divide_hash_space(size: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
 
     // We want to have an interval [a,b], so b cannot be the same as the next groups a or we would get issues
     // Instead, we just assign the last one the rest of the space
-    let increment = 2.to_biguint().unwrap().pow(slice_size_bits_u32).sub(1);
+    let increment = 2.to_biguint().unwrap().pow(slice_size_bits_u32).sub(1.to_biguint().unwrap());
 
     // The final slices for each member
     let mut slices = Vec::with_capacity(count);
@@ -201,7 +201,7 @@ fn divide_hash_space(size: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
         };
 
         // Move the start to the start of the next interval
-        start.add(1);
+        start.add(1.to_biguint().unwrap());
 
         slices.push((slice_start, slice_end))
     }

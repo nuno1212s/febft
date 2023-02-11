@@ -1,4 +1,5 @@
 pub mod consensus_backlog;
+mod serialization;
 
 use std::convert::TryInto;
 
@@ -8,7 +9,6 @@ use std::sync::{Arc};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use log::error;
-use serde::{Deserialize, Serialize};
 
 use crate::bft::communication::channel;
 use crate::bft::communication::channel::{ChannelSyncRx, SendError};
@@ -17,7 +17,8 @@ use crate::bft::communication::message::ConsensusMessageKind;
 use crate::bft::communication::message::Header;
 use crate::bft::communication::NodeId;
 
-use crate::bft::communication::serialize::{SharedData, Persister};
+use crate::bft::communication::serialize::{SharedData};
+use crate::bft::msg_log::persistent::serialization::{Persister};
 
 use crate::bft::crypto::hash::Digest;
 
@@ -332,7 +333,7 @@ impl<S: Service + 'static> PersistentLog<S>
         }
     }
 
-    /// Attempt
+    /// Attempt to install the state into persistent storage
     pub fn write_install_state(&self, write_mode: WriteMode, state: InstallState<S>) -> Result<()> {
         match self.persistency_mode {
             PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
@@ -351,6 +352,7 @@ impl<S: Service + 'static> PersistentLog<S>
         }
     }
 
+    /// Write a proof to the persistent log.
     pub fn write_proof(&self, write_mode: WriteMode, proof: Proof<Request<S>>) -> Result<()> {
         match self.persistency_mode {
             PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
@@ -393,7 +395,6 @@ impl<S: Service + 'static> PersistentLog<S>
     pub fn wait_for_proof_persistency_and_execute(&self, batch: BatchExecutionInfo<S>) -> Result<Option<BatchExecutionInfo<S>>> {
         match &self.persistency_mode {
             PersistentLogMode::Strict(backlog) => {
-
                 backlog.queue_batch_proof(batch)?;
 
                 Ok(None)
@@ -619,7 +620,7 @@ pub(crate) enum PWMessage<S: Service> {
 
     //Remove all associated stored messages for this given seq number
     Invalidate(SeqNo),
-    
+
     // Register a proof of the decision log
     Proof(Proof<Request<S>>),
 
@@ -659,10 +660,13 @@ pub enum ResponseMessage {
     RegisteredCallback,
 }
 
-struct ProofInfo {
+
+/// Basic Information about a proof
+/// Used for storage by the persistent storage system
+pub struct ProofInfo {
     batch_digest: Digest,
 
-    pre_prepare_ordering: Vec<Digest>
+    pre_prepare_ordering: Vec<Digest>,
 }
 
 ///Write a state provided by the CST protocol into the persistent DB
@@ -712,7 +716,7 @@ fn read_latest_state<S: Service>(db: &KVDB) -> Result<Option<InstallState<S>>> {
 
     let mut dec_log = DecisionLog::new();
 
-    dec_log.finished_quorum_execution(last_seq);
+    dec_log.finished_quorum_execution(last_seq, 1)?;
 
     for ele in messages {
         let wrapped_msg = Arc::new(ReadOnly::new(ele));
@@ -798,8 +802,12 @@ fn read_message_for_range<S: Service>(
     msg_seq_start: SeqNo,
     msg_seq_end: SeqNo,
 ) -> Result<Vec<StoredMessage<ConsensusMessage<Request<S>>>>> {
-    let start_key = make_msg_seq(msg_seq_start, None);
-    let end_key = make_msg_seq(msg_seq_end.next(), None);
+    let mut start_key = Vec::with_capacity(8);
+    let mut end_key = Vec::with_capacity(8);
+
+    serialization::make_message_key(&mut start_key[..], msg_seq_start, None)?;
+
+    serialization::make_message_key(&mut end_key[..], msg_seq_end, None)?;
 
     let mut messages = Vec::new();
 
@@ -831,26 +839,32 @@ fn read_message_for_range<S: Service>(
 }
 
 fn finalize_instance(db: &KVDB, seq_no: SeqNo, digest: Digest, pre_prepare_ordering: Vec<Digest>) -> Result<()> {
-    
-     let pi = ProofInfo {
-         batch_digest: digest,
-         pre_prepare_ordering,
-     };
-    
-    db.set(CF_PROOF_INFO, make_seq(seq_no), pi)?;
-    
+    let pi = ProofInfo {
+        batch_digest: digest,
+        pre_prepare_ordering,
+    };
+
+    let key = Vec::with_capacity(8);
+
+    serialization::make_seq(&mut key[..], seq_no)?;
+
+    db.set(CF_PROOF_INFO, key, pi)?;
+
     Ok(())
 }
 
 fn write_proof<S: Service>(db: &KVDB, proof: Proof<Request<S>>) -> Result<()> {
-
     let pi = ProofInfo {
         batch_digest: proof.batch_digest(),
         pre_prepare_ordering: proof.pre_prepare_ordering().clone(),
     };
 
     //TODO: Serialization of the proof info
-    db.set(CF_PROOF_INFO, make_seq(proof.seq_no()), pi)?;
+    let mut key = Vec::with_capacity(8);
+
+    serialization::make_seq(&mut key[..], proof.seq_no())?;
+
+    db.set(CF_PROOF_INFO, key, pi)?;
 
     for pre_prepare in proof.pre_prepares() {
         write_message::<S>(db, pre_prepare)?;
@@ -872,9 +886,12 @@ fn read_messages_for_seq<S: Service>(
     db: &KVDB,
     msg_seq: SeqNo,
 ) -> Result<Vec<StoredMessage<ConsensusMessage<Request<S>>>>> {
-    let start_key = make_msg_seq(msg_seq, None);
+    let mut start_key = Vec::with_capacity(8);
+    let mut end_key = Vec::with_capacity(8);
 
-    let end_key = make_msg_seq(msg_seq.next(), None);
+    serialization::make_message_key(&mut start_key[..], msg_seq, None)?;
+
+    serialization::make_message_key(&mut end_key[..], msg_seq.next(), None)?;
 
     let mut messages = Vec::new();
 
@@ -906,13 +923,14 @@ fn read_messages_for_seq<S: Service>(
 }
 
 fn read_proof<S: Service>(db: &KVDB, seq_no: SeqNo) -> Result<Proof<Request<S>>> {
+    let mut start_key = Vec::with_capacity(8);
+    let mut end_key = Vec::with_capacity(8);
 
-    let start_key = make_msg_seq(seq_no, None);
+    serialization::make_message_key(&mut start_key[..], seq_no, None)?;
 
-    let end_key = make_msg_seq(seq_no.next(), None);
+    serialization::make_message_key(&mut end_key[..], seq_no.next(), None)?;
 
     todo!()
-
 }
 
 ///Parse a given message from its bytes representation
@@ -940,7 +958,9 @@ fn write_message<S: Service>(
 
     let msg_seq = message.message().sequence_number();
 
-    let key = make_msg_seq(msg_seq, Some(message.header().from()));
+    let mut key = Vec::with_capacity(8);
+
+    serialization::make_message_key(&mut key[..], msg_seq, Some(message.header().from()))?;
 
     match message.message().kind() {
         ConsensusMessageKind::PrePrepare(_) => db.set(CF_PRE_PREPARES, key, buf)?,
@@ -953,9 +973,12 @@ fn write_message<S: Service>(
 
 ///Delete all msgs relating to a given sequence number
 fn delete_all_msgs_for_seq<S: Service>(db: &KVDB, msg_seq: SeqNo) -> Result<()> {
-    let start_key = make_msg_seq(msg_seq, None);
+    let mut start_key = Vec::with_capacity(8);
+    let mut end_key = Vec::with_capacity(8);
 
-    let end_key = make_msg_seq(msg_seq.next(), None);
+    serialization::make_message_key(&mut start_key[..], msg_seq, None)?;
+
+    serialization::make_message_key(&mut end_key[..], msg_seq.next(), None)?;
 
     db.erase_range(CF_PRE_PREPARES, &start_key, &end_key)?;
 
@@ -969,80 +992,47 @@ fn delete_all_msgs_for_seq<S: Service>(db: &KVDB, msg_seq: SeqNo) -> Result<()> 
 fn read_first_seq(db: &KVDB) -> Result<Option<SeqNo>> {
     let result = db.get(CF_OTHER, FIRST_SEQ)?;
 
-    if let Some(res) = result {
-        let seq = read_seq_from_vec(res)?;
-
-        Ok(Some(seq))
-    } else {
-        Ok(None)
-    }
+    get_seq_from_result(result)
 }
 
 fn read_latest_seq(db: &KVDB) -> Result<Option<SeqNo>> {
     let result = db.get(CF_OTHER, LATEST_SEQ)?;
 
-    if let Some(res) = result {
-        let seq = read_seq_from_vec(res)?;
-
-        Ok(Some(seq))
-    } else {
-        Ok(None)
-    }
+    get_seq_from_result(result)
 }
 
 fn write_latest_seq(db: &KVDB, seq: SeqNo) -> Result<()> {
-    let seq_no: u32 = seq.into();
+    let mut f_seq_no = Vec::with_capacity(8);
+
+    serialization::make_seq(&mut f_seq_no[..], seq)?;
 
     if !db.exists(CF_OTHER, FIRST_SEQ)? {
-        db.set(CF_OTHER, FIRST_SEQ, seq_no.to_le_bytes())?;
+        db.set(CF_OTHER, FIRST_SEQ, &f_seq_no [..])?;
     }
 
-    db.set(CF_OTHER, LATEST_SEQ, seq_no.to_le_bytes())
+    db.set(CF_OTHER, LATEST_SEQ, &f_seq_no [..])
 }
 
 fn read_latest_view_seq(db: &KVDB) -> Result<Option<SeqNo>> {
     let result = db.get(CF_OTHER, LATEST_VIEW_SEQ)?;
 
-    if let Some(res) = result {
-        let res = read_seq_from_vec(res)?;
+    get_seq_from_result(result)
+}
+
+
+fn write_latest_view_seq(db: &KVDB, seq: SeqNo) -> Result<()> {
+    let mut f_seq_no = Vec::with_capacity(8);
+    serialization::make_seq(&mut f_seq_no[..], seq)?;
+
+    db.set(CF_OTHER, LATEST_VIEW_SEQ, &f_seq_no [..])
+}
+
+fn get_seq_from_result(res: Option<Vec<u8>>) -> Result<Option<SeqNo>> {
+    if let Some(res) = res {
+        let res = serialization::read_seq(&res[..])?;
 
         Ok(Some(res))
     } else {
         Ok(None)
     }
-}
-
-pub fn make_seq(seq: SeqNo) -> Vec<u8> {
-    let msg_u32: u32 = seq.into();
-
-    Vec::from(msg_u32.to_be_bytes())
-}
-
-fn read_seq_from_vec(data: Vec<u8>) -> Result<SeqNo> {
-    let seq_cast: [u8; 4] = data
-        .as_slice()
-        .try_into()
-        .wrapped(ErrorKind::MsgLogPersistent)?;
-
-    let seq = u32::from_be_bytes(seq_cast);
-
-    Ok(seq.into())
-}
-
-fn write_latest_view_seq(db: &KVDB, seq: SeqNo) -> Result<()> {
-    let seq_no: u32 = seq.into();
-
-    db.set(CF_OTHER, LATEST_VIEW_SEQ, seq_no.to_be_bytes())
-}
-
-pub fn make_msg_seq(msg_seq: SeqNo, from: Option<NodeId>) -> Vec<u8> {
-    let msg_u32: u32 = msg_seq.into();
-
-    let from_u32: u32 = if let Some(from) = from {
-        from.into()
-    } else {
-        0
-    };
-
-    [msg_u32.to_be_bytes(), from_u32.to_be_bytes()].concat()
 }

@@ -11,6 +11,7 @@ use std::io::{Read, Write};
 use crate::bft::communication::message::SystemMessage;
 use crate::bft::crypto::hash::{Context, Digest};
 use crate::bft::error::*;
+use crate::bft::msg_log::persistent::ProofInfo;
 
 use super::message::ConsensusMessage;
 
@@ -86,24 +87,4 @@ pub trait DigestData: SharedData {
 
 impl<D: SharedData> DigestData for D {}
 
-/// The persister trait, to add functionality to the Shared Data struct.
-/// The functionality added is ease of serialization for individual consensus messages, which 
-/// are then going to be stored in the persistent log.
-pub trait Persister: SharedData {
 
-    fn serialize_consensus_message<W: Write> (
-        message: &ConsensusMessage<Self::Request>,
-        mut w: W,
-    ) -> Result<()>{
-        serialization_primitives::serialize_consensus::<W, Self>(&mut w, message)
-    }
-
-    fn deserialize_consensus_message<R: Read> (
-        r: R
-    ) -> Result<ConsensusMessage< Self::Request>> {
-        serialization_primitives::deserialize_consensus::<R, Self>(r)
-    }
-
-}
-
-impl<D: SharedData> Persister for D {}

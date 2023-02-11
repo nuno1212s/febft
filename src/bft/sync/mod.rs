@@ -31,6 +31,7 @@ use super::{
 };
 
 use intmap::IntMap;
+use log::error;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use crate::bft::msg_log::decided_log::DecidedLog;

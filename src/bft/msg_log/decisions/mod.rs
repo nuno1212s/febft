@@ -344,6 +344,22 @@ impl<O> OnGoingDecision<O> {
 }
 
 impl<O> DecisionLog<O> {
+
+    pub fn new() -> Self {
+        Self {
+            last_exec: None,
+            currently_deciding: OnGoingDecision {
+                seq_no: SeqNo::ZERO,
+                batch_digest: None,
+                pre_prepare_ordering: None,
+                pre_prepares: vec![],
+                prepares: vec![],
+                commits: vec![],
+            },
+            decided: vec![],
+        }
+    }
+
     /// Returns the sequence number of the last executed batch of client
     /// requests, assigned by the conesensus layer.
     pub fn last_execution(&self) -> Option<SeqNo> {
