@@ -1,7 +1,9 @@
 pub mod consensus_backlog;
 mod serialization;
 
+use std::collections::BTreeMap;
 use std::convert::TryInto;
+use std::iter;
 
 use std::ops::Deref;
 use std::path::Path;
@@ -18,7 +20,7 @@ use crate::bft::communication::message::Header;
 use crate::bft::communication::NodeId;
 
 use crate::bft::communication::serialize::{SharedData};
-use crate::bft::msg_log::persistent::serialization::{Persister};
+use crate::bft::msg_log::persistent::serialization::{make_proof_info, Persister};
 
 use crate::bft::crypto::hash::Digest;
 
@@ -32,8 +34,9 @@ use crate::bft::{
     ordering::SeqNo,
     persistentdb::KVDB,
 };
+use crate::bft::executable::ExecutionRequest::Read;
 use crate::bft::msg_log::decided_log::BatchExecutionInfo;
-use crate::bft::msg_log::decisions::Proof;
+use crate::bft::msg_log::decisions::{Decision, OnGoingDecision, Proof, ProofMetadata};
 use crate::bft::sync::view::ViewInfo;
 
 use self::consensus_backlog::ConsensusBackLogHandle;
@@ -271,6 +274,26 @@ impl<S: Service + 'static> PersistentLog<S>
         }
     }
 
+    /// Write the metadata of the proof
+    pub fn write_proof_metadata(&self, write_mode: WriteMode,
+                                metadata: ProofMetadata) -> Result<()> {
+        match self.persistency_mode {
+            PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
+                match write_mode {
+                    WriteMode::NonBlockingSync(callback) => {
+                        self.worker_handle.queue_proof_metadata(metadata, callback)
+                    }
+                    WriteMode::BlockingSync => {
+                        finalize_instance(&self.db, metadata)
+                    }
+                }
+            }
+            PersistentLogMode::None => {
+                Ok(())
+            }
+        }
+    }
+
     pub fn write_message(
         &self,
         write_mode: WriteMode,
@@ -324,7 +347,11 @@ impl<S: Service + 'static> PersistentLog<S>
                     WriteMode::NonBlockingSync(callback) => {
                         self.worker_handle.queue_invalidate(seq, callback)
                     }
-                    WriteMode::BlockingSync => delete_all_msgs_for_seq::<S>(&self.db, seq),
+                    WriteMode::BlockingSync => {
+                        invalidate_seq(&self.db, seq)?;
+
+                        Ok(())
+                    }
                 }
             }
             PersistentLogMode::None => {
@@ -475,6 +502,10 @@ impl<S: Service> PersistentLogWorkerHandle<S> {
         Self::translate_error(self.next_worker().send((PWMessage::Committed(seq_no), callback)))
     }
 
+    fn queue_proof_metadata(&self, metadata: ProofMetadata, callback: Option<CallbackType>) -> Result<()> {
+        Self::translate_error(self.next_worker().send((PWMessage::ProofMetadata(metadata), callback)))
+    }
+
     fn queue_view_number(&self, view: ViewInfo, callback: Option<CallbackType>) -> Result<()> {
         Self::translate_error(self.next_worker().send((PWMessage::View(view), callback)))
     }
@@ -565,7 +596,7 @@ impl<S: Service> PersistentLogWorker<S> {
                 ResponseMsg::Checkpointed(checkpoint.sequence_number())
             }
             PWMessage::Invalidate(seq) => {
-                delete_all_msgs_for_seq::<S>(&self.db, seq)?;
+                invalidate_seq(&self.db, seq)?;
 
                 ResponseMsg::InvalidationPersisted(seq)
             }
@@ -587,6 +618,13 @@ impl<S: Service> PersistentLogWorker<S> {
                 self.response_txs.push(receiver);
 
                 ResponseMessage::RegisteredCallback
+            }
+            PWMessage::ProofMetadata(metadata) => {
+                let seq = metadata.seq_no();
+
+                finalize_instance(&self.db, metadata)?;
+
+                ResponseMessage::WroteMetadata(seq)
             }
         })
     }
@@ -611,6 +649,9 @@ pub(crate) enum PWMessage<S: Service> {
 
     //Persist a new sequence number as the consensus instance has been committed and is therefore ready to be persisted
     Committed(SeqNo),
+
+    // Persist the metadata for a given decision
+    ProofMetadata(ProofMetadata),
 
     //Persist a given message into storage
     Message(Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>),
@@ -641,6 +682,9 @@ pub enum ResponseMessage {
     /// Not related to actually persisting messages
     CommittedPersisted(SeqNo),
 
+    // Notifies that the metadata for a given seq no has been persisted
+    WroteMetadata(SeqNo),
+
     ///Notifies that a message with a given SeqNo and a given unique identifier for the message
     /// TODO: Decide this unique identifier
     WroteMessage(SeqNo, Digest),
@@ -667,6 +711,17 @@ pub struct ProofInfo {
     batch_digest: Digest,
 
     pre_prepare_ordering: Vec<Digest>,
+}
+
+impl From<(Digest, Vec<Digest>)> for ProofInfo {
+    fn from(value: (Digest, Vec<Digest>)) -> Self {
+        let (digest, ordering) = value;
+
+        ProofInfo {
+            batch_digest: digest,
+            pre_prepare_ordering: ordering,
+        }
+    }
 }
 
 ///Write a state provided by the CST protocol into the persistent DB
@@ -701,35 +756,11 @@ fn read_latest_state<S: Service>(db: &KVDB) -> Result<Option<InstallState<S>>> {
 
     let state = read_latest_checkpoint::<S>(db)?;
 
-    let last_seq = read_latest_seq(db)?;
-
     let first_seq = read_first_seq(db)?;
 
-    let (first_seq, last_seq) = match (first_seq, last_seq) {
-        (Some(first), Some(latest)) => (first, latest),
-        _ => {
-            todo!()
-        }
-    };
+    let dec_log = read_all_present_proofs::<S>(db)?;
 
-    let messages = read_message_for_range::<S>(db, first_seq, last_seq)?;
-
-    let mut dec_log = DecisionLog::new();
-
-    dec_log.finished_quorum_execution(last_seq, 1)?;
-
-    for ele in messages {
-        let wrapped_msg = Arc::new(ReadOnly::new(ele));
-
-        //TODO: Make sure this is sorted
-        match wrapped_msg.message().kind() {
-            ConsensusMessageKind::PrePrepare(_) => dec_log.append_pre_prepare(wrapped_msg),
-            ConsensusMessageKind::Prepare(_) => dec_log.append_prepare(wrapped_msg),
-            ConsensusMessageKind::Commit(_) => dec_log.append_commit(wrapped_msg),
-        }
-    }
-
-    let checkpoint = Checkpoint::new(first_seq, state.unwrap());
+    let checkpoint = Checkpoint::new(first_seq.unwrap(), state.unwrap());
 
     Ok(Some((view.unwrap(), checkpoint, dec_log)))
 }
@@ -759,38 +790,25 @@ fn write_checkpoint<S: Service>(db: &KVDB, state: &State<S>, last_seq: SeqNo) ->
 
     //Only remove the previous operations after persisting the checkpoint,
     //To assert no information can be lost
-    let start = db.get(CF_OTHER, FIRST_SEQ)?;
+    let start = db.get(CF_OTHER, FIRST_SEQ)?.unwrap();
+
+    let start = serialization::read_seq(&start[..])?;
 
     //Update the first seq number, officially making all of the previous messages useless
     //And ready to be deleted
     db.set(
         CF_OTHER,
         FIRST_SEQ,
-        u32::from(last_seq.next()).to_le_bytes(),
+        serialization::make_seq(last_seq.next())?,
     )?;
-
 
     //We want the end to be the last message contained inside the checkpoint.
     //Not the current message end, which can already be far ahead of the current checkpoint,
     //Which would mean we could lose information.
-    let end = u32::from(last_seq).to_le_bytes();
+    let end = last_seq;
 
-    match &start {
-        Some(start) => {
-            let start = &start[..];
-
-            //Erase the logs from the previous executions
-            db.erase_range(CF_COMMITS, start, &end)?;
-            db.erase_range(CF_PREPARES, start, &end)?;
-            db.erase_range(CF_PRE_PREPARES, start, &end)?;
-        }
-        _ => {
-            return Err(Error::simple_with_msg(
-                ErrorKind::MsgLogPersistent,
-                "Failed to get the range of values to erase",
-            ));
-        }
-    }
+    // Delete all of the now obsolete proofs
+    delete_proofs_between(db, start, end)?;
 
     Ok(())
 }
@@ -803,7 +821,7 @@ fn read_message_for_range<S: Service>(
     msg_seq_end: SeqNo,
 ) -> Result<Vec<StoredMessage<ConsensusMessage<Request<S>>>>> {
     let mut start_key = serialization::make_message_key(msg_seq_start, None)?;
-    let mut end_key = serialization::make_message_key(msg_seq_end, None)?;
+    let mut end_key = serialization::make_message_key(msg_seq_end.next(), None)?;
 
     let mut messages = Vec::new();
 
@@ -834,17 +852,40 @@ fn read_message_for_range<S: Service>(
     Ok(messages)
 }
 
-fn finalize_instance(db: &KVDB, seq_no: SeqNo, digest: Digest, pre_prepare_ordering: Vec<Digest>) -> Result<()> {
+fn read_proof_infos_for_range(
+    db: &KVDB,
+    msg_seq_start: SeqNo,
+    msg_seq_end: SeqNo,
+) -> Result<BTreeMap<SeqNo, ProofInfo>> {
+    let start_key = serialization::make_seq(msg_seq_start)?;
+    let end_key = serialization::make_seq(msg_seq_end.next())?;
+
+    let proof_infos = db.iter_range(CF_PROOF_INFO, Some(start_key), Some(end_key))?;
+
+    let mut result = BTreeMap::new();
+
+    for res in proof_infos {
+        if let Ok((key, value)) = res {
+            let seq = serialization::read_seq(&*key)?;
+
+            let pi = serialization::deserialize_proof_info(&*value)?;
+
+            result.insert(seq, pi);
+        }
+    }
+
+    Ok(result)
+}
+
+fn finalize_instance(db: &KVDB, metadata: ProofMetadata) -> Result<()> {
     let pi = ProofInfo {
-        batch_digest: digest,
-        pre_prepare_ordering,
+        batch_digest: metadata.batch_digest(),
+        pre_prepare_ordering: metadata.pre_prepare_ordering().clone(),
     };
 
-    let mut key = serialization::make_seq(seq_no)?;
+    let mut key = serialization::make_seq(metadata.seq_no())?;
 
-    let mut proof_info = Vec::new();
-
-    serialization::serialize_proof_info(&mut proof_info, &pi)?;
+    let mut proof_info = make_proof_info(&pi)?;
 
     db.set(CF_PROOF_INFO, key, proof_info)?;
 
@@ -857,12 +898,9 @@ fn write_proof<S: Service>(db: &KVDB, proof: Proof<Request<S>>) -> Result<()> {
         pre_prepare_ordering: proof.pre_prepare_ordering().clone(),
     };
 
-    //TODO: Serialization of the proof info
     let mut key = serialization::make_seq(proof.seq_no())?;
 
-    let mut proof_info = Vec::new();
-
-    serialization::serialize_proof_info(&mut proof_info, &pi)?;
+    let mut proof_info = make_proof_info(&pi)?;
 
     db.set(CF_PROOF_INFO, key, proof_info)?;
 
@@ -929,7 +967,83 @@ fn read_proof<S: Service>(db: &KVDB, seq_no: SeqNo) -> Result<Proof<Request<S>>>
     todo!()
 }
 
-///Parse a given message from its bytes representation
+/// Read all proofs that are present in the log
+fn read_all_present_proofs<S: Service>(db: &KVDB) -> Result<DecisionLog<Request<S>>> {
+    // The last seq number to have been executed
+    let last_seq = read_latest_seq(db)?;
+
+    let first_seq = read_first_seq(db)?;
+
+    let (first_seq, last_seq) = match (first_seq, last_seq) {
+        (Some(first), Some(latest)) => (first, latest),
+        _ => {
+            todo!()
+        }
+    };
+
+    let messages = read_message_for_range::<S>(db, first_seq, last_seq)?;
+
+    let proof_infos = read_proof_infos_for_range(db, first_seq, last_seq)?;
+
+    let mut final_decisions = BTreeMap::new();
+
+    // Analyse all of the messages from the persistent log and place them in the correct part
+    // Of the decision log
+    for message in messages {
+        let wrapped_msg = Arc::new(ReadOnly::new(message));
+
+        let seq_no = wrapped_msg.message().sequence_number();
+
+        if !final_decisions.contains_key(&seq_no) {
+            // If we have not yet processed this decision, create a new data object for it
+            let proof_info = proof_infos.get(&seq_no).unwrap();
+
+            let (digest, ordering): (Digest, Vec<Digest>) = (proof_info.batch_digest.clone(), proof_info.pre_prepare_ordering.clone());
+
+            let mut ongoing_decision = OnGoingDecision::init_from_info(seq_no,
+                                                                       digest,
+                                                                       ordering);
+
+            final_decisions.insert(seq_no, ongoing_decision);
+        }
+
+        let decision = final_decisions.get_mut(&seq_no).unwrap();
+
+        match wrapped_msg.message().kind() {
+            ConsensusMessageKind::PrePrepare(_) => decision.append_pre_prepare(wrapped_msg),
+            ConsensusMessageKind::Prepare(_) => decision.append_prepare(wrapped_msg),
+            ConsensusMessageKind::Commit(_) => decision.append_commit(wrapped_msg)
+        }
+    }
+
+    // When we are done reading all of the messages, we must create the decision log
+
+    let mut proof_vec: Vec<Proof<Request<S>>> =
+        Vec::with_capacity(final_decisions.len());
+
+    // Take out all of the proofs one by one and add them to the final vec
+
+    while let Some((seq, ongoing_decision)) = final_decisions.pop_first() {
+        if let Some(last) = proof_vec.last() {
+            // Check if we have skipped any sequence numbers, for any given reason
+            if last.sequence_number().next() != seq {
+                return Err(Error::simple_with_msg(ErrorKind::MsgLogPersistent,
+                                                  "Failed to load proofs from local storage as\
+                                                   we are missing a decision from the log"));
+            }
+        }
+
+        let result = ongoing_decision.proof(None)?;
+
+        proof_vec.push(result);
+    }
+
+    let decision_log = DecisionLog::from_decided(last_seq, proof_vec);
+
+    Ok(decision_log)
+}
+
+/// Parse a given message from its bytes representation
 fn parse_message<S: Service, T>(
     _key: T,
     value: T,
@@ -965,8 +1079,47 @@ fn write_message<S: Service>(
     Ok(())
 }
 
+/// Delete all the proofs stored between the first_seq and the last_seq
+/// [first_seq, last_seq]
+fn delete_proofs_between(db: &KVDB, first_seq: SeqNo, last_seq: SeqNo) -> Result<()> {
+
+    delete_proof_metadata_between(db, first_seq, last_seq)?;
+
+    delete_proof_messages_between(db, first_seq, last_seq)?;
+
+    Ok(())
+}
+
+fn delete_proof_messages_between(db: &KVDB, first_seq: SeqNo, last_seq: SeqNo) -> Result<()> {
+
+    let start = serialization::make_message_key(first_seq, None)?;
+    let end = serialization::make_message_key(last_seq.next(), None)?;
+
+    db.erase_range(CF_PRE_PREPARES, &start, &end)?;
+    db.erase_range(CF_PREPARES, &start, &end)?;
+    db.erase_range(CF_COMMITS, &start, &end)?;
+
+    Ok(())
+}
+
+fn delete_proof_metadata_between(db: &KVDB, first_seq: SeqNo, last_seq: SeqNo) -> Result<()> {
+
+    let start = serialization::make_seq(first_seq)?;
+    let end = serialization::make_seq(last_seq.next())?;
+
+    db.erase_range(CF_PROOF_INFO, start, end)?;
+
+    Ok(())
+}
+
+fn invalidate_seq(db: &KVDB, seq: SeqNo) -> Result<()> {
+    delete_all_msgs_for_seq(db, seq)?;
+    delete_all_proof_metadata_for_seq(db, seq)?;
+    Ok(())
+}
+
 ///Delete all msgs relating to a given sequence number
-fn delete_all_msgs_for_seq<S: Service>(db: &KVDB, msg_seq: SeqNo) -> Result<()> {
+fn delete_all_msgs_for_seq(db: &KVDB, msg_seq: SeqNo) -> Result<()> {
     let mut start_key =
         serialization::make_message_key(msg_seq, None)?;
     let mut end_key =
@@ -977,6 +1130,14 @@ fn delete_all_msgs_for_seq<S: Service>(db: &KVDB, msg_seq: SeqNo) -> Result<()> 
     db.erase_range(CF_PREPARES, &start_key, &end_key)?;
 
     db.erase_range(CF_COMMITS, &start_key, &end_key)?;
+
+    Ok(())
+}
+
+fn delete_all_proof_metadata_for_seq(db: &KVDB, seq: SeqNo) -> Result<()> {
+    let seq = serialization::make_seq(seq)?;
+
+    db.erase(CF_PROOF_INFO, &seq)?;
 
     Ok(())
 }

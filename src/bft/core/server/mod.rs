@@ -848,6 +848,7 @@ impl<S> Replica<S>
 
     fn execution_finished_with_appstate(&mut self, seq: SeqNo, appstate: State<S>) -> Result<()> {
         self.decided_log.finalize_checkpoint(seq, appstate)?;
+
         if self.cst.needs_checkpoint() {
             // status should return CstStatus::Nil,
             // which does not need to be handled
@@ -859,6 +860,21 @@ impl<S> Replica<S>
                 &mut self.node,
             );
         }
+
+        // {@
+        // Observer code
+        // @}
+
+        self.observer_handle
+            .tx()
+            .send(MessageType::Event(ObserveEventKind::CheckpointEnd(
+                self.decided_log.decision_log().executing(),
+            )))
+            .unwrap();
+
+        //
+        // @}
+        //
 
         Ok(())
     }

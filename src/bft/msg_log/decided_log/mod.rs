@@ -302,6 +302,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
                     let mut decided = &mut self.de;
 
                     if decided_request_count < decided.len() {
+
                         let mut new_decided = Vec::with_capacity(decided.len() - decided_request_count);
 
                         let to_keep = decided.len() - decided_request_count;
@@ -352,7 +353,10 @@ impl<S> DecidedLog<S> where S: Service + 'static {
 
     /// Register that all the batches for a given decision have already been received
     pub fn all_batches_received(&mut self, digest: Digest, pre_prepare_ordering: Vec<Digest>) {
-        self.dec_log.all_batches_received(digest, pre_prepare_ordering)
+        let metadata = self.dec_log.all_batches_received(digest, pre_prepare_ordering.clone());
+
+        self.persistent_log.write_proof_metadata(WriteMode::NonBlockingSync(None),
+                                                        metadata).unwrap();
     }
 
     /// Finalize a batch of client requests decided on the consensus instance
@@ -430,6 +434,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
             update_batch: batch,
             completed_batch: Some(completed_batch),
         });
+        
         result
     }
 }

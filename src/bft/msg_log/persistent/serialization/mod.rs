@@ -25,21 +25,16 @@ pub trait Persister: SharedData {
     ) -> Result<ConsensusMessage<Self::Request>> {
         serialization_primitives::deserialize_consensus::<R, Self>(r)
     }
-
-    fn serialize_proof_info<W: Write>(
-        info: &ProofInfo,
-        mut w: W,
-    ) -> Result<()> {
-        serialize_proof_info::<W>(&mut w, info)
-    }
-
-    fn deserialize_proof_info<R: Read>(
-        r: R
-    ) -> Result<ProofInfo> {
-        deserialize_proof_info(r)
-    }
 }
 
+pub(super) fn make_proof_info(pi: &ProofInfo) -> Result<Vec<u8>>
+{
+    let mut final_vec = Vec::new();
+
+    serialize_proof_info(&mut final_vec, pi)?;
+
+    Ok(final_vec)
+}
 
 pub(super) fn make_seq(seq: SeqNo) -> Result<Vec<u8>> {
     let mut seq_no = Vec::with_capacity(size_of::<SeqNo>());
@@ -63,7 +58,6 @@ fn write_seq<W>(w: &mut W, seq: SeqNo) -> Result<()> where W: Write {
 }
 
 pub(super) fn make_message_key(seq: SeqNo, from: Option<NodeId>) -> Result<Vec<u8>> {
-
     let mut key = Vec::with_capacity(size_of::<SeqNo>() + size_of::<NodeId>());
 
     write_message_key(&mut key, seq, from)?;
@@ -74,18 +68,20 @@ pub(super) fn make_message_key(seq: SeqNo, from: Option<NodeId>) -> Result<Vec<u
 fn write_message_key<W>(w: &mut W, seq: SeqNo, from: Option<NodeId>) -> Result<()> where W: Write {
     let mut root = capnp::message::Builder::new(capnp::message::HeapAllocator::new());
 
-    let mut seq_no: objects_capnp::message_key::Builder = root.init_root();
+    let mut msg_key: objects_capnp::message_key::Builder = root.init_root();
 
-    todo!();
-/*
-    let seq = seq_no.init_seq();
+    let mut msg_seq_builder = msg_key.reborrow().init_msg_seq();
 
-    seq_no.init_from();
+    msg_seq_builder.set_seq_no(seq.into());
+
+    let mut msg_from = msg_key.reborrow().init_from();
+
+    msg_from.set_node_id(from.unwrap_or(NodeId(0)).into());
 
     capnp::serialize::write_message(w, &root).wrapped_msg(
         ErrorKind::MsgLogPersistentSerialization,
         "Failed to serialize using capnp",
-    ) */
+    )
 }
 
 pub(super) fn read_seq<R>(r: R) -> Result<SeqNo> where R: Read {

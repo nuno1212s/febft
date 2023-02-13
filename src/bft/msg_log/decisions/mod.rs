@@ -1,6 +1,8 @@
 use std::cmp::Ordering;
+use std::ops::Deref;
 use std::sync::Arc;
 use serde::{Serialize, Deserialize};
+use serde::de::Unexpected::Seq;
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, StoredMessage};
 use crate::bft::crypto::hash::Digest;
 use crate::bft::globals::ReadOnly;
@@ -89,12 +91,19 @@ pub struct OnGoingDecision<O> {
     commits: Vec<StoredConsensusMessage<O>>,
 }
 
-/// Represents a single decision from the `DecisionLog`.
+/// Metadata about a proof
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-pub struct Proof<O> {
+#[derive(Clone)]
+pub struct ProofMetadata {
     seq_no: SeqNo,
     batch_digest: Digest,
     pre_prepare_ordering: Vec<Digest>,
+}
+
+/// Represents a single decision from the `DecisionLog`.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+pub struct Proof<O> {
+    metadata: ProofMetadata,
     pre_prepares: Vec<StoredConsensusMessage<O>>,
     prepares: Vec<StoredConsensusMessage<O>>,
     commits: Vec<StoredConsensusMessage<O>>,
@@ -133,6 +142,29 @@ impl WriteSet {
     }
 }
 
+impl ProofMetadata {
+    /// Create a new proof metadata
+    pub(crate) fn new(seq_no: SeqNo, digest: Digest, pre_prepare_ordering: Vec<Digest>) -> Self {
+        Self {
+            seq_no,
+            batch_digest: digest,
+            pre_prepare_ordering,
+        }
+    }
+
+    pub fn seq_no(&self) -> SeqNo {
+        self.seq_no
+    }
+
+    pub fn batch_digest(&self) -> Digest {
+        self.batch_digest
+    }
+
+    pub fn pre_prepare_ordering(&self) -> &Vec<Digest> {
+        &self.pre_prepare_ordering
+    }
+}
+
 impl<O> Proof<O> {
     /// Returns the `PRE-PREPARE` message of this `Proof`.
     pub fn pre_prepares(&self) -> &[StoredConsensusMessage<O>] {
@@ -149,23 +181,13 @@ impl<O> Proof<O> {
         &self.commits[..]
     }
 
-    pub fn pre_prepare_ordering(&self) -> &Vec<Digest> {
-        &self.pre_prepare_ordering
-    }
-
-    pub fn seq_no(&self) -> SeqNo {
-        self.seq_no
-    }
-
-    pub fn batch_digest(&self) -> Digest {
-        self.batch_digest
-    }
 
     fn check_pre_prepare_sizes(&self) -> Result<()> {
-        if self.pre_prepare_ordering.len() != self.pre_prepares.len() {
+        if self.metadata.pre_prepare_ordering().len() != self.pre_prepares.len() {
             return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
                                               "Wrong number of pre prepares."));
         }
+
         Ok(())
     }
 
@@ -174,8 +196,8 @@ impl<O> Proof<O> {
     pub fn are_pre_prepares_ordered(&self) -> Result<bool> {
         self.check_pre_prepare_sizes()?;
 
-        for index in 0..self.pre_prepare_ordering.len() {
-            if self.pre_prepare_ordering[index] != *self.pre_prepares[index].header().digest() {
+        for index in 0..self.metadata.pre_prepare_ordering().len() {
+            if self.metadata.pre_prepare_ordering()[index] != *self.pre_prepares[index].header().digest() {
                 return Ok(false);
             }
         }
@@ -187,10 +209,12 @@ impl<O> Proof<O> {
     pub fn order_pre_prepares(&mut self) -> Result<()> {
         self.check_pre_prepare_sizes()?;
 
-        let mut ordered_pre_prepares = Vec::with_capacity(self.pre_prepare_ordering.len());
+        let pre_prepare_ordering = self.metadata.pre_prepare_ordering();
 
-        for index in 0..self.pre_prepare_ordering.len() {
-            let digest = self.pre_prepare_ordering[index];
+        let mut ordered_pre_prepares = Vec::with_capacity(pre_prepare_ordering.len());
+
+        for index in 0..pre_prepare_ordering.len() {
+            let digest = pre_prepare_ordering[index];
 
             let pre_prepare = self.pre_prepares.iter().position(|msg| *msg.header().digest() == digest);
 
@@ -211,11 +235,20 @@ impl<O> Proof<O> {
 
         Ok(())
     }
+
 }
 
 impl<O> Orderable for Proof<O> {
     fn sequence_number(&self) -> SeqNo {
         self.seq_no
+    }
+}
+
+impl<O> Deref for Proof<O> {
+    type Target = ProofMetadata;
+
+    fn deref(&self) -> &Self::Target {
+        &self.metadata
     }
 }
 
@@ -261,7 +294,7 @@ impl<O> CollectData<O> {
 }
 
 impl<O> OnGoingDecision<O> {
-    fn init_blank(seq_no: SeqNo) -> Self {
+    pub(crate) fn init_blank(seq_no: SeqNo) -> Self {
         Self {
             seq_no,
             batch_digest: None,
@@ -272,7 +305,18 @@ impl<O> OnGoingDecision<O> {
         }
     }
 
-    fn proof(mut self, quorum: usize) -> Result<Proof<O>> {
+    pub(crate) fn init_from_info(seq_no: SeqNo, batch_digest: Digest, pre_prepare_ordering: Vec<Digest>) -> Self {
+        Self {
+            seq_no,
+            batch_digest: Some(batch_digest),
+            pre_prepare_ordering: Some(pre_prepare_ordering),
+            pre_prepares: vec![],
+            prepares: vec![],
+            commits: vec![],
+        }
+    }
+
+    pub(crate) fn proof(mut self, quorum: Option<usize>) -> Result<Proof<O>> {
 
         //TODO: Order the pre prepares to match the ordering of the vector
 
@@ -299,29 +343,53 @@ impl<O> OnGoingDecision<O> {
                 if *message.header().digest() == *digest {
                     ordered_pre_prepares.push(self.pre_prepares.swap_remove(i));
 
-                    break
+                    break;
                 }
             }
         }
 
-        if self.prepares.len() < quorum {
-            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
-                                              "Failed to create a proof, prepares do not match up to the 2*f+1"));
-        }
+        if let Some(quorum) = quorum {
+            if self.prepares.len() < quorum {
+                return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
+                                                  "Failed to create a proof, prepares do not match up to the 2*f+1"));
+            }
 
-        if self.commits.len() < quorum {
-            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
-                                              "Failed to create a proof, commits do not match up to the 2*f+1"));
+            if self.commits.len() < quorum {
+                return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
+                                                  "Failed to create a proof, commits do not match up to the 2*f+1"));
+            }
         }
 
         Ok(Proof {
-            seq_no: self.seq_no,
-            batch_digest: self.batch_digest.unwrap(),
-            pre_prepare_ordering: order,
+            metadata: ProofMetadata::new(self.seq_no,
+                                         self.batch_digest.unwrap(),
+                                         order),
             pre_prepares: ordered_pre_prepares,
             prepares: self.prepares,
             commits: self.commits,
         })
+    }
+
+    pub(crate) fn append_pre_prepare(&mut self, pre_prepare: StoredConsensusMessage<O>) {
+        self.pre_prepares.push(pre_prepare);
+    }
+
+    pub(crate) fn append_prepare(&mut self, prepare: StoredConsensusMessage<O>) {
+        self.prepares.push(prepare);
+    }
+
+    pub(crate) fn append_commit(&mut self, commit: StoredConsensusMessage<O>) {
+        self.commits.push(commit);
+    }
+
+    /// Register that all the batches have been received
+    pub(crate) fn all_batches_received(&mut self, digest: Digest, pre_prepare_ordering: Vec<Digest>) -> ProofMetadata {
+        self.batch_digest = Some(digest);
+        self.pre_prepare_ordering = Some(pre_prepare_ordering);
+
+        ProofMetadata::new(self.seq_no,
+                           self.batch_digest.unwrap().clone(),
+                           self.pre_prepare_ordering.as_ref().unwrap().clone())
     }
 
     pub fn seq_no(&self) -> SeqNo {
@@ -349,15 +417,18 @@ impl<O> DecisionLog<O> {
     pub fn new() -> Self {
         Self {
             last_exec: None,
-            currently_deciding: OnGoingDecision {
-                seq_no: SeqNo::ZERO,
-                batch_digest: None,
-                pre_prepare_ordering: None,
-                pre_prepares: vec![],
-                prepares: vec![],
-                commits: vec![],
-            },
+            currently_deciding: OnGoingDecision::init_blank(SeqNo::ZERO),
             decided: vec![],
+        }
+    }
+
+    pub fn from_decided(last_exec: SeqNo, proofs: Vec<Proof<O>>) -> Self {
+        let current_exec = last_exec.next();
+
+        Self {
+            last_exec: Some(last_exec),
+            currently_deciding: OnGoingDecision::init_blank(current_exec),
+            decided: proofs,
         }
     }
 
@@ -373,15 +444,15 @@ impl<O> DecisionLog<O> {
     }
 
     pub(crate) fn append_pre_prepare(&mut self, pre_prepare: StoredConsensusMessage<O>) {
-        self.currently_deciding.pre_prepares.push(pre_prepare);
+        self.currently_deciding.append_pre_prepare(pre_prepare);
     }
 
     pub(crate) fn append_prepare(&mut self, prepare: StoredConsensusMessage<O>) {
-        self.currently_deciding.prepares.push(prepare);
+        self.currently_deciding.append_prepare(prepare);
     }
 
     pub(crate) fn append_commit(&mut self, commit: StoredConsensusMessage<O>) {
-        self.currently_deciding.commits.push(commit);
+        self.currently_deciding.append_commit(commit);
     }
 
     /// Append a proof to the end of the log. Assumes all prior checks have been done
@@ -392,9 +463,8 @@ impl<O> DecisionLog<O> {
     }
 
     /// Register that all the batches have been received
-    pub(crate) fn all_batches_received(&mut self, digest: Digest, pre_prepare_ordering: Vec<Digest>) {
-        self.currently_deciding.batch_digest = Some(digest);
-        self.currently_deciding.pre_prepare_ordering = Some(pre_prepare_ordering);
+    pub(crate) fn all_batches_received(&mut self, digest: Digest, pre_prepare_ordering: Vec<Digest>) -> ProofMetadata {
+        self.currently_deciding.all_batches_received(digest, pre_prepare_ordering)
     }
 
     //TODO: Maybe make these data structures a BTreeSet so that the messages are always ordered
@@ -403,7 +473,7 @@ impl<O> DecisionLog<O> {
         self.last_exec.replace(seq_no);
 
         let decided = std::mem::replace(&mut self.currently_deciding, OnGoingDecision::init_blank(seq_no.next()));
-        let proof = decided.proof(f)?;
+        let proof = decided.proof(Some(f))?;
 
         self.decided.push(proof);
 
@@ -559,7 +629,6 @@ impl<O> DecisionLog<O> {
 
 impl<O> Clone for Proof<O> {
     fn clone(&self) -> Self {
-
         let mut new_pre_prepares = Vec::with_capacity(self.pre_prepares.len());
 
         let mut new_prepares = Vec::with_capacity(self.prepares.len());
@@ -579,13 +648,10 @@ impl<O> Clone for Proof<O> {
         }
 
         Self {
-            seq_no: self.seq_no,
-            batch_digest: self.batch_digest.clone(),
-            pre_prepare_ordering: self.pre_prepare_ordering.clone(),
+            metadata: self.metadata.clone(),
             pre_prepares: new_pre_prepares,
             prepares: new_prepares,
             commits: new_commits,
         }
-
     }
 }
