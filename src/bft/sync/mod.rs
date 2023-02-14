@@ -31,13 +31,13 @@ use super::{
 };
 
 use intmap::IntMap;
-use log::error;
+
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::decisions::{CollectData, Proof, ViewDecisionPair};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
-use crate::bft::msg_log::persistent::PersistentLogModeTrait;
+
 use crate::bft::sync::view::ViewInfo;
 use crate::bft::timeouts::{ClientRqInfo, Timeouts};
 

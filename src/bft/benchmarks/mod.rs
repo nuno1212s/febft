@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
-use chrono::DateTime;
-use chrono::offset::Utc;
+use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
 use crate::bft::communication::NodeId;

@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 use std::iter;
 use std::ops::{Add, Sub};
-use num_bigint::{BigInt, BigUint, ToBigInt, ToBigUint};
+use num_bigint::BigUint;
+use num_bigint::ToBigUint;
 use num_traits::identities::Zero;
 use crate::bft::communication::NodeId;
 use crate::bft::core::SystemParams;
 use crate::bft::ordering::{Orderable, SeqNo};
-use serde::{Serialize, Deserialize};
+#[cfg(feature = "serialize_serde")]
+use serde::{Deserialize, Serialize};
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
 

@@ -1,39 +1,23 @@
 //! A module to manage the `febft` message log.
 
-use std::cell::{Cell, RefCell};
-use std::cmp::Ordering;
-
 use std::path::Path;
 use std::sync::Arc;
 
-use intmap::IntMap;
-use log::{debug, error};
-use parking_lot::Mutex;
-#[cfg(feature = "serialize_serde")]
-use serde::{Deserialize, Serialize};
+use crate::bft::communication::message::ConsensusMessage;
+use crate::bft::communication::message::Header;
+use crate::bft::communication::message::RequestMessage;
+use crate::bft::communication::message::StoredMessage;
 
-use crate::bft::benchmarks::BatchMeta;
-use crate::bft::collections;
-use crate::bft::collections::ConcurrentHashMap;
-use crate::bft::communication::message::{
-    ConsensusMessage, ConsensusMessageKind, Header, ObserveEventKind, RequestMessage,
-    StoredMessage, SystemMessage,
-};
-use crate::bft::communication::NodeId;
-use crate::bft::consensus::Consensus;
-use crate::bft::core::server::observer::{MessageType, ObserverHandle};
-use crate::bft::crypto::hash::Digest;
-use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
-use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UpdateBatch};
+use crate::bft::executable::ExecutorHandle;
+use crate::bft::executable::Service;
 use crate::bft::globals::ReadOnly;
 use crate::bft::msg_log::decided_log::DecidedLog;
-use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
+use crate::bft::msg_log::deciding_log::{DecidingLog};
 use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
-use crate::bft::ordering::{Orderable, SeqNo};
 
-use self::persistent::{PersistentLog, WriteMode};
+use self::persistent::{PersistentLog};
 use self::persistent::{PersistentLogModeTrait};
 
 pub mod persistent;

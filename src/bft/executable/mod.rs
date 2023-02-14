@@ -49,6 +49,7 @@ pub struct UnorderedBatch<O> {
 pub struct UpdateBatch<O> {
     seq_no: SeqNo,
     inner: Vec<Update<O>>,
+    meta: Option<BatchMeta>
 }
 
 /// Storage for a batch of client update replies.
@@ -469,6 +470,7 @@ impl<O> UpdateBatch<O> {
         Self {
             seq_no,
             inner: Vec::new(),
+            meta: None
         }
     }
 
@@ -476,6 +478,7 @@ impl<O> UpdateBatch<O> {
         Self {
             seq_no,
             inner: Vec::with_capacity(capacity),
+            meta: None
         }
     }
 
@@ -497,6 +500,14 @@ impl<O> UpdateBatch<O> {
     /// Returns the length of the batch.
     pub fn len(&self) -> usize {
         self.inner.len()
+    }
+
+    pub fn append_batch_meta(&mut self, batch_meta: BatchMeta) {
+        let _ = self.meta.insert(batch_meta);
+    }
+
+    pub fn take_meta(&mut self) -> Option<BatchMeta> {
+        self.meta.take()
     }
 }
 

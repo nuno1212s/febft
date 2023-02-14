@@ -2,7 +2,6 @@ use std::sync::Arc;
 use log::error;
 
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, StoredMessage};
-use crate::bft::communication::serialize::SharedData;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::cst::RecoveryState;
 use crate::bft::executable::{Request, Service, State, UpdateBatch};
@@ -407,6 +406,8 @@ impl<S> DecidedLog<S> where S: Service + 'static {
                     );
                 }
             }
+
+            batch.append_batch_meta(completed_batch.batch_meta().clone());
 
             batch
         };

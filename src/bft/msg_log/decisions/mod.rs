@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 use std::ops::Deref;
 use std::sync::Arc;
-use serde::{Serialize, Deserialize};
-use serde::de::Unexpected::Seq;
+#[cfg(feature = "serialize_serde")]
+use serde::{Deserialize, Serialize};
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, StoredMessage};
 use crate::bft::crypto::hash::Digest;
 use crate::bft::globals::ReadOnly;
