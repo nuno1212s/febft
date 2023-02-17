@@ -91,6 +91,7 @@ mimalloc = { version = "*", default-features = false }
 [dependencies]
 capnp = "0.16.0"
 fastrand = "1.7.0"
+bytes = "1.4.0"
 chrono = "0.4"
 intmap = "2.0.0"
 either = "1"

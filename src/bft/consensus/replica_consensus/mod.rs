@@ -5,6 +5,7 @@ use std::{
         atomic::{AtomicBool, Ordering}, Mutex,
     },
 };
+use bytes::BytesMut;
 
 use chrono::Utc;
 use intmap::IntMap;
@@ -30,6 +31,7 @@ use crate::bft::{
     sync::AbstractSynchronizer,
     threadpool,
 };
+use crate::bft::communication::serialize::Buf;
 use crate::bft::msg_log::deciding_log::DecidingLog;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
@@ -107,13 +109,15 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
             ));
 
             // serialize raw msg
-            let mut buf = Vec::new();
+            let mut buf = BytesMut::new();
 
             let digest =
-                <S::Data as DigestData>::serialize_digest(&message, &mut buf).unwrap();
+                <S::Data as DigestData>::serialize_digest(&message,  buf.as_mut()).unwrap();
 
+            let buf = buf.freeze();
+            
             for peer_id in NodeId::targets(0..n) {
-                let buf_clone = Vec::from(&buf[..]);
+                let buf_clone = buf.clone();
 
                 // create header
                 let (header, _) = WireMessage::new(

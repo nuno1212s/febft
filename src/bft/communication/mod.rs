@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_tls::{TlsAcceptor, TlsConnector};
+use bytes::{Bytes, BytesMut};
 use dashmap::DashMap;
 use either::{Either, Left, Right};
 
@@ -892,8 +893,11 @@ impl<D> Node<D>
             // serialize
             let start_serialization = Instant::now();
 
-            let mut buf: Buf = Buf::new();
-            let digest = <D as DigestData>::serialize_digest(&message, &mut buf).unwrap();
+            let mut buf = BytesMut::new();
+
+            let digest = <D as DigestData>::serialize_digest(&message, buf.as_mut()).unwrap();
+            
+            let buf = buf.freeze();
 
             if let Some((comm_stats, _)) = &comm_stats {
                 let time_taken_signing = Instant::now()
@@ -1121,9 +1125,9 @@ impl<D> Node<D>
             let start_serialization = Instant::now();
 
             // serialize
-            let mut buf: Buf = Buf::new();
-
-            let digest = match <D as DigestData>::serialize_digest(&message, &mut buf) {
+            let mut buf = BytesMut::new();
+            
+            let digest = match <D as DigestData>::serialize_digest(&message, buf.as_mut()) {
                 Ok(dig) => dig,
                 Err(err) => {
                     error!("Failed to serialize message {:?}. Message is {:?}", err, message);
@@ -1131,6 +1135,8 @@ impl<D> Node<D>
                     panic!("Failed to serialize message");
                 }
             };
+            
+            let buf = buf.freeze();
 
             if let Some((comm_stats, _)) = &comm_stats {
                 let time_taken_signing = Instant::now()
@@ -1791,7 +1797,9 @@ impl<D> Node<D>
                 Ok(mut sock) => {
                     // create header
                     let (header, _) =
-                        WireMessage::new(my_id, peer_id, vec![], nonce, None, None).into_inner();
+                        WireMessage::new(my_id, peer_id,
+                                         Buf::new(), nonce,
+                                         None, None).into_inner();
 
                     // serialize header
                     let mut buf = [0; Header::LENGTH];
@@ -1897,7 +1905,9 @@ impl<D> Node<D>
             if let Ok(mut sock) = socket::connect_async(addr).await {
                 // create header
                 let (header, _) =
-                    WireMessage::new(my_id, peer_id, vec![], nonce, None, None).into_inner();
+                    WireMessage::new(my_id, peer_id,
+                                     Bytes::new(), nonce,
+                                     None, None).into_inner();
 
                 // serialize header
                 let mut buf = [0; Header::LENGTH];
@@ -2053,7 +2063,7 @@ impl<D> Node<D>
             let header = Header::deserialize_from(&buf_header[..]).unwrap();
 
             // extract peer id
-            let peer_id = match WireMessage::from_parts(header, vec![]) {
+            let peer_id = match WireMessage::from_parts(header, Bytes::new()) {
                 // drop connections from other clis if we are a cli
                 Ok(wm) if wm.header().from() >= first_cli && my_id >= first_cli => break,
                 // drop connections to the wrong dest
@@ -2142,7 +2152,7 @@ impl<D> Node<D>
             let header = Header::deserialize_from(&buf_header[..]).unwrap();
 
             // extract peer id
-            let peer_id = match WireMessage::from_parts(header, vec![]) {
+            let peer_id = match WireMessage::from_parts(header, Bytes::new()) {
                 // drop connections from other clis if we are a cli
                 Ok(wm) if wm.header().from() >= first_cli && my_id >= first_cli => break,
                 // drop connections to the wrong dest
@@ -2983,7 +2993,7 @@ impl<D> SerializedSendTo<D>
     ) {
         // create wire msg
         let (_, raw) = m.into_inner();
-        let wm = WireMessage::from_parts(h, raw).unwrap();
+        let wm = WireMessage::from_parts(h, Bytes::from(raw)).unwrap();
 
         match conn_handle.send(wm, None) {
             Ok(_) => {}
@@ -3007,7 +3017,7 @@ impl<D> SerializedSendTo<D>
     ) {
         // create wire msg
         let (_, raw) = m.into_inner();
-        let wm = WireMessage::from_parts(h, raw).unwrap();
+        let wm = WireMessage::from_parts(h, Bytes::from(raw)).unwrap();
 
         match conn_handle.async_send(wm).await {
             Ok(_) => {}

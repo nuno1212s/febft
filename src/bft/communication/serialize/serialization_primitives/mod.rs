@@ -1,5 +1,6 @@
 use std::io::Read;
 use std::io::Write;
+use bytes::BytesMut;
 
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, ObserveEventKind, ObserverMessage, PingMessage, ReplyMessage, RequestMessage, StoredMessage, SystemMessage};
 
@@ -37,9 +38,9 @@ pub fn serialize_message<W, S>(
             request.set_session_id(req.session_id().into());
             request.set_operation_id(req.sequence_number().into());
 
-            let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
+            let mut rq = BytesMut::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_request(&mut rq, req.operation())?;
+            S::serialize_request(rq.as_mut(), req.operation())?;
 
             request.set_request(&rq[..]);
         }
@@ -49,11 +50,13 @@ pub fn serialize_message<W, S>(
             request.set_session_id(req.session_id().into());
             request.set_operation_id(req.sequence_number().into());
 
-            let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
+            let mut rq = BytesMut::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_request(&mut rq, req.operation())?;
+            S::serialize_request(rq.as_mut(), req.operation())?;
 
-            request.set_request(&rq[..]);
+            let rq = rq.freeze();
+
+            request.set_request(rq.as_ref());
         }
         SystemMessage::Reply(reply) => {
             let mut reply_obj = sys_msg.init_reply();
@@ -61,11 +64,13 @@ pub fn serialize_message<W, S>(
             reply_obj.set_session_id(reply.session_id().into());
             reply_obj.set_operation_id(reply.sequence_number().into());
 
-            let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
+            let mut rq = BytesMut::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_reply(&mut rq, reply.payload())?;
+            S::serialize_reply(rq.as_mut(), reply.payload())?;
 
-            reply_obj.set_reply(&rq[..]);
+            let bytes = rq.freeze();
+
+            reply_obj.set_reply(bytes.as_ref());
         }
         SystemMessage::UnOrderedReply(reply) => {
             let mut reply_obj = sys_msg.init_unordered_reply();
@@ -73,11 +78,13 @@ pub fn serialize_message<W, S>(
             reply_obj.set_session_id(reply.session_id().into());
             reply_obj.set_operation_id(reply.sequence_number().into());
 
-            let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
+            let mut rq = BytesMut::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_reply(&mut rq, reply.payload())?;
+            S::serialize_reply(rq.as_mut(), reply.payload())?;
 
-            reply_obj.set_reply(&rq[..]);
+            let rq = rq.freeze();
+
+            reply_obj.set_reply(rq.as_ref());
         }
         SystemMessage::Consensus(m) => {
             let mut consensus = sys_msg.init_consensus();
@@ -490,11 +497,13 @@ fn serialize_consensus_message<S>(
                     request.set_session_id(stored_req.session_id().into());
                     request.set_operation_id(stored_req.sequence_number().into());
 
-                    let mut rq = Buf::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
+                    let mut rq = BytesMut::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-                    S::serialize_request(&mut rq, stored_req.operation())?;
+                    S::serialize_request(rq.as_mut(), stored_req.operation())?;
 
-                    request.set_request(&rq[..]);
+                    let rq = rq.freeze();
+
+                    request.set_request(rq.as_ref());
                 }
             }
         }

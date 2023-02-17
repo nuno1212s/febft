@@ -7,6 +7,7 @@
 //! expected to be implemented by the user.
 
 use std::io::{Read, Write};
+use bytes::Bytes;
 
 use crate::bft::communication::message::SystemMessage;
 use crate::bft::crypto::hash::{Context, Digest};
@@ -63,7 +64,7 @@ pub trait SharedData: Send {
 //const NODE_BUFSIZ: usize = 16384;
 
 /// The buffer type used to serialize messages into.
-pub type Buf = Vec<u8>;
+pub type Buf = Bytes;
 
 /// Extension of `SharedData` to obtain hash digests.
 pub trait DigestData: SharedData {

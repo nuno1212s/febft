@@ -6,6 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 use std::sync::MutexGuard;
+use bytes::BytesMut;
 
 use self::{follower_sync::FollowerSynchronizer, replica_sync::ReplicaSynchronizer};
 
@@ -747,14 +748,16 @@ impl<S> Synchronizer<S>
                             //We create the pre-prepare here as we are the new leader,
                             //And we sign it right now
                             let (header, message) = {
-                                let mut buf = Buf::new();
+                                let mut buf = BytesMut::new();
 
                                 let forged_pre_prepare = consensus.forge_propose(p.clone(), self);
 
                                 let digest = <S::Data as DigestData>::serialize_digest(
                                     &forged_pre_prepare,
-                                    &mut buf,
+                                    buf.as_mut(),
                                 ).unwrap();
+
+                                let buf = buf.freeze();
 
                                 let mut prng_state = prng::State::new();
 
@@ -1414,7 +1417,9 @@ fn validate_signature<'a, S, M>(node: &'a Node<S::Data>, stored: &'a StoredMessa
         Request<S>: Send + Clone + 'static,
         Reply<S>: Send + 'static,
 {
-    let wm = match WireMessage::from_parts(*stored.header(), vec![]) {
+
+    //TODO: Fix this as I believe it will always be false
+    let wm = match WireMessage::from_parts(*stored.header(), Buf::new()) {
         Ok(wm) => wm,
         _ => return false,
     };

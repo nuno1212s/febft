@@ -5,6 +5,7 @@ use std::fmt::{Debug, Formatter};
 use std::io;
 use std::io::Write;
 use std::mem::MaybeUninit;
+use bytes::Bytes;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
@@ -28,7 +29,7 @@ use crate::bft::ordering::{
     Orderable,
 };
 
-use crate::bft::communication::serialize::SharedData;
+use crate::bft::communication::serialize::{Buf, SharedData};
 use crate::bft::communication::NodeId;
 use crate::bft::timeouts::{Timeout, TimeoutKind};
 use crate::bft::sync::LeaderCollects;
@@ -50,11 +51,11 @@ pub type StoredSerializedSystemMessage<D> = StoredMessage<
 
 pub struct SerializedMessage<M> {
     original: M,
-    raw: Vec<u8>,
+    raw: Buf,
 }
 
 impl<M> SerializedMessage<M> {
-    pub fn new(original: M, raw: Vec<u8>) -> Self {
+    pub fn new(original: M, raw: Buf) -> Self {
         Self { original, raw }
     }
 
@@ -62,11 +63,11 @@ impl<M> SerializedMessage<M> {
         &self.original
     }
 
-    pub fn raw(&self) -> &Vec<u8> {
+    pub fn raw(&self) -> &Buf {
         &self.raw
     }
 
-    pub fn into_inner(self) -> (M, Vec<u8>) {
+    pub fn into_inner(self) -> (M, Buf) {
         (self.original, self.raw)
     }
 }
@@ -177,7 +178,7 @@ impl<'de> serde::Deserialize<'de> for Header {
 #[derive(Debug)]
 pub struct WireMessage {
     pub(crate) header: Header,
-    pub(crate) payload: Vec<u8>,
+    pub(crate) payload: Bytes,
 }
 
 /// A generic `WireMessage`, for different `AsRef<[u8]>` types.
@@ -899,7 +900,7 @@ impl WireMessage {
     pub const CURRENT_VERSION: u32 = 0;
 
     /// Wraps a `Header` and a byte array payload into a `WireMessage`.
-    pub fn from_parts(header: Header, payload: Vec<u8>) -> Result<Self> {
+    pub fn from_parts(header: Header, payload: Buf) -> Result<Self> {
         let wm = Self { header, payload };
         if !wm.is_valid(None) {
             return Err(Error::simple(ErrorKind::CommunicationMessage));
@@ -911,7 +912,7 @@ impl WireMessage {
     pub fn new(
         from: NodeId,
         to: NodeId,
-        payload: Vec<u8>,
+        payload: Buf,
         nonce: u64,
         digest: Option<Digest>,
         sk: Option<&KeyPair>,
@@ -1016,7 +1017,7 @@ impl WireMessage {
 
     /// Retrieve the inner `Header` and payload byte buffer stored
     /// inside the `WireMessage`.
-    pub fn into_inner(self) -> (Header, Vec<u8>) {
+    pub fn into_inner(self) -> (Header, Buf) {
         (self.header, self.payload)
     }
 
