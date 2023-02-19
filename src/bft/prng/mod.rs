@@ -5,7 +5,6 @@
 //! C code, released to the public domain.
 
 use std::cell::RefCell;
-use std::os::linux::raw::stat;
 use rand_core::{RngCore, OsRng};
 use thread_local::ThreadLocal;
 

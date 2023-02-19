@@ -9,8 +9,8 @@ mod cthpool;
 #[cfg(feature = "threadpool_rayon")]
 mod rayon;
 
-use std::convert::TryInto;
-use std::sync::{Arc, Barrier};
+
+
 use crate::bft::globals::Global;
 use crate::bft::error::*;
 

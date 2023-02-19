@@ -3,14 +3,13 @@
 use std::fs::File;
 use std::net::SocketAddr;
 use std::io::{BufReader, Read, Write};
+use std::sync::Arc;
 use std::time::Duration;
 
 use rustls::{
-    internal::pemfile,
     ServerConfig,
     ClientConfig,
     RootCertStore,
-    AllowAnyAuthenticatedClient,
 };
 use serde::{
     Serialize,
@@ -31,7 +30,7 @@ use febft::bft::communication::message::{
 use febft::bft::communication::{
     Node,
     NodeId,
-    NodeConfig,
+    NodeConfig, PeerAddr,
 };
 use febft::bft::crypto::signature::{
     KeyPair,
@@ -88,7 +87,6 @@ pub fn debug_msg(m: Message<f32, Action, f32>) -> &'static str {
         },
         Message::ExecutionFinishedWithAppstate(_) => "ExA",
         Message::Timeout(_) => "Tim",
-        Message::RequestBatch(_, _) => "RqB",
     }
 }
 
@@ -148,7 +146,8 @@ pub async fn setup_replica(
         next_consensus_seq: SeqNo::ZERO,
         view: SeqNo::ZERO,
         service: CalcService(id, 0),
-        batch_timeout: Duration::from_millis(10).as_micros()
+        batch_timeout: Duration::from_millis(10).as_micros(),
+        log_mode: ,
     };
     Replica::bootstrap(conf).await
 }
@@ -156,7 +155,7 @@ pub async fn setup_replica(
 pub async fn setup_node(
     id: NodeId,
     sk: KeyPair,
-    addrs: IntMap<(SocketAddr, String)>,
+    addrs: IntMap<PeerAddr>,
     pk: IntMap<PublicKey>,
 ) -> Result<(Node<CalcData>, Vec<Message<f32, Action, f32>>)> {
     let conf = node_config(id, sk, addrs, pk).await;

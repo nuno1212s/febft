@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
-use chrono::DateTime;
-use chrono::offset::Utc;
+use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
 use crate::bft::communication::NodeId;
@@ -407,7 +406,7 @@ impl BatchMeta {
         Self::new_with_cap(None)
     }
 
-    pub fn new_with_cap(cap: Option<usize>) -> Self {
+    pub fn new_with_cap(_cap: Option<usize>) -> Self {
         let now = Utc::now();
         Self {
             batch_size: 0,
@@ -450,7 +449,7 @@ impl BenchmarkHelper {
 
     ///Consumes the elements of the other benchmark helper into this one
     /// Maintains the other benchmark helper
-    pub fn merge(&mut self, mut other: &mut BenchmarkHelper) {
+    pub fn merge(&mut self, other: &mut BenchmarkHelper) {
         self.values.append(&mut other.values)
     }
 

@@ -5,17 +5,11 @@ use std::fmt::{Debug, Formatter};
 use std::io;
 use std::io::Write;
 use std::mem::MaybeUninit;
-
-use chrono::DateTime;
-use chrono::offset::Utc;
+use bytes::Bytes;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
-use smallvec::{
-    SmallVec,
-    Array,
-};
 use futures::io::{
     AsyncWriteExt,
     AsyncWrite,
@@ -34,13 +28,15 @@ use crate::bft::ordering::{
     SeqNo,
     Orderable,
 };
-use crate::bft::consensus::log::CollectData;
-use crate::bft::communication::serialize::SharedData;
+
+use crate::bft::communication::serialize::{Buf, SharedData};
 use crate::bft::communication::NodeId;
-use crate::bft::timeouts::TimeoutKind;
+use crate::bft::timeouts::{Timeout, TimeoutKind};
 use crate::bft::sync::LeaderCollects;
 use crate::bft::cst::RecoveryState;
 use crate::bft::error::*;
+use crate::bft::msg_log::decisions::CollectData;
+use crate::bft::sync::view::ViewInfo;
 
 // convenience type
 pub type StoredSerializedSystemMessage<D> = StoredMessage<
@@ -55,11 +51,11 @@ pub type StoredSerializedSystemMessage<D> = StoredMessage<
 
 pub struct SerializedMessage<M> {
     original: M,
-    raw: Vec<u8>,
+    raw: Buf,
 }
 
 impl<M> SerializedMessage<M> {
-    pub fn new(original: M, raw: Vec<u8>) -> Self {
+    pub fn new(original: M, raw: Buf) -> Self {
         Self { original, raw }
     }
 
@@ -67,11 +63,11 @@ impl<M> SerializedMessage<M> {
         &self.original
     }
 
-    pub fn raw(&self) -> &Vec<u8> {
+    pub fn raw(&self) -> &Buf {
         &self.raw
     }
 
-    pub fn into_inner(self) -> (M, Vec<u8>) {
+    pub fn into_inner(self) -> (M, Buf) {
         (self.original, self.raw)
     }
 }
@@ -146,7 +142,7 @@ pub struct Header {
     pub(crate) length: u64,
     // the digest of the serialized payload
     pub(crate) digest: [u8; Digest::LENGTH],
-    // sign(hash(le(version) + le(from) + le(to) + le(nonce) + le(length) + hash(serialize(payload))))
+    // sign(hash(le(from) + le(to) + le(nonce) + hash(serialize(payload))))
     pub(crate) signature: [u8; Signature::LENGTH],
 }
 
@@ -182,7 +178,7 @@ impl<'de> serde::Deserialize<'de> for Header {
 #[derive(Debug)]
 pub struct WireMessage {
     pub(crate) header: Header,
-    pub(crate) payload: Vec<u8>,
+    pub(crate) payload: Bytes,
 }
 
 /// A generic `WireMessage`, for different `AsRef<[u8]>` types.
@@ -202,11 +198,9 @@ pub enum Message<S, O, P> where S: Send, O: Send, P: Send {
     /// the application state.
     ///
     /// This is useful for local checkpoints.
-    ExecutionFinishedWithAppstate(S),
+    ExecutionFinishedWithAppstate((SeqNo, S)),
     /// We received a timeout from the timeouts layer.
-    Timeout(TimeoutKind),
-    //We received a request batch
-    RequestBatch(DateTime<Utc>, Vec<StoredMessage<RequestMessage<O>>>),
+    Timeout(Timeout),
 }
 
 impl<S, O, P> Debug for Message<S, O, P> where S: Send, O: Send, P: Send {
@@ -221,9 +215,6 @@ impl<S, O, P> Debug for Message<S, O, P> where S: Send, O: Send, P: Send {
             Message::Timeout(_) => {
                 write!(f, "timeout")
             }
-            Message::RequestBatch(_, _) => {
-                write!(f, "rq batch")
-            }
         }
     }
 }
@@ -236,23 +227,39 @@ impl<S, O, P> Debug for Message<S, O, P> where S: Send, O: Send, P: Send {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub enum SystemMessage<S, O, P> {
-    // TODO: ReadRequest,
+    //Requests that do not need to be logged nor ordered. Notice that
+    //The actual request instance is not different from the ordered requests,
+    //It is up to the developer of the particular services to use
+    //These operations responsibly
+    UnOrderedRequest(RequestMessage<O>),
+    UnOrderedReply(ReplyMessage<P>),
     Request(RequestMessage<O>),
     Reply(ReplyMessage<P>),
     Consensus(ConsensusMessage<O>),
-    ///Collaborative state transfer messages
+    FwdConsensus(FwdConsensusMessage<O>),
+    //Collaborative state transfer messages
     Cst(CstMessage<S, O>),
     ViewChange(ViewChangeMessage<O>),
     ForwardedRequests(ForwardedRequestsMessage<O>),
+    //Observer related messages
+    ObserverMessage(ObserverMessage),
+    //Ping messages
+    Ping(PingMessage),
 }
 
 impl<S, O, P> Debug for SystemMessage<S, O, P> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            SystemMessage::Request(rq) => {
+            SystemMessage::UnOrderedRequest(_req) => {
+                write!(f, "Unordered request")
+            }
+            SystemMessage::UnOrderedReply(_) => {
+                write!(f, "Unordered reply")
+            }
+            SystemMessage::Request(_rq) => {
                 write!(f, "Request")
             }
-            SystemMessage::Reply(re) => {
+            SystemMessage::Reply(_re) => {
                 write!(f, "Reply")
             }
             SystemMessage::Consensus(cs) => {
@@ -268,19 +275,27 @@ impl<S, O, P> Debug for SystemMessage<S, O, P> {
                     }
                 }
             }
-            SystemMessage::Cst(cst) => {
+            SystemMessage::Cst(_cst) => {
                 write!(f, "Cst")
             }
-            SystemMessage::ViewChange(vchange) => {
+            SystemMessage::ViewChange(_vchange) => {
                 write!(f, "view change")
             }
-            SystemMessage::ForwardedRequests(fr) => {
+            SystemMessage::ForwardedRequests(_fr) => {
                 write!(f, "forwarded requests")
+            }
+            SystemMessage::ObserverMessage(_message) => {
+                write!(f, "observer message")
+            }
+            SystemMessage::FwdConsensus(_) => {
+                write!(f, "Fwd consensus message")
+            }
+            SystemMessage::Ping(_) => {
+                write!(f, "Ping message")
             }
         }
     }
 }
-
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
@@ -332,15 +347,10 @@ impl<O> ViewChangeMessage<O> {
     }
 
     /// Takes the collects embedded in this view change message, if they are available.
-    pub fn take_collects(&mut self) -> Option<LeaderCollects<O>> {
-        let kind = std::mem::replace(
-            &mut self.kind,
-            ViewChangeMessageKind::Sync(LeaderCollects::empty()),
-        );
-        match kind {
+    pub fn take_collects(self) -> Option<LeaderCollects<O>> {
+        match self.kind {
             ViewChangeMessageKind::Sync(collects) => Some(collects),
             _ => {
-                self.kind = kind;
                 None
             }
         }
@@ -428,6 +438,32 @@ pub struct ReplyMessage<P> {
     payload: P,
 }
 
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct FwdConsensusMessage<O> {
+    header: Header,
+    consensus_msg: ConsensusMessage<O>,
+}
+
+impl<O> FwdConsensusMessage<O> {
+    pub fn new(header: Header, msg: ConsensusMessage<O>) -> Self {
+        Self {
+            header,
+            consensus_msg: msg,
+        }
+    }
+
+    pub fn header(&self) -> &Header { &self.header }
+
+    pub fn consensus(&self) -> &ConsensusMessage<O> {
+        &self.consensus_msg
+    }
+
+    pub fn into_inner(self) -> (Header, ConsensusMessage<O>) {
+        (self.header, self.consensus_msg)
+    }
+}
+
 /// Represents a message from the consensus sub-protocol.
 ///
 /// Different types of consensus messages are represented in the `ConsensusMessageKind`
@@ -461,6 +497,7 @@ impl<O> Debug for ConsensusMessage<O> {
 #[derive(Clone)]
 pub enum ConsensusMessageKind<O> {
     /// Pre-prepare a request, according to the BFT consensus protocol.
+    /// Sent by a single leader
     ///
     /// The value `Vec<Digest>` contains a batch of hash digests of the
     /// serialized client requests to be proposed.
@@ -590,6 +627,135 @@ impl<O> ConsensusMessage<O> {
     }
 }
 
+///Observer related messages
+///@{
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub enum ObserverMessage {
+    ///Observer client related messages
+    ///Register the client that sent this as an observer
+    ObserverRegister,
+    //Response to the register request of an observer
+    ObserverRegisterResponse(bool),
+    ObserverUnregister,
+    ///A status update sent to an observer client as an observer
+    ObservedValue(ObserveEventKind),
+}
+
+///The kinds of events that can be reported by the replicas to observers
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub enum ObserveEventKind {
+    ///Report a checkpoint start type event
+    /// The provided SeqNo is the last seq number of requests executed before the checkpoint
+    CheckpointStart(SeqNo),
+    ///Report a checkpoint end type event
+    /// The provided SeqNo is the current seq number that is going to be used
+    CheckpointEnd(SeqNo),
+    ///Report that the system is ready for another round of consensus
+    ///
+    /// The param is the seq no of the next consensus round
+    Ready(SeqNo),
+    ///Report that the given replica has received a preprepare request
+    ///And it's now going to enter into it's prepare phase
+    /// 
+    ///  param is the seq no of the received preprepare request, and therefore
+    /// of the current consensus instance
+    Prepare(SeqNo),
+    ///Report that the given replica has received all required prepare messages
+    ///And is now going to enter consensus phase
+    /// 
+    /// param is the seq no of the current consensus instance
+    Commit(SeqNo),
+    ///Report that the given replica has received all required commit messages
+    /// and has sent the request for execution as the consensus has been finished
+    ///
+    /// The provided SeqNo is the sequence number of the last executed operation
+    Consensus(SeqNo),
+    ///Report that the previous consensus has been executed and written to the drive
+    ///
+    /// param is the seq number of the consensus instance that was executed
+    Executed(SeqNo),
+    ///Report that the replica is now in the normal
+    ///phase of the algorithm
+    ///
+    /// The provided info is the info about the view and the current sequence number
+    NormalPhase((ViewInfo, SeqNo)),
+    ///Report that the replica has entered the view change phase
+    /// The provided SeqNo is the seq number of the new view and the current seq no
+    ViewChangePhase,
+    /// Report that the replica is now in the collaborative state
+    /// transfer state
+    CollabStateTransfer,
+}
+
+impl Debug for ObserveEventKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ObserveEventKind::CheckpointStart(_) => {
+                write!(f, "Checkpoint start event")
+            }
+            ObserveEventKind::CheckpointEnd(_) => {
+                write!(f, "Checkpoint end event")
+            }
+            ObserveEventKind::Consensus(_) => {
+                write!(f, "Consensus event")
+            }
+            ObserveEventKind::NormalPhase(_) => {
+                write!(f, "Normal phase")
+            }
+            ObserveEventKind::ViewChangePhase => {
+                write!(f, "View change phase")
+            }
+            ObserveEventKind::CollabStateTransfer => {
+                write!(f, "Collab state transfer")
+            }
+            ObserveEventKind::Prepare(_) => {
+                write!(f, "Prepare state entered")
+            }
+            ObserveEventKind::Commit(_) => {
+                write!(f, "Commit state entered")
+            }
+            ObserveEventKind::Ready(seq) => {
+                write!(f, "Ready to receive next consensus {:?}", seq)
+            }
+            ObserveEventKind::Executed(seq) => {
+                write!(f, "Executed the consensus instance {:?}", seq)
+            }
+        }
+    }
+}
+
+///}@
+
+///
+/// Ping messages
+/// @{
+
+///Contains a boolean representing if this is a request.
+///If it is a ping request, should be set to true,
+///ping responses should be false
+///
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct PingMessage {
+    request: bool,
+}
+
+impl PingMessage {
+    pub fn new(is_request: bool) -> Self {
+        Self {
+            request: is_request
+        }
+    }
+
+    pub fn is_request(&self) -> bool {
+        self.request
+    }
+}
+
+///}@
+
 // FIXME: perhaps use references for serializing and deserializing,
 // to save a stack allocation? probably overkill
 impl Header {
@@ -598,13 +764,13 @@ impl Header {
 
     unsafe fn serialize_into_unchecked(self, buf: &mut [u8]) {
         #[cfg(target_endian = "big")]
-            {
-                self.version = self.version.to_le();
-                self.nonce = self.nonce.to_le();
-                self.from = self.from.to_le();
-                self.to = self.to.to_le();
-                self.length = self.length.to_le();
-            }
+        {
+            self.version = self.version.to_le();
+            self.nonce = self.nonce.to_le();
+            self.from = self.from.to_le();
+            self.to = self.to.to_le();
+            self.length = self.length.to_le();
+        }
         let hdr: [u8; Self::LENGTH] = std::mem::transmute(self);
         (&mut buf[..Self::LENGTH]).copy_from_slice(&hdr[..]);
     }
@@ -625,13 +791,13 @@ impl Header {
         };
         (&mut hdr[..]).copy_from_slice(&buf[..Self::LENGTH]);
         #[cfg(target_endian = "big")]
-            {
-                hdr.version = hdr.version.to_be();
-                hdr.nonce = hdr.nonce.to_be();
-                hdr.from = hdr.from.to_be();
-                hdr.to = hdr.to.to_le();
-                hdr.length = hdr.length.to_be();
-            }
+        {
+            hdr.version = hdr.version.to_be();
+            hdr.nonce = hdr.nonce.to_be();
+            hdr.from = hdr.from.to_be();
+            hdr.to = hdr.to.to_le();
+            hdr.length = hdr.length.to_be();
+        }
         std::mem::transmute(hdr)
     }
 
@@ -734,7 +900,7 @@ impl WireMessage {
     pub const CURRENT_VERSION: u32 = 0;
 
     /// Wraps a `Header` and a byte array payload into a `WireMessage`.
-    pub fn from_parts(header: Header, payload: Vec<u8>) -> Result<Self> {
+    pub fn from_parts(header: Header, payload: Buf) -> Result<Self> {
         let wm = Self { header, payload };
         if !wm.is_valid(None) {
             return Err(Error::simple(ErrorKind::CommunicationMessage));
@@ -746,7 +912,7 @@ impl WireMessage {
     pub fn new(
         from: NodeId,
         to: NodeId,
-        payload: Vec<u8>,
+        payload: Buf,
         nonce: u64,
         digest: Option<Digest>,
         sk: Option<&KeyPair>,
@@ -809,6 +975,13 @@ impl WireMessage {
         ctx.finish()
     }
 
+    ///Sign a given message, with the following passed parameters
+    /// From is the node that sent the message
+    /// to is the destination node
+    /// nonce is the none
+    /// and the payload is what we actually want to sign (in this case we will
+    /// sign the digest of the message, instead of the actual entire payload
+    /// since that would be quite slow)
     fn sign_parts(
         sk: &KeyPair,
         from: u32,
@@ -822,6 +995,14 @@ impl WireMessage {
         sk.sign(digest.as_ref()).unwrap()
     }
 
+    ///Verify the signature of a given message, which contains
+    /// the following parameters
+    /// From is the node that sent the message
+    /// to is the destination node
+    /// nonce is the none
+    /// and the payload is what we actually want to sign (in this case we will
+    /// sign the digest of the message, instead of the actual entire payload
+    /// since that would be quite slow)
     fn verify_parts(
         pk: &PublicKey,
         sig: &Signature,
@@ -836,7 +1017,7 @@ impl WireMessage {
 
     /// Retrieve the inner `Header` and payload byte buffer stored
     /// inside the `WireMessage`.
-    pub fn into_inner(self) -> (Header, Vec<u8>) {
+    pub fn into_inner(self) -> (Header, Buf) {
         (self.header, self.payload)
     }
 
@@ -856,9 +1037,11 @@ impl WireMessage {
         let preliminary_check_failed =
             self.header.version != WireMessage::CURRENT_VERSION
                 || self.header.length != self.payload.len() as u64;
+
         if preliminary_check_failed {
             return false;
         }
+
         public_key
             .map(|pk| {
                 Self::verify_parts(
@@ -938,9 +1121,6 @@ impl<S: Send, O: Send, P: Send> Message<S, O, P> {
                     .wrapped(ErrorKind::CommunicationMessage),
             Message::Timeout(_) =>
                 Err("Expected System found Timeout")
-                    .wrapped(ErrorKind::CommunicationMessage),
-            Message::RequestBatch(_, _) =>
-                Err("Expected System found RequestBatch")
                     .wrapped(ErrorKind::CommunicationMessage),
         }
     }

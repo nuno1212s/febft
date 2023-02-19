@@ -17,7 +17,7 @@ pub fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
 
 pub fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
     TcpStream::connect(addr.into())
-        .map(|s| Socket::new(s))
+        .map(|s| {Socket::new(s)})
 }
 
 impl Listener {

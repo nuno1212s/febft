@@ -1,6 +1,9 @@
 //! Abstractions to deal with global variables.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{sync::atomic::{AtomicBool, Ordering}, ops::Deref};
+
+#[cfg(feature = "serialize_serde")]
+use serde::{Deserialize, Serialize};
 
 /// A `Flag` is used to check for the initialization of a global value.
 pub struct Flag(AtomicBool);
@@ -77,5 +80,37 @@ impl<T: Sync + 'static> Global<T> {
         } else {
             None
         }
+    }
+}
+
+
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+pub struct ReadOnly<T> {
+
+    value: T
+
+}
+
+unsafe impl<T> Sync for ReadOnly<T> {}
+
+impl<T> ReadOnly<T> {
+
+    pub fn new(value: T) -> Self {
+        Self { value }
+    }
+
+}
+
+impl<T> From<T> for ReadOnly<T> {
+    fn from(value: T) -> Self {
+        ReadOnly::new(value)
+    }
+}
+
+impl<T> Deref for ReadOnly<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
     }
 }

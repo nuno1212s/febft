@@ -11,47 +11,25 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(feature = "serialize_serde")]
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-use crate::bft::error::*;
-use crate::bft::sync::Synchronizer;
+use crate::bft::collections::{self, HashMap};
+use crate::bft::communication::message::{CstMessage, CstMessageKind, Header, SystemMessage};
+use crate::bft::communication::{Node, NodeId};
 use crate::bft::crypto::hash::Digest;
-use crate::bft::consensus::Consensus;
-use crate::bft::core::server::ViewInfo;
-use crate::bft::ordering::{
-    SeqNo,
-    Orderable,
-};
-use crate::bft::timeouts::{
-    TimeoutKind,
-    TimeoutsHandle,
-};
-use crate::bft::consensus::log::{
-    Log,
-    Checkpoint,
-    DecisionLog,
-};
-use crate::bft::communication::{
-    Node,
-    NodeId,
-};
-use crate::bft::communication::message::{
-    Header,
-    CstMessage,
-    SystemMessage,
-    CstMessageKind,
-};
-use crate::bft::executable::{
-    ExecutorHandle,
-    Service,
-    Request,
-    Reply,
-    State,
-};
-use crate::bft::collections::{
-    self,
-    HashMap,
-};
+use crate::bft::error::*;
+use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State};
+use crate::bft::msg_log::decided_log::DecidedLog;
+use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog};
+use crate::bft::msg_log::persistent::PersistentLogModeTrait;
+use crate::bft::ordering::{Orderable, SeqNo};
+use crate::bft::sync::Synchronizer;
+use crate::bft::sync::view::ViewInfo;
+use crate::bft::timeouts::{TimeoutKind, Timeouts};
+
+use super::consensus::AbstractConsensus;
+use super::globals::ReadOnly;
+use super::sync::AbstractSynchronizer;
 
 enum ProtoPhase<S, O> {
     Init,
@@ -61,49 +39,61 @@ enum ProtoPhase<S, O> {
 }
 
 /// Contains state used by a recovering node.
+///
+/// Cloning this is better than it was because of the read only checkpoint, 
+/// and because decision log also got a lot easier to clone, but we still have
+/// to be very careful thanks to the requests vector, which can be VERY large
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct RecoveryState<S, O> {
     pub(crate) view: ViewInfo,
-    pub(crate) checkpoint: Checkpoint<S>,
+    pub(crate) checkpoint: Arc<ReadOnly<Checkpoint<S>>>,
     // used to replay log on recovering replicas;
     // the request batches have been concatenated,
     // for memory efficiency
+    //TODO: I don't think this is necessary and it adds so much More potential memory usage (2x) with the declog
     pub(crate) requests: Vec<O>,
     pub(crate) declog: DecisionLog<O>,
 }
 
 /// Allow a replica to recover from the state received by peer nodes.
-pub fn install_recovery_state<S>(
+pub fn install_recovery_state<S, T, K>(
     recovery_state: RecoveryState<State<S>, Request<S>>,
-    synchronizer: &Synchronizer<S>,
-    log: &Log<State<S>, Request<S>, Reply<S>>,
+    synchronizer: &Arc<T>,
+    log: &mut DecidedLog<S>,
     executor: &mut ExecutorHandle<S>,
-    consensus: &mut Consensus<S>,
+    consensus: &mut K,
 ) -> Result<()>
-where
-    S: Service + Send + 'static,
-    State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
-    Reply<S>: Send + 'static,
+    where
+        S: Service + Send + 'static,
+        State<S>: Send + Clone + 'static,
+        Request<S>: Send + Clone + 'static,
+        Reply<S>: Send + 'static,
+        T: AbstractSynchronizer<S>,
+        K: AbstractConsensus<S>
 {
     // TODO: maybe try to optimize this, to avoid clone(),
     // which may be quite expensive depending on the size
     // of the state and the amount of batched requests
-    let state = recovery_state
-        .checkpoint
-        .state()
-        .clone();
-    let requests = recovery_state
-        .requests
-        .clone();
+
+    //Because we depend on this state to operate the consensus so it's not that bad that we block 
+    //Here, since we're not currently partaking in the consensus.
+    //Also so the executor doesn't have to accept checkpoint types, which is kind of messing with the levels
+    //of the architecture, so I think we can keep it this way 
+    let state = recovery_state.checkpoint.state().clone();
+    let requests = recovery_state.requests.clone();
 
     // TODO: update pub/priv keys when reconfig is implemented?
 
-    synchronizer.install_view(recovery_state.view);
-    consensus.install_new_phase(&recovery_state);
-    executor.install_state(state, requests)?;
+    //Update the current view we are in
+    synchronizer.install_view(recovery_state.view.clone());
+    //Update the consensus phase, we will update the decision log ahead
+    consensus.install_state(&recovery_state);
+    //Persist the newly obtained state and update the decision log
     log.install_state(consensus.sequence_number(), recovery_state);
+
+    //Update the executor phase
+    executor.install_state(state, requests)?;
 
     Ok(())
 }
@@ -112,7 +102,7 @@ impl<S, O> RecoveryState<S, O> {
     /// Creates a new `RecoveryState`.
     pub fn new(
         view: ViewInfo,
-        checkpoint: Checkpoint<S>,
+        checkpoint: Arc<ReadOnly<Checkpoint<S>>>,
         requests: Vec<O>,
         declog: DecisionLog<O>,
     ) -> Self {
@@ -125,12 +115,12 @@ impl<S, O> RecoveryState<S, O> {
     }
 
     /// Returns the view this `RecoveryState` is tracking.
-    pub fn view(&self) -> ViewInfo {
-        self.view
+    pub fn view(&self) -> &ViewInfo {
+        &self.view
     }
 
     /// Returns the local checkpoint of this recovery state.
-    pub fn checkpoint(&self) -> &Checkpoint<S> {
+    pub fn checkpoint(&self) -> &Arc<ReadOnly<Checkpoint<S>>> {
         &self.checkpoint
     }
 
@@ -166,7 +156,7 @@ pub struct CollabStateTransfer<S: Service> {
     phase: ProtoPhase<State<S>, Request<S>>,
 }
 
-/// Status returned from processnig a state transfer message.
+/// Status returned from processing a state transfer message.
 pub enum CstStatus<S, O> {
     /// We are not running the CST protocol.
     ///
@@ -183,7 +173,7 @@ pub enum CstStatus<S, O> {
     SeqNo(SeqNo),
     /// We have received and validated the state from
     /// a group of replicas.
-    State(RecoveryState<S, O>)
+    State(RecoveryState<S, O>),
 }
 
 /// Represents progress in the CST state machine.
@@ -218,11 +208,11 @@ macro_rules! getmessage {
 
 // TODO: request timeouts
 impl<S> CollabStateTransfer<S>
-where
-    S: Service + Send + 'static,
-    State<S>: Send + Clone + 'static,
-    Request<S>: Send + Clone + 'static,
-    Reply<S>: Send + 'static,
+    where
+        S: Service + Send + 'static,
+        State<S>: Send + Clone + 'static,
+        Request<S>: Send + Clone + 'static,
+        Reply<S>: Send + 'static,
 {
     /// Craete a new instance of `CollabStateTransfer`.
     pub fn new(base_timeout: Duration) -> Self {
@@ -245,20 +235,22 @@ where
         matches!(self.phase, ProtoPhase::WaitingCheckpoint(_, _))
     }
 
-    fn process_reply_state(
+    fn process_reply_state<T>(
         &mut self,
         header: Header,
         message: CstMessage<State<S>, Request<S>>,
-        synchronizer: &Synchronizer<S>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        synchronizer: &Arc<T>,
+        log: &DecidedLog<S>,
         node: &Node<S::Data>,
-    ) {
+    ) where
+        T: AbstractSynchronizer<S>,
+    {
         let snapshot = match log.snapshot(synchronizer.view()) {
             Ok(snapshot) => snapshot,
             Err(_) => {
                 self.phase = ProtoPhase::WaitingCheckpoint(header, message);
                 return;
-            },
+            }
         };
         let reply = SystemMessage::Cst(CstMessage::new(
             message.sequence_number(),
@@ -268,36 +260,37 @@ where
     }
 
     /// Advances the state of the CST state machine.
-    pub fn process_message(
+    pub fn process_message<T, K>(
         &mut self,
         progress: CstProgress<State<S>, Request<S>>,
-        synchronizer: &Synchronizer<S>,
-        consensus: &Consensus<S>,
-        log: &Log<State<S>, Request<S>, Reply<S>>,
+        synchronizer: &Arc<T>,
+        consensus: &K,
+        log: &DecidedLog<S>,
         node: &Node<S::Data>,
-    ) -> CstStatus<State<S>, Request<S>> {
+    ) -> CstStatus<State<S>, Request<S>>
+        where
+            T: AbstractSynchronizer<S>,
+            K: AbstractConsensus<S>,
+    {
         match self.phase {
             ProtoPhase::WaitingCheckpoint(_, _) => {
                 let (header, message) = getmessage!(&mut self.phase);
                 self.process_reply_state(header, message, synchronizer, log, node);
                 CstStatus::Nil
-            },
+            }
             ProtoPhase::Init => {
                 let (header, message) = getmessage!(progress, CstStatus::Nil);
                 match message.kind() {
                     CstMessageKind::RequestLatestConsensusSeq => {
-                        let kind = CstMessageKind::ReplyLatestConsensusSeq(
-                            consensus.sequence_number(),
-                        );
-                        let reply = SystemMessage::Cst(CstMessage::new(
-                            message.sequence_number(),
-                            kind,
-                        ));
+                        let kind =
+                            CstMessageKind::ReplyLatestConsensusSeq(consensus.sequence_number());
+                        let reply =
+                            SystemMessage::Cst(CstMessage::new(message.sequence_number(), kind));
                         node.send(reply, header.from(), true);
-                    },
+                    }
                     CstMessageKind::RequestState => {
                         self.process_reply_state(header, message, synchronizer, log, node);
-                    },
+                    }
                     // we are not running cst, so drop any reply msgs
                     //
                     // TODO: maybe inspect cid msgs, and passively start
@@ -306,7 +299,7 @@ where
                     _ => (),
                 }
                 CstStatus::Nil
-            },
+            }
             ProtoPhase::ReceivingCid(i) => {
                 let (_header, message) = getmessage!(progress, CstStatus::RequestLatestCid);
 
@@ -328,13 +321,13 @@ where
                             Ordering::Greater => {
                                 self.latest_cid = *seq;
                                 self.latest_cid_count = 1;
-                            },
+                            }
                             Ordering::Equal => {
                                 self.latest_cid_count += 1;
-                            },
+                            }
                             Ordering::Less => (),
                         }
-                    },
+                    }
                     // drop invalid message kinds
                     _ => return CstStatus::Running,
                 }
@@ -361,7 +354,7 @@ where
                     self.phase = ProtoPhase::ReceivingCid(i);
                     CstStatus::Running
                 }
-            },
+            }
             ProtoPhase::ReceivingState(i) => {
                 let (header, mut message) = getmessage!(progress, CstStatus::RequestState);
 
@@ -376,7 +369,8 @@ where
                     None => return CstStatus::Running,
                 };
 
-                let received_state = self.received_states
+                let received_state = self
+                    .received_states
                     .entry(header.digest().clone())
                     .or_insert(ReceivedState { count: 0, state });
 
@@ -399,20 +393,17 @@ where
 
                 // check if we have at least f+1 matching states
                 let digest = {
-                    let received_state = self.received_states
-                        .iter()
-                        .max_by_key(|(_, st)| st.count);
+                    let received_state = self.received_states.iter().max_by_key(|(_, st)| st.count);
                     match received_state {
                         Some((digest, _)) => digest.clone(),
                         None => {
                             self.received_states.clear();
                             return CstStatus::RequestState;
-                        },
+                        }
                     }
                 };
                 let received_state = {
-                    let received_state = self.received_states
-                        .remove(&digest);
+                    let received_state = self.received_states.remove(&digest);
                     self.received_states.clear();
                     received_state
                 };
@@ -423,12 +414,10 @@ where
                 // return the state
                 let f = synchronizer.view().params().f();
                 match received_state {
-                    Some(ReceivedState { count, state }) if count > f => {
-                        CstStatus::State(state)
-                    },
+                    Some(ReceivedState { count, state }) if count > f => CstStatus::State(state),
                     _ => CstStatus::RequestState,
                 }
-            },
+            }
         }
     }
 
@@ -439,7 +428,37 @@ where
     }
 
     /// Handle a timeout received from the timeouts layer.
-    pub fn timed_out(&mut self, seq: SeqNo) -> CstStatus<State<S>, Request<S>> {
+    /// Returns a bool to signify if we must move to the Retrieving state
+    /// If the timeout is no longer relevant, returns false (Can remain in current phase)
+    pub fn cst_request_timed_out(&mut self, seq: SeqNo, synchronizer: &Arc<Synchronizer<S>>,
+                                 timeouts: &Timeouts, node: &Node<S::Data>) -> bool {
+        let status = self.timed_out(seq);
+
+        match status {
+            CstStatus::RequestLatestCid => {
+                self.request_latest_consensus_seq_no(
+                    synchronizer,
+                    timeouts,
+                    node,
+                );
+
+                true
+            }
+            CstStatus::RequestState => {
+                self.request_latest_state(
+                    synchronizer,
+                    timeouts,
+                    node,
+                );
+
+                true
+            }
+            // nothing to do
+            _ => false,
+        }
+    }
+
+    fn timed_out(&mut self, seq: SeqNo) -> CstStatus<State<S>, Request<S>> {
         if seq.next() != self.cst_seq {
             // the timeout we received is for a request
             // that has already completed, therefore we ignore it
@@ -450,16 +469,17 @@ where
             // from peer nodes
             return CstStatus::Nil;
         }
+
         match self.phase {
             // retry requests if receiving state and we have timed out
             ProtoPhase::ReceivingCid(_) => {
                 self.curr_timeout *= 2;
                 CstStatus::RequestLatestCid
-            },
+            }
             ProtoPhase::ReceivingState(_) => {
                 self.curr_timeout *= 2;
                 CstStatus::RequestState
-            },
+            }
             // ignore timeouts if not receiving any kind
             // of state from peer nodes
             _ => CstStatus::Nil,
@@ -468,50 +488,62 @@ where
 
     /// Used by a recovering node to retrieve the latest sequence number
     /// attributed to a client request by the consensus layer.
-    pub fn request_latest_consensus_seq_no(
+    pub fn request_latest_consensus_seq_no<T>(
         &mut self,
-        synchronizer: &Synchronizer<S>,
-        timeouts: &TimeoutsHandle<S>,
+        synchronizer: &Arc<T>,
+        timeouts: &Timeouts,
         node: &Node<S::Data>,
-        log: &Log<State<S>, Request<S>, Reply<S>>
-    ) {
+    ) where
+        T: AbstractSynchronizer<S>
+    {
         // reset state of latest seq no. request
         self.latest_cid = SeqNo::ZERO;
         self.latest_cid_count = 0;
 
         let cst_seq = self.next_seq();
-        timeouts.timeout(self.curr_timeout, TimeoutKind::Cst(cst_seq));
+        let current_view = synchronizer.view();
+
+        timeouts.timeout_cst_request(self.curr_timeout,
+                                     current_view.params().quorum() as u32,
+                                     cst_seq);
+
         self.phase = ProtoPhase::ReceivingCid(0);
 
         let message = SystemMessage::Cst(CstMessage::new(
             cst_seq,
             CstMessageKind::RequestLatestConsensusSeq,
         ));
-        let targets = NodeId::targets(0..synchronizer.view().params().n());
+
+        let targets = NodeId::targets(0..current_view.params().n());
 
         node.broadcast(message, targets);
     }
 
     /// Used by a recovering node to retrieve the latest state.
-    pub fn request_latest_state(
+    pub fn request_latest_state<T>(
         &mut self,
-        synchronizer: &Synchronizer<S>,
-        timeouts: &TimeoutsHandle<S>,
+        synchronizer: &Arc<T>,
+        timeouts: &Timeouts,
         node: &Node<S::Data>,
-        log: &Log<State<S>, Request<S>, Reply<S>>
-    ) {
+    ) where
+        T: AbstractSynchronizer<S>
+    {
         // reset hashmap of received states
         self.received_states.clear();
 
         let cst_seq = self.next_seq();
-        timeouts.timeout(self.curr_timeout, TimeoutKind::Cst(cst_seq));
+        let current_view = synchronizer.view();
+
+        timeouts.timeout_cst_request(self.curr_timeout,
+                                     current_view.params().quorum() as u32,
+                                     cst_seq);
+
         self.phase = ProtoPhase::ReceivingState(0);
 
-        let message = SystemMessage::Cst(CstMessage::new(
-            cst_seq,
-            CstMessageKind::RequestState,
-        ));
-        let targets = NodeId::targets(0..synchronizer.view().params().n());
+        //TODO: Maybe attempt to use followers to rebuild state and avoid
+        // Overloading the replicas
+        let message = SystemMessage::Cst(CstMessage::new(cst_seq, CstMessageKind::RequestState));
+        let targets = NodeId::targets(0..current_view.params().n());
         node.broadcast(message, targets);
     }
 }

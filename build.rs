@@ -6,8 +6,22 @@ use itertools::Itertools;
 
 const ERROR_KIND_DST: &str = "error_kind.rs";
 
+const MESSAGE_CAPNP_SRC: &str = "src/schemas/messages.capnp";
+const PERSISTENT_CAPNP_SRC: &str = "src/schemas/objects.capnp";
+
+
 fn main() {
     generate_error_kinds();
+    
+    // recompile capnp message into rust when the source changes
+    println!("cargo:rerun-if-changed={}", MESSAGE_CAPNP_SRC);
+
+    capnpc::CompilerCommand::new()
+        .src_prefix("src/schemas")
+        .file(MESSAGE_CAPNP_SRC)
+        .file(PERSISTENT_CAPNP_SRC)
+        .run()
+        .unwrap();
 }
 
 fn generate_error_kinds() {

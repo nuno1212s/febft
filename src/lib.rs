@@ -24,18 +24,23 @@
 //! the user, that this is a BFT library, so software variation is encouraged;
 //! in a typical system setup, you would probably employ different backend
 //! libraries performing identical duties.
+#![feature(type_alias_impl_trait)]
+
+extern crate core;
 
 #[cfg(feature = "expose_impl")]
 pub mod bft;
+
+#[cfg(not(feature = "expose_impl"))]
+mod bft;
 
 pub mod tests {
     pub mod peer_handling_tests {
         pub mod peer_handling_tests;
     }
-}
 
-#[cfg(not(feature = "expose_impl"))]
-mod bft;
+    pub mod persistent_db_tests;
+}
 
 // TODO: re-export relevant stuff
 
