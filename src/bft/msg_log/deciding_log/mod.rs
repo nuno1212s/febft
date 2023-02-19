@@ -124,6 +124,11 @@ impl<S> DecidingLog<S> where S: Service {
         self.leader_set = view.leader_set().clone();
         self.received_leader_messages.clear();
 
+        self.request_space_slices.clear();
+
+        for (id, section) in view.hash_space_division() {
+            self.request_space_slices.insert(id.clone(), section.clone());
+        }
 
         // We need to have a number of pre prepares == to the # of leaders
         self.pre_prepare_ordering = iter::repeat(None)
@@ -140,7 +145,11 @@ impl<S> DecidingLog<S> where S: Service {
                                     mut batch_rq_digests: Vec<Digest>) -> Result<Option<FullBatch>> {
         let sending_leader = request_batch.header().from();
 
-        let slice = self.request_space_slices.get(&sending_leader).unwrap();
+        let slice = self.request_space_slices.get(&sending_leader)
+            .ok_or(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
+                                          format!("Failed to get request space for leader {:?}. Len: {:?}",
+                                                  sending_leader,
+                                                  self.request_space_slices.len()).as_str()))?;
 
         for request in &batch_rq_digests {
             if !crate::bft::sync::view::is_request_in_hash_space(request, slice) {

@@ -1132,7 +1132,7 @@ impl<D> Node<D>
                 Err(err) => {
                     error!("Failed to serialize message {:?}. Message is {:?}", err, message);
 
-                    panic!(format!("Failed to serialize message {:?}", err));
+                    panic!("Failed to serialize message {:?}", err);
                 }
             };
             

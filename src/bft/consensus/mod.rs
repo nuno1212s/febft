@@ -700,7 +700,7 @@ impl<S: Service + 'static> Consensus<S> {
 
                 if let Err(err) = &current_digest {
                     //There was an error when analysing the batch of requests, so it won't be counted
-                    error!("Failed to analyse request batch {:?}", err);
+                    panic!("Failed to analyse request batch {:?}", err);
 
                     return ConsensusStatus::Deciding;
                 }
