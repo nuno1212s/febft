@@ -748,16 +748,16 @@ impl<S> Synchronizer<S>
                             //We create the pre-prepare here as we are the new leader,
                             //And we sign it right now
                             let (header, message) = {
-                                let mut buf = BytesMut::new();
+                                let mut buf = Vec::new();
 
                                 let forged_pre_prepare = consensus.forge_propose(p.clone(), self);
 
                                 let digest = <S::Data as DigestData>::serialize_digest(
                                     &forged_pre_prepare,
-                                    buf.as_mut(),
+                                    &mut buf,
                                 ).unwrap();
 
-                                let buf = buf.freeze();
+                                let buf = Buf::from(buf);
 
                                 let mut prng_state = prng::State::new();
 

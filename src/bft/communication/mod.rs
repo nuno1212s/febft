@@ -893,11 +893,11 @@ impl<D> Node<D>
             // serialize
             let start_serialization = Instant::now();
 
-            let mut buf = BytesMut::new();
+            let mut buf = Vec::new();
 
-            let digest = <D as DigestData>::serialize_digest(&message, buf.as_mut()).unwrap();
+            let digest = <D as DigestData>::serialize_digest(&message, &mut buf).unwrap();
             
-            let buf = buf.freeze();
+            let buf = Bytes::from(buf);
 
             if let Some((comm_stats, _)) = &comm_stats {
                 let time_taken_signing = Instant::now()
@@ -1125,9 +1125,9 @@ impl<D> Node<D>
             let start_serialization = Instant::now();
 
             // serialize
-            let mut buf = BytesMut::new();
+            let mut buf = Vec::new();
             
-            let digest = match <D as DigestData>::serialize_digest(&message, buf.as_mut()) {
+            let digest = match <D as DigestData>::serialize_digest(&message, &mut buf) {
                 Ok(dig) => dig,
                 Err(err) => {
                     error!("Failed to serialize message {:?}. Message is {:?}", err, message);
@@ -1136,7 +1136,7 @@ impl<D> Node<D>
                 }
             };
             
-            let buf = buf.freeze();
+            let buf = Bytes::from(buf);
 
             if let Some((comm_stats, _)) = &comm_stats {
                 let time_taken_signing = Instant::now()

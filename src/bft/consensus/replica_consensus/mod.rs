@@ -109,12 +109,12 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
             ));
 
             // serialize raw msg
-            let mut buf = BytesMut::new();
+            let mut buf = Vec::new();
 
             let digest =
-                <S::Data as DigestData>::serialize_digest(&message,  buf.as_mut()).unwrap();
+                <S::Data as DigestData>::serialize_digest(&message,  &mut buf).unwrap();
 
-            let buf = buf.freeze();
+            let buf = Buf::from(buf);
             
             for peer_id in NodeId::targets(0..n) {
                 let buf_clone = buf.clone();
