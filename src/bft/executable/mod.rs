@@ -1,7 +1,5 @@
 //! User application execution business logic.
 
-// XXX: maybe `Box<(BatchMeta, UpdateBatch<O>)>`
-
 use log::error;
 use std::marker::PhantomData;
 

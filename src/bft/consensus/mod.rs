@@ -43,7 +43,7 @@ use crate::bft::ordering::{
     tbo_advance_message_queue, tbo_pop_message, tbo_queue_message, Orderable, SeqNo,
 };
 use crate::bft::sync::view::ViewInfo;
-use crate::bft::timeouts::Timeouts;
+use crate::bft::timeouts::{Timeout, Timeouts};
 
 pub mod follower_consensus;
 pub mod replica_consensus;
@@ -265,6 +265,11 @@ pub trait AbstractConsensus<S: Service> {
     fn sequence_number(&self) -> SeqNo;
 
     fn install_state(&mut self, phase: &RecoveryState<State<S>, Request<S>>);
+
+    /*fn handle_message(&mut self, header: Header, message: ConsensusMessage<Request<S>>,
+                      timeouts: &Timeouts,
+                      synchronizer: impl AbstractSynchronizer<S>,
+                      decided_log: &mut DecidedLog<S>, );*/
 }
 
 ///Base consensus state machine implementation
@@ -311,6 +316,12 @@ impl<S: Service + 'static> AbstractConsensus<S> for Consensus<S> {
         // try to fetch msgs from tbo queue
         self.signal();
     }
+
+    /*fn handle_message(&mut self, header: Header, message: ConsensusMessage<Request<S>>,
+                      timeouts: &Timeouts, synchronizer: impl AbstractSynchronizer<S>,
+                      decided_log: &mut DecidedLog<S>) {
+        todo!()
+    }*/
 }
 
 impl<S: Service + 'static> Consensus<S> {
@@ -338,7 +349,7 @@ impl<S: Service + 'static> Consensus<S> {
     }
 
     pub fn new_follower(node_id: NodeId, next_seq_num: SeqNo,
-                        executor_handle: ExecutorHandle<S>,) -> Self {
+                        executor_handle: ExecutorHandle<S>, ) -> Self {
         Self {
             node_id,
             phase: ProtoPhase::Init,
