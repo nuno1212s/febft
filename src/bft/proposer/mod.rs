@@ -141,7 +141,7 @@ impl<S: Service + 'static> Proposer<S> {
                     let is_leader = info.leader_set().contains(&self.node_ref.id());
 
                     let our_slice = info.hash_space_division()
-                        .get(&self.node_ref.id()).unwrap().clone();
+                        .get(&self.node_ref.id()).cloned().clone();
 
                     //We do this as we don't want to get stuck waiting for requests that might never arrive
                     //Or even just waiting for any type of request. We want to minimize the amount of time the
@@ -197,7 +197,8 @@ impl<S: Service + 'static> Proposer<S> {
                                             continue;
                                         }*/
 
-                                        if is_leader && is_request_in_hash_space(&rq_digest, &our_slice) {
+                                        if is_leader && is_request_in_hash_space(&rq_digest,
+                                                                                 our_slice.as_ref().unwrap()) {
                                             ordered_propose.currently_accumulated.push(StoredMessage::new(header, req));
                                         } else {
                                             //TODO: The synchronizer must be notified of this

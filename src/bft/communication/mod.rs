@@ -32,7 +32,7 @@ use crate::bft::communication::message::{
 };
 use crate::bft::communication::incoming_peer_handling::{ConnectedPeer, PeerIncomingRqHandling};
 use crate::bft::communication::peer_sending_threads::ConnectionHandle;
-use crate::bft::communication::ping_handler::{PingHandler};
+use crate::bft::communication::ping_handler::{PingHandler, PingResponse};
 
 use crate::bft::communication::serialize::{Buf, DigestData, SharedData};
 use crate::bft::communication::socket::{
@@ -1566,7 +1566,7 @@ impl<D> Node<D>
             if self.is_connected_to_tx(peer_id) {
                 match self.ping_handler.ping_peer(&self, peer_id) {
                     Ok(mut result_handle) => {
-                        let ping_result = result_handle.recv_async().await.unwrap();
+                        let ping_result = result_handle.recv_resp_async().await;
 
                         match ping_result {
                             Ok(_) => {
@@ -1574,8 +1574,9 @@ impl<D> Node<D>
                                 self.unregister_currently_connecting_to_node(peer_id);
                                 return;
                             }
-                            Err(_error) => {
-                                debug!("Peer {:?} is not reachable. Attempting to reconnect. ", peer_id);
+                            Err(error) => {
+                                debug!("Peer {:?} is not reachable. Attempting to reconnect. {:?}",
+                                    peer_id, error);
                             }
                         }
                     }
@@ -1678,8 +1679,7 @@ impl<D> Node<D>
                 if self.is_connected_to_tx(peer_id) {
                     match self.ping_handler.ping_peer(&self, peer_id) {
                         Ok(mut result) => {
-                            let result = result.recv().unwrap();
-
+                            let result = result.recv_resp();
                             match result {
                                 Ok(_) => {
                                     //Our connection to this peer is fine, we shouldn't try to reconnect
@@ -1688,8 +1688,8 @@ impl<D> Node<D>
                                     self.unregister_currently_connecting_to_node(peer_id);
                                     return;
                                 }
-                                Err(_error) => {
-                                    debug!("Peer {:?} is not reachable. Attempting to reconnect. ", peer_id);
+                                Err(error) => {
+                                    debug!("Peer {:?} is not reachable. Attempting to reconnect. {:?}", peer_id, error);
                                 }
                             }
                         }

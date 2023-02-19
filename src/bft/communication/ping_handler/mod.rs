@@ -19,7 +19,12 @@ pub type PingInformation = PingInfo;
 
 pub type PingResponse = Result<()>;
 
-pub type PingResponseReceiver = ChannelMixedRx<PingResponse>;
+pub type PingResponseReceiver = PingRespReceiver;
+
+/// The receiver of ping responses
+pub struct PingRespReceiver {
+    rx: ChannelMixedRx<PingResponse>
+}
 
 pub const PING_TIMEOUT: u128 = 100;
 
@@ -71,7 +76,9 @@ impl PingHandler {
 
         node.send(SystemMessage::Ping(PingMessage::new(true)), peer_id, true);
 
-        Ok(rx)
+        Ok(PingRespReceiver {
+            rx
+        })
     }
 
     /// Handles a received ping from other replicas.
@@ -140,4 +147,44 @@ impl PingHandler {
             awaiting_pings_lock.remove(&id);
         }
     }
+}
+
+impl PingRespReceiver {
+
+    pub fn recv_resp(&self) -> Result<()> {
+        match self.rx.recv() {
+            Ok(ping_response) => {
+                match ping_response {
+                    Ok(_) => {
+                        Ok(())
+                    }
+                    Err(err) => {
+                        Err(err)
+                    }
+                }
+            }
+            Err(err) => {
+                Err(Error::wrapped(ErrorKind::CommunicationPingHandler, err))
+            }
+        }
+    }
+
+    pub async fn recv_resp_async(&mut self) -> Result<()> {
+        match self.rx.recv_async().await {
+            Ok(ping_response) => {
+                match ping_response {
+                    Ok(_) => {
+                        Ok(())
+                    }
+                    Err(err) => {
+                        Err(err)
+                    }
+                }
+            }
+            Err(err) => {
+                Err(Error::wrapped(ErrorKind::CommunicationPingHandler, err))
+            }
+        }
+    }
+
 }
