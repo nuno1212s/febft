@@ -587,7 +587,8 @@ where
                             timed_out: AtomicBool::new(false),
                         };
 
-                        //populate the data with the received payload
+                        //populate the data with the received payload, even though the
+                        //
                         *opt_ready = Some(request);
                     }
                 }

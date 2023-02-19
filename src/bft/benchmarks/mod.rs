@@ -27,7 +27,7 @@ pub struct CommStats {
     client_comm: Option<CommStatsHelper>,
     replica_comm: CommStatsHelper,
     first_cli: NodeId,
-    node_id: NodeId
+    node_id: NodeId,
 }
 
 struct CommStatsHelper {
@@ -51,7 +51,7 @@ struct CommStatsHelper {
     //Time taken to create send to objects
     pub message_send_to_create: Vec<Mutex<BenchmarkHelper>>,
     //Time taken to pass from threadpool to each individual thread
-    pub message_passing_to_send_thread: Vec<Mutex<BenchmarkHelper>>
+    pub message_passing_to_send_thread: Vec<Mutex<BenchmarkHelper>>,
 }
 
 impl CommStats {
@@ -60,17 +60,14 @@ impl CommStats {
             client_comm: if owner_id < first_cli { Some(CommStatsHelper::new(owner_id, String::from("Clients"), measurement_interval)) } else { None },
             replica_comm: CommStatsHelper::new(owner_id, String::from("Replicas"), measurement_interval),
             first_cli,
-            node_id: owner_id
+            node_id: owner_id,
         }
     }
 
     pub fn insert_message_signing_time(&self, dest: NodeId, time: u128) {
         if dest > self.first_cli {
-            match &self.client_comm {
-                None => {}
-                Some(stats) => {
-                    stats.insert_message_signing_time(time)
-                }
+            if let Some(client_comm) = &self.client_comm {
+                client_comm.insert_message_signing_time(time)
             }
         } else {
             self.replica_comm.insert_message_signing_time(time)
@@ -79,11 +76,8 @@ impl CommStats {
 
     pub fn insert_message_send_to_create_time(&self, dest: NodeId, time: u128) {
         if dest > self.first_cli {
-            match &self.client_comm {
-                None => {}
-                Some(stats) => {
-                    stats.insert_message_send_to_create(time);
-                }
+            if let Some(client_comm) = &self.client_comm {
+                client_comm.insert_message_send_to_create(time);
             }
         } else {
             self.replica_comm.insert_message_send_to_create(time)
@@ -91,88 +85,60 @@ impl CommStats {
     }
 
     pub fn insert_message_passing_latency_own(&self, time: u128) {
-
         if self.node_id > self.first_cli {
-            match &self.client_comm {
-                None => {}
-                Some(stats) => {
-                    stats.insert_message_passing_time_own(time);
-                }
+            if let Some(client_comm) = &self.client_comm {
+                client_comm.insert_message_passing_time_own(time);
             }
         } else {
             self.replica_comm.insert_message_passing_time_own(time)
         }
-
     }
 
 
     pub fn insert_message_passing_latency(&self, dest: NodeId, time: u128) {
-
         if dest > self.first_cli {
-            match &self.client_comm {
-                None => {}
-                Some(stats) => {
-                    stats.insert_message_passing_time(time);
-                }
+            if let Some(client_comm) = &self.client_comm {
+                client_comm.insert_message_passing_time(time);
             }
         } else {
             self.replica_comm.insert_message_passing_time(time)
         }
-
     }
 
     pub fn insert_message_sending_time_own(&self, time: u128) {
-
         if self.node_id > self.first_cli {
-            match &self.client_comm {
-                None => {}
-                Some(stats) => {
-                    stats.insert_message_sending_time_own(time);
-                }
+            if let Some(client_comm) = &self.client_comm {
+                client_comm.insert_message_sending_time_own(time);
             }
         } else {
             self.replica_comm.insert_message_sending_time_own(time)
         }
-
     }
 
     pub fn insert_message_sending_time(&self, dest: NodeId, time: u128) {
-
         if dest > self.first_cli {
-            match &self.client_comm {
-                None => {
-                }
-                Some(stats) => {
-                    stats.insert_message_sending_time(time);
-                }
+            if let Some(client_comm) = &self.client_comm {
+                client_comm.insert_message_sending_time(time);
             }
         } else {
             self.replica_comm.insert_message_sending_time(time)
         }
-
     }
 
     pub fn insert_message_passing_to_send_thread(&self, dest: NodeId, time: u128) {
         if dest > self.first_cli {
-            match &self.client_comm {
-                None => {
-                }
-                Some(stats) => {
-                    stats.insert_message_passing_to_send_thread(time);
-                }
+            if let Some(client_comm) = &self.client_comm {
+                client_comm.insert_message_passing_to_send_thread(time);
             }
         } else {
             self.replica_comm.insert_message_passing_to_send_thread(time)
         }
-
     }
 
     pub fn register_rq_received(&self, sender: NodeId) {
         if sender > self.first_cli {
             match &self.client_comm {
-                None => {
-
-                }
+                None => {}
                 Some(stats) => {
                     stats.register_rq_received();
                 }
@@ -347,7 +313,6 @@ impl CommStatsHelper {
             self.message_send_to_create[0].lock().log_latency("Create send to objects");
             self.message_passing_to_send_thread[0].lock().log_latency("Message passing send thread");
         }
-
     }
 }
 

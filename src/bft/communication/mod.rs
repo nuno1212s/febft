@@ -559,47 +559,46 @@ impl<D> Node<D>
             None
         };
 
-        let rcv_rqs = None;
+        let rcv_rqs =
+            if id >= cfg.first_cli {
 
-        /*if id < cfg.first_cli {
-
-            //We want the replicas to log recved requests
-            let arc = Arc::new(RwLock::new(
-                std::iter::repeat_with(|| { DashMap::with_capacity(20000) })
-                    .take(30)
-                    .collect()));
-
-            let rqs = arc.clone();
-
-            std::thread::Builder::new().name(String::from("Logging thread")).spawn(move || {
-                loop {
-                    let new_vec: Vec<DashMap<u64, ()>> = std::iter::repeat_with(|| { DashMap::with_capacity(20000) })
+                //We want the replicas to log recved requests
+                let arc = Arc::new(RwLock::new(
+                    std::iter::repeat_with(|| { DashMap::with_capacity(20000) })
                         .take(30)
-                        .collect();
+                        .collect()));
 
-                    let mut old_vec = {
-                        let mut write_guard = rqs.write();
+                let rqs = arc.clone();
 
-                        std::mem::replace(&mut *write_guard, new_vec)
-                    };
+                std::thread::Builder::new().name(String::from("Logging thread")).spawn(move || {
+                    loop {
+                        let new_vec: Vec<DashMap<u64, ()>> = std::iter::repeat_with(|| { DashMap::with_capacity(20000) })
+                            .take(30)
+                            .collect();
 
-                    let mut print = String::new();
+                        let mut old_vec = {
+                            let mut write_guard = rqs.write();
 
-                    for bucket in old_vec {
-                        for (key, _) in bucket.into_iter() {
-                            print = print + " , " + &*format!("{}", key);
+                            std::mem::replace(&mut *write_guard, new_vec)
+                        };
+
+                        let mut print = String::new();
+
+                        for bucket in old_vec {
+                            for (key, _) in bucket.into_iter() {
+                                print = print + " , " + &*format!("{}", key);
+                            }
                         }
+
+                        println!("{}", print);
+
+                        std::thread::sleep(Duration::from_secs(1));
                     }
+                }).expect("Failed to start logging thread");
 
-                    println!("{}", print);
+                Some(arc)
 
-                    std::thread::sleep(Duration::from_secs(1));
-                }
-            }).expect("Failed to start logging thread");
-
-            Some(arc)
-        } else { None };*/
-        //
+            } else { None };
 
         debug!("Initializing node reference");
 
@@ -896,7 +895,7 @@ impl<D> Node<D>
             let mut buf = Vec::new();
 
             let digest = <D as DigestData>::serialize_digest(&message, &mut buf).unwrap();
-            
+
             let buf = Bytes::from(buf);
 
             if let Some((comm_stats, _)) = &comm_stats {
@@ -1126,7 +1125,7 @@ impl<D> Node<D>
 
             // serialize
             let mut buf = Vec::new();
-            
+
             let digest = match <D as DigestData>::serialize_digest(&message, &mut buf) {
                 Ok(dig) => dig,
                 Err(err) => {
@@ -1135,7 +1134,7 @@ impl<D> Node<D>
                     panic!("Failed to serialize message {:?}", err);
                 }
             };
-            
+
             let buf = Bytes::from(buf);
 
             if let Some((comm_stats, _)) = &comm_stats {
