@@ -38,11 +38,13 @@ pub fn serialize_message<W, S>(
             request.set_session_id(req.session_id().into());
             request.set_operation_id(req.sequence_number().into());
 
-            let mut rq = BytesMut::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
+            let mut rq = Vec::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_request(rq.as_mut(), req.operation())?;
+            S::serialize_request(&mut rq, req.operation())?;
 
-            request.set_request(&rq[..]);
+            let rq = Buf::from(rq);
+
+            request.set_request(rq.as_ref());
         }
         SystemMessage::UnOrderedRequest(req) => {
             let mut request = sys_msg.reborrow().init_unordered_request();
