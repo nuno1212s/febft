@@ -1,4 +1,4 @@
-use crate::{bft, message_peer_sending_thread_sent, start_measure_time};
+use crate::{bft, message_peer_sending_thread_sent, start_measurement};
 use crate::bft::benchmarks::CommStats;
 use crate::bft::communication::channel::{ChannelAsyncRx, ChannelAsyncTx, ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::WireMessage;
@@ -125,7 +125,7 @@ fn sync_sending_thread<D>(
 
         match to_send {
             SendMessage::Message(to_send, init_time, rq_key) => {
-                start_measure_time!(before_send);
+                start_measurement!(before_send);
 
                 // send
                 //
@@ -193,7 +193,7 @@ async fn async_sending_task<D>(
 
         match to_send {
             SendMessage::Message(to_send, init_time, _) => {
-                start_measure_time!(before_send);
+                start_measurement!(before_send);
 
                 // send
                 //

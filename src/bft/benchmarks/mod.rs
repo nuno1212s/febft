@@ -13,6 +13,13 @@ pub struct CommStats {
 }
 
 #[macro_export]
+macro_rules! start_measurement {
+    ($g:pat) => {
+        let $g = Instant::now();
+    }
+}
+
+#[macro_export]
 macro_rules! received_network_rq {
     ($w:expr) => {
         {
@@ -24,13 +31,6 @@ macro_rules! received_network_rq {
                 None
             }
         }
-    }
-}
-
-#[macro_export]
-macro_rules! start_measure_time {
-    ($g:pat) => {
-        let $g = Instant::now();
     }
 }
 
@@ -114,7 +114,6 @@ struct CommStatsHelper {
     //Time taken to pass from threadpool to each individual thread
     pub message_passing_to_send_thread: Vec<Mutex<BenchmarkHelper>>,
 }
-
 
 
 impl CommStats {
@@ -222,7 +221,6 @@ impl CommStats {
 const CONCURRENCY_LEVEL: u128 = 10;
 
 impl CommStatsHelper {
-
     pub fn new(owner_id: NodeId, info: String, measurement_interval: usize) -> Self {
         let concurrency_level = CONCURRENCY_LEVEL as usize;
 
@@ -365,16 +363,125 @@ impl CommStatsHelper {
 }
 
 pub struct ClientPerf {
+    count: AtomicUsize,
+
     pub request_init_time: Vec<Mutex<BenchmarkHelper>>,
 
     pub sent_request_info_time: Vec<Mutex<BenchmarkHelper>>,
 
     pub ready_request_time: Vec<Mutex<BenchmarkHelper>>,
+
+    pub target_init_time: Vec<Mutex<BenchmarkHelper>>,
+
+    pub message_rcv_vote_time: Vec<Mutex<BenchmarkHelper>>,
+
+    pub response_deliver_time: Vec<Mutex<BenchmarkHelper>>,
+
+}
+
+
+#[macro_export]
+macro_rules! measure_time_rq_init {
+    ($w:expr, $g: expr) => {
+        if let Some(client_perf) = $w {
+            let time_taken_rq_init = Instant::now().duration_since($g).as_nanos();
+
+            client_perf.insert_request_init_time(time_taken_rq_init);
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! measure_sent_rq_info {
+    ($w:expr, $g: expr) => {
+        if let Some(client_perf) = $w {
+            let time_taken_rq_info = Instant::now().duration_since($g).as_nanos();
+
+            client_perf.insert_sent_rq_info_time(time_taken_rq_info);
+        }
+    }
+}
+
+
+#[macro_export]
+macro_rules! measure_ready_rq_time {
+    ($w:expr, $g: expr) => {
+        if let Some(client_perf) = $w {
+            let time_taken_rq_info = Instant::now().duration_since($g).as_nanos();
+
+            client_perf.insert_ready_request_time(time_taken_rq_info);
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! measure_target_init_time {
+    ($w:expr, $g: expr) => {
+        if let Some(client_perf) = $w {
+            let time_taken_rq_info = Instant::now().duration_since($g).as_nanos();
+
+            client_perf.insert_target_init_time(time_taken_rq_info);
+        }
+    }
+}
+
+
+#[macro_export]
+macro_rules! measure_response_rcv_time {
+    ($w:expr, $g: expr) => {
+        if let Some(client_perf) = $w {
+            let time_taken_rq_info = Instant::now().duration_since($g).as_nanos();
+
+            client_perf.insert_msg_rcv_vote_time(time_taken_rq_info);
+        }
+    }
+}
+
+
+#[macro_export]
+macro_rules! measure_response_deliver_time {
+    ($w:expr, $g: expr) => {
+        if let Some(client_perf) = $w {
+            let time_taken_rq_info = Instant::now().duration_since($g).as_nanos();
+
+            client_perf.insert_response_deliver_time(time_taken_rq_info);
+        }
+    }
 }
 
 impl ClientPerf {
+    const MEASUREMENT_INTERVAL: usize = 5500;
 
-    pub fn insert_request_init_time(&self, time:u128) {
+    pub fn new() -> Self {
+        let concurrency_level = CONCURRENCY_LEVEL as usize;
+
+        let owner_id = NodeId(1000u32);
+
+        Self {
+            count: AtomicUsize::new(0),
+
+            request_init_time: std::iter::repeat_with(|| {
+                Mutex::new(BenchmarkHelper::new(owner_id, Self::MEASUREMENT_INTERVAL / concurrency_level))
+            }).take(concurrency_level).collect(),
+            sent_request_info_time: std::iter::repeat_with(|| {
+                Mutex::new(BenchmarkHelper::new(owner_id, Self::MEASUREMENT_INTERVAL / concurrency_level))
+            }).take(concurrency_level).collect(),
+            ready_request_time: std::iter::repeat_with(|| {
+                Mutex::new(BenchmarkHelper::new(owner_id, Self::MEASUREMENT_INTERVAL / concurrency_level))
+            }).take(concurrency_level).collect(),
+            target_init_time: std::iter::repeat_with(|| {
+                Mutex::new(BenchmarkHelper::new(owner_id, Self::MEASUREMENT_INTERVAL / concurrency_level))
+            }).take(concurrency_level).collect(),
+            message_rcv_vote_time: std::iter::repeat_with(|| {
+                Mutex::new(BenchmarkHelper::new(owner_id, Self::MEASUREMENT_INTERVAL / concurrency_level))
+            }).take(concurrency_level).collect(),
+            response_deliver_time: std::iter::repeat_with(|| {
+                Mutex::new(BenchmarkHelper::new(owner_id, Self::MEASUREMENT_INTERVAL / concurrency_level))
+            }).take(concurrency_level).collect(),
+        }
+    }
+
+    pub fn insert_request_init_time(&self, time: u128) {
         insert_value(&self.request_init_time, time);
     }
 
@@ -382,16 +489,48 @@ impl ClientPerf {
         insert_value(&self.sent_request_info_time, time);
     }
 
+    pub fn insert_target_init_time(&self, time: u128) {
+        insert_value(&self.target_init_time, time);
+    }
+
     pub fn insert_ready_request_time(&self, time: u128) {
         insert_value(&self.ready_request_time, time);
+
+        let count = self.count.fetch_add(1, Ordering::Relaxed);
+
+        if count % Self::MEASUREMENT_INTERVAL == 0 {
+            self.print_data(count);
+        }
+    }
+
+    pub fn insert_msg_rcv_vote_time(&self, time: u128) {
+        insert_value(&self.message_rcv_vote_time, time);
+    }
+
+    pub fn insert_response_deliver_time(&self, time: u128) {
+        insert_value(&self.response_deliver_time, time);
     }
 
     fn gather_all_info(&self) {
         gather_rqs(&self.request_init_time);
         gather_rqs(&self.sent_request_info_time);
         gather_rqs(&self.ready_request_time);
+        gather_rqs(&self.target_init_time);
     }
 
+    fn print_data(&self, requests: usize) {
+        self.gather_all_info();
+
+        println!("{:?} // --- Measurements after {} ({} samples) ---",
+                 NodeId(1000u32), requests, Self::MEASUREMENT_INTERVAL);
+
+        self.request_init_time[0].lock().log_latency("Request Init Time");
+        self.sent_request_info_time[0].lock().log_latency("Sent Request Info Time");
+        self.ready_request_time[0].lock().log_latency("Ready Rq Info Time");
+        self.target_init_time[0].lock().log_latency("Targets init time");
+
+        println!("------------------------------------------------------");
+    }
 }
 
 const CAP: usize = 2048;

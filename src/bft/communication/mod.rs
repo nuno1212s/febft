@@ -47,7 +47,7 @@ use crate::bft::ordering::Orderable;
 use crate::bft::prng;
 use crate::bft::prng::ThreadSafePrng;
 use crate::bft::threadpool;
-use crate::{message_digest_time, message_dispatched, message_sent_own, received_network_rq, start_measure_time};
+use crate::{message_digest_time, message_dispatched, message_sent_own, received_network_rq, start_measurement};
 
 pub mod channel;
 pub mod message;
@@ -884,7 +884,7 @@ impl<D> Node<D>
     ) {
         threadpool::execute(move || {
             // serialize
-            start_measure_time!(start_serialization);
+            start_measurement!(start_serialization);
 
             let mut buf = Vec::new();
 
@@ -896,7 +896,7 @@ impl<D> Node<D>
 
             //Measuring time taken to get to the point of sending the message
             //We don't actually want to measure how long it takes to send the message
-            start_measure_time!(before_send_time);
+            start_measurement!(before_send_time);
 
             // send
             if my_id == target {
@@ -948,7 +948,7 @@ impl<D> Node<D>
         message: SystemMessage<D::State, D::Request, D::Reply>,
         targets: impl Iterator<Item=NodeId>,
     ) {
-        start_measure_time!(start_time);
+        start_measurement!(start_time);
 
         let (mine, others) = self.send_tos(self.id, &self.peer_tx, Some(&self.shared), targets);
 
@@ -1001,7 +1001,7 @@ impl<D> Node<D>
 
                 //Measuring time taken to get to the point of sending the message
                 //We don't actually want to measure how long it takes to send the message
-                start_measure_time!(before_send_time);
+                start_measurement!(before_send_time);
 
                 send_to.value_sync(header, message);
 
@@ -1022,7 +1022,7 @@ impl<D> Node<D>
 
                 //Measuring time taken to get to the point of sending the message
                 //We don't actually want to measure how long it takes to send the message
-                start_measure_time!(before_send_time);
+                start_measurement!(before_send_time);
 
                 match send_to.socket_type().unwrap() {
                     ConnectionHandle::Async(_) => {
@@ -1048,7 +1048,7 @@ impl<D> Node<D>
         comm_stats: Option<(Arc<CommStats>, Instant)>,
     ) {
         threadpool::execute(move || {
-            start_measure_time!(start_serialization);
+            start_measurement!(start_serialization);
 
             // serialize
             let mut buf = Vec::new();
@@ -1089,7 +1089,7 @@ impl<D> Node<D>
 
                 //Measuring time taken to get to the point of sending the message
                 //We don't actually want to measure how long it takes to send the message
-                start_measure_time!(before_send_time);
+                start_measurement!(before_send_time);
 
                 // Right -> our turn
                 send_to.value_sync(Right((message, nonce, digest, buf)), rq_key.clone());
@@ -1110,7 +1110,7 @@ impl<D> Node<D>
 
                 //Measuring time taken to get to the point of sending the message
                 //We don't actually want to measure how long it takes to send the message
-                start_measure_time!(before_send_time);
+                start_measurement!(before_send_time);
 
                 match send_to.socket_type().unwrap() {
                     ConnectionHandle::Async(_) => {
