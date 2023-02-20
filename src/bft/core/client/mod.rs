@@ -340,8 +340,6 @@ where
 
         let request_key = get_request_key(session_id, operation_id);
 
-        debug!("{:?} // Operation id is {:?}", self.node.id(), operation_id);
-
         let message = T::init_request(session_id, operation_id, operation);
 
         let request_info = get_request_info(session_id, &*self.data);
@@ -359,8 +357,6 @@ where
 
             request_info_guard.insert(request_key, sent_info);
         }
-
-        debug!("{:?} // Broadcasting to {} targets", self.id(), target_count);
 
         // broadcast our request to the node group
         self.node.broadcast(message, targets);
@@ -713,8 +709,6 @@ where
                             let session_id = msg_info.session_id();
                             let operation_id = msg_info.sequence_number();
 
-                            debug!("{:?} // Received reply to {:?} session op id {:?} from {:?}", node.id(), session_id, operation_id, header.from());
-
                             start_measurement!(start_time);
 
                             //Check if we have already executed the operation
@@ -725,7 +719,6 @@ where
 
                             // reply already delivered to application
                             if last_operation_id >= operation_id {
-                                info!("{:?} // Ignoring since the last op id is {:?}", node.id(), last_operation_id);
                                 continue;
                             }
 
@@ -765,8 +758,6 @@ where
                             };
 
                             measure_response_rcv_time!(&data.stats, start_time);
-
-                            debug!("Current response count is {}", count);
 
                             // wait for the amount of votes that we require identical replies
                             // In a BFT system, this is by default f+1
