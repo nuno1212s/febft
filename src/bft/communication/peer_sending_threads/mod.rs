@@ -1,4 +1,4 @@
-use crate::bft;
+use crate::{bft, message_peer_sending_thread_sent, start_measure_time};
 use crate::bft::benchmarks::CommStats;
 use crate::bft::communication::channel::{ChannelAsyncRx, ChannelAsyncTx, ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::WireMessage;
@@ -125,7 +125,7 @@ fn sync_sending_thread<D>(
 
         match to_send {
             SendMessage::Message(to_send, init_time, rq_key) => {
-                let before_send = Instant::now();
+                start_measure_time!(before_send);
 
                 // send
                 //
@@ -139,16 +139,7 @@ fn sync_sending_thread<D>(
                     }
                 }
 
-                if let Some(comm_stats) = &comm_stats {
-                    let time_taken_passing = before_send.duration_since(init_time).as_nanos();
-
-                    let time_taken_sending = Instant::now().duration_since(before_send).as_nanos();
-
-                    comm_stats
-                        .insert_message_passing_to_send_thread(to_send.header.to(), time_taken_passing);
-                    comm_stats.insert_message_sending_time(to_send.header.to(), time_taken_sending);
-                    comm_stats.register_rq_sent(to_send.header.to());
-                }
+                message_peer_sending_thread_sent!(&comm_stats, init_time, before_send, to_send);
 
                 if let Some(sent_rqs) = &sent_rqs {
                     if let Some(rq_key) = rq_key {
@@ -202,7 +193,7 @@ async fn async_sending_task<D>(
 
         match to_send {
             SendMessage::Message(to_send, init_time, _) => {
-                let before_send = Instant::now();
+                start_measure_time!(before_send);
 
                 // send
                 //
@@ -216,16 +207,7 @@ async fn async_sending_task<D>(
                     }
                 }
 
-                if let Some(comm_stats) = &comm_stats {
-                    let time_taken_passing = before_send.duration_since(init_time).as_nanos();
-
-                    let time_taken_sending = Instant::now().duration_since(before_send).as_nanos();
-
-                    comm_stats
-                        .insert_message_passing_to_send_thread(to_send.header.to(), time_taken_passing);
-                    comm_stats.insert_message_sending_time(to_send.header.to(), time_taken_sending);
-                    comm_stats.register_rq_sent(to_send.header.to());
-                }
+                message_peer_sending_thread_sent!(&comm_stats, init_time, before_send, to_send);
             }
         }
     }
