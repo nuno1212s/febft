@@ -215,6 +215,12 @@ impl ExecutorReplier for ReplicaReplier {
         _seq: Option<SeqNo>,
         batch: BatchReplies<Reply<S>>,
     ) {
+
+        if batch.len() == 0 {
+            //Ignore empty batches.
+            return;
+        }
+
         crate::bft::threadpool::execute(move || {
             let mut batch = batch.into_inner();
 
