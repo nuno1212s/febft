@@ -331,11 +331,17 @@ impl<S> Replica<S>
             replica.id(),
             global_batch_size
         );
+
         debug!(
             "{:?} // Global batch timeout: {}",
             replica.id(),
             batch_timeout
         );
+
+        println!("{:?} // Leader count: {} ({:?})",
+                 replica.id(),
+                 replica.synchronizer.view().leader_set().len(),
+                 replica.synchronizer.view().leader_set());
 
         Ok(replica)
     }

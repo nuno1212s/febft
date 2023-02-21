@@ -131,7 +131,6 @@ impl<S: Service + 'static> Proposer<S> {
                     if self.cancelled.load(Ordering::Relaxed) {
                         break;
                     }
-
                     //We only want to produce batches to the channel if we are the leader, as
                     //Only the leader will propose thing
 
@@ -160,8 +159,6 @@ impl<S: Service + 'static> Proposer<S> {
                             }
                         }
                     } else {
-
-                        //TODO: Fix the existence of the possibility that unordered requests are just ignored
                         match self.node_ref.receive_from_clients(Some(Duration::from_micros(self.global_batch_time_limit as u64))) {
                             Ok(msgs) => {
                                 Some(msgs)
@@ -203,14 +200,8 @@ impl<S: Service + 'static> Proposer<S> {
                                         } else {
                                             //TODO: The synchronizer must be notified of this
                                         }
-
-                                        //Store the message in the log in this thread.
-                                        //to_log.push(StoredMessage::new(header, req));
                                     }
                                     SystemMessage::UnOrderedRequest(req) => {
-                                        debug!("{:?} // Received unordered request session {:?}, op id {:?} from {:?}", self.node_ref.id(), req.session_id(), req.sequence_number(),
-                                        header.from());
-
                                         unordered_propose.currently_accumulated.push(StoredMessage::new(header, req));
                                     }
                                     SystemMessage::ObserverMessage(msg) => {
@@ -289,16 +280,12 @@ impl<S: Service + 'static> Proposer<S> {
 
                 let node_id = self.node_ref.id();
 
-                info!("{:?} // Executing unordered request batch", node_id);
-
                 threadpool::execute(move || {
                     let mut unordered_batch =
                         UnorderedBatch::new_with_cap(new_accumulated_vec.len());
 
                     for request in new_accumulated_vec {
                         let (header, message) = request.into_inner();
-
-                        debug!("{:?} // Adding request session {:?} with op id {:?} and sender {:?}", node_id, message.session_id(), message.sequence_number(), header.from());
 
                         unordered_batch.add(
                             header.from(),
@@ -307,8 +294,6 @@ impl<S: Service + 'static> Proposer<S> {
                             message.into_inner_operation(),
                         );
                     }
-
-                    info!("{:?} // Queueing unordered request batch", node_id);
 
                     if let Err(err) = executor_handle.queue_update_unordered(unordered_batch) {
                         error!(
@@ -329,7 +314,7 @@ impl<S: Service + 'static> Proposer<S> {
                        debug: &mut DebugStats) {
 
         //Now let's deal with ordered requests
-        if is_leader && !propose.currently_accumulated.is_empty() {
+        if is_leader {
             let current_batch_size = propose.currently_accumulated.len();
 
             if current_batch_size < self.target_global_batch_size {

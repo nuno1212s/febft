@@ -337,7 +337,7 @@ impl<S: Service + 'static> Consensus<S> {
             node_id,
             phase: ProtoPhase::Init,
             tbo: TboQueue::new(next_seq_num),
-            deciding_log: DecidingLog::new(),
+            deciding_log: DecidingLog::new(node_id),
             executor_handle,
             accessory: ConsensusAccessory::Replica(ReplicaConsensus::new(
                 view,
@@ -354,7 +354,7 @@ impl<S: Service + 'static> Consensus<S> {
             node_id,
             phase: ProtoPhase::Init,
             tbo: TboQueue::new(next_seq_num),
-            deciding_log: DecidingLog::new(),
+            deciding_log: DecidingLog::new(node_id),
             executor_handle,
             accessory: ConsensusAccessory::Follower,
         }

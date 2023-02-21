@@ -260,7 +260,8 @@ where
         let (node, _rogue) = Node::bootstrap(node_config).await?;
 
         let stats = {
-            Some(Arc::new(ClientPerf::new()))
+            None
+            //Some(Arc::new(ClientPerf::new()))
         };
 
         // create shared data
@@ -292,7 +293,6 @@ where
             .expect("Failed to launch message processing thread");
 
         let session_id = data.session_counter.fetch_add(1, Ordering::Relaxed).into();
-
 
         Ok(Client {
             data,
