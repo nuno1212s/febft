@@ -156,7 +156,6 @@ impl<S> DecidingLog<S> where S: Service {
                                                   self.request_space_slices.len()).as_str()))?;
 
         if request_batch.header().from() != self.node_id {
-            //We implicitly trust ourselves.
             for request in &batch_rq_digests {
                 if !crate::bft::sync::view::is_request_in_hash_space(request, slice) {
                     return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
