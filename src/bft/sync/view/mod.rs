@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::iter;
 use std::ops::{Add, Div, Sub};
+use fastrand::usize;
 use num_bigint::BigUint;
 use num_bigint::ToBigUint;
 use num_traits::identities::Zero;
@@ -36,6 +37,8 @@ impl Orderable for ViewInfo {
     }
 }
 
+const LEADER_COUNT: usize = 3;
+
 impl ViewInfo {
     /// Creates a new instance of `ViewInfo`.
     /// This is meant for when we are working with simple
@@ -48,9 +51,11 @@ impl ViewInfo {
 
         let destined_leader = quorum_members[usize::from(seq) % n];
 
-        let other_leader = quorum_members[(usize::from(seq) + 1) % n];
+        let mut leader_set = vec![destined_leader];
 
-        let leader_set = vec![destined_leader, other_leader];
+        for i in 1..=LEADER_COUNT {
+            leader_set.push(quorum_members[(usize::from(seq) + i) % n]);
+        }
 
         let division = calculate_hash_space_division(&leader_set);
 
