@@ -464,7 +464,6 @@ impl<S, T> Executor<S, T>
         }
 
         T::execution_finished::<S>(send_node, seq, batch);
-        //self.reply_worker.send(batch).unwrap();
     }
 }
 
