@@ -1034,12 +1034,13 @@ fn request_batch_received<S>(
 {
     let mut batch_guard = log.batch_meta().lock().unwrap();
 
-    batch_guard.batch_size = match pre_prepare.message().kind() {
+    batch_guard.batch_size += match pre_prepare.message().kind() {
         ConsensusMessageKind::PrePrepare(req) => {
             req.len()
         }
         _ => { panic!("Wrong message type provided") }
     };
+
     batch_guard.reception_time = Utc::now();
 
     //Tell the synchronizer to watch this request batch
