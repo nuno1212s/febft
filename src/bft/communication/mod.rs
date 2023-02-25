@@ -228,9 +228,22 @@ impl SignDetached {
 /// The connection type used for connections
 /// Stores the connector needed
 #[derive(Clone)]
-pub enum NodeConnector {
+pub enum TlsNodeConnector {
     Async(TlsConnector),
     Sync(Arc<ClientConfig>),
+}
+
+/// Establish safe tls node connections
+#[derive(Clone)]
+pub enum TlsNodeAcceptor {
+    Async(TlsAcceptor),
+    Sync(Arc<ServerConfig>),
+}
+
+/// Accept node connections
+pub enum NodeConnectionAcceptor {
+    Async(AsyncListener),
+    Sync(SyncListener),
 }
 
 /// Container for handles to other processes in the system.
@@ -240,7 +253,7 @@ pub enum NodeConnector {
 pub struct Node<D: SharedData + 'static> {
     id: NodeId,
     first_cli: NodeId,
-    //Handles the incomming connections' buffering and request collection
+    //Handles the incoming connections' buffering and request collection
     //This is polled by the proposer for client requests and by the
     client_pooling: PeerIncomingRqHandling<Message<D::State, D::Request, D::Reply>>,
     //Handles the outgoing connection references
@@ -252,7 +265,7 @@ pub struct Node<D: SharedData + 'static> {
     //A set of the nodes we are currently attempting to connect to
     currently_connecting: Mutex<BTreeSet<NodeId>>,
     //The connector used to establish secure connections between peers
-    connector: NodeConnector,
+    connector: TlsNodeConnector,
     //Handles pings and timeouts of said pings
     ping_handler: Arc<PingHandler>,
     //An address map of all the peers
@@ -362,15 +375,40 @@ impl<D> Node<D>
     fn setup_connector(
         sync_connector: Arc<ClientConfig>,
         _async_connector: TlsConnector,
-    ) -> NodeConnector {
+    ) -> TlsNodeConnector {
         //TODO: Support Async connectors as well
-        NodeConnector::Sync(sync_connector)
+        TlsNodeConnector::Sync(sync_connector)
+    }
+
+    fn setup_acceptor(
+        sync_acceptor: Arc<ServerConfig>,
+        _async_acceptor: TlsAcceptor
+    ) -> TlsNodeAcceptor {
+        TlsNodeAcceptor::Sync(sync_acceptor)
+    }
+
+    async fn setup_socket(
+        id:&NodeId,
+        server_addr: &SocketAddr
+    ) -> Result<NodeConnectionAcceptor> {
+        let mut server_addr = server_addr.clone();
+
+        server_addr.set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
+        //TODO: Maybe add support for asynchronous listeners?
+        debug!("{:?} // Binding to address (clients) {:?}", id, server_addr);
+
+        let socket = socket::bind_sync_server(server_addr).wrapped_msg(
+            ErrorKind::Communication,
+            format!("Failed to bind to address {:?}", server_addr).as_str(),
+        )?;
+
+        Ok(NodeConnectionAcceptor::Sync(socket))
     }
 
     async fn setup_client_facing_socket(
         id: NodeId,
         cfg: &NodeConfig,
-    ) -> Result<Either<SyncListener, AsyncListener>> {
+    ) -> Result<NodeConnectionAcceptor> {
         debug!("{:?} // Attempt to setup client facing socket.", id);
 
         let peer_addr = cfg.addrs.get(id.into()).ok_or(Error::simple_with_msg(
@@ -380,30 +418,13 @@ impl<D> Node<D>
 
         let server_addr = &peer_addr.client_addr;
 
-        let either: Either<SyncListener, AsyncListener>;
-
-        {
-            let mut server_addr = server_addr.0.clone();
-
-            server_addr.set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
-            //TODO: Maybe add support for asynchronous listeners?
-            debug!("{:?} // Binding to address (clients) {:?}", id, server_addr);
-
-            let socket = socket::bind_sync_server(server_addr).wrapped_msg(
-                ErrorKind::Communication,
-                format!("Failed to bind to address {:?}", server_addr).as_str(),
-            )?;
-
-            either = Left(socket);
-        }
-
-        Ok(either)
+        Self::setup_socket(&id, &server_addr.0).await
     }
 
     async fn setup_replica_facing_socket(
         id: NodeId,
         cfg: &NodeConfig,
-    ) -> Result<Option<Either<SyncListener, AsyncListener>>> {
+    ) -> Result<Option<NodeConnectionAcceptor>> {
         let peer_addr = cfg.addrs.get(id.into()).ok_or(Error::simple_with_msg(
             ErrorKind::Communication,
             "Failed to get replica facing IP",
@@ -423,22 +444,7 @@ impl<D> Node<D>
                         "Failed to get replica facing IP",
                     ))?;
 
-            //TODO: Maybe add support for asynchronous listeners?
-
-            let mut server_addr = replica_facing_addr.0.clone();
-
-            //Listen on all interfaces.
-            server_addr.set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
-
-            debug!(
-                "{:?} // Binding to address (replicas) {:?}",
-                id, server_addr
-            );
-
-            Some(Left(socket::bind_sync_server(server_addr).wrapped_msg(
-                ErrorKind::Communication,
-                format!("Failed to bind to address {:?}", server_addr).as_str(),
-            )?))
+            Some(Self::setup_socket(&id, &replica_facing_addr.0).await?)
         };
 
         Ok(replica_listener)
@@ -447,17 +453,16 @@ impl<D> Node<D>
     ///Sets up the thread or task (depending on runtime) to receive new connection attempts
     fn setup_socket_connection_workers_socket(
         self: Arc<Self>,
-        sync_acceptor: Arc<ServerConfig>,
-        async_acceptor: TlsAcceptor,
-        replica_listener: Either<SyncListener, AsyncListener>,
+        node_connector: TlsNodeAcceptor,
+        listener: NodeConnectionAcceptor,
     ) {
-        match replica_listener {
-            Left(sync_listener) => {
+        match (node_connector, listener) {
+            (TlsNodeAcceptor::Sync(cfg), NodeConnectionAcceptor::Sync(sync_listener)) => {
                 let first_cli = self.first_client_id();
 
                 let my_id = self.id();
 
-                let sync_acceptor = sync_acceptor.clone();
+                let sync_acceptor = cfg.clone();
 
                 std::thread::Builder::new()
                     .name(format!("{:?} connection acceptor", self.id()))
@@ -466,14 +471,17 @@ impl<D> Node<D>
                     })
                     .expect("Failed to start replica's connection acceptor");
             }
-            Right(async_listener) => {
+            (TlsNodeAcceptor::Async(cfg), NodeConnectionAcceptor::Async(async_listener)) => {
                 let first_cli = self.first_client_id();
 
                 let my_id = self.id();
 
-                let async_acceptor = async_acceptor.clone();
+                let async_acceptor = cfg.clone();
 
                 rt::spawn(self.rx_side_accept(first_cli, my_id, async_listener, async_acceptor));
+            }
+            (_, _) => {
+                unreachable!()
             }
         }
     }
@@ -528,6 +536,8 @@ impl<D> Node<D>
         debug!("Initializing client facing connections");
 
         let connector = Self::setup_connector(sync_connector, async_connector);
+
+        let acceptor = Self::setup_acceptor(sync_acceptor, async_acceptor);
 
         let shared = Arc::new(NodeShared {
             my_key: cfg.sk,
@@ -603,7 +613,6 @@ impl<D> Node<D>
                 // }).expect("Failed to start logging thread");
                 //
                 // Some(arc)
-
             } else { None };
 
         debug!("Initializing node reference");
@@ -634,8 +643,7 @@ impl<D> Node<D>
             rx_node_clone
                 .clone()
                 .setup_socket_connection_workers_socket(
-                    sync_acceptor.clone(),
-                    async_acceptor.clone(),
+                    acceptor.clone(),
                     replica_listener,
                 );
         }
@@ -645,8 +653,7 @@ impl<D> Node<D>
             rx_node_clone
                 .clone()
                 .setup_socket_connection_workers_socket(
-                    sync_acceptor.clone(),
-                    async_acceptor.clone(),
+                    acceptor,
                     client_listener,
                 );
         }
@@ -660,12 +667,12 @@ impl<D> Node<D>
             //We are a replica, connect to all other replicas
 
             match node.connector.clone() {
-                NodeConnector::Async(async_connector) => {
+                TlsNodeConnector::Async(async_connector) => {
                     let node = node.clone();
 
                     node.tx_side_connect_async(n as u32, async_connector).await;
                 }
-                NodeConnector::Sync(sync_connector) => {
+                TlsNodeConnector::Sync(sync_connector) => {
                     let node = node.clone();
 
                     node.tx_side_connect_sync(n as u32, sync_connector);
@@ -674,12 +681,12 @@ impl<D> Node<D>
         } else {
             //Connect to all replicas as a client
             match node.connector.clone() {
-                NodeConnector::Async(async_connector) => {
+                TlsNodeConnector::Async(async_connector) => {
                     let node = node.clone();
 
                     node.tx_side_connect_async(n as u32, async_connector).await;
                 }
-                NodeConnector::Sync(sync_connector) => {
+                TlsNodeConnector::Sync(sync_connector) => {
                     let node = node.clone();
                     threadpool::execute(move || {
                         node.tx_side_connect_sync(n as u32, sync_connector);
@@ -751,7 +758,7 @@ impl<D> Node<D>
         self.first_cli
     }
 
-    pub fn connector(&self) -> &NodeConnector {
+    pub fn connector(&self) -> &TlsNodeConnector {
         &self.connector
     }
 
@@ -1550,8 +1557,8 @@ impl<D> Node<D>
             let first_cli = self.first_client_id();
 
             let connector = match &self.connector {
-                NodeConnector::Async(connector) => { connector }
-                NodeConnector::Sync(_) => { panic!("Failed, trying to use sync connector in async mode") }
+                TlsNodeConnector::Async(connector) => { connector }
+                TlsNodeConnector::Sync(_) => { panic!("Failed, trying to use sync connector in async mode") }
             }.clone();
 
             self.tx_side_connect_task(
@@ -1655,10 +1662,10 @@ impl<D> Node<D>
                 let first_cli = self.first_client_id();
 
                 let connector = match &self.connector {
-                    NodeConnector::Async(_) => {
+                    TlsNodeConnector::Async(_) => {
                         panic!("Failed using async connector in sync mode");
                     }
-                    NodeConnector::Sync(connector) => {
+                    TlsNodeConnector::Sync(connector) => {
                         connector
                     }
                 }.clone();
