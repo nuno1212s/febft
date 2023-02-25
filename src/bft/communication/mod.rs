@@ -356,7 +356,7 @@ pub struct NodeConfig {
 }
 
 // max no. of messages allowed in the channel
-const NODE_CHAN_BOUND: usize = 50000;
+const NODE_CHAN_BOUND: usize = 1024;
 
 // max no. of SendTo's to inline before doing a heap alloc
 const NODE_VIEWSIZ: usize = 16;
@@ -373,23 +373,23 @@ impl<D> Node<D>
         D::Reply: Send + 'static,
 {
     fn setup_connector(
-        sync_connector: Arc<ClientConfig>,
+        _sync_connector: Arc<ClientConfig>,
         _async_connector: TlsConnector,
     ) -> TlsNodeConnector {
         //TODO: Support Async connectors as well
-        TlsNodeConnector::Sync(sync_connector)
+        TlsNodeConnector::Async(_async_connector)
     }
 
     fn setup_acceptor(
-        sync_acceptor: Arc<ServerConfig>,
-        _async_acceptor: TlsAcceptor
+        _sync_acceptor: Arc<ServerConfig>,
+        _async_acceptor: TlsAcceptor,
     ) -> TlsNodeAcceptor {
-        TlsNodeAcceptor::Sync(sync_acceptor)
+        TlsNodeAcceptor::Async(_async_acceptor)
     }
 
     async fn setup_socket(
-        id:&NodeId,
-        server_addr: &SocketAddr
+        id: &NodeId,
+        server_addr: &SocketAddr,
     ) -> Result<NodeConnectionAcceptor> {
         let mut server_addr = server_addr.clone();
 
@@ -397,12 +397,18 @@ impl<D> Node<D>
         //TODO: Maybe add support for asynchronous listeners?
         debug!("{:?} // Binding to address (clients) {:?}", id, server_addr);
 
-        let socket = socket::bind_sync_server(server_addr).wrapped_msg(
+        //
+        // let socket = socket::bind_sync_server(server_addr).wrapped_msg(
+        //     ErrorKind::Communication,
+        //     format!("Failed to bind to address {:?}", server_addr).as_str(),
+        // )?;
+
+        let socket = socket::bind_async_server(server_addr).await.wrapped_msg(
             ErrorKind::Communication,
             format!("Failed to bind to address {:?}", server_addr).as_str(),
         )?;
 
-        Ok(NodeConnectionAcceptor::Sync(socket))
+        Ok(NodeConnectionAcceptor::Async(socket))
     }
 
     async fn setup_client_facing_socket(
@@ -1461,8 +1467,6 @@ impl<D> Node<D>
     /// (Either not successfully or successfully)
     ///
     /// Spawns a task to handle the outgoing connection attempt
-    //TODO: Make this use the correct type of connections
-    // depending on what is configured.
     pub fn tx_connect_node_async(
         self: Arc<Self>,
         peer_id: NodeId,
@@ -1563,7 +1567,7 @@ impl<D> Node<D>
 
             self.tx_side_connect_task(
                 my_id, first_cli, peer_id, nonce, connector, peer_addr, callback,
-            );
+            ).await;
         });
     }
 
@@ -1815,60 +1819,76 @@ impl<D> Node<D>
         // 2) try to connect up to `RETRY` times, then announce
         // failure with a channel send op
         for _try in 0..RETRY {
-            //println!("Trying attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
-            if let Ok(mut sock) = socket::connect_async(addr).await {
-                // create header
-                let (header, _) =
-                    WireMessage::new(my_id, peer_id,
-                                     Bytes::new(), nonce,
-                                     None, None).into_inner();
+            debug!(
+                "Attempting to connect to node {:?} with addr {:?} for the {} time",
+                peer_id, addr, _try
+            );
 
-                // serialize header
-                let mut buf = [0; Header::LENGTH];
-                header.serialize_into(&mut buf[..]).unwrap();
+            match socket::connect_async(addr).await {
+                Ok(mut sock) => {
 
-                // send header
-                if let Err(_) = sock.write_all(&buf[..]).await {
-                    // errors writing -> faulty connection;
-                    // drop this socket
-                    break;
-                }
+                    // create header
+                    let (header, _) =
+                        WireMessage::new(my_id, peer_id,
+                                         Bytes::new(), nonce,
+                                         None, None).into_inner();
 
-                if let Err(_) = sock.flush().await {
-                    // errors flushing -> faulty connection;
-                    // drop this socket
-                    break;
-                }
+                    // serialize header
+                    let mut buf = [0; Header::LENGTH];
+                    header.serialize_into(&mut buf[..]).unwrap();
 
-                // TLS handshake; drop connection if it fails
-                let sock = if peer_id >= first_cli || my_id >= first_cli {
-                    debug!(
-                        "{:?} // Connecting with plain text to node {:?}",
-                        my_id, peer_id
-                    );
-
-                    SecureSocketSendAsync::Plain(BufWriter::new(sock))
-                } else {
-                    match connector.connect(hostname, sock).await {
-                        Ok(s) => SecureSocketSendAsync::Tls(s),
-                        Err(_) => {
-                            break;
-                        }
+                    // send header
+                    if let Err(err) = sock.write_all(&buf[..]).await {
+                        // errors writing -> faulty connection;
+                        // drop this socket
+                        error!("{:?} // Failed to connect to the node {:?} {:?} ", self.id, peer_id, err);
+                        break;
                     }
-                };
 
-                let final_sock = SecureSocketSend::Async(SocketSendAsync::new(sock));
+                    if let Err(err) = sock.flush().await {
+                        // errors flushing -> faulty connection;
+                        // drop this socket
+                        error!("{:?} // Failed to connect to the node {:?} {:?} ", self.id, peer_id, err);
+                        break;
+                    }
 
-                // success
-                self.handle_connected_tx(peer_id, final_sock);
+                    // TLS handshake; drop connection if it fails
+                    let sock = if peer_id >= first_cli || my_id >= first_cli {
+                        debug!(
+                            "{:?} // Connecting with plain text to node {:?}",
+                            my_id, peer_id
+                        );
 
-                self.unregister_currently_connecting_to_node(peer_id);
+                        SecureSocketSendAsync::Plain(BufWriter::new(sock))
+                    } else {
+                        match connector.connect(hostname, sock).await {
+                            Ok(s) => SecureSocketSendAsync::Tls(s),
+                            Err(err) => {
+                                error!("{:?} // Failed to connect to the node {:?} {:?} ", self.id, peer_id, err);
+                                break;
+                            }
+                        }
+                    };
 
-                if let Some(callback) = callback {
-                    callback(true);
+                    let final_sock = SecureSocketSend::Async(SocketSendAsync::new(sock));
+
+                    // success
+                    self.handle_connected_tx(peer_id, final_sock);
+
+                    self.unregister_currently_connecting_to_node(peer_id);
+
+                    if let Some(callback) = callback {
+                        callback(true);
+                    }
+
+                    return;
                 }
-
-                return;
+                Err(err) => {
+                    error!(
+                        "{:?} // Error on connecting to {:?} addr {:?}: {:?}",
+                        self.id, peer_id, addr, err
+                    );
+                }
             }
 
             // sleep for `SECS` seconds and retry
@@ -1883,6 +1903,7 @@ impl<D> Node<D>
 
         // announce we have failed to connect to the peer node
         //if we fail to connect, then just ignore
+        error!("{:?} // Failed to connect to the node {:?} ", self.id, peer_id);
     }
 
     ///Accept synchronous connections
@@ -1925,7 +1946,7 @@ impl<D> Node<D>
         listener: AsyncListener,
         acceptor: TlsAcceptor,
     ) {
-        debug!("{:?} // Awaiting for new connections", my_id);
+        debug!("{:?} // Awaiting for new connections (async)", my_id);
 
         loop {
             match listener.accept().await {
@@ -2612,10 +2633,10 @@ impl<D> SendTo<D>
                 tx: _,
             } => {
                 match &sock {
-                    ConnectionHandle::Sync(_) => {}
                     ConnectionHandle::Async(_) => {
-                        panic!("Attempted to send messages synchronously through a async channel")
+                        panic!("Attempted to send messages asynchronously through a sync channel")
                     }
+                    _ => {}
                 }
 
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
@@ -2667,10 +2688,9 @@ impl<D> SendTo<D>
                 tx: _rx,
             } => {
                 match &sock {
-                    ConnectionHandle::Sync(_) => {}
-                    ConnectionHandle::Async(_) => {
-                        panic!("Attempted to send messages synchronously through a async channel")
-                    }
+                    ConnectionHandle::Sync(_) => {
+                        panic!("Attempted to send messages synchronously through a async channel")}
+                    _ => {}
                 }
 
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);

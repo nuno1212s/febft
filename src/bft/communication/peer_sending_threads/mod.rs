@@ -15,10 +15,9 @@ use crate::bft::async_runtime as rt;
 use crate::bft::communication::serialize::SharedData;
 
 
-
 ///Implements the behaviour where each connection has it's own dedicated thread that will handle
 ///Sending messages from it
-const QUEUE_SPACE: usize = 128;
+const QUEUE_SPACE: usize = 1024;
 
 pub type SendMessage = SendMessageType;
 
