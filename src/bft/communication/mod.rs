@@ -916,20 +916,13 @@ impl<D> Node<D>
                 // Right -> our turn
 
                 //Send to myself, always synchronous since only replicas send to themselves
-                send_to.value_sync(Right((message, nonce, digest, buf)), None);
+                send_to.value(Right((message, nonce, digest, buf)), None);
 
                 message_sent_own!(&comm_stats, before_send_time, my_id);
             } else {
 
                 // Left -> peer turn
-                match send_to.socket_type().unwrap() {
-                    ConnectionHandle::Async(_) => {
-                        rt::block_on(send_to.value(Left((nonce, digest, buf))));
-                    }
-                    ConnectionHandle::Sync(_) => {
-                        send_to.value_sync(Left((nonce, digest, buf)), None);
-                    }
-                }
+                send_to.value(Left((nonce, digest, buf)), None);
 
                 message_dispatched!(&comm_stats, before_send_time, target);
             }
@@ -1016,7 +1009,7 @@ impl<D> Node<D>
                 //We don't actually want to measure how long it takes to send the message
                 start_measurement!(before_send_time);
 
-                send_to.value_sync(header, message);
+                send_to.value(header, message);
 
                 message_sent_own!(&comm_stats, before_send_time, id);
             }
@@ -1037,14 +1030,7 @@ impl<D> Node<D>
                 //We don't actually want to measure how long it takes to send the message
                 start_measurement!(before_send_time);
 
-                match send_to.socket_type().unwrap() {
-                    ConnectionHandle::Async(_) => {
-                        rt::block_on(send_to.value(header, message));
-                    }
-                    ConnectionHandle::Sync(_) => {
-                        send_to.value_sync(header, message);
-                    }
-                }
+                send_to.value(header, message);
 
                 message_dispatched!(&comm_stats, before_send_time, id);
             }
@@ -1105,7 +1091,7 @@ impl<D> Node<D>
                 start_measurement!(before_send_time);
 
                 // Right -> our turn
-                send_to.value_sync(Right((message, nonce, digest, buf)), rq_key.clone());
+                send_to.value(Right((message, nonce, digest, buf)), rq_key.clone());
 
                 message_sent_own!(&comm_stats, before_send_time, id);
             }
@@ -1125,15 +1111,8 @@ impl<D> Node<D>
                 //We don't actually want to measure how long it takes to send the message
                 start_measurement!(before_send_time);
 
-                match send_to.socket_type().unwrap() {
-                    ConnectionHandle::Async(_) => {
-                        // Left -> peer turn
-                        rt::block_on(send_to.value(Left((nonce, digest, buf))));
-                    }
-                    ConnectionHandle::Sync { .. } => {
-                        send_to.value_sync(Left((nonce, digest, buf)), rq_key.clone());
-                    }
-                }
+                // Left -> Other peers turn
+                send_to.value(Left((nonce, digest, buf)), rq_key.clone());
 
                 message_dispatched!(&comm_stats, before_send_time, id);
             }
@@ -2209,7 +2188,7 @@ impl<D> Node<D>
 
             let msg = Message::System(header, message);
 
-            if let Err(inner) = client.push_request(msg).await {
+            if let Err(inner) = client.push_request_sync(msg) {
                 error!(
                     "{:?} // Channel closed, closing tcp connection as well to peer {:?}. {:?}",
                     self.id(),
@@ -2595,7 +2574,7 @@ impl<D> SendTo<D>
         }
     }
 
-    fn value_sync(
+    fn value(
         self,
         m: Either<
             (u64, Digest, Buf),
@@ -2617,7 +2596,7 @@ impl<D> SendTo<D>
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
 
                 if let Right((m, n, d, b)) = m {
-                    Self::me_sync(my_id, m, n, d, b, key, tx);
+                    Self::me(my_id, m, n, d, b, key, tx);
                 } else {
                     // optimize code path
                     unreachable!()
@@ -2632,17 +2611,10 @@ impl<D> SendTo<D>
                 peer_tx,
                 tx: _,
             } => {
-                match &sock {
-                    ConnectionHandle::Async(_) => {
-                        panic!("Attempted to send messages asynchronously through a sync channel")
-                    }
-                    _ => {}
-                }
-
                 let key = sh.as_ref().map(|ref sh| &sh.my_key);
 
                 if let Left((n, d, b)) = m {
-                    Self::peers_sync(flush, my_id, peer_id, n, d, b, key, &peer_tx, sock, rq_key);
+                    Self::peers(flush, my_id, peer_id, n, d, b, key, &peer_tx, sock, rq_key);
                 } else {
                     // optimize code path
                     unreachable!()
@@ -2651,60 +2623,7 @@ impl<D> SendTo<D>
         }
     }
 
-    async fn value(
-        self,
-        m: Either<
-            (u64, Digest, Buf),
-            (
-                SystemMessage<D::State, D::Request, D::Reply>,
-                u64,
-                Digest,
-                Buf,
-            ),
-        >,
-    ) {
-        match self {
-            SendTo::Me {
-                my_id,
-                shared: ref sh,
-                tx,
-            } => {
-                let key = sh.as_ref().map(|ref sh| &sh.my_key);
-
-                if let Right((m, n, d, b)) = m {
-                    Self::me(my_id, m, n, d, b, key, tx).await;
-                } else {
-                    // optimize code path
-                    unreachable!()
-                }
-            }
-            SendTo::Peers {
-                flush,
-                my_id,
-                peer_id,
-                shared: ref sh,
-                sock,
-                peer_tx,
-                tx: _rx,
-            } => {
-                match &sock {
-                    ConnectionHandle::Sync(_) => {
-                        panic!("Attempted to send messages synchronously through a async channel")}
-                    _ => {}
-                }
-
-                let key = sh.as_ref().map(|ref sh| &sh.my_key);
-                if let Left((n, d, b)) = m {
-                    Self::peers(flush, my_id, peer_id, n, d, b, key, &peer_tx, sock).await;
-                } else {
-                    // optimize code path
-                    unreachable!()
-                }
-            }
-        }
-    }
-
-    fn me_sync(
+    fn me(
         my_id: NodeId,
         m: SystemMessage<D::State, D::Request, D::Reply>,
         n: u64,
@@ -2722,50 +2641,7 @@ impl<D> SendTo<D>
         };
     }
 
-    async fn me(
-        my_id: NodeId,
-        m: SystemMessage<D::State, D::Request, D::Reply>,
-        n: u64,
-        d: Digest,
-        b: Buf,
-        sk: Option<&KeyPair>,
-        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
-    ) {
-        // create wire msg
-        let (h, _) = WireMessage::new(my_id, my_id, b, n, Some(d), sk).into_inner();
-
-        // send
-        if let Err(inner) = cli.push_request(Message::System(h, m)).await {
-            error!("{:?} // Failed to push to myself! {:?}", my_id, inner);
-        };
-    }
-
-    async fn peers(
-        _flush: bool,
-        my_id: NodeId,
-        peer_id: NodeId,
-        n: u64,
-        d: Digest,
-        b: Buf,
-        sk: Option<&KeyPair>,
-        peer_tx: &PeerTx,
-        mut conn_handle: ConnectionHandle,
-    ) {
-        //let print = format!("DONE SENDING MESSAGE {:?}", d);
-        // create wire msg
-        let wm = WireMessage::new(my_id, peer_id, b, n, Some(d), sk);
-
-        match conn_handle.async_send(wm).await {
-            Ok(_) => {}
-            Err(_) => {
-                conn_handle.close();
-
-                peer_tx.disconnect_peer(peer_id.into());
-            }
-        }
-    }
-
-    fn peers_sync(
+    fn peers(
         _flush: bool,
         my_id: NodeId,
         peer_id: NodeId,
@@ -2804,14 +2680,14 @@ impl<D> SerializedSendTo<D>
         }
     }
 
-    fn value_sync(
+    fn value(
         self,
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
     ) {
         match self {
             SerializedSendTo::Me { tx, .. } => {
-                Self::me_sync(h, m, tx);
+                Self::me(h, m, tx);
             }
             SerializedSendTo::Peers {
                 id,
@@ -2820,56 +2696,12 @@ impl<D> SerializedSendTo<D>
                 peer_tx,
                 tx,
             } => {
-                match &sock {
-                    ConnectionHandle::Sync(_) => {}
-                    ConnectionHandle::Async(_) => {
-                        panic!("Attempted to send messages synchronously through a async channel")
-                    }
-                }
-
-                Self::peers_sync(id, h, m, &peer_tx, sock, tx);
+                Self::peers(id, h, m, &peer_tx, sock, tx);
             }
         }
     }
 
-    async fn value(
-        self,
-        h: Header,
-        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-    ) {
-        match self {
-            SerializedSendTo::Me { tx, .. } => {
-                //let msg = format!("{:?}", m.original());
-                //let peer = format!("{:?}", tx.client_id());
-
-                //debug!("{:?} // Sending SERIALIZED message {:?} to myself", peer,  msg);
-                Self::me(h, m, tx).await;
-            }
-            SerializedSendTo::Peers {
-                id,
-                our_id: _,
-                sock,
-                peer_tx,
-                tx,
-            } => {
-                //let msg = format!("{:?}", m.original());
-                //let peer = format!("{:?}", tx.client_id());
-
-                //debug!("{:?} // Sending SERIALIZED message {} to other peer {:?} ",our_id,  msg, id);
-
-                match &sock {
-                    ConnectionHandle::Sync(_) => {
-                        panic!("Attempted to send messages asynchronously through a sync channel")
-                    }
-                    ConnectionHandle::Async(_) => {}
-                }
-
-                Self::peers(id, h, m, &peer_tx, sock, tx).await;
-            }
-        }
-    }
-
-    fn me_sync(
+    fn me(
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
@@ -2884,22 +2716,7 @@ impl<D> SerializedSendTo<D>
         }
     }
 
-    async fn me(
-        h: Header,
-        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
-    ) {
-        let (original, _) = m.into_inner();
-
-        let myself = h.from;
-
-        // send to ourselves
-        if let Err(err) = cli.push_request(Message::System(h, original)).await {
-            error!("{:?} // FAILED TO SEND TO MYSELF {:?}", myself, err);
-        }
-    }
-
-    fn peers_sync(
+    fn peers(
         peer_id: NodeId,
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
@@ -2912,30 +2729,6 @@ impl<D> SerializedSendTo<D>
         let wm = WireMessage::from_parts(h, Bytes::from(raw)).unwrap();
 
         match conn_handle.send(wm, None) {
-            Ok(_) => {}
-            Err(_) => {
-                conn_handle.close();
-
-                peer_tx.disconnect_peer(peer_id.into());
-            }
-        }
-    }
-
-    ///Asynchronous sending to peers
-    ///Sends Client->Replica, Replica->Client
-    async fn peers(
-        peer_id: NodeId,
-        h: Header,
-        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        peer_tx: &PeerTx,
-        mut conn_handle: ConnectionHandle,
-        _cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
-    ) {
-        // create wire msg
-        let (_, raw) = m.into_inner();
-        let wm = WireMessage::from_parts(h, Bytes::from(raw)).unwrap();
-
-        match conn_handle.async_send(wm).await {
             Ok(_) => {}
             Err(_) => {
                 conn_handle.close();

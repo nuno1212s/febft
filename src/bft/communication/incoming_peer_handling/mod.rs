@@ -40,7 +40,7 @@ pub struct PeerIncomingRqHandling<T: Send + 'static> {
     client_rx: Option<ChannelSyncRx<Vec<T>>>,
 }
 
-const DEFAULT_CLIENT_QUEUE: usize = 1024;
+const DEFAULT_CLIENT_QUEUE: usize = 16384;
 const DEFAULT_REPLICA_QUEUE: usize = 1024;
 
 ///We make this class Sync and send since the clients are going to be handled by a single class

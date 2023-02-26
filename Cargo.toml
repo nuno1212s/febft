@@ -164,3 +164,6 @@ lto = false
 debug = true
 debug-assertions = true
 incremental = true
+
+[toolchain]
+channel = "nightly"
