@@ -580,7 +580,7 @@ impl<S> Replica<S>
             }
         };
 
-        debug!("{:?} // Processing message {:?}", self.id(), message);
+        // debug!("{:?} // Processing message {:?}", self.id(), message);
 
         match message {
             Message::System(header, message) => {
@@ -650,13 +650,13 @@ impl<S> Replica<S>
     ) -> Result<()> {
         let seq = self.consensus.sequence_number();
 
-        debug!(
-            "{:?} // Processing consensus message {:?} ",
-            self.id(),
-            message
-        );
+        // debug!(
+        //     "{:?} // Processing consensus message {:?} ",
+        //     self.id(),
+        //     message
+        // );
 
-        let start = Instant::now();
+        // let start = Instant::now();
 
         let status = self.consensus.process_message(
             header,
@@ -700,11 +700,12 @@ impl<S> Replica<S>
         // signal the consensus layer of this event
         self.consensus.signal();
 
-        debug!(
-            "{:?} // Done processing consensus message. Took {:?}",
-            self.id(),
-            Instant::now().duration_since(start)
-        );
+        //
+        // debug!(
+        //     "{:?} // Done processing consensus message. Took {:?}",
+        //     self.id(),
+        //     Instant::now().duration_since(start)
+        // );
 
         // yield execution since `signal()`
         // will probably force a value from the

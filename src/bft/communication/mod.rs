@@ -621,7 +621,7 @@ impl<D> Node<D>
                 // Some(arc)
             } else { None };
 
-        debug!("Initializing node reference");
+        debug!("{:?} // Initializing node reference", id);
 
         let node = Arc::new(Node {
             id,
@@ -641,7 +641,7 @@ impl<D> Node<D>
 
         let rx_node_clone = node.clone();
 
-        debug!("Initializing replica connection workers");
+        debug!("{:?} // Initializing replica connection workers", id);
 
         //Setup the worker threads for receiving new connections before starting to connect to
         //other peers
@@ -666,7 +666,7 @@ impl<D> Node<D>
 
         let n = cfg.n;
 
-        debug!("Connect to other replicas");
+        debug!("{:?} // Connect to other replicas", id);
 
         // tx side (connect to replica)
         if id < cfg.first_cli {

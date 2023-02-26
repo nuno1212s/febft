@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use chrono::{DateTime, Utc};
 use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::Message::System;
 use crate::bft::communication::message::{
@@ -14,10 +15,8 @@ use crate::bft::communication::message::{
 };
 use crate::bft::communication::{channel, Node, NodeId};
 use crate::bft::consensus::ConsensusGuard;
-use chrono::{DateTime, Utc};
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::threadpool;
-
 use crate::bft::core::server::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UnorderedBatch};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
@@ -171,6 +170,8 @@ impl<S: Service + 'static> Proposer<S> {
                         }
                     };
 
+                    let discovered_requests = opt_msgs.is_some();
+
                     //TODO: Handle timing out requests
 
                     if let Some(messages) = opt_msgs {
@@ -232,8 +233,12 @@ impl<S: Service + 'static> Proposer<S> {
                                          &mut last_seq,
                                          &mut debug_stats);
 
-                    //Yield to prevent active waiting
-                    std::thread::yield_now();
+                    if !discovered_requests {
+                        //Yield to prevent active waiting
+
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+
                 }
             }).unwrap()
     }
@@ -321,9 +326,6 @@ impl<S: Service + 'static> Proposer<S> {
                 let micros_since_last_batch = Instant::now().duration_since(propose.last_proposal).as_micros();
 
                 if micros_since_last_batch <= self.global_batch_time_limit {
-                    //Yield to prevent active waiting
-                    std::thread::yield_now();
-
                     //Batch isn't large enough and time hasn't passed, don't even attempt to propose
                     return;
                 }
@@ -360,11 +362,11 @@ impl<S: Service + 'static> Proposer<S> {
 
                     //Stats
                     if debug.batches_made % 10000 == 0 {
-                        let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+                        //let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
 
-                        println!("{:?} // {:?} // {}: batches made {}: message collections {}: total requests collected.",
+                        /*println!("{:?} // {:?} // {}: batches made {}: message collections {}: total requests collected.",
                                  self.node_ref.id(), duration, debug.batches_made,
-                                 debug.collections, debug.collected_per_batch_total);
+                                 debug.collections, debug.collected_per_batch_total);*/
 
                         debug.batches_made = 0;
                         debug.collections = 0;

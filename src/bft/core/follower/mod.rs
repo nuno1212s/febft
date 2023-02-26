@@ -249,7 +249,7 @@ impl<S: Service + 'static> Follower<S> {
             }
         };
 
-        debug!("{:?} // Processing message {:?}", self.id(), message);
+        // debug!("{:?} // Processing message {:?}", self.id(), message);
 
         match message {
             Message::System(header, message) => {
