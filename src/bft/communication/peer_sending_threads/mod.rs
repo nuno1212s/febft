@@ -31,7 +31,7 @@ pub enum SendMessageType {
 /// error out when attempting to send the next message
 #[derive(Clone)]
 pub struct ConnectionHandle {
-    channel: ChannelMixedTx<SendMessage>
+    channel: ChannelMixedTx<SendMessage>,
 }
 
 impl ConnectionHandle {

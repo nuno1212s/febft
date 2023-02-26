@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_tls::{TlsAcceptor, TlsConnector};
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use dashmap::DashMap;
 use either::{Either, Left, Right};
 
@@ -48,6 +48,7 @@ use crate::bft::prng;
 use crate::bft::prng::ThreadSafePrng;
 use crate::bft::threadpool;
 use crate::{message_digest_time, message_dispatched, message_sent_own, received_network_rq, start_measurement};
+use crate::bft::ordering::InvalidSeqNo::Small;
 
 pub mod channel;
 pub mod message;
@@ -1050,7 +1051,8 @@ impl<D> Node<D>
             start_measurement!(start_serialization);
 
             // serialize
-            let mut buf = Vec::new();
+            //TODO: Actually make this work well
+            let mut buf = SmallVec::<[u8; 16384]>::new();
 
             let digest = match <D as DigestData>::serialize_digest(&message, &mut buf) {
                 Ok(dig) => dig,
@@ -1061,7 +1063,7 @@ impl<D> Node<D>
                 }
             };
 
-            let buf = Bytes::from(buf);
+            let buf = Bytes::from(&buf);
 
             message_digest_time!(&comm_stats, start_serialization);
 
@@ -1321,8 +1323,7 @@ impl<D> Node<D>
                     ));
                 }
                 Some(sock) => sock,
-            }
-                .clone();
+            }.clone();
 
             Ok(SendTo::Peers {
                 flush,
@@ -1971,8 +1972,6 @@ impl<D> Node<D>
                 break;
             }
 
-            //println!("Node {:?} received connection from node", my_id);
-
             // we are passing the correct length, safe to use unwrap()
             let header = Header::deserialize_from(&buf_header[..]).unwrap();
 
@@ -1987,8 +1986,6 @@ impl<D> Node<D>
                 // drop connections with invalid headers
                 Err(_) => break,
             };
-
-            //println!("Node {:?} received connection from node {:?}", my_id, peer_id);
 
             // TLS handshake; drop connection if it fails
             let sock = if peer_id >= first_cli || my_id >= first_cli {
@@ -2217,7 +2214,7 @@ impl<D> Node<D>
 
         let client = self.client_pooling.init_peer_conn(peer_id.clone());
 
-        let mut buf = SmallVec::<[u8; 16384]>::new();
+        let mut buf = BytesMut::with_capacity(16384);
 
         // TODO
         //  - verify signatures???
@@ -2239,7 +2236,7 @@ impl<D> Node<D>
 
             // reserve space for message
             //
-            // FIXME: add a max bound on the message payload length;
+            //FIXME: add a max bound on the message payload length;
             // if the length is exceeded, reject connection;
             // the bound can be application defined, i.e.
             // returned by `SharedData`
