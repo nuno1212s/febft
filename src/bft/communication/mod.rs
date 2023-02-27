@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_tls::{TlsAcceptor, TlsConnector};
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use dashmap::DashMap;
 use either::{Either, Left, Right};
 
@@ -900,7 +900,7 @@ impl<D> Node<D>
             // serialize
             start_measurement!(start_serialization);
 
-            let mut buf = Vec::new();
+            let mut buf = Vec::with_capacity(512);
 
             let digest = <D as DigestData>::serialize_digest(&message, &mut buf).unwrap();
 
@@ -1052,7 +1052,7 @@ impl<D> Node<D>
 
             // serialize
             //TODO: Actually make this work well
-            let mut buf = SmallVec::<[u8; 16384]>::new();
+            let mut buf = Vec::with_capacity(512);
 
             let digest = match <D as DigestData>::serialize_digest(&message, &mut buf) {
                 Ok(dig) => dig,
@@ -1063,7 +1063,7 @@ impl<D> Node<D>
                 }
             };
 
-            let buf = Bytes::from(&buf);
+            let buf = Bytes::from(buf);
 
             message_digest_time!(&comm_stats, start_serialization);
 
