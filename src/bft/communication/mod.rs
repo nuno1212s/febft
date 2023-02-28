@@ -1718,7 +1718,7 @@ impl<D> Node<D>
 
                     // TLS handshake; drop connection if it fails
                     let sock = if peer_id >= first_cli || my_id >= first_cli {
-                        SecureSocketSendSync::Plain(sock)
+                        SecureSocketSendSync::new_plain(sock)
                     } else {
                         let dns_ref = match ServerName::try_from(hostname.as_str()) {
                             Ok(server_name) => server_name,
@@ -1839,10 +1839,10 @@ impl<D> Node<D>
                             my_id, peer_id
                         );
 
-                        SecureSocketSendAsync::Plain(BufWriter::new(sock))
+                        SecureSocketSendAsync::new_plain(sock)
                     } else {
                         match connector.connect(hostname, sock).await {
-                            Ok(s) => SecureSocketSendAsync::Tls(s),
+                            Ok(s) => SecureSocketSendAsync::new_tls(s),
                             Err(err) => {
                                 error!("{:?} // Failed to connect to the node {:?} {:?} ", self.id, peer_id, err);
                                 break;
@@ -1989,7 +1989,7 @@ impl<D> Node<D>
 
             // TLS handshake; drop connection if it fails
             let sock = if peer_id >= first_cli || my_id >= first_cli {
-                SecureSocketRecvSync::Plain(sock)
+                SecureSocketRecvSync::new_plain(sock)
             } else {
                 if let Ok(tls_session) = ServerConnection::new(acceptor.clone()) {
                     SecureSocketRecvSync::new_tls(tls_session, sock)
@@ -2081,10 +2081,10 @@ impl<D> Node<D>
 
             // TLS handshake; drop connection if it fails
             let sock = if peer_id >= first_cli || my_id >= first_cli {
-                SecureSocketRecvAsync::Plain(BufReader::new(sock))
+                SecureSocketRecvAsync::new_plain(sock)
             } else {
                 match acceptor.accept(sock).await {
-                    Ok(s) => SecureSocketRecvAsync::Tls(s),
+                    Ok(s) => SecureSocketRecvAsync::new_tls(s),
                     Err(_) => {
                         error!(
                             "{:?} // Failed to setup tls connection to node {:?}",
@@ -2119,7 +2119,7 @@ impl<D> Node<D>
 
         let client = self.client_pooling.init_peer_conn(peer_id.clone());
 
-        let mut buf = SmallVec::<[u8; 16384]>::new();
+        let mut buf = BytesMut::with_capacity(16384);
 
         // TODO
         //  - verify signatures???
@@ -2130,9 +2130,12 @@ impl<D> Node<D>
             buf.resize(Header::LENGTH, 0);
 
             // read the peer's header
-            if let Err(_) = sock.read_exact(&mut buf[..Header::LENGTH]).await {
+            // We are reading from a buffered connection so this is fine
+            if let Err(err) = sock.read_exact(&mut buf[..Header::LENGTH]).await {
                 // errors reading -> faulty connection;
                 // drop this socket
+
+                error!("{:?} // Failed to read header from socket, faulty connection {:?}", self.id, err);
                 break;
             }
 
@@ -2156,17 +2159,13 @@ impl<D> Node<D>
                 break;
             }
 
-            if header.payload_length() == 0 {
-                //IGNORE PING REQUESTS
-                continue;
-            }
-
             // deserialize payload
             let message = match D::deserialize_message(&buf[..header.payload_length()]) {
                 Ok(m) => m,
-                Err(_) => {
+                Err(err) => {
                     // errors deserializing -> faulty connection;
                     // drop this socket
+                    error!("{:?} // Failed to deserialize message {:?}", self.id(), err);
                     break;
                 }
             };
@@ -2185,7 +2184,7 @@ impl<D> Node<D>
 
             let msg = Message::System(header, message);
 
-            if let Err(inner) = client.push_request_sync(msg) {
+            if let Err(inner) = client.push_request(msg) {
                 error!(
                     "{:?} // Channel closed, closing tcp connection as well to peer {:?}. {:?}",
                     self.id(),
@@ -2225,9 +2224,10 @@ impl<D> Node<D>
             buf.resize(Header::LENGTH, 0);
 
             // read the peer's header
-            if let Err(_) = sock.read_exact(&mut buf[..Header::LENGTH]) {
+            if let Err(err) = sock.read_exact(&mut buf[..Header::LENGTH]) {
                 // errors reading -> faulty connection;
                 // drop this socket
+                error!("{:?} // Failed to read header from socket, faulty connection {:?}", self.id, err);
                 break;
             }
 
@@ -2259,9 +2259,10 @@ impl<D> Node<D>
             // deserialize payload
             let message = match D::deserialize_message(&buf[..header.payload_length()]) {
                 Ok(m) => m,
-                Err(_) => {
+                Err(err) => {
                     // errors deserializing -> faulty connection;
                     // drop this socket
+                    error!("{:?} // Failed to deserialize message {:?}", self.id(), err);
                     break;
                 }
             };
@@ -2285,7 +2286,7 @@ impl<D> Node<D>
 
             let msg = Message::System(header, message);
 
-            if let Err(inner) = client.push_request_sync(msg) {
+            if let Err(inner) = client.push_request(msg) {
                 error!(
                     "{:?} // Channel closed, closing tcp connection as well to peer {:?}. {:?}",
                     self.id(),
@@ -2633,7 +2634,7 @@ impl<D> SendTo<D>
         let (h, _) = WireMessage::new(my_id, my_id, b, n, Some(d), sk).into_inner();
 
         // send
-        if let Err(inner) = cli.push_request_sync(Message::System(h, m)) {
+        if let Err(inner) = cli.push_request(Message::System(h, m)) {
             error!("{:?} // Failed to push to myself! {:?}", my_id, inner);
         };
     }
@@ -2655,7 +2656,9 @@ impl<D> SendTo<D>
 
         match conn_handle.send(wm, rq_key) {
             Ok(_) => {}
-            Err(_) => {
+            Err(err) => {
+                error!("{:?} // Failed to send message to node {:?}, {:?}. Disconnecting", my_id, peer_id, err);
+
                 conn_handle.close();
                 peer_tx.disconnect_peer(peer_id.into());
             }
@@ -2708,7 +2711,7 @@ impl<D> SerializedSendTo<D>
         let myself = h.from;
 
         // send to ourselves
-        if let Err(err) = cli.push_request_sync(Message::System(h, original)) {
+        if let Err(err) = cli.push_request(Message::System(h, original)) {
             error!("{:?} // FAILED TO SEND TO MYSELF {:?}", myself, err);
         }
     }

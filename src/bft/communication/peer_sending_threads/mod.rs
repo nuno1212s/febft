@@ -6,7 +6,7 @@ use crate::bft::communication::socket::{SocketSendAsync, SocketSendSync};
 use crate::bft::communication::{Node, NodeId};
 use crate::bft::error::*;
 use dashmap::DashMap;
-use log::{error};
+use log::{debug, error};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -83,6 +83,7 @@ fn sync_sending_thread<D>(
 ) where
     D: SharedData + 'static,
 {
+
     loop {
         let recv_result = recv.recv();
 

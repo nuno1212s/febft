@@ -812,7 +812,7 @@ impl<T> ConnectedPeer<T> where T: Send {
         };
     }
 
-    pub fn push_request_sync(&self, msg: T) -> Result<()> {
+    pub fn push_request(&self, msg: T) -> Result<()> {
         match self {
             Self::PoolConnection { queue, client_id, .. } => {
                 let mut sender_guard = queue.lock().unwrap();
@@ -863,45 +863,4 @@ impl<T> ConnectedPeer<T> where T: Send {
         }
     }
 
-    pub async fn push_request(&self, msg: T) -> Result<()> {
-        match self {
-            Self::PoolConnection { queue, client_id, .. } => {
-                let mut sender_guard = queue.lock().unwrap();
-
-                match &mut *sender_guard {
-                    Some(guard) => {
-                        guard.push(msg);
-
-                        Ok(())
-                    }
-                    None => {
-                        error!("Failed to send to client {:?} as he was already disconnected", client_id);
-
-                        Err(Error::simple_with_msg(ErrorKind::Communication, "Channel is closed"))
-                    }
-                }
-            }
-            Self::UnpooledConnection { sender, client_id, .. } => {
-                let sender_guard = sender.lock().unwrap();
-
-                match &*sender_guard {
-                    Some(send) => {
-                        match send.send(msg) {
-                            Ok(_) => {
-                                Ok(())
-                            }
-                            Err(err) => {
-                                Err(Error::simple_with_msg(ErrorKind::Communication, format!("Failed to receive data from {:?} because {:?}", self.client_id(), err).as_str()))
-                            }
-                        }
-                    }
-                    None => {
-                        error!("Failed to receive to client queue {:?} as he was already disconnected", client_id);
-
-                        Err(Error::simple_with_msg(ErrorKind::Communication, "Channel is closed"))
-                    }
-                }
-            }
-        }
-    }
 }

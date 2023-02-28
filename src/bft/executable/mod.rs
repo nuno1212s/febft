@@ -439,7 +439,7 @@ impl<S, T> Executor<S, T>
 
         let m = Message::ExecutionFinishedWithAppstate((seq, cloned_state));
 
-        if let Err(_err) = system_tx.push_request_sync(m) {
+        if let Err(_err) = system_tx.push_request(m) {
             error!(
                 "{:?} // FAILED TO DELIVER CHECKPOINT STATE",
                 self.send_node.id()

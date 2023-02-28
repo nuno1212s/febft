@@ -1061,11 +1061,12 @@ impl WireMessage {
         let mut buf = [0; Header::LENGTH];
         self.header.serialize_into(&mut buf[..]).unwrap();
 
-        // FIXME: switch to vectored writes?
         w.write_all(&buf[..]).await?;
+        
         if self.payload.len() > 0 {
             w.write_all(&self.payload[..]).await?;
         }
+        
         if flush {
             w.flush().await?;
         }

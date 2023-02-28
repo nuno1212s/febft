@@ -656,21 +656,23 @@ impl<S: Service + 'static> Consensus<S> {
                     }
                     ConsensusMessageKind::Prepare(d) => {
                         debug!(
-                            "{:?} // Received prepare message {:?} while in prepreparing ",
-                            self.node_id, d
+                            "{:?} // Received prepare message {:?} from {:?} while in prepreparing ",
+                            self.node_id, d, header.from()
                         );
                         self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
                     }
                     ConsensusMessageKind::Commit(d) => {
                         debug!(
-                            "{:?} // Received commit message {:?} while in pre preparing",
-                            self.node_id, d
+                            "{:?} // Received commit message {:?} from {:?} while in pre preparing",
+                            self.node_id, d, header.from()
                         );
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
                     }
                 };
+
+                debug!("{:?} // Received pre prepare message from {:?} seq {:?}", self.node_id, header.from(), self.sequence_number());
 
                 if i == 1 {
                     //If this is the first pre prepare message we have received.
@@ -740,6 +742,8 @@ impl<S: Service + 'static> Consensus<S> {
                                                               view, stored_msg, node);
                         }
                     }
+
+                    debug!("{:?} // Completed pre prepare phase with all pre prepares Seq {:?}", node.id(), self.sequence_number());
 
                     // We no longer start the count at 1 since all leaders must also send the prepare
                     // message with the digest of the entire batch
@@ -869,6 +873,7 @@ impl<S: Service + 'static> Consensus<S> {
                         }
                     }
 
+                    debug!("{:?} // Completed prepare phase with all prepares Seq {:?}", node.id(), self.sequence_number());
                     //We set at 0 since we broadcast the messages above, meaning we will also receive the message.
                     ProtoPhase::Committing(0)
                 } else {
@@ -972,6 +977,8 @@ impl<S: Service + 'static> Consensus<S> {
                     }
 
                     let processed_batch = self.deciding_log.finish_processing_batch().unwrap();
+
+                    debug!("{:?} // Decided consensus phase with all commits Seq {:?}", node.id(), self.sequence_number());
 
                     ConsensusStatus::Decided(processed_batch)
                 } else {

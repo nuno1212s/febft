@@ -386,6 +386,9 @@ impl<S: Service + 'static> Proposer<S> {
         view: &ViewInfo,
         currently_accumulated: Vec<StoredMessage<RequestMessage<Request<S>>>>,
     ) {
+        debug!("{:?} // Broadcasting Pre Prepare Seq {:?} to all nodes with {} requests",
+            self.node_ref.id(), seq, currently_accumulated.len());
+
         let message = SystemMessage::Consensus(ConsensusMessage::new(
             seq,
             view.sequence_number(),
