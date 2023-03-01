@@ -48,6 +48,7 @@ pub struct Proposer<S: Service + 'static> {
     target_global_batch_size: usize,
     //Time limit for generating a batch with target_global_batch_size size
     global_batch_time_limit: u128,
+    max_batch_size: usize,
 
     //For unordered request execution
     executor_handle: ExecutorHandle<S>,
@@ -82,6 +83,7 @@ impl<S: Service + 'static> Proposer<S> {
         consensus_guard: ConsensusGuard,
         target_global_batch_size: usize,
         global_batch_time_limit: u128,
+        max_batch_size: usize,
         observer_handle: ObserverHandle,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -95,6 +97,7 @@ impl<S: Service + 'static> Proposer<S> {
             observer_handle,
             executor_handle,
             pending_decision_log,
+            max_batch_size,
         })
     }
 
@@ -322,7 +325,7 @@ impl<S: Service + 'static> Proposer<S> {
         if is_leader {
             let current_batch_size = propose.currently_accumulated.len();
 
-            if current_batch_size < self.target_global_batch_size {
+             if current_batch_size < self.target_global_batch_size {
                 let micros_since_last_batch = Instant::now().duration_since(propose.last_proposal).as_micros();
 
                 if micros_since_last_batch <= self.global_batch_time_limit {
@@ -355,8 +358,22 @@ impl<S: Service + 'static> Proposer<S> {
 
                     *last_seq = Some(*seq);
 
+                    let next_batch = if propose.currently_accumulated.len() > self.max_batch_size {
+
+                        //This now contains target_global_size requests. We want this to be our next batch
+                        //Currently accumulated contains the remaining messages to be sent in the next batch
+                        let mut next_batch = propose.currently_accumulated.split_off(propose.currently_accumulated.len() - self.max_batch_size);
+
+                        //So we swap that memory with the other vector memory and we have it!
+                        std::mem::swap(&mut next_batch, &mut propose.currently_accumulated);
+
+                        Some(next_batch)
+                    } else {
+                        None
+                    };
+
                     let current_batch = std::mem::replace(&mut propose.currently_accumulated,
-                                                          Vec::with_capacity(self.node_ref.batch_size() * 2));
+                                                          next_batch.unwrap_or(Vec::with_capacity(self.node_ref.batch_size() * 2)));
 
                     self.propose(*seq, view, current_batch);
 

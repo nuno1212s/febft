@@ -112,6 +112,7 @@ pub struct ReplicaConfig<S: Service, T: PersistentLogModeTrait> {
     pub global_batch_size: usize,
     ///The time limit for creating that batch, in micro seconds
     pub batch_timeout: u128,
+    pub max_batch_size: usize,
     ///The logging mode
     pub log_mode: PhantomData<T>,
     /// Check out the docs on `NodeConfig`.
@@ -131,6 +132,7 @@ impl<S> Replica<S>
             next_consensus_seq,
             global_batch_size,
             batch_timeout,
+            max_batch_size,
             node: node_config,
             service,
             view: _,
@@ -258,6 +260,7 @@ impl<S> Replica<S>
                 consensus_guard,
                 global_batch_size,
                 batch_timeout,
+                max_batch_size,
                 observer_handle.clone(),
             ),
             executor,
