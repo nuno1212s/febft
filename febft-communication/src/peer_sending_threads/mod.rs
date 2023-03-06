@@ -3,7 +3,8 @@ use log::{error};
 use std::sync::Arc;
 use std::time::Instant;
 use febft_common::channel;
-use febft_common::channel::{ChannelAsyncRx, ChannelAsyncTx, ChannelSyncRx, ChannelSyncTx};
+use febft_common::channel::{ChannelAsyncRx, ChannelMixedRx};
+use febft_common::channel::ChannelMixedTx;
 
 use febft_common::error::*;
 use febft_common::socket::{SocketSendAsync, SocketSendSync};
@@ -31,21 +32,13 @@ pub enum SendMessageType {
 /// this handle will be dropped and as such, this will
 /// error out when attempting to send the next message
 #[derive(Clone)]
-pub enum ConnectionHandle {
-    Sync(ChannelSyncTx<SendMessage>),
-    Async(ChannelAsyncTx<SendMessage>),
+pub struct ConnectionHandle {
+    channel: ChannelMixedTx<SendMessage>
 }
 
 impl ConnectionHandle {
     pub fn send(&self, message: WireMessage, rq_key: Option<u64>) -> Result<()> {
-        let channel = match self {
-            ConnectionHandle::Sync(channel) => channel,
-            ConnectionHandle::Async(_) => {
-                panic!("Cannot send asynchronously on synchronous channel!");
-            }
-        };
-
-        match channel.send(SendMessageType::Message(message, Instant::now(), rq_key)) {
+        match self.channel.send(SendMessageType::Message(message, Instant::now(), rq_key)) {
             Ok(_) => Ok(()),
             Err(error) => {
                 error!("Failed to send to the channel! {:?}", error);
@@ -56,14 +49,7 @@ impl ConnectionHandle {
     }
 
     pub async fn async_send(&mut self, message: WireMessage) -> Result<()> {
-        let mut channel = match self {
-            ConnectionHandle::Sync(_) => {
-                panic!("Cannot send synchronously on asynchronous channel");
-            }
-            ConnectionHandle::Async(channel) => channel.clone(),
-        };
-
-        match channel.send(SendMessageType::Message(message, Instant::now(), None)).await {
+        match self.channel.send_async(SendMessageType::Message(message, Instant::now(), None)).await {
             Ok(_) => Ok(()),
             Err(error) => {
                 error!("Failed to send to the channel! {:?}", error);
@@ -89,14 +75,14 @@ pub fn initialize_sync_sending_thread_for<T>(
     where
         T: Serializable,
 {
-    let (tx, rx) = channel::new_bounded_sync(QUEUE_SPACE);
+    let (tx, rx) = channel::new_bounded_mixed(QUEUE_SPACE);
 
     std::thread::Builder::new()
         .name(format!("Peer {:?} sending thread", peer_id))
         .spawn(move || sync_sending_thread(node, peer_id, socket, rx, comm_stats, sent_rqs))
         .expect(format!("Failed to start sending thread for client {:?}", peer_id).as_str());
 
-    ConnectionHandle::Sync(tx)
+    ConnectionHandle { channel: tx }
 }
 
 ///Receives requests from the queue and sends them using the provided socket
@@ -104,7 +90,7 @@ fn sync_sending_thread<T>(
     node: Arc<Node<T>>,
     peer_id: NodeId,
     mut socket: SocketSendSync,
-    recv: ChannelSyncRx<SendMessage>,
+    recv: ChannelMixedRx<SendMessage>,
     comm_stats: Option<Arc<CommStats>>,
     sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>,
 ) where
@@ -160,11 +146,11 @@ pub fn initialize_async_sending_task_for<T>(
     where
         T: Serializable,
 {
-    let (tx, rx) = channel::new_bounded_async(QUEUE_SPACE);
+    let (tx, rx) = channel::new_bounded_mixed(QUEUE_SPACE);
 
     rt::spawn(async_sending_task(node, peer_id, socket, rx, comm_stats));
 
-    ConnectionHandle::Async(tx)
+    ConnectionHandle {channel: tx }
 }
 
 
@@ -173,13 +159,13 @@ async fn async_sending_task<T>(
     node: Arc<Node<T>>,
     peer_id: NodeId,
     mut socket: SocketSendAsync,
-    mut recv: ChannelAsyncRx<SendMessage>,
+    mut recv: ChannelMixedRx<SendMessage>,
     comm_stats: Option<Arc<CommStats>>,
 ) where
     T: Serializable,
 {
     loop {
-        let recv_result = recv.recv().await;
+        let recv_result = recv.recv_async().await;
 
         let to_send = match recv_result {
             Ok(to_send) => to_send,

@@ -1761,13 +1761,6 @@ impl<T> SerializedSendTo<T>
                 peer_tx,
                 tx,
             } => {
-                match &sock {
-                    ConnectionHandle::Sync(_) => {}
-                    ConnectionHandle::Async(_) => {
-                        panic!("Attempted to send messages synchronously through a async channel")
-                    }
-                }
-
                 Self::peers(id, m, &peer_tx, sock, tx);
             }
         }

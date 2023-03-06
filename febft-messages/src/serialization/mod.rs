@@ -24,12 +24,14 @@ impl<S, P> Serializable for SystemMessage<S, P> where S: Service, P: Serializabl
 
         /*
         #[cfg(feature = "serialize_bincode")]
-        bincode::serialize_message(message, w)?;*/
+        bincode::serialize_message(message, w)?;
+        */
 
         Ok(())
     }
 
     fn deserialize_message<R: Read>(r: R) -> Result<Self::Message> {
-        todo!()
+        #[cfg(feature="serialize_capnp")]
+        capnp::deserialize_message(r)
     }
 }
