@@ -27,7 +27,7 @@ pub mod bincode;*/
 pub mod capnp;
 
 pub fn serialize_message<T, W>(
-    m: NetworkMessageContent<T>,
+    m: &NetworkMessageContent<T>,
     w: &mut W,
 ) -> Result<()> where
     W: Write + AsRef<[u8]>,
@@ -41,7 +41,7 @@ pub fn serialize_message<T, W>(
     serde::serialize_message(&m, w)?; */
 
     #[cfg(feature="serialize_capnp")]
-    capnp::serialize_message(&m , w)?;
+    capnp::serialize_message(m , w)?;
 
     Ok(())
 }
@@ -52,16 +52,11 @@ pub fn serialize_digest_message<T, W>(
 ) -> Result<Digest>
     where W: Write + AsRef<[u8]>,
           T: Serializable {
-    match m {
-        NetworkMessageContent::System(message) => {
-            <T as DigestSerializable>::serialize_digest(message, w)
-        }
-        NetworkMessageContent::Ping(ping) => {
-            let mut ctx = Context::new();
+    serialize_message::<T, W>(m, w)?;
 
-            Ok(ctx.finish())
-        }
-    }
+    let mut ctx = Context::new();
+    ctx.update(w.as_ref());
+    Ok(ctx.finish())
 }
 
 pub fn deserialize_message<T, R>(r: R) -> Result<NetworkMessageContent<T>> where R: Read, T: Serializable {
