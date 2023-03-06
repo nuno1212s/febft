@@ -22,28 +22,50 @@ use crate::SysMsg;
 /// A protocol message corresponds to a message regarding one of the SMR protocols
 /// This can be a message to the consensus state machine, view change state machine or
 /// consensus state transfer protocol
+/// The S is the State type while the O is the request type
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
-#[derive(Clone)]
-pub enum ProtocolMessage<S, O> where S: Send + Clone, O: Send + Clone {
-    Consensus(ConsensusMessage<O>),
-    FwdConsensus(FwdConsensusMessage<O>),
+pub enum ProtocolMessage<D> where D: SharedData {
+    Consensus(ConsensusMessage<D::Request>),
+    FwdConsensus(FwdConsensusMessage<D::Request>),
 
-    Cst(CstMessage<S, O>),
-    ViewChange(ViewChangeMessage<O>),
+    Cst(CstMessage<D::State, D::Request>),
+    ViewChange(ViewChangeMessage<D::Request>),
 
     ObserverMessage(ObserverMessage),
 }
 
+impl<D:SharedData> Clone for ProtocolMessage<D> {
+    fn clone(&self) -> Self {
+        match self {
+            ProtocolMessage::Consensus(consensus) => {
+                ProtocolMessage::Consensus(consensus.clone())
+            }
+            ProtocolMessage::FwdConsensus(fwd_consensus) => {
+                ProtocolMessage::FwdConsensus(fwd_consensus.clone())
+            }
+            ProtocolMessage::Cst(cst) => {
+                ProtocolMessage::Cst(cst.clone())
+            }
+            ProtocolMessage::ViewChange(view_change) => {
+                ProtocolMessage::ViewChange(view_change.clone())
+            }
+            ProtocolMessage::ObserverMessage(observer) => {
+                ProtocolMessage::ObserverMessage(observer.clone())
+            }
+        }
+    }
+}
+
 /// Automatically encapsulate to a system message
-impl<S: Service> From<ProtocolMessage<State<S>, Request<S>>> for SysMsg<S> {
-    fn from(value: ProtocolMessage<State<S>, Request<S>>) -> Self {
+impl<S: Service> From<ProtocolMessage<S::Data>> for SysMsg<S> {
+    fn from(value: ProtocolMessage<S::Data>) -> Self {
         SystemMessage::Protocol(value)
     }
 }
 
-impl <S: Service> From<SystemMessage<S, ProtocolMessage<State<S>, Request<S>>>> for ProtocolMessage<State<S>, Request<S>> {
-    fn from(value:SystemMessage<S, ProtocolMessage<State<S>, Request<S>>>) -> Self {
+impl<S: Service> From<SystemMessage<S, ProtocolMessage<S::Data>>> for ProtocolMessage<S::Data> {
+    fn from(value: SystemMessage<S, ProtocolMessage<S::Data>>) -> Self {
         match value {
             SystemMessage::Protocol(protocol) => {
                 protocol
@@ -53,7 +75,7 @@ impl <S: Service> From<SystemMessage<S, ProtocolMessage<State<S>, Request<S>>>> 
     }
 }
 
-impl<S, O> Debug for ProtocolMessage<S, O> where S: Send + Clone, O: Send + Clone {
+impl<D> Debug for ProtocolMessage<D> where D: SharedData {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ProtocolMessage::Consensus(_) => {

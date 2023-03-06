@@ -25,7 +25,7 @@ use crate::messages;
 use crate::messages::{ConsensusMessage, ConsensusMessageKind, ProtocolMessage};
 use crate::msg_log::decided_log::BatchExecutionInfo;
 use crate::msg_log::decisions::{Checkpoint, DecisionLog, OnGoingDecision, Proof, ProofMetadata};
-use crate::msg_log::persistent::serialization::make_proof_info;
+use crate::msg_log::persistent::serialization::{make_proof_info, Persister};
 use crate::sync::view::ViewInfo;
 
 use self::consensus_backlog::ConsensusBackLogHandle;
@@ -1036,12 +1036,7 @@ fn parse_message<S: Service, T>(
 ) -> Result<StoredMessage<ConsensusMessage<Request<S>>>> where T: AsRef<[u8]> {
     let header = Header::deserialize_from(&value.as_ref()[..Header::LENGTH])?;
 
-    let message = <ProtocolMessage<State<S>, Request<S>>>::deserialize_message(&value.as_ref()[Header::LENGTH..])?;
-
-    let message = match message {
-        ProtocolMessage::Consensus(cons) => {cons}
-        _ => unreachable!()
-    };
+    let message = <S::Data as Persister>::deserialize_consensus_message(&value.as_ref()[Header::LENGTH..])?;
 
     Ok(StoredMessage::new(header, message))
 }
@@ -1056,7 +1051,7 @@ fn write_message<S: Service>(
     message.header().serialize_into(buf.as_mut_slice()).unwrap();
 
     //TODO: Does this recognize that the header has already been placed?
-    messages::serialization::serialize_consensus_message(&mut buf, message.message())?;
+    <S::Data as Persister>::serialize_consensus_message( message.message(),&mut buf )?;
 
     let msg_seq = message.message().sequence_number();
 

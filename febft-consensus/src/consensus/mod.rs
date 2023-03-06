@@ -511,7 +511,7 @@ impl<S: Service + 'static> Consensus<S> {
         &self,
         requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         synchronizer: &K,
-    ) -> ProtocolMessage<State<S>, Request<S>>
+    ) -> ProtocolMessage<S::Data>
         where
             K: AbstractSynchronizer<S>,
     {

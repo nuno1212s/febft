@@ -22,7 +22,6 @@ pub mod network_messages_capnp {
     ));
 }
 
-/*
 pub mod consensus_messages_capnp {
     #![allow(unused)]
     include!(concat!(
@@ -30,5 +29,3 @@ pub mod consensus_messages_capnp {
     "/consensus_messages_capnp.rs"
     ));
 }
-*
- */

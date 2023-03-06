@@ -22,7 +22,7 @@ use crate::msg_log::pending_decision::PendingRequestLog;
 use crate::proposer::Proposer;
 use crate::sync::Synchronizer;
 
-pub type SysMsg<S> = SystemMessage<S, ProtocolMessage<State<S>, Request<S>>>;
+pub type SysMsg<S: Service> = SystemMessage<S, ProtocolMessage<S::Data>>;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub(crate) enum ReplicaPhase {
