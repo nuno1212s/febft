@@ -124,7 +124,7 @@ impl<T> Node<T> where T: Serializable {
 
             self.tx_side_connect_task(
                 my_id, first_cli, peer_id, nonce, connector, peer_addr, callback,
-            );
+            ).await;
         });
     }
 
@@ -376,60 +376,71 @@ impl<T> Node<T> where T: Serializable {
         // 2) try to connect up to `RETRY` times, then announce
         // failure with a channel send op
         for _try in 0..RETRY {
-            //println!("Trying attempt {} for Node {:?} from peer {:?}", _try, peer_id, my_id);
-            if let Ok(mut sock) = socket::connect_async(addr).await {
-                // create header
-                let (header, _) =
-                    WireMessage::new(my_id, peer_id,
-                                     Bytes::new(), nonce,
-                                     None, None).into_inner();
+            debug!("{:?} // Attempting to connect to node {:?} for the {} time", my_id, peer_id, _try);
 
-                // serialize header
-                let mut buf = [0; Header::LENGTH];
-                header.serialize_into(&mut buf[..]).unwrap();
+            match socket::connect_async(addr).await {
+                Ok(mut sock) => {
+                    // create header
+                    let (header, _) =
+                        WireMessage::new(my_id, peer_id,
+                                         Bytes::new(), nonce,
+                                         None, None).into_inner();
 
-                // send header
-                if let Err(_) = sock.write_all(&buf[..]).await {
-                    // errors writing -> faulty connection;
-                    // drop this socket
-                    break;
-                }
+                    // serialize header
+                    let mut buf = [0; Header::LENGTH];
+                    header.serialize_into(&mut buf[..]).unwrap();
 
-                if let Err(_) = sock.flush().await {
-                    // errors flushing -> faulty connection;
-                    // drop this socket
-                    break;
-                }
+                    // send header
+                    if let Err(_) = sock.write_all(&buf[..]).await {
+                        // errors writing -> faulty connection;
+                        // drop this socket
+                        break;
+                    }
 
-                // TLS handshake; drop connection if it fails
-                let sock = if peer_id >= first_cli || my_id >= first_cli {
-                    debug!(
+                    if let Err(_) = sock.flush().await {
+                        // errors flushing -> faulty connection;
+                        // drop this socket
+                        break;
+                    }
+
+                    // TLS handshake; drop connection if it fails
+                    let sock = if peer_id >= first_cli || my_id >= first_cli {
+                        debug!(
                         "{:?} // Connecting with plain text to node {:?}",
                         my_id, peer_id
                     );
 
-                    SecureSocketSendAsync::new_plain(sock)
-                } else {
-                    match connector.connect(hostname, sock).await {
-                        Ok(s) => SecureSocketSendAsync::new_tls(s),
-                        Err(_) => {
-                            break;
+                        SecureSocketSendAsync::new_plain(sock)
+                    } else {
+                        debug!(
+                        "{:?} // Connecting with SSL to node {:?}",
+                        my_id, peer_id
+                    );
+
+                        match connector.connect(hostname, sock).await {
+                            Ok(s) => SecureSocketSendAsync::new_tls(s),
+                            Err(_) => {
+                                break;
+                            }
                         }
+                    };
+
+                    let final_sock = SecureSocketSend::Async(SocketSendAsync::new(sock));
+
+                    // success
+                    self.handle_connected_tx(peer_id, final_sock);
+
+                    self.unregister_currently_connecting_to_node(peer_id);
+
+                    if let Some(callback) = callback {
+                        callback(true);
                     }
-                };
 
-                let final_sock = SecureSocketSend::Async(SocketSendAsync::new(sock));
-
-                // success
-                self.handle_connected_tx(peer_id, final_sock);
-
-                self.unregister_currently_connecting_to_node(peer_id);
-
-                if let Some(callback) = callback {
-                    callback(true);
+                    return;
                 }
-
-                return;
+                Err(err) => {
+                    error!("{:?} // Failed to connect to node {:?} because of {:?}", my_id, peer_id, err)
+                }
             }
 
             // sleep for `SECS` seconds and retry
@@ -461,6 +472,8 @@ impl<T> Node<T> where T: Serializable {
                 let replica_acceptor = acceptor.clone();
 
                 let rx_ref = self.clone();
+
+                debug!("{:?} // Accepting connection", my_id);
 
                 let first_cli = first_cli.clone();
                 let my_id = my_id.clone();

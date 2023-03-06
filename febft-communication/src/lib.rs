@@ -360,7 +360,7 @@ impl<T> Node<T>
         _sync_connector: Arc<ClientConfig>,
         _async_connector: TlsConnector,
     ) -> TlsNodeConnector {
-        //TODO: Support Async connectors as well
+        //TODO: Support Sync connectors as well
         TlsNodeConnector::Async(_async_connector)
     }
 
@@ -370,7 +370,6 @@ impl<T> Node<T>
     ) -> TlsNodeAcceptor {
         TlsNodeAcceptor::Async(_async_acceptor)
     }
-
 
     async fn setup_socket(
         id: &NodeId,
