@@ -35,6 +35,9 @@ pub enum ProtocolMessage<D> where D: SharedData {
     ObserverMessage(ObserverMessage),
 }
 
+/// Manual clone implementation as the compiler is not smart enough to decompose the
+/// Implementation above into it's Cloneable parts, so we are left with this
+/// Manual but very effective (and safe) work around
 impl<D:SharedData> Clone for ProtocolMessage<D> {
     fn clone(&self) -> Self {
         match self {
