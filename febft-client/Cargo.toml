@@ -1,0 +1,25 @@
+[package]
+name = "febft-client"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+
+observer_client = ["febft-consensus"]
+
+#default = ["observer_client"]
+
+[dependencies]
+febft-common = { path = "../febft-common" }
+febft-communication = { path = "../febft-communication" }
+febft-messages = { path = "../febft-messages" }
+febft-execution = { path = "../febft-execution" }
+
+febft-consensus = {path ="../febft-consensus", optional = true}
+
+intmap = "2.0.0"
+log = "0.4.17"
+num_cpus = "1.15.0"
+tokio = { version = "1.25.0" , features = ["full"]}

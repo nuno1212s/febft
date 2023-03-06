@@ -1,0 +1,36 @@
+[package]
+name = "febft-consensus"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+
+serialize_capnp = ["capnp", "febft-capnp", "febft-communication/serialize_capnp", "febft-messages/serialize_capnp"]
+#serialize_bincode = ["bincode", "febft-communication/serialize_bincode", "febft-messages/serialize_bincode"]
+
+default = [
+    "serialize_capnp"
+]
+
+[dependencies]
+febft-common = { path = "../febft-common" }
+febft-communication = { path = "../febft-communication", features = ["serialize_capnp"] }
+febft-messages = { path = "../febft-messages" }
+febft-execution = { path = "../febft-execution" }
+febft-timeouts = { path = "../febft-timeouts" }
+febft-capnp = { path = "../febft-capnp", optional = true }
+
+chrono = "0.4.23"
+bytes = "1.4.0"
+either = "1.8.1"
+intmap = "2.0.0"
+fastrand = "1.7.0"
+num-bigint = "0.4.3"
+num-traits = "0.2.15"
+
+capnp = { version = "0.16.0", optional = true }
+bincode = {version = "2.0.0-rc.2", optional = true}
+
+log = "0.4.17"

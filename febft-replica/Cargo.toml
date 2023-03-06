@@ -1,0 +1,17 @@
+[package]
+name = "febft-replica"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+febft-common = { path = "../febft-common" }
+febft-consensus = { path = "../febft-consensus" }
+febft-communication = { path = "../febft-communication" }
+febft-messages = { path = "../febft-messages" }
+febft-execution = { path = "../febft-execution" }
+febft-timeouts = { path = "../febft-timeouts" }
+
+chrono = "0.4.23"
+log = "0.4.17"

@@ -1,0 +1,26 @@
+[package]
+name = "febft-messages"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+
+serialize_capnp = ["febft-capnp", "capnp", "febft-communication/serialize_capnp"]
+
+#serialize_serde = ["serde", "febft-communication/serialize_serde"]
+
+#serialize_bincode = ["bincode", "febft-communication/serialize_bincode"]
+
+default = ["serialize_capnp"]
+
+[dependencies]
+febft-common = { path = "../febft-common" }
+febft-communication = { path = "../febft-communication" }
+febft-execution = { path = "../febft-execution" }
+febft-capnp = { path = "../febft-capnp", optional = true }
+
+capnp = { version = "0.16.0", optional = true }
+bincode = {version = "2.0.0-rc.2" , optional = true}
+serde = {version ="1.0.152", optional = true}

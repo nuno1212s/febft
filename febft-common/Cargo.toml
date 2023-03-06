@@ -1,0 +1,116 @@
+[package]
+name = "febft-common"
+version = "0.1.0"
+edition = "2021"
+description = "Common tools for the FeBFT project"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+
+default = [
+    "async_runtime_tokio",
+    "threadpool_rayon",
+    "socket_tokio_tcp",
+    "channel_flume_mpmc",
+    "channel_sync_crossbeam",
+    "channel_mixed_flume",
+    "channel_mult_custom_dump",
+    "crypto_signature_ring_ed25519",
+    "crypto_hash_blake3_blake3",
+    "collections_randomstate_fxhash",
+    "persistent_db_rocksdb"
+]
+
+socket_tokio_tcp = ["tokio", "tokio-util"]
+socket_async_std_tcp = ["async-std"]
+socket_rio_tcp = ["rio"]
+
+async_runtime_tokio = ["tokio"]
+async_runtime_async_std = ["async-std"]
+
+crypto_signature_ring_ed25519 = ["ring"]
+crypto_hash_ring_sha2 = ["ring"]
+crypto_hash_blake3_blake3 = ["blake3"]
+
+threadpool_crossbeam = ["threadpool-crossbeam-channel"]
+threadpool_cthpool = ["cthpool"]
+threadpool_rayon = ["rayon"]
+
+collections_randomstate_std = []
+collections_randomstate_fxhash = ["fxhash"]
+collections_randomstate_twox_hash = ["twox-hash"]
+
+# Alternatives for the persistent db type.
+# If no type of this category is presented, it will default to disabled,
+# But the default features do include rocksdb
+persistent_db_rocksdb = ["rocksdb"]
+persistent_db_disabled = []
+
+#Async channel alternatives
+channel_futures_mpsc = []
+channel_flume_mpmc = ["flume"]
+channel_async_channel_mpmc = ["async-channel"]
+
+#Sync channel alternatives
+channel_sync_crossbeam = ["crossbeam-channel"]
+channel_sync_flume = ["flume"]
+
+#Mixed channel alternatives
+channel_mixed_flume = ["flume"]
+
+#Mutiple dumping channel alternatives
+channel_mult_custom_dump = ["dsrust"]
+
+#Alternatives for the multiple dumping channel (You can leave these out,
+#defaults to mqueue channel type)
+channel_custom_dump = ["dsrust"]
+channel_custom_dump_lfb = ["dsrust"]
+channel_custom_dump_mqueue = ["dsrust"]
+
+[dependencies]
+futures = "0.3.26"
+
+oneshot = "0.1.5"
+
+rio = { version = "0.9", optional = true }
+
+async-std = { version = "1.12.0", optional = true }
+tokio = { version = "1.25.0", features = ["full"], optional = true }
+tokio-util = { version = "0.7.1", features = ["compat"], optional = true }
+
+rocksdb = {version = "0.20.1", optional = true }
+
+threadpool-crossbeam-channel = { version = "1.8.0", optional = true }
+rayon = { version = "1.5.3", optional = true }
+cthpool = { git = "https://github.com/sug0/cthpool", optional = true }
+
+ring = { version = "0.16", optional = true }
+blake3 = { version = "0.3", optional = true }
+
+twox-hash = { version = "1", optional = true }
+fxhash = { version = "0.2", optional = true }
+
+crossbeam-channel = { version = "0.5.2", optional = true }
+async-channel = { version = "1.8.0", optional = true }
+flume = { version = "0.10", optional = true }
+dsrust = { version = "0.1.9", git = "https://github.com/nuno1212s/DSRust", optional = true }
+socket2 = "0.4"
+
+dashmap = "5.4.0"
+linked-hash-map = "0.5.6"
+
+either = "1.8.1"
+
+rand_core = { version = "0.6.4", features = ["getrandom"] }
+thread_local = "1.1.4"
+
+rustls = "0.20.6"
+webpki = "0.22.0"
+async-tls = { version = "0.11.1", git = "https://github.com/nuno1212s/async-tls.git" }
+
+log = "0.4.17"
+log4rs = {version = "1.1.1", features = ["file_appender"]}
+
+[build-dependencies]
+itertools = "0.10.5"
