@@ -5,6 +5,7 @@ use std::{
         atomic::{AtomicBool, Ordering}, Mutex,
     },
 };
+use std::ops::Deref;
 
 use chrono::Utc;
 use febft_common::crypto::hash::Digest;
@@ -19,7 +20,7 @@ use intmap::IntMap;
 use log::{debug, error, warn};
 use febft_messages::messages::SystemMessage;
 use crate::follower::{FollowerEvent, FollowerHandle};
-use crate::messages::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, ProtocolMessage};
+use crate::messages::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTProtocolMessage};
 use crate::msg_log::deciding_log::DecidingLog;
 use crate::msg_log::pending_decision::PendingRequestLog;
 use crate::observer::{MessageType, ObserverHandle};
@@ -56,7 +57,7 @@ macro_rules! extract_msg {
 pub struct ReplicaConsensus<S: Service> {
     missing_requests: VecDeque<Digest>,
     missing_swapbuf: Vec<usize>,
-    speculative_commits: Arc<Mutex<IntMap<StoredSerializedNetworkMessage<SysMsg<S>>>>>,
+    speculative_commits: Arc<Mutex<IntMap<StoredSerializedNetworkMessage<SysMsg<S::Data>>>>>,
     consensus_guard: ConsensusGuard,
     observer_handle: ObserverHandle,
     follower_handle: Option<FollowerHandle<S>>,
@@ -75,7 +76,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         current_digest: Digest,
         view: ViewInfo,
         msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
     ) {
         let my_id = node.id();
         let view_seq = view.sequence_number();
@@ -91,7 +92,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         //Speculate in another thread.
         threadpool::execute(move || {
             // create COMMIT
-            let message = SystemMessage::Protocol(ProtocolMessage::Consensus(ConsensusMessage::new(
+            let message = SystemMessage::from(PBFTProtocolMessage::Consensus(ConsensusMessage::new(
                 seq,
                 view_seq,
                 ConsensusMessageKind::Commit(current_digest.clone()),
@@ -102,7 +103,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
 
             let network_msg = NetworkMessageContent::System(message);
 
-            let digest = febft_communication::serialize::serialize_digest_message(&network_msg, &mut buf)
+            let digest = febft_communication::serialize::serialize_digest_message::<SysMsg<S::Data>, Vec<u8>>(&network_msg, &mut buf)
                 .unwrap();
 
             let buf = Buf::from(buf);
@@ -139,7 +140,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         // Also, since we can have # Leaders > f, if the leaders didn't partake in this
         // Instance we would have situations where faults joined with leaders would cause
         // Unresponsiveness
-        let message = ProtocolMessage::Consensus(ConsensusMessage::new(
+        let message = PBFTProtocolMessage::Consensus(ConsensusMessage::new(
             seq,
             view.sequence_number(),
             ConsensusMessageKind::Prepare(current_digest),
@@ -148,7 +149,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         let targets = NodeId::targets(0..view.params().n());
 
         node.broadcast_signed(
-            NetworkMessageContent::System(SystemMessage::Protocol(message)), targets);
+            NetworkMessageContent::System(SystemMessage::from(message)), targets);
 
         //Notify the followers
         if let Some(follower_handle) = &self.follower_handle {
@@ -174,7 +175,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         &mut self,
         curr_view: ViewInfo,
         preparing_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-        _node: &Node<SysMsg<S>>,
+        _node: &Node<SysMsg<S::Data>>,
     )
     {
         if let Some(follower_handle) = &self.follower_handle {
@@ -195,7 +196,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         curr_view: ViewInfo,
         preparing_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
         log: &DecidingLog<S>,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
     ) {
         let node_id = node.id();
 
@@ -210,7 +211,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
 
             node.broadcast_serialized(speculative_commits);
         } else {
-            let message = ProtocolMessage::Consensus(ConsensusMessage::new(
+            let message = PBFTProtocolMessage::Consensus(ConsensusMessage::new(
                 seq,
                 curr_view.sequence_number(),
                 ConsensusMessageKind::Commit(current_digest.clone()),
@@ -221,7 +222,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
 
             let targets = NodeId::targets(0..curr_view.params().n());
 
-            node.broadcast_signed(NetworkMessageContent::System(SystemMessage::Protocol(message)), targets);
+            node.broadcast_signed(NetworkMessageContent::from(SystemMessage::from(message)), targets);
         }
 
         log.batch_meta().lock().unwrap().commit_sent_time = Utc::now();
@@ -379,7 +380,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         &self.consensus_guard
     }
 
-    fn take_speculative_commits(&self) -> IntMap<StoredSerializedNetworkMessage<SysMsg<S>>> {
+    fn take_speculative_commits(&self) -> IntMap<StoredSerializedNetworkMessage<SysMsg<S::Data>>> {
         let mut map = self.speculative_commits.lock().unwrap();
         std::mem::replace(&mut *map, IntMap::new())
     }
@@ -387,7 +388,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
 
 #[inline]
 fn valid_spec_commits<S>(
-    speculative_commits: &IntMap<StoredSerializedNetworkMessage<SysMsg<S>>>,
+    speculative_commits: &IntMap<StoredSerializedNetworkMessage<SysMsg<S::Data>>>,
     node_id: NodeId,
     seq_no: SeqNo,
     view: &ViewInfo,
@@ -416,8 +417,8 @@ fn valid_spec_commits<S>(
             NetworkMessageContent::System(sys_msg) => {
                 match sys_msg {
                     SystemMessage::Protocol(c) => {
-                        match c {
-                            ProtocolMessage::Consensus(consensus) => {
+                        match c.deref() {
+                            PBFTProtocolMessage::Consensus(consensus) => {
                                 consensus
                             }
                             _ => unreachable!()

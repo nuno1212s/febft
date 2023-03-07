@@ -9,6 +9,8 @@ edition = "2021"
 
 observer_client = ["febft-consensus"]
 
+serialize_serde = ["febft-common/serialize_serde", "febft-communication/serialize_serde", "febft-messages/serialize_serde"]
+
 #default = ["observer_client"]
 
 [dependencies]

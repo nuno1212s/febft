@@ -1,6 +1,7 @@
 use core::task::{Context, Waker};
 use log::{error, warn};
 use std::future::Future;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -8,9 +9,10 @@ use std::task::Poll;
 use febft_common::ordering::Orderable;
 use febft_communication::message::{NetworkMessage, NetworkMessageContent};
 use febft_communication::NodeId;
-use febft_consensus::messages::{ObserveEventKind, ObserverMessage, ProtocolMessage};
+use febft_consensus::messages::{ObserveEventKind, ObserverMessage, PBFTProtocolMessage};
 use febft_consensus::SysMsg;
 use febft_execution::executable::Service;
+use febft_execution::serialize::SharedData;
 
 use febft_messages::messages::SystemMessage;
 use crate::{Client, ClientData, NoProtocol};
@@ -69,16 +71,16 @@ pub struct ObserverClient {
 }
 
 impl ObserverClient {
-    pub async fn bootstrap_client<S>(client: &mut Client<S>) -> ObserverClient
+    pub async fn bootstrap_client<D>(client: &mut Client<D>) -> ObserverClient
         where
-            S: Service + 'static,
+            D: SharedData + 'static,
     {
         let targets = NodeId::targets(0..client.params.n());
 
         //Register the observer clients with the client node
         client.node.broadcast(
             NetworkMessageContent::System(
-                SystemMessage::Protocol(ProtocolMessage::ObserverMessage(ObserverMessage::ObserverRegister))),
+                SystemMessage::from(PBFTProtocolMessage::ObserverMessage(ObserverMessage::ObserverRegister))),
             targets,
         );
 
@@ -104,18 +106,18 @@ impl ObserverClient {
         self.registered_callback_fns.push(callback)
     }
 
-    pub(super) fn handle_observed_message<S>(
-        client_data: &Arc<ClientData<S>>,
-        observed_msg: NetworkMessage<SystemMessage<S, SysMsg<S>>>,
+    pub(super) fn handle_observed_message<D>(
+        client_data: &Arc<ClientData<D>>,
+        observed_msg: NetworkMessage<SysMsg<D>>,
     ) where
-        S: Service + 'static,
+        D: SharedData + 'static,
     {
         let (header, observed_msg) = observed_msg.into_inner();
 
         match observed_msg.into() {
             SystemMessage::Protocol(protocol_msg) => {
-                match protocol_msg {
-                    ProtocolMessage::ObserverMessage(observer_msg) => {
+                match protocol_msg.deref() {
+                    PBFTProtocolMessage::ObserverMessage(observer_msg) => {
                         match observed_msg {
                             ObserverMessage::ObserverRegister
                             | ObserverMessage::ObserverUnregister => {

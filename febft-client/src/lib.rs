@@ -23,7 +23,9 @@ use febft_communication::{Node, NodeConfig, NodeId};
 use febft_communication::message::{NetworkMessage, NetworkMessageContent};
 use febft_communication::serialize::Serializable;
 use febft_execution::executable::{Reply, Request, Service};
+use febft_execution::serialize::SharedData;
 use febft_messages::messages::{ReplyMessage, SystemMessage};
+use febft_messages::serialization::ProtocolData;
 
 #[cfg(feature = "observer_client")]
 use crate::observing_client::{ObserverClient, ObserverClientData};
@@ -99,9 +101,21 @@ impl Serializable for NoProtocol {
     }
 }
 
-pub struct ClientData<S>
+impl ProtocolData for NoProtocol {
+    type Message = ();
+
+    fn serialize<W: Write>(w: &mut W, message: &Self::Message) -> Result<()> {
+        Ok(())
+    }
+
+    fn deserialize<R: Read>(r: R) -> Result<Self::Message> {
+        Ok(())
+    }
+}
+
+pub struct ClientData<D>
     where
-        S: Service + 'static,
+        D: SharedData + 'static,
 {
     //The global session counter, so we don't have two client objects with the same session number
     session_counter: AtomicU32,
@@ -115,7 +129,7 @@ pub struct ClientData<S>
 
     //The ready items for requests made by this client. This is what is going to be used by the message receive task
     //To call the awaiting tasks
-    ready: Vec<Mutex<IntMap<ClientAwaker<Reply<S>>>>>,
+    ready: Vec<Mutex<IntMap<ClientAwaker<D::Reply>>>>,
 
     //We only want to have a single observer client for any and all sessions that the user
     //May have, so we keep this reference in here
@@ -126,13 +140,13 @@ pub struct ClientData<S>
 }
 
 
-pub trait ClientType<S: Service + 'static> {
+pub trait ClientType<D: SharedData + 'static> {
     ///Initialize request in accordance with the type of clients
     fn init_request(
         session_id: SeqNo,
         operation_id: SeqNo,
-        operation: Request<S>,
-    ) -> SystemMessage<S, NoProtocol>;
+        operation: D::Request,
+    ) -> SystemMessage<D, NoProtocol>;
 
     ///The return types for the iterator
     type Iter: Iterator<Item=NodeId>;
@@ -140,24 +154,24 @@ pub trait ClientType<S: Service + 'static> {
     ///Initialize the targets for the requests according with the type of request made
     ///
     /// Returns the iterator along with the amount of items contained within it
-    fn init_targets(client: &Client<S>) -> (Self::Iter, usize);
+    fn init_targets(client: &Client<D>) -> (Self::Iter, usize);
 
     ///How many responses does that client need to get the
-    fn needed_responses(client: &Client<S>) -> usize;
+    fn needed_responses(client: &Client<D>) -> usize;
 }
 
 /// Represents a client node in `febft`.
 // TODO: maybe make the clone impl more efficient
-pub struct Client<S: Service + 'static> {
+pub struct Client<D: SharedData + 'static> {
     session_id: SeqNo,
     operation_counter: SeqNo,
-    data: Arc<ClientData<S>>,
+    data: Arc<ClientData<D>>,
     params: SystemParams,
-    node: Arc<Node<SystemMessage<S, NoProtocol>>>,
+    node: Arc<Node<SystemMessage<D, NoProtocol>>>,
 
 }
 
-impl<S: Service> Clone for Client<S> {
+impl<D: SharedData> Clone for Client<D> {
     fn clone(&self) -> Self {
         let session_id = self
             .data
@@ -253,9 +267,9 @@ pub struct ReplicaVotes {
     digests: BTreeMap<Digest, usize>,
 }
 
-impl<S> Client<S>
+impl<D> Client<D>
     where
-        S: Service + 'static
+        D: SharedData + 'static
 {
     /// Bootstrap a client in `febft`.
     pub async fn bootstrap(cfg: ClientConfig) -> Result<Self> {
@@ -329,9 +343,9 @@ impl<S> Client<S>
     /// Updates the replicated state of the application running
     /// on top of `febft`.
     //
-    pub async fn update<T>(&mut self, operation: Request<S>) -> Result<Reply<S>>
+    pub async fn update<T>(&mut self, operation: D::Request) -> Result<D::Reply>
         where
-            T: ClientType<S>,
+            T: ClientType<D>,
     {
         let session_id = self.session_id;
         let operation_id = self.next_operation_id();
@@ -360,7 +374,7 @@ impl<S> Client<S>
         self.node.broadcast(NetworkMessageContent::System(message), targets);
 
         // await response
-        let ready = get_ready::<S>(session_id, &*self.data);
+        let ready = get_ready::<D>(session_id, &*self.data);
 
         {
             let mut ready_stored = ready.lock().unwrap();
@@ -387,10 +401,10 @@ impl<S> Client<S>
     /// to other threads to prevent slowdowns
     pub fn update_callback<T>(
         &mut self,
-        operation: Request<S>,
-        callback: Box<dyn FnOnce(Result<Reply<S>>) + Send>,
+        operation: D::Request,
+        callback: Box<dyn FnOnce(Result<D::Reply>) + Send>,
     ) where
-        T: ClientType<S>,
+        T: ClientType<D>,
     {
         let session_id = self.session_id;
 
@@ -435,7 +449,7 @@ impl<S> Client<S>
 
         //start_measurement!(rq_ready_init);
 
-        let ready = get_ready::<S>(session_id, &*self.data);
+        let ready = get_ready::<D>(session_id, &*self.data);
 
         let callback = Callback {
             to_call: callback,
@@ -472,10 +486,10 @@ impl<S> Client<S>
     ///Start performing a timeout for a given request.
     /// TODO: Repeat the request/do something else to fix this
     fn start_timeout(
-        node: Arc<Node<SystemMessage<S, NoProtocol>>>,
+        node: Arc<Node<SystemMessage<D, NoProtocol>>>,
         session_id: SeqNo,
         rq_id: SeqNo,
-        client_data: Arc<ClientData<S>>,
+        client_data: Arc<ClientData<D>>,
     ) {
         let node = node.clone();
         let node_id = node.id();
@@ -487,7 +501,7 @@ impl<S> Client<S>
             let req_key = get_request_key(session_id, rq_id);
 
             {
-                let bucket = get_ready::<S>(session_id, &*client_data);
+                let bucket = get_ready::<D>(session_id, &*client_data);
 
                 let bucket_guard = bucket.lock().unwrap();
 
@@ -563,8 +577,8 @@ impl<S> Client<S>
     fn deliver_response(
         node_id: NodeId,
         request_key: u64,
-        ready: &Mutex<IntMap<ClientAwaker<Reply<S>>>>,
-        message: ReplyMessage<Reply<S>>,
+        ready: &Mutex<IntMap<ClientAwaker<D::Reply>>>,
+        message: ReplyMessage<D::Reply>,
     ) {
         let mut ready_lock = ready.lock().unwrap();
 
@@ -628,7 +642,7 @@ impl<S> Client<S>
     fn deliver_error(
         node_id: NodeId,
         request_key: u64,
-        ready: &Mutex<IntMap<ClientAwaker<Reply<S>>>>,
+        ready: &Mutex<IntMap<ClientAwaker<D::Reply>>>,
         (session_id, operation_id): (SeqNo, SeqNo),
     ) {
         let mut ready_lock = ready.lock().unwrap();
@@ -692,7 +706,7 @@ impl<S> Client<S>
     ///This task might become a large bottleneck with the scenario of few clients with high concurrent rqs,
     /// As the replicas will make very large batches and respond to all the sent requests in one go.
     /// This leaves this thread with a very large task to do in a very short time and it just can't keep up
-    fn message_recv_task(params: SystemParams, data: Arc<ClientData<S>>, node: Arc<Node<SystemMessage<S, NoProtocol>>>) {
+    fn message_recv_task(params: SystemParams, data: Arc<ClientData<D>>, node: Arc<Node<SystemMessage<D, NoProtocol>>>) {
         // use session id as key
         let mut last_operation_ids: IntMap<SeqNo> = IntMap::new();
         let mut replica_votes: IntMap<ReplicaVotes> = IntMap::new();
@@ -773,7 +787,7 @@ impl<S> Client<S>
 
                         //Get the wakers for this request and deliver the payload
 
-                        let ready = get_ready::<S>(session_id, &*data);
+                        let ready = get_ready::<D>(session_id, &*data);
 
                         Self::deliver_response(
                             node.id(),
@@ -806,7 +820,7 @@ impl<S> Client<S>
                             last_operation_ids.insert(session_id.into(), operation_id);
 
                             //Get the wakers for this request and deliver the payload
-                            let ready = get_ready::<S>(session_id, &*data);
+                            let ready = get_ready::<D>(session_id, &*data);
 
                             Self::deliver_error(
                                 node.id(),
@@ -854,17 +868,17 @@ fn get_correct_vec_for<T>(session_id: SeqNo, vec: &Vec<Mutex<T>>) -> &Mutex<T> {
 }
 
 #[inline]
-fn get_ready<S: Service>(
+fn get_ready<D: SharedData>(
     session_id: SeqNo,
-    data: &ClientData<S>,
-) -> &Mutex<IntMap<ClientAwaker<Reply<S>>>> {
+    data: &ClientData<D>,
+) -> &Mutex<IntMap<ClientAwaker<D::Reply>>> {
     get_correct_vec_for(session_id, &data.ready)
 }
 
 #[inline]
-fn get_request_info<S: Service>(
+fn get_request_info<D: SharedData>(
     session_id: SeqNo,
-    data: &ClientData<S>,
+    data: &ClientData<D>,
 ) -> &Mutex<IntMap<SentRequestInfo>> {
     get_correct_vec_for(session_id, &data.request_info)
 }

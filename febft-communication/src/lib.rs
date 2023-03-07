@@ -777,7 +777,7 @@ impl<T> Node<T>
     /// on a single target id.
     pub fn send(
         &self,
-        message: NetworkMessageContent<T>,
+        message: NetworkMessageContent<T::Message>,
         target: NodeId,
         flush: bool,
     ) {
@@ -824,7 +824,7 @@ impl<T> Node<T>
     /// This variant of `send()` signs the sent message.
     pub fn send_signed(
         &self,
-        message: NetworkMessageContent<T>,
+        message: NetworkMessageContent<T::Message>,
         target: NodeId,
     ) {
         let comm_stats = received_network_rq!(&self.comm_stats);
@@ -871,7 +871,7 @@ impl<T> Node<T>
 
     #[inline]
     fn send_impl(
-        message: NetworkMessageContent<T>,
+        message: NetworkMessageContent<T::Message>,
         send_to: SendTo<T>,
         my_id: NodeId,
         target: NodeId,
@@ -885,7 +885,7 @@ impl<T> Node<T>
 
             let mut buf = Vec::new();
 
-            let digest = serialize::serialize_digest_message(&message, &mut buf).unwrap();
+            let digest = serialize::serialize_digest_message::<T, Vec<u8>>(&message, &mut buf).unwrap();
 
             let buf = Bytes::from(buf);
 
@@ -918,7 +918,7 @@ impl<T> Node<T>
     /// This variant of broadcast does not sign the messages that are sent
     pub fn broadcast(
         &self,
-        message: NetworkMessageContent<T>,
+        message: NetworkMessageContent<T::Message>,
         targets: impl Iterator<Item=NodeId>,
     ) {
         let comm_stats = received_network_rq!(&self.comm_stats);
@@ -935,7 +935,7 @@ impl<T> Node<T>
     /// This variant of `broadcast()` signs the sent message.
     pub fn broadcast_signed(
         &self,
-        message: NetworkMessageContent<T>,
+        message: NetworkMessageContent<T::Message>,
         targets: impl Iterator<Item=NodeId>,
     ) {
         start_measurement!(start_time);
@@ -1021,7 +1021,7 @@ impl<T> Node<T>
 
     #[inline]
     fn broadcast_impl(
-        message: NetworkMessageContent<T>,
+        message: NetworkMessageContent<T::Message>,
         my_send_to: Option<SendTo<T>>,
         other_send_tos: SendTos<T>,
         _first_cli: NodeId,
@@ -1463,7 +1463,7 @@ impl<T> SendNode<T>
     /// Check the `send()` documentation for `Node`.
     pub fn send(
         &mut self,
-        message: NetworkMessageContent<T>,
+        message: NetworkMessageContent<T::Message>,
         target: NodeId,
         flush: bool,
     ) {
@@ -1512,7 +1512,7 @@ impl<T> SendNode<T>
     /// Check the `send_signed()` documentation for `Node`.
     pub fn send_signed(
         &mut self,
-        message: NetworkMessageContent<T>,
+        message: NetworkMessageContent<T::Message>,
         target: NodeId,
     ) {
         let comm_stats = received_network_rq!(&self.comm_stats);
@@ -1560,7 +1560,7 @@ impl<T> SendNode<T>
     /// Check the `broadcast()` documentation for `Node`.
     pub fn broadcast(
         &mut self,
-        message: NetworkMessageContent<T>,
+        message: NetworkMessageContent<T::Message>,
         targets: impl Iterator<Item=NodeId>,
     ) {
         let comm_stats = received_network_rq!(&self.comm_stats);
@@ -1577,7 +1577,7 @@ impl<T> SendNode<T>
     /// Check the `broadcast_signed()` documentation for `Node`.
     pub fn broadcast_signed(
         &mut self,
-        message: NetworkMessageContent<T>,
+        message: NetworkMessageContent<T::Message>,
         targets: impl Iterator<Item=NodeId>,
     ) {
         let comm_stats = received_network_rq!(&self.comm_stats);
@@ -1662,7 +1662,7 @@ impl<T> SendTo<T>
 
     fn value(
         self,
-        m: Either<MessageData, (MessageData, NetworkMessageContent<T>)>,
+        m: Either<MessageData, (MessageData, NetworkMessageContent<T::Message>)>,
         rq_key: Option<u64>,
     ) {
         match self {

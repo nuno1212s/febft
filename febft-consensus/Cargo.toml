@@ -9,9 +9,10 @@ edition = "2021"
 
 serialize_capnp = ["capnp", "febft-capnp", "febft-communication/serialize_capnp", "febft-messages/serialize_capnp"]
 #serialize_bincode = ["bincode", "febft-communication/serialize_bincode", "febft-messages/serialize_bincode"]
+serialize_serde = ["serde", "febft-messages/serialize_serde", "febft-communication/serialize_serde", "febft-common/serialize_serde"]
 
 default = [
-    "serialize_capnp"
+    "serialize_serde"
 ]
 
 [dependencies]
@@ -31,6 +32,7 @@ num-bigint = "0.4.3"
 num-traits = "0.2.15"
 
 capnp = { version = "0.16.0", optional = true }
-bincode = {version = "2.0.0-rc.2", optional = true}
+bincode = { version = "2.0.0-rc.2", optional = true }
+serde = { version = "1.0.153", features = ["rc"], optional = true }
 
 log = "0.4.17"

@@ -25,7 +25,7 @@ use febft_timeouts::Timeouts;
 use crate::consensus::replica_consensus::{ReplicaConsensus, ReplicaPreparingPollStatus};
 use crate::cst::RecoveryState;
 use crate::follower::FollowerHandle;
-use crate::messages::{ConsensusMessage, ConsensusMessageKind, ProtocolMessage};
+use crate::messages::{ConsensusMessage, ConsensusMessageKind, PBFTProtocolMessage};
 use crate::msg_log::decided_log::DecidedLog;
 use crate::msg_log::deciding_log::{CompletedBatch, DecidingLog};
 use crate::msg_log::decisions::Proof;
@@ -511,11 +511,11 @@ impl<S: Service + 'static> Consensus<S> {
         &self,
         requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         synchronizer: &K,
-    ) -> ProtocolMessage<S::Data>
+    ) -> PBFTProtocolMessage<S::Data>
         where
             K: AbstractSynchronizer<S>,
     {
-        ProtocolMessage::Consensus(ConsensusMessage::new(
+        PBFTProtocolMessage::Consensus(ConsensusMessage::new(
             self.sequence_number(),
             synchronizer.view().sequence_number(),
             ConsensusMessageKind::PrePrepare(requests),
@@ -556,7 +556,7 @@ impl<S: Service + 'static> Consensus<S> {
         synchronizer: &Synchronizer<S>,
         timeouts: &Timeouts,
         log: &mut DecidedLog<S>,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
     ) {
         match &mut self.accessory {
             ConsensusAccessory::Follower => {}
@@ -586,7 +586,7 @@ impl<S: Service + 'static> Consensus<S> {
         synchronizer: &Synchronizer<S>,
         timeouts: &Timeouts,
         log: &mut DecidedLog<S>,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
     ) -> ConsensusStatus<S> {
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just

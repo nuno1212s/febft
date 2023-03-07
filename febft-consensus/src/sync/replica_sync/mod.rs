@@ -18,7 +18,7 @@ use febft_communication::{Node, NodeId};
 use febft_execution::executable::{Request, Service};
 use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
 use febft_timeouts::{ClientRqInfo, Timeouts};
-use crate::messages::{ConsensusMessage, ConsensusMessageKind, ProtocolMessage, ViewChangeMessage, ViewChangeMessageKind};
+use crate::messages::{ConsensusMessage, ConsensusMessageKind, PBFTProtocolMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::msg_log::decided_log::DecidedLog;
 use crate::msg_log::pending_decision::PendingRequestLog;
 use crate::sync::view::ViewInfo;
@@ -61,7 +61,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         log: &DecidedLog<S>,
         pending_rq_log: &PendingRequestLog<S>,
         timeouts: &Timeouts,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
     ) {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
@@ -81,7 +81,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
             //The N of the network (With reconfigurable views)
             .collect_data(previous_view.params().f());
 
-        let message = ProtocolMessage::ViewChange(ViewChangeMessage::new(
+        let message = PBFTProtocolMessage::ViewChange(ViewChangeMessage::new(
             current_view_seq,
             ViewChangeMessageKind::StopData(collect),
         ));
@@ -96,7 +96,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         &self,
         base_sync: &Synchronizer<S>,
         timeouts: &Timeouts,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
         timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
     ) {
         // stop all timers
@@ -111,7 +111,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
 
         //TODO: Timeout this request and keep sending it until we have achieved a new regency
 
-        let message = ProtocolMessage::ViewChange(ViewChangeMessage::new(
+        let message = PBFTProtocolMessage::ViewChange(ViewChangeMessage::new(
             current_view.sequence_number().next(),
             ViewChangeMessageKind::Stop(requests),
         ));
@@ -375,7 +375,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         &self,
         base_sync: &Synchronizer<S>,
         timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
         _log: &PendingRequestLog<S>,
     ) {
         let message = SystemMessage::ForwardedRequests(ForwardedRequestsMessage::new(timed_out));

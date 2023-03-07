@@ -16,7 +16,7 @@ const EXECUTING_BUFFER: usize = 8096;
 
 pub trait ExecutorReplier: Send {
     fn execution_finished<S: Service>(
-        node: SendNode<SysMsg<S>>,
+        node: SendNode<SysMsg<S::Data>>,
         seq: Option<SeqNo>,
         batch: BatchReplies<Reply<S>>,
     );
@@ -26,7 +26,7 @@ pub struct FollowerReplier;
 
 impl ExecutorReplier for FollowerReplier {
     fn execution_finished<S: Service>(
-        node: SendNode<SysMsg<S>>,
+        node: SendNode<SysMsg<S::Data>>,
         seq: Option<SeqNo>,
         batch: BatchReplies<Reply<S>>,
     ) {
@@ -43,7 +43,7 @@ pub struct ReplicaReplier;
 
 impl ExecutorReplier for ReplicaReplier {
     fn execution_finished<S: Service>(
-        mut send_node: SendNode<SysMsg<S>>,
+        mut send_node: SendNode<SysMsg<S::Data>>,
         _seq: Option<SeqNo>,
         batch: BatchReplies<Reply<S>>,
     ) {
@@ -104,7 +104,7 @@ pub struct Executor<S: Service + 'static, T: ExecutorReplier> {
     state: State<S>,
     e_rx: ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>,
     reply_worker: ReplyHandle<S>,
-    send_node: SendNode<SysMsg<S>>,
+    send_node: SendNode<SysMsg<S::Data>>,
     observer_handle: Option<ObserverHandle>,
     checkpoint_delivery_channel: ChannelSyncTx<AppState<S>>,
 
@@ -130,7 +130,7 @@ impl<S, T> Executor<S, T>
         work_handle: ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>,
         mut service: S,
         current_state: Option<(State<S>, Vec<Request<S>>)>,
-        send_node: SendNode<SysMsg<S>>,
+        send_node: SendNode<SysMsg<S::Data>>,
         checkpoint_delivery_channel: ChannelSyncTx<AppState<S>>,
         observer: Option<ObserverHandle>,
     ) -> Result<()> {

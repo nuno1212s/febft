@@ -5,8 +5,16 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+
+serialize_serde = ["serde"]
+
+default = ["serialize_serde"]
+
 [dependencies]
-febft-common={path = "../febft-common"}
-febft-communication={path="../febft-communication"}
+febft-common = { path = "../febft-common" }
+febft-communication = { path = "../febft-communication" }
+
+serde = { version = "1.0.153", optional = true }
 
 log = "0.4.17"

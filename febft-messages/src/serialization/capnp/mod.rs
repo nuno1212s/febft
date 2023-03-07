@@ -3,13 +3,14 @@ use crate::messages::{ReplyMessage, RequestMessage, SystemMessage};
 use febft_common::error::*;
 use febft_communication::serialize::Serializable;
 use febft_execution::executable::{Request, Service};
-use febft_capnp::messages_capnp;
+use febft_capnp::{messages_capnp, service_messages_capnp};
 use febft_capnp::messages_capnp::system::WhichReader;
 use febft_common::ordering::{Orderable, SeqNo};
+use febft_communication::message::NetworkMessageContent;
 use febft_execution::serialize::SharedData;
 
 pub(super) fn serialize_message<W, S, P>(w: &mut W, msg: &SystemMessage<S, P>) -> Result<()>
-    where W: Write, S: Service, P: Serializable {
+    where W: Write, S: SharedData, P: Serializable {
     let allocator = capnp::message::HeapAllocator::new();
 
     let mut root = capnp::message::Builder::new(allocator);
@@ -99,7 +100,7 @@ pub(super) fn deserialize_message<R: Read, S: Service, P: Serializable>(r: R) ->
     }
 }
 
-pub fn serialize_request_message<D>(mut msg_builder: messages_capnp::request::Builder, rq_msg: &RequestMessage<D::Request>)
+pub fn serialize_request_message<D>(mut msg_builder: service_messages_capnp::request::Builder, rq_msg: &RequestMessage<D::Request>)
                                 -> Result<()>
     where D: SharedData {
     msg_builder.set_operation_id(u32::from(rq_msg.sequence_number()));
@@ -114,7 +115,7 @@ pub fn serialize_request_message<D>(mut msg_builder: messages_capnp::request::Bu
     Ok(())
 }
 
-pub fn deserialize_request_message<S>(msg_reader: messages_capnp::request::Reader) -> Result<RequestMessage<S::Request>>
+pub fn deserialize_request_message<S>(msg_reader: service_messages_capnp::request::Reader) -> Result<RequestMessage<S::Request>>
     where S: SharedData {
 
     let seq_num: SeqNo = SeqNo::from(msg_reader.get_operation_id());
@@ -125,7 +126,7 @@ pub fn deserialize_request_message<S>(msg_reader: messages_capnp::request::Reade
     Ok(RequestMessage::new(session_id, seq_num, request))
 }
 
-pub fn serialize_reply_message<S>(mut msg_builder: messages_capnp::reply::Builder, reply_msg: &ReplyMessage<S::Reply>) -> Result<()>
+pub fn serialize_reply_message<S>(mut msg_builder: service_messages_capnp::reply::Builder, reply_msg: &ReplyMessage<S::Reply>) -> Result<()>
     where S: SharedData {
     msg_builder.set_operation_id(u32::from(reply_msg.sequence_number()));
     msg_builder.set_session_id(u32::from(reply_msg.session_id()));
@@ -139,7 +140,7 @@ pub fn serialize_reply_message<S>(mut msg_builder: messages_capnp::reply::Builde
     Ok(())
 }
 
-pub fn deserialize_reply_message<S>(msg_reader: messages_capnp::reply::Reader) -> Result<ReplyMessage<S::Reply>>
+pub fn deserialize_reply_message<S>(msg_reader: service_messages_capnp::reply::Reader) -> Result<ReplyMessage<S::Reply>>
     where S: SharedData {
 
     let seq_num: SeqNo = SeqNo::from(msg_reader.get_operation_id());

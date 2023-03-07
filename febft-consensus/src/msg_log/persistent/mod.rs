@@ -22,7 +22,7 @@ use febft_communication::serialize::Serializable;
 use febft_execution::executable::{ExecutorHandle, Request, Service, State};
 use febft_execution::serialize::SharedData;
 use crate::messages;
-use crate::messages::{ConsensusMessage, ConsensusMessageKind, ProtocolMessage};
+use crate::messages::{ConsensusMessage, ConsensusMessageKind, PBFTProtocolMessage};
 use crate::msg_log::decided_log::BatchExecutionInfo;
 use crate::msg_log::decisions::{Checkpoint, DecisionLog, OnGoingDecision, Proof, ProofMetadata};
 use crate::msg_log::persistent::serialization::{make_proof_info, Persister};

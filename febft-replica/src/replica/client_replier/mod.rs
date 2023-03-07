@@ -13,7 +13,7 @@ type RepliesType<S> = BatchReplies<S>;
 pub struct Replier<S> where S: Service + 'static {
     node_id: NodeId,
     channel:  ChannelSyncRx<RepliesType<Reply<S>>>,
-    send_node: SendNode<SysMsg<S>>,
+    send_node: SendNode<SysMsg<S::Data>>,
 }
 
 pub struct ReplyHandle<S> where S: Service {
@@ -50,7 +50,7 @@ impl<S> Clone for ReplyHandle<S> where S: Service {
 
 impl<S> Replier<S> where S: Service + 'static{
 
-    pub fn new(node_id: NodeId, send_node: SendNode<SysMsg<S>>) -> ReplyHandle<S> {
+    pub fn new(node_id: NodeId, send_node: SendNode<SysMsg<S::Data>>) -> ReplyHandle<S> {
         let (ch_tx, ch_rx) = channel::new_bounded_sync(REPLY_CHANNEL_SIZE);
 
         let reply_task = Self {

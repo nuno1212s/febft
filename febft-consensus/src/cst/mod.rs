@@ -22,7 +22,7 @@ use febft_timeouts::Timeouts;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
-use crate::messages::{CstMessage, CstMessageKind, ProtocolMessage};
+use crate::messages::{CstMessage, CstMessageKind, PBFTProtocolMessage};
 use crate::msg_log::decided_log::DecidedLog;
 use crate::msg_log::decisions::{Checkpoint, DecisionLog};
 use crate::sync::Synchronizer;
@@ -242,7 +242,7 @@ impl<S> CollabStateTransfer<S>
         message: CstMessage<State<S>, Request<S>>,
         synchronizer: &Arc<T>,
         log: &DecidedLog<S>,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
     ) where
         T: AbstractSynchronizer<S>,
     {
@@ -253,7 +253,7 @@ impl<S> CollabStateTransfer<S>
                 return;
             }
         };
-        let reply = ProtocolMessage::Cst(CstMessage::new(
+        let reply = PBFTProtocolMessage::Cst(CstMessage::new(
             message.sequence_number(),
             CstMessageKind::ReplyState(snapshot),
         ));
@@ -268,7 +268,7 @@ impl<S> CollabStateTransfer<S>
         synchronizer: &Arc<T>,
         consensus: &K,
         log: &DecidedLog<S>,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
     ) -> CstStatus<State<S>, Request<S>>
         where
             T: AbstractSynchronizer<S>,
@@ -287,7 +287,7 @@ impl<S> CollabStateTransfer<S>
                         let kind =
                             CstMessageKind::ReplyLatestConsensusSeq(consensus.sequence_number());
                         let reply =
-                            ProtocolMessage::Cst(CstMessage::new(message.sequence_number(), kind));
+                            PBFTProtocolMessage::Cst(CstMessage::new(message.sequence_number(), kind));
 
                         node.send(NetworkMessageContent::System(reply.into()), header.from(), true);
                     }
@@ -434,7 +434,7 @@ impl<S> CollabStateTransfer<S>
     /// Returns a bool to signify if we must move to the Retrieving state
     /// If the timeout is no longer relevant, returns false (Can remain in current phase)
     pub fn cst_request_timed_out(&mut self, seq: SeqNo, synchronizer: &Arc<Synchronizer<S>>,
-                                 timeouts: &Timeouts, node: &Node<SysMsg<S>>) -> bool {
+                                 timeouts: &Timeouts, node: &Node<SysMsg<S::Data>>) -> bool {
         let status = self.timed_out(seq);
 
         match status {
@@ -495,7 +495,7 @@ impl<S> CollabStateTransfer<S>
         &mut self,
         synchronizer: &Arc<T>,
         timeouts: &Timeouts,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
     ) where
         T: AbstractSynchronizer<S>
     {
@@ -512,7 +512,7 @@ impl<S> CollabStateTransfer<S>
 
         self.phase = ProtoPhase::ReceivingCid(0);
 
-        let message = ProtocolMessage::Cst(CstMessage::new(
+        let message = PBFTProtocolMessage::Cst(CstMessage::new(
             cst_seq,
             CstMessageKind::RequestLatestConsensusSeq,
         ));
@@ -527,7 +527,7 @@ impl<S> CollabStateTransfer<S>
         &mut self,
         synchronizer: &Arc<T>,
         timeouts: &Timeouts,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
     ) where
         T: AbstractSynchronizer<S>
     {
@@ -545,7 +545,7 @@ impl<S> CollabStateTransfer<S>
 
         //TODO: Maybe attempt to use followers to rebuild state and avoid
         // Overloading the replicas
-        let message = ProtocolMessage::Cst(CstMessage::new(cst_seq, CstMessageKind::RequestState));
+        let message = PBFTProtocolMessage::Cst(CstMessage::new(cst_seq, CstMessageKind::RequestState));
 
         let targets = NodeId::targets(0..current_view.params().n());
 

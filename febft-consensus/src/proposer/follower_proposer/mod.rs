@@ -21,7 +21,7 @@ pub struct FollowerProposer<S: Service + 'static> {
     cancelled: AtomicBool,
 
     //Reference to the network node
-    node_ref: Arc<Node<SysMsg<S>>>,
+    node_ref: Arc<Node<SysMsg<S::Data>>>,
 
     //The target
     target_global_batch_size: usize,
@@ -35,7 +35,7 @@ const BATCH_CHANNEL_SIZE: usize = 128;
 
 impl<S: Service + 'static> FollowerProposer<S> {
     pub fn new(
-        node: Arc<Node<SysMsg<S>>>,
+        node: Arc<Node<SysMsg<S::Data>>>,
         log: Arc<PendingRequestLog<S>>,
         executor: ExecutorHandle<S>,
         target_global_batch_size: usize,

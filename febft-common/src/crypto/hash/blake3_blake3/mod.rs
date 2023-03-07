@@ -54,7 +54,6 @@ impl AsRef<[u8]> for Digest {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::Context;

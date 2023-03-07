@@ -1,7 +1,7 @@
 @0x9c9b10fc214204df;
 
 using Rust = import "rust.capnp";
-using SysMsgs = import "messages.capnp";
+using SrvMsgs = import "service_messages.capnp";
 
 struct ProtocolMessage {
 
@@ -18,7 +18,7 @@ struct Consensus {
     seqNo @0 :UInt32;
     view  @1 :UInt32;
     union {
-        prePrepare @2 :List(SysMsgs.ForwardedRequest);
+        prePrepare @2 :List(SrvMsgs.ForwardedRequest);
         prepare    @3 :Data;
         commit     @4 :Data;
     }

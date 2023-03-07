@@ -7,10 +7,10 @@ use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, StoredMessage};
 use febft_communication::serialize::Buf;
 use febft_messages::serialization::capnp as messages_capnp_impl;
-use crate::messages::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, ObserverMessage, ProtocolMessage};
+use crate::messages::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, ObserverMessage, PBFTProtocolMessage};
 use crate::sync::view::ViewInfo;
 
-pub(super) fn serialize_protocol_message<W: Write, D: SharedData>(w:&mut W, msg: &ProtocolMessage<D>) -> Result<()> {
+pub(super) fn serialize_protocol_message<W: Write, D: SharedData>(w:&mut W, msg: &PBFTProtocolMessage<D>) -> Result<()> {
     let allocator = capnp::message::HeapAllocator::new();
 
     let mut root = capnp::message::Builder::new(allocator);
@@ -18,21 +18,21 @@ pub(super) fn serialize_protocol_message<W: Write, D: SharedData>(w:&mut W, msg:
     let mut writer: consensus_messages_capnp::protocol_message::Builder = root.init_root();
 
     match msg {
-        ProtocolMessage::Consensus(consensus_msg) => {
+        PBFTProtocolMessage::Consensus(consensus_msg) => {
             let consensus = writer.reborrow().init_consensus_message();
 
             serialize_consensus_message::<D>(consensus, consensus_msg)?;
         }
-        ProtocolMessage::FwdConsensus(fwd_consensus_msg) => {
+        PBFTProtocolMessage::FwdConsensus(fwd_consensus_msg) => {
             unreachable!()
         }
-        ProtocolMessage::Cst(cst_msg) => {
+        PBFTProtocolMessage::Cst(cst_msg) => {
             unreachable!()
         }
-        ProtocolMessage::ViewChange(view_change_msg) => {
+        PBFTProtocolMessage::ViewChange(view_change_msg) => {
             unreachable!()
         }
-        ProtocolMessage::ObserverMessage(observer_message) => {
+        PBFTProtocolMessage::ObserverMessage(observer_message) => {
             let capnp_observer = writer.reborrow().init_observer_message();
 
             let mut obs_message_type = capnp_observer.init_message_type();
@@ -103,7 +103,7 @@ pub(super) fn serialize_protocol_message<W: Write, D: SharedData>(w:&mut W, msg:
     )
 }
 
-pub(super) fn deserialize_protocol_message<R: Read, D: SharedData>(r: R) -> Result<ProtocolMessage<D>> {
+pub(super) fn deserialize_protocol_message<R: Read, D: SharedData>(r: R) -> Result<PBFTProtocolMessage<D>> {
     let reader = capnp::serialize::read_message(r, Default::default()).wrapped_msg(
         ErrorKind::CommunicationSerialize,
         "Failed to get capnp reader",
@@ -116,7 +116,7 @@ pub(super) fn deserialize_protocol_message<R: Read, D: SharedData>(r: R) -> Resu
 
     return match which {
         consensus_messages_capnp::protocol_message::WhichReader::ConsensusMessage(Ok(consensus_msg)) => {
-            Ok(ProtocolMessage::Consensus(deserialize_consensus_message::<D>(consensus_msg)?))
+            Ok(PBFTProtocolMessage::Consensus(deserialize_consensus_message::<D>(consensus_msg)?))
         }
         consensus_messages_capnp::protocol_message::WhichReader::ConsensusMessage(Err(err)) => {
             Err(Error::wrapped(ErrorKind::CommunicationSerialize, err))
@@ -203,7 +203,7 @@ pub(super) fn deserialize_protocol_message<R: Read, D: SharedData>(r: R) -> Resu
                 }
             }?;
 
-            Ok(ProtocolMessage::ObserverMessage(observer_msg))
+            Ok(PBFTProtocolMessage::ObserverMessage(observer_msg))
         }
         consensus_messages_capnp::protocol_message::WhichReader::ObserverMessage(Err(err)) => {
             Err(Error::wrapped(ErrorKind::CommunicationSerialize, err))

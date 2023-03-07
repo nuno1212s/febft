@@ -7,7 +7,8 @@ use log::{debug, info, warn};
 use febft_common::channel;
 use febft_communication::message::NetworkMessageContent;
 use febft_execution::executable::Service;
-use crate::messages::{ObserveEventKind, ObserverMessage, ProtocolMessage};
+use febft_execution::serialize::SharedData;
+use crate::messages::{ObserveEventKind, ObserverMessage, PBFTProtocolMessage};
 use crate::sync::view::ViewInfo;
 use crate::SysMsg;
 
@@ -37,7 +38,7 @@ impl ObserverHandle {
     }
 }
 
-pub fn start_observers<S>(send_node: SendNode<SysMsg<S>>) -> ObserverHandle where S: Service {
+pub fn start_observers<D>(send_node: SendNode<SysMsg<D>>) -> ObserverHandle where D: SharedData + 'static {
 
     let (tx, rx) = channel::new_bounded_mixed(16834);
 
@@ -58,15 +59,15 @@ pub fn start_observers<S>(send_node: SendNode<SysMsg<S>>) -> ObserverHandle wher
     observer_handle
 }
 
-struct Observers<S> where S: Service + 'static {
+struct Observers<D> where D: SharedData + 'static {
     registered_observers: BTreeSet<ObserverType>,
-    send_node: SendNode<SysMsg<S>>,
+    send_node: SendNode<SysMsg<D>>,
     rx: ChannelMixedRx<MessageType<ObserverType>>,
     last_normal_event: Option<(ViewInfo, SeqNo)>,
     last_event: Option<ObserveEventKind>,
 }
 
-impl<S> Observers<S> where S: Service {
+impl<D> Observers<D> where D: SharedData + 'static {
 
     fn register_observer(&mut self, observer: ObserverType) -> bool {
         self.registered_observers.insert(observer)
@@ -96,18 +97,18 @@ impl<S> Observers<S> where S: Service {
                                         info!("{:?} // Observer {:?} has been registered", self.send_node.id(), connected_client);
                                     }
 
-                                    let message = ProtocolMessage::ObserverMessage(ObserverMessage::ObserverRegisterResponse(res));
+                                    let message = PBFTProtocolMessage::ObserverMessage(ObserverMessage::ObserverRegisterResponse(res));
 
                                     self.send_node.send(NetworkMessageContent::System(message.into()), connected_client, true);
 
                                     if let Some((view, seq)) = &self.last_normal_event {
-                                        let message  = ProtocolMessage::ObserverMessage(ObserverMessage::ObservedValue(ObserveEventKind::NormalPhase((view.clone(), seq.clone()))));
+                                        let message  = PBFTProtocolMessage::ObserverMessage(ObserverMessage::ObservedValue(ObserveEventKind::NormalPhase((view.clone(), seq.clone()))));
 
                                         self.send_node.send(NetworkMessageContent::System(message.into()), connected_client, true);
                                     }
 
                                     if let Some(last_event) = &self.last_event {
-                                        let message  = ProtocolMessage::ObserverMessage(ObserverMessage::ObservedValue(last_event.clone()));
+                                        let message  = PBFTProtocolMessage::ObserverMessage(ObserverMessage::ObservedValue(last_event.clone()));
 
                                         self.send_node.send(NetworkMessageContent::System(message.into()), connected_client, true);
                                     }
@@ -128,7 +129,7 @@ impl<S> Observers<S> where S: Service {
                             self.last_event = Some(event_type.clone());
 
                             //Send the observed event to the registered observers
-                            let message = ProtocolMessage::ObserverMessage(ObserverMessage::ObservedValue(event_type));
+                            let message = PBFTProtocolMessage::ObserverMessage(ObserverMessage::ObservedValue(event_type));
 
                             let registered_obs = self.registered_observers.iter().copied().map(|f| {
                                 f.0 as usize

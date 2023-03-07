@@ -16,13 +16,13 @@ use febft_communication::message::{Header, NetworkMessageContent, StoredMessage,
 use febft_communication::{Node, NodeId};
 use febft_communication::serialize::{Buf, DigestSerializable};
 use febft_execution::executable::{Reply, Request, Service, State};
-use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage};
+use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
 use febft_timeouts::{ClientRqInfo, Timeouts};
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use crate::consensus::Consensus;
-use crate::messages::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, ProtocolMessage, ViewChangeMessage, ViewChangeMessageKind};
+use crate::messages::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTProtocolMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::msg_log::decided_log::DecidedLog;
 use crate::msg_log::decisions::{CollectData, Proof, ViewDecisionPair};
 use crate::msg_log::pending_decision::PendingRequestLog;
@@ -481,7 +481,7 @@ impl<S> Synchronizer<S>
         log: &mut DecidedLog<S>,
         pending_rq_log: &PendingRequestLog<S>,
         consensus: &mut Consensus<S>,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
     ) -> SynchronizerStatus
     {
         match *self.phase.borrow() {
@@ -737,10 +737,10 @@ impl<S> Synchronizer<S>
                             let (header, message) = {
                                 let mut buf = Vec::new();
 
-                                let forged_pre_prepare : SysMsg<S> = consensus.forge_propose(p.clone(), self).into();
+                                let forged_pre_prepare : SysMsg<S::Data> = consensus.forge_propose(p.clone(), self).into();
 
                                 //TODO: Is this right?
-                                let digest = <SysMsg<S> as DigestSerializable>::serialize_digest(
+                                let digest = <SysMsg<S::Data> as DigestSerializable>::serialize_digest(
                                     &forged_pre_prepare,
                                     &mut buf,
                                 ).unwrap();
@@ -760,7 +760,7 @@ impl<S> Synchronizer<S>
                                     Some(node_sign.key_pair()),
                                 ).into_inner();
 
-                                if let ProtocolMessage::Consensus(consensus) = ProtocolMessage::from(forged_pre_prepare) {
+                                if let PBFTProtocolMessage::Consensus(consensus) = PBFTProtocolMessage::from(forged_pre_prepare) {
                                     (h, consensus)
                                 } else {
                                     //This is basically impossible
@@ -773,7 +773,7 @@ impl<S> Synchronizer<S>
                             let collects = collects_guard.values()
                                 .cloned().collect();
 
-                            let message = ProtocolMessage::ViewChange(ViewChangeMessage::new(
+                            let message = PBFTProtocolMessage::ViewChange(ViewChangeMessage::new(
                                 current_view.sequence_number(),
                                 ViewChangeMessageKind::Sync(LeaderCollects {
                                     proposed: fwd_request.clone(),
@@ -785,7 +785,7 @@ impl<S> Synchronizer<S>
                             let targets = NodeId::targets(0..current_view.params().n())
                                 .filter(move |&id| id != node_id);
 
-                            node.broadcast(NetworkMessageContent::System(message.into()), targets);
+                            node.broadcast(NetworkMessageContent::from(SystemMessage::from(message)), targets);
 
                             let state = FinalizeState {
                                 curr_cid,
@@ -913,7 +913,7 @@ impl<S> Synchronizer<S>
         log: &mut DecidedLog<S>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<S>,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
     ) -> Option<()>
     {
         let state = self.finalize_state.borrow_mut().take()?;
@@ -944,7 +944,7 @@ impl<S> Synchronizer<S>
     pub fn begin_view_change(
         &self,
         timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
         timeouts: &Timeouts,
         _log: &DecidedLog<S>,
     )
@@ -1024,7 +1024,7 @@ impl<S> Synchronizer<S>
         log: &mut DecidedLog<S>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<S>,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
     ) -> SynchronizerStatus
     {
         let FinalizeState {
@@ -1131,7 +1131,7 @@ impl<S> Synchronizer<S>
     /// Has not received the requests from the client)
     pub fn forward_requests(&self,
                             timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
-                            node: &Node<SysMsg<S>>,
+                            node: &Node<SysMsg<S::Data>>,
                             log: &PendingRequestLog<S>) {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {}
@@ -1178,7 +1178,7 @@ impl<S> Synchronizer<S>
     fn highest_proof<'a>(
         guard: &'a IntMap<StoredMessage<ViewChangeMessage<Request<S>>>>,
         view: &ViewInfo,
-        node: &Node<SysMsg<S>>,
+        node: &Node<SysMsg<S::Data>>,
     ) -> Option<&'a Proof<Request<S>>> {
         highest_proof::<S, _>(&view, node, guard.values())
     }
@@ -1383,7 +1383,7 @@ fn normalized_collects<'a, O: 'a>(
 }
 
 fn signed_collects<S>(
-    node: &Node<SysMsg<S>>,
+    node: &Node<SysMsg<S::Data>>,
     collects: Vec<StoredMessage<ViewChangeMessage<Request<S>>>>,
 ) -> Vec<StoredMessage<ViewChangeMessage<Request<S>>>>
     where
@@ -1398,7 +1398,7 @@ fn signed_collects<S>(
         .collect()
 }
 
-fn validate_signature<'a, S, M>(node: &'a Node<SysMsg<S>>, stored: &'a StoredMessage<M>) -> bool
+fn validate_signature<'a, S, M>(node: &'a Node<SysMsg<S::Data>>, stored: &'a StoredMessage<M>) -> bool
     where
         S: Service + Send + 'static,
         State<S>: Send + Clone + 'static,
@@ -1424,7 +1424,7 @@ fn validate_signature<'a, S, M>(node: &'a Node<SysMsg<S>>, stored: &'a StoredMes
 
 fn highest_proof<'a, S, I>(
     view: &ViewInfo,
-    node: &Node<SysMsg<S>>,
+    node: &Node<SysMsg<S::Data>>,
     collects: I,
 ) -> Option<&'a Proof<Request<S>>>
     where

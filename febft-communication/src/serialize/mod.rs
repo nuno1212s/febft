@@ -17,40 +17,39 @@ use febft_common::error::*;
 
 use crate::message::{NetworkMessage, NetworkMessageContent};
 
-/*#[cfg(feature = "serialize_serde")]
+#[cfg(feature = "serialize_serde")]
 pub mod serde;
 
-#[cfg(feature = "serialize_bincode")]
-pub mod bincode;*/
+// #[cfg(feature = "serialize_bincode")]
+// pub mod bincode;
 
-#[cfg(feature = "serialize_capnp")]
-pub mod capnp;
+// #[cfg(feature = "serialize_capnp")]
+// pub mod capnp;
 
 pub fn serialize_message<T, W>(
-    m: &NetworkMessageContent<T>,
+    m: &NetworkMessageContent<T::Message>,
     w: &mut W,
 ) -> Result<()> where
-    W: Write + AsRef<[u8]>,
+    W: Write + AsMut<[u8]>,
     T: Serializable {
 
-    /*
-    #[cfg(feature="serialize_bincode")]
-    bincode::serialize_message(&m, w)?;
+    // #[cfg(feature="serialize_bincode")]
+    // bincode::serialize_message(&m, w)?;
 
     #[cfg(feature="serialize_serde")]
-    serde::serialize_message(&m, w)?; */
+    serde::serialize_message::<T, W>(&m, w)?;
 
-    #[cfg(feature="serialize_capnp")]
-    capnp::serialize_message(m , w)?;
+    // #[cfg(feature="serialize_capnp")]
+    // capnp::serialize_message::<T, W>(m , w)?;
 
     Ok(())
 }
 
 pub fn serialize_digest_message<T, W>(
-    m: &NetworkMessageContent<T>,
+    m: &NetworkMessageContent<T::Message>,
     w: &mut W,
 ) -> Result<Digest>
-    where W: Write + AsRef<[u8]>,
+    where W: Write + AsRef<[u8]> + AsMut<[u8]>,
           T: Serializable {
     serialize_message::<T, W>(m, w)?;
 
@@ -59,16 +58,16 @@ pub fn serialize_digest_message<T, W>(
     Ok(ctx.finish())
 }
 
-pub fn deserialize_message<T, R>(r: R) -> Result<NetworkMessageContent<T>> where R: Read, T: Serializable {
+pub fn deserialize_message<T, R>(r: R) -> Result<NetworkMessageContent<T::Message>> where R: Read + AsRef<[u8]>, T: Serializable {
 
     /*#[cfg(feature="serialize_bincode")]
-    let content = bincode::deserialize_message(r)?;
+    let content = bincode::deserialize_message(r)?;*/
 
     #[cfg(feature="serialize_serde")]
-    let content = serde::deserialize_message(r)?; */
+    let content = serde::deserialize_message::<T, R>(r)?;
 
-    #[cfg(feature = "serialize_capnp")]
-    let content = capnp::deserialize_message(r)?;
+    // #[cfg(feature = "serialize_capnp")]
+    // let content = capnp::deserialize_message::<T, R>(r)?;
 
     Ok(content)
 }
@@ -79,29 +78,36 @@ pub fn deserialize_message<T, R>(r: R) -> Result<NetworkMessageContent<T>> where
 /// The buffer type used to serialize messages into.
 pub type Buf = Bytes;
 
-pub trait Serializable {
+pub trait Serializable
+{
     /*#[cfg(feature = "serialize_bincode")]
-    type Message: Encode + Decode + for<'a> BorrowDecode<'a> + Send + Clone;
+    type Message: Encode + Decode + for<'a> BorrowDecode<'a> + Send + Clone;*/
 
     #[cfg(feature = "serialize_serde")]
-    type Message: for<'a> Deserialize<'a> + Serialize + Send + Clone; */
+    type Message: for<'a> Deserialize<'a> + Serialize + Send + Clone;
 
-    #[cfg(feature = "serialize_capnp")]
-    type Message: Send + Clone;
+    /*#[cfg(feature = "serialize_capnp")]
+    type Message: Send + Clone;*/
 
-    fn serialize<W: Write>(
+    fn serialize<W: Write + AsRef<[u8]> + AsMut<[u8]>>(
         w: &mut W,
         message: &Self::Message,
     ) -> Result<()>;
 
     fn deserialize_message<R: Read>(r: R) -> Result<Self::Message>;
+
+    // #[cfg(feature="serialize_capnp")]
+    // fn serialize_message_capnp<W: Write>(w: &mut W, message: &NetworkMessageContent<Self::Message>) -> Result<()>;
+    // 
+    // #[cfg(feature="serialize_capnp")]
+    // fn deserialize_message_capnp<R: Read>(r: R) -> Result<NetworkMessageContent<Self::Message>>;
 }
 
 pub trait DigestSerializable: Serializable {
     /// Extension of `SharedData` to obtain hash digests.
     /// Convenience function to obtain the digest of a request upon
     /// serialization.
-    fn serialize_digest<W: Write + AsRef<[u8]>>(
+    fn serialize_digest<W: Write + AsRef<[u8]> + AsMut<[u8]>>(
         message: &Self::Message,
         w: &mut W,
     ) -> Result<Digest> {

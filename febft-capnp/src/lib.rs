@@ -29,3 +29,11 @@ pub mod consensus_messages_capnp {
     "/consensus_messages_capnp.rs"
     ));
 }
+
+pub mod service_messages_capnp {
+    #![allow(unused)]
+    include!(concat!(
+    env!("OUT_DIR"),
+    "/service_messages_capnp.rs"
+    ));
+}

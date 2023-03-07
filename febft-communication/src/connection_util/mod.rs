@@ -838,7 +838,7 @@ impl<T> Node<T> where T: Serializable {
             }
 
             // deserialize payload
-            let message = match serialize::deserialize_message(&buf[..header.payload_length()]) {
+            let message = match serialize::deserialize_message::<T, &[u8]>(&buf[..header.payload_length()]) {
                 Ok(m) => m,
                 Err(_) => {
                     // errors deserializing -> faulty connection;

@@ -6,7 +6,7 @@ use febft_common::globals::ReadOnly;
 use febft_communication::{Node, NodeId, SendNode};
 use febft_communication::message::StoredMessage;
 use febft_consensus::follower::{ChannelMsg, FollowerEvent, FollowerHandle};
-use febft_consensus::messages::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, ProtocolMessage, ViewChangeMessage, ViewChangeMessageKind};
+use febft_consensus::messages::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTProtocolMessage, ViewChangeMessage, ViewChangeMessageKind};
 use febft_consensus::sync::view::ViewInfo;
 use febft_consensus::SysMsg;
 use febft_execution::executable::{Request, Service};
@@ -23,14 +23,14 @@ use febft_messages::messages::{ForwardedRequestsMessage, SystemMessage};
 struct FollowersFollowing<S: Service + 'static> {
     own_id: NodeId,
     followers: Vec<NodeId>,
-    send_node: SendNode<SysMsg<S>>,
+    send_node: SendNode<SysMsg<S::Data>>,
     rx: ChannelSyncRx<ChannelMsg<S>>,
 }
 
 impl<S: Service + 'static> FollowersFollowing<S> {
     /// Starts the follower handling thread and returns a cloneable handle that
     /// can be used to deliver messages to it.
-    pub fn init_follower_handling(id: NodeId, node: &Arc<Node<SysMsg<S>>>) -> FollowerHandle<S> {
+    pub fn init_follower_handling(id: NodeId, node: &Arc<Node<SysMsg<S::Data>>>) -> FollowerHandle<S> {
         let (tx, rx) = channel::new_bounded_sync(1024);
 
         let follower_handling = Self {
@@ -172,7 +172,7 @@ impl<S: Service + 'static> FollowersFollowing<S> {
         //Clone the messages here in this thread so we don't slow down the consensus thread at all
         let prepare = prepare.message().clone();
 
-        let message : SysMsg<S> = ProtocolMessage::Consensus(prepare).into();
+        let message = SystemMessage::from(PBFTProtocolMessage::Consensus(prepare));
 
         self.send_node
             .broadcast(message.into(), self.followers.iter().copied());
@@ -193,7 +193,7 @@ impl<S: Service + 'static> FollowersFollowing<S> {
 
         let commit = commit.message().clone();
 
-        let message : SysMsg<S> = ProtocolMessage::Consensus(commit).into();
+        let message = SystemMessage::from(PBFTProtocolMessage::Consensus(commit));
 
         self.send_node
             .broadcast(message.into(), self.followers.iter().copied());
@@ -218,7 +218,7 @@ impl<S: Service + 'static> FollowersFollowing<S> {
             }
         }
 
-        let message :SysMsg<S> = ProtocolMessage::ViewChange(message.clone()).into();
+        let message = SystemMessage::from(PBFTProtocolMessage::ViewChange(message.clone()));
 
         self.send_node
             .broadcast(message.into(), self.followers.iter().copied());

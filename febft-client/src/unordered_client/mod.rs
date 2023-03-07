@@ -44,9 +44,9 @@ impl FollowerData {
     }
 }
 
-impl<S> Client<S>
+impl<D> Client<D>
 where
-    S: Service + 'static,
+    D: SharedData + 'static,
 {
     ///Connect to a follower with a given node id
     ///
@@ -111,22 +111,22 @@ where
 
 pub struct Unordered;
 
-impl<S> ClientType<S> for Unordered
+impl<D> ClientType<D> for Unordered
 where
-    S: Service + 'static,
+    D: SharedData + 'static,
 {
     fn init_request(
         session_id: SeqNo,
         operation_id: SeqNo,
-        operation: Request<S>,
-    ) -> SystemMessage<S, NoProtocol>
+        operation: D::Request,
+    ) -> SystemMessage<D, NoProtocol>
     {
         SystemMessage::UnorderedRequest(RequestMessage::new(session_id, operation_id, operation))
     }
 
     type Iter = impl Iterator<Item = NodeId>;
 
-    fn init_targets(client: &Client<S>) -> (Self::Iter, usize) {
+    fn init_targets(client: &Client<D>) -> (Self::Iter, usize) {
         //TODO: Atm we are using all followers, we should choose a small number of them and
         // Send it to those. (Maybe the ones that are closes? TBD)
         let connected_followers: Vec<NodeId> = client
@@ -151,7 +151,7 @@ where
         };
     }
 
-    fn needed_responses(client: &Client<S>) -> usize {
+    fn needed_responses(client: &Client<D>) -> usize {
         let f = client.params.f();
 
         match client.data.follower_data.unordered_request_mode {

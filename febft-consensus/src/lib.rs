@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use febft_execution::executable::{Reply, Request, Service, State};
 use febft_messages::messages::SystemMessage;
-use crate::messages::ProtocolMessage;
+use crate::messages::PBFTProtocolMessage;
 
 pub mod consensus;
 pub mod cst;
@@ -15,6 +15,7 @@ pub mod follower;
 
 pub use febft_messages::*;
 pub use febft_communication::*;
+use febft_execution::serialize::SharedData;
 use crate::consensus::{Consensus, ConsensusGuard};
 use crate::cst::CollabStateTransfer;
 use crate::msg_log::decided_log::DecidedLog;
@@ -22,7 +23,7 @@ use crate::msg_log::pending_decision::PendingRequestLog;
 use crate::proposer::Proposer;
 use crate::sync::Synchronizer;
 
-pub type SysMsg<S: Service> = SystemMessage<S, ProtocolMessage<S::Data>>;
+pub type SysMsg<D> = SystemMessage<D, PBFTProtocolMessage<D>>;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub(crate) enum ReplicaPhase {

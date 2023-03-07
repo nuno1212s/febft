@@ -1,4 +1,5 @@
 use std::io::{Read, Write};
+use serde::{Deserialize, Serialize};
 use febft_common::error::*;
 
 /// Marker trait containing the types used by the application,
@@ -11,15 +12,15 @@ use febft_common::error::*;
 pub trait SharedData: Send {
     /// The application state, which is mutated by client
     /// requests.
-    type State: Send + Clone;
+    type State: for<'a> Deserialize<'a> + Serialize + Send + Clone;
 
     /// Represents the requests forwarded to replicas by the
     /// clients of the BFT system.
-    type Request: Send + Clone;
+    type Request: for<'a> Deserialize<'a> + Serialize + Send + Clone;
 
     /// Represents the replies forwarded to clients by replicas
     /// in the BFT system.
-    type Reply: Send + Clone;
+    type Reply: for<'a> Deserialize<'a> + Serialize + Send + Clone;
 
     ///Serialize a state so it can be utilized by the SMR middleware
     ///  (either for network sending or persistent storing)

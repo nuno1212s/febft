@@ -177,22 +177,22 @@ pub struct OwnedWireMessage<T> {
 #[derive(Clone, Debug)]
 pub struct NetworkMessage<T> where T: Serializable {
     header: Header,
-    msg_type: NetworkMessageContent<T>,
+    msg_type: NetworkMessageContent<T::Message>,
 }
 
 #[derive(Clone)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
-pub enum NetworkMessageContent<T> where T: Serializable {
-    #[cfg_attr(feature = "serialize_serde", serde(bound(deserialize = "T::Message: Serialize + Deserialize<'de>")))]
-    #[cfg_attr(feature = "serialize_bincode", bincode(bound(deserialize = "T::Message: Encode + Decode")))]
-    System(T::Message),
+pub enum NetworkMessageContent<T> {
+    #[cfg_attr(feature = "serialize_serde", serde(bound(deserialize = "T: Serialize + Deserialize<'de>")))]
+    #[cfg_attr(feature = "serialize_bincode", bincode(bound(deserialize = "T: Encode + Decode")))]
+    System(T),
     Ping(PingMessage),
 }
 
 impl<T> NetworkMessage<T> where T: Serializable {
 
-    pub fn new(header: Header, msg_type: NetworkMessageContent<T>) -> Self {
+    pub fn new(header: Header, msg_type: NetworkMessageContent<T::Message>) -> Self {
         Self { header, msg_type }
     }
 
@@ -200,22 +200,22 @@ impl<T> NetworkMessage<T> where T: Serializable {
         &self.header
     }
 
-    pub fn msg_type(&self) -> &NetworkMessageContent<T> {
+    pub fn msg_type(&self) -> &NetworkMessageContent<T::Message> {
         &self.msg_type
     }
 
-    pub fn into_inner(self) -> (Header, NetworkMessageContent<T>) {
+    pub fn into_inner(self) -> (Header, NetworkMessageContent<T::Message>) {
         (self.header, self.msg_type)
     }
 }
 
-impl<T: Serializable> From<(Header, NetworkMessageContent<T>)> for NetworkMessage<T> {
-    fn from(value: (Header, NetworkMessageContent<T>)) -> Self {
+impl<T: Serializable> From<(Header, NetworkMessageContent<T::Message>)> for NetworkMessage<T> {
+    fn from(value: (Header, NetworkMessageContent<T::Message>)) -> Self {
         NetworkMessage::new(value.0, value.1)
     }
 }
 
-impl<T:Serializable> Debug for NetworkMessageContent<T> {
+impl<T> Debug for NetworkMessageContent<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             NetworkMessageContent::System(_) => {

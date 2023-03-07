@@ -16,7 +16,7 @@ use febft_execution::executable::UnorderedBatch;
 use febft_messages::messages::{RequestMessage, SystemMessage};
 use febft_timeouts::Timeouts;
 use crate::consensus::ConsensusGuard;
-use crate::messages::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, ProtocolMessage};
+use crate::messages::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, PBFTProtocolMessage};
 use crate::msg_log::pending_decision::PendingRequestLog;
 use crate::observer::{ConnState, MessageType, ObserverHandle};
 use crate::sync::view::{is_request_in_hash_space, ViewInfo};
@@ -30,7 +30,7 @@ pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
 pub struct Proposer<S: Service + 'static> {
-    node_ref: Arc<Node<SysMsg<S>>>,
+    node_ref: Arc<Node<SysMsg<S::Data>>>,
 
     synchronizer: Arc<Synchronizer<S>>,
     timeouts: Timeouts,
@@ -70,7 +70,7 @@ const BATCH_CHANNEL_SIZE: usize = 128;
 
 impl<S: Service + 'static> Proposer<S> {
     pub fn new(
-        node: Arc<Node<SysMsg<S>>>,
+        node: Arc<Node<SysMsg<S::Data>>>,
         sync: Arc<Synchronizer<S>>,
         pending_decision_log: Arc<PendingRequestLog<S>>,
         timeouts: Timeouts,
@@ -380,7 +380,7 @@ impl<S: Service + 'static> Proposer<S> {
         view: &ViewInfo,
         currently_accumulated: Vec<StoredMessage<RequestMessage<Request<S>>>>,
     ) {
-        let message = ProtocolMessage::Consensus(ConsensusMessage::new(
+        let message = PBFTProtocolMessage::Consensus(ConsensusMessage::new(
             seq,
             view.sequence_number(),
             ConsensusMessageKind::PrePrepare(currently_accumulated),

@@ -1,12 +1,15 @@
+use std::ops::Deref;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{NetworkMessageContent, StoredMessage};
-use febft_communication::serialize::Serializable;
-use febft_execution::executable::{Reply, Request, Service};
+
 #[cfg(feature = "serialize_bincode")]
 use bincode::{Decode, Encode};
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+
+use febft_execution::serialize::SharedData;
+use crate::serialization::ProtocolData;
 
 /// A `SystemMessage` corresponds to a message regarding one of the SMR
 /// sub-protocols or requests from the clients.
@@ -15,19 +18,19 @@ use serde::{Deserialize, Serialize};
 /// be defined by the consensus crate.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
-pub enum SystemMessage<S: Service, P: Serializable> {
-    OrderedRequest(RequestMessage<Request<S>>),
-    OrderedReply(ReplyMessage<Reply<S>>),
-    UnorderedRequest(RequestMessage<Request<S>>),
-    UnorderedReply(ReplyMessage<Reply<S>>),
+pub enum SystemMessage<D, P> where D: SharedData, P: ProtocolData {
+    OrderedRequest(RequestMessage<D::Request>),
+    OrderedReply(ReplyMessage<D::Reply>),
+    UnorderedRequest(RequestMessage<D::Request>),
+    UnorderedReply(ReplyMessage<D::Reply>),
 
     //Decide how this is going to be handled
-    ForwardedRequests(ForwardedRequestsMessage<Request<S>>),
+    ForwardedRequests(ForwardedRequestsMessage<D::Request>),
 
-    Protocol(P::Message),
+    Protocol(ProtocolMessage<P::Message>),
 }
 
-impl<S, P> Clone for SystemMessage<S, P> where S: Service, P: Serializable {
+impl<D, P> Clone for SystemMessage<D, P> where D: SharedData, P: ProtocolData {
     fn clone(&self) -> Self {
         match self {
             SystemMessage::OrderedRequest(req) => {
@@ -52,14 +55,14 @@ impl<S, P> Clone for SystemMessage<S, P> where S: Service, P: Serializable {
     }
 }
 
-impl<S, P> From<SystemMessage<S, P>> for NetworkMessageContent<SystemMessage<S, P>> where S: Service, P: Serializable {
-    fn from(value: SystemMessage<S, P>) -> Self {
+impl<D, P> From<SystemMessage<D, P>> for NetworkMessageContent<SystemMessage<D, P>> where D: SharedData, P: ProtocolData {
+    fn from(value: SystemMessage<D, P>) -> Self {
         NetworkMessageContent::System(value)
     }
 }
 
-impl<S, P> From<NetworkMessageContent<SystemMessage<S, P>>> for SystemMessage<S, P> where S: Service, P: Serializable {
-    fn from(value: NetworkMessageContent<SystemMessage<S, P>>) -> Self {
+impl<D, P> From<NetworkMessageContent<SystemMessage<D, P>>> for SystemMessage<D, P> where D: SharedData, P: ProtocolData {
+    fn from(value: NetworkMessageContent<SystemMessage<D, P>>) -> Self {
         match value {
             NetworkMessageContent::System(sys) => {
                 sys
@@ -68,6 +71,34 @@ impl<S, P> From<NetworkMessageContent<SystemMessage<S, P>>> for SystemMessage<S,
                 panic!("Cannot unwrap a ping msg")
             }
         }
+    }
+}
+
+/// A protocol message
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
+#[derive(Clone)]
+pub struct ProtocolMessage<P> {
+    inner: P,
+}
+
+impl<P> ProtocolMessage<P> {
+    /// Creates a new `ProtocolMessage`, containing the given protocol message.
+    pub fn new(inner: P) -> Self {
+        Self { inner }
+    }
+
+    /// Returns the inner Protocol Message, consuming the encapsulating struct
+    pub fn into_inner(self) -> P {
+        self.inner
+    }
+}
+
+impl<P> Deref for ProtocolMessage<P> {
+    type Target = P;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
 

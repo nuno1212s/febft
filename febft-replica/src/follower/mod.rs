@@ -9,7 +9,7 @@ use febft_communication::{Node, NodeConfig, NodeId};
 use febft_communication::message::{Header, NetworkMessage, NetworkMessageContent};
 use febft_consensus::consensus::{AbstractConsensus, Consensus, ConsensusPollStatus, ConsensusStatus};
 use febft_consensus::cst::{CollabStateTransfer, CstProgress, CstStatus, install_recovery_state};
-use febft_consensus::messages::{ConsensusMessage, CstMessage, ProtocolMessage, ViewChangeMessage};
+use febft_consensus::messages::{ConsensusMessage, CstMessage, PBFTProtocolMessage, ViewChangeMessage};
 use febft_consensus::{msg_log, SysMsg};
 use febft_consensus::msg_log::decided_log::DecidedLog;
 use febft_consensus::msg_log::Info;
@@ -73,7 +73,7 @@ pub struct Follower<S: Service + 'static> {
 
     pending_rq_log: Arc<PendingRequestLog<S>>,
 
-    node: Arc<Node<SysMsg<S>>>,
+    node: Arc<Node<SysMsg<S::Data>>>,
 }
 
 pub struct FollowerConfig<S: Service, T: PersistentLogModeTrait> {
@@ -221,20 +221,20 @@ impl<S: Service + 'static> Follower<S> {
 
     fn update_retrieving_state(&mut self) -> Result<()> {
         debug!("{:?} // Retrieving state...", self.id());
-        let message : NetworkMessage<SysMsg<S>> = self.node.receive_from_replicas().unwrap();
+        let message = self.node.receive_from_replicas().unwrap();
 
         let (header, message_content) = message.into_inner();
 
         match message_content.into() {
             SystemMessage::Protocol(protocol_msg) => {
-                match protocol_msg {
-                    ProtocolMessage::Cst(cst_message) => {
+                match protocol_msg.into_inner() {
+                    PBFTProtocolMessage::Cst(cst_message) => {
                         self.adv_cst(header, cst_message)?;
                     }
-                    ProtocolMessage::ViewChange(message) => {
+                    PBFTProtocolMessage::ViewChange(message) => {
                         self.synchronizer.queue(header, message);
                     }
-                    ProtocolMessage::Consensus(consensus) => {
+                    PBFTProtocolMessage::Consensus(consensus) => {
                         self.consensus.queue(header, consensus);
                     }
                     _ => {
@@ -258,7 +258,7 @@ impl<S: Service + 'static> Follower<S> {
         let message = match self.synchronizer.poll() {
             SynchronizerPollStatus::Recv => self.node.receive_from_replicas()?,
             SynchronizerPollStatus::NextMessage(h, m) => {
-                NetworkMessage::new(h, NetworkMessageContent::System(ProtocolMessage::ViewChange(m).into()))
+                NetworkMessage::new(h, NetworkMessageContent::System(PBFTProtocolMessage::ViewChange(m).into()))
             }
             SynchronizerPollStatus::ResumeViewChange => {
                 self.synchronizer.resume_view_change(
@@ -277,14 +277,14 @@ impl<S: Service + 'static> Follower<S> {
 
         match message.into() {
             SystemMessage::Protocol(protocol_message) => {
-                match protocol_message {
-                    ProtocolMessage::ViewChange(message) => {
+                match protocol_message.into_inner() {
+                    PBFTProtocolMessage::ViewChange(message) => {
                         return self.adv_sync(header, message);
                     }
-                    ProtocolMessage::Cst(cst_message) => {
+                    PBFTProtocolMessage::Cst(cst_message) => {
                         self.process_off_context_cst_msg(header, cst_message)?;
                     }
-                    ProtocolMessage::Consensus(consensus) => {
+                    PBFTProtocolMessage::Consensus(consensus) => {
                         self.consensus.queue(header, consensus);
                     }
                     _ => {
@@ -324,7 +324,7 @@ impl<S: Service + 'static> Follower<S> {
         let message = match polled_message {
             ConsensusPollStatus::Recv => self.node.receive_from_replicas()?,
             ConsensusPollStatus::NextMessage(h, m) => {
-                NetworkMessage::new(h, NetworkMessageContent::System(ProtocolMessage::Consensus(m).into()))
+                NetworkMessage::new(h, NetworkMessageContent::System(PBFTProtocolMessage::Consensus(m).into()))
             }
             ConsensusPollStatus::TryProposeAndRecv => {
                 self.consensus.advance_init_phase();
@@ -340,11 +340,11 @@ impl<S: Service + 'static> Follower<S> {
 
         match message.into() {
             SystemMessage::Protocol(protocol_message) => {
-                match protocol_message {
-                    ProtocolMessage::Consensus(consensus) => {
+                match protocol_message.into_inner() {
+                    PBFTProtocolMessage::Consensus(consensus) => {
                         self.adv_consensus(header, consensus)?;
                     }
-                    ProtocolMessage::ViewChange(message) => {
+                    PBFTProtocolMessage::ViewChange(message) => {
                         let status = self.synchronizer.process_message(
                             header,
                             message,
@@ -368,7 +368,7 @@ impl<S: Service + 'static> Follower<S> {
                             }
                         }
                     }
-                    ProtocolMessage::Cst(cst_message) => {
+                    PBFTProtocolMessage::Cst(cst_message) => {
                         self.process_off_context_cst_msg(header, cst_message)?;
                     }
                     _ => {

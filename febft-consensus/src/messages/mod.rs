@@ -25,7 +25,7 @@ use crate::SysMsg;
 /// The S is the State type while the O is the request type
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
-pub enum ProtocolMessage<D> where D: SharedData {
+pub enum PBFTProtocolMessage<D> where D: SharedData {
     Consensus(ConsensusMessage<D::Request>),
     FwdConsensus(FwdConsensusMessage<D::Request>),
 
@@ -38,62 +38,62 @@ pub enum ProtocolMessage<D> where D: SharedData {
 /// Manual clone implementation as the compiler is not smart enough to decompose the
 /// Implementation above into it's Cloneable parts, so we are left with this
 /// Manual but very effective (and safe) work around
-impl<D:SharedData> Clone for ProtocolMessage<D> {
+impl<D:SharedData> Clone for PBFTProtocolMessage<D> {
     fn clone(&self) -> Self {
         match self {
-            ProtocolMessage::Consensus(consensus) => {
-                ProtocolMessage::Consensus(consensus.clone())
+            PBFTProtocolMessage::Consensus(consensus) => {
+                PBFTProtocolMessage::Consensus(consensus.clone())
             }
-            ProtocolMessage::FwdConsensus(fwd_consensus) => {
-                ProtocolMessage::FwdConsensus(fwd_consensus.clone())
+            PBFTProtocolMessage::FwdConsensus(fwd_consensus) => {
+                PBFTProtocolMessage::FwdConsensus(fwd_consensus.clone())
             }
-            ProtocolMessage::Cst(cst) => {
-                ProtocolMessage::Cst(cst.clone())
+            PBFTProtocolMessage::Cst(cst) => {
+                PBFTProtocolMessage::Cst(cst.clone())
             }
-            ProtocolMessage::ViewChange(view_change) => {
-                ProtocolMessage::ViewChange(view_change.clone())
+            PBFTProtocolMessage::ViewChange(view_change) => {
+                PBFTProtocolMessage::ViewChange(view_change.clone())
             }
-            ProtocolMessage::ObserverMessage(observer) => {
-                ProtocolMessage::ObserverMessage(observer.clone())
+            PBFTProtocolMessage::ObserverMessage(observer) => {
+                PBFTProtocolMessage::ObserverMessage(observer.clone())
             }
         }
     }
 }
 
 /// Automatically encapsulate to a system message
-impl<S: Service> From<ProtocolMessage<S::Data>> for SysMsg<S> {
-    fn from(value: ProtocolMessage<S::Data>) -> Self {
-        SystemMessage::Protocol(value)
+impl<D: SharedData> From<PBFTProtocolMessage<D>> for SysMsg<D> {
+    fn from(value: PBFTProtocolMessage<D>) -> Self {
+        SystemMessage::Protocol(febft_messages::messages::ProtocolMessage::new(value))
     }
 }
 
-impl<S: Service> From<SystemMessage<S, ProtocolMessage<S::Data>>> for ProtocolMessage<S::Data> {
-    fn from(value: SystemMessage<S, ProtocolMessage<S::Data>>) -> Self {
+impl<D: SharedData> From<SystemMessage<D, PBFTProtocolMessage<D>>> for PBFTProtocolMessage<D> {
+    fn from(value: SystemMessage<D, PBFTProtocolMessage<D>>) -> Self {
         match value {
             SystemMessage::Protocol(protocol) => {
-                protocol
+                protocol.into_inner()
             }
             _ => unreachable!()
         }
     }
 }
 
-impl<D> Debug for ProtocolMessage<D> where D: SharedData {
+impl<D> Debug for PBFTProtocolMessage<D> where D: SharedData {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProtocolMessage::Consensus(_) => {
+            PBFTProtocolMessage::Consensus(_) => {
                 write!(f, "Consensus Message")
             }
-            ProtocolMessage::FwdConsensus(_) => {
+            PBFTProtocolMessage::FwdConsensus(_) => {
                 write!(f, "Forwarded Consensus Message")
             }
-            ProtocolMessage::Cst(_) => {
+            PBFTProtocolMessage::Cst(_) => {
                 write!(f, "CST Message")
             }
-            ProtocolMessage::ViewChange(_) => {
+            PBFTProtocolMessage::ViewChange(_) => {
                 write!(f, "View change Message")
             }
-            ProtocolMessage::ObserverMessage(_) => {
+            PBFTProtocolMessage::ObserverMessage(_) => {
                 write!(f, "Consensus Message")
             }
         }

@@ -19,7 +19,8 @@ default = [
     "crypto_signature_ring_ed25519",
     "crypto_hash_blake3_blake3",
     "collections_randomstate_fxhash",
-    "persistent_db_rocksdb"
+    "persistent_db_rocksdb",
+    "serialize_serde"
 ]
 
 socket_tokio_tcp = ["tokio", "tokio-util"]
@@ -68,6 +69,8 @@ channel_custom_dump = ["dsrust"]
 channel_custom_dump_lfb = ["dsrust"]
 channel_custom_dump_mqueue = ["dsrust"]
 
+serialize_serde = ["serde", "serde-big-array"]
+
 [dependencies]
 futures = "0.3.26"
 
@@ -79,7 +82,7 @@ async-std = { version = "1.12.0", optional = true }
 tokio = { version = "1.25.0", features = ["full"], optional = true }
 tokio-util = { version = "0.7.1", features = ["compat"], optional = true }
 
-rocksdb = {version = "0.20.1", optional = true }
+rocksdb = { version = "0.20.1", optional = true }
 
 threadpool-crossbeam-channel = { version = "1.8.0", optional = true }
 rayon = { version = "1.5.3", optional = true }
@@ -110,7 +113,10 @@ webpki = "0.22.0"
 async-tls = { version = "0.11.1", git = "https://github.com/nuno1212s/async-tls.git" }
 
 log = "0.4.17"
-log4rs = {version = "1.1.1", features = ["file_appender"]}
+log4rs = { version = "1.1.1", features = ["file_appender"] }
+
+serde = { version = "1.0.153", features = ["rc"], optional = true }
+serde-big-array = { version = "0.5.1", optional = true }
 
 [build-dependencies]
 itertools = "0.10.5"
