@@ -18,7 +18,7 @@ pub fn serialize_message<T, W>(
 pub fn deserialize_message<T, R>(
     r: R
 ) -> Result<NetworkMessageContent<T::Message>> where T: Serializable, R: Read + AsRef<[u8]> {
-    let (msg, space): (NetworkMessageContent<T::Message>, usize) = bincode::serde::decode_from_slice(r.as_ref(), bincode::config::standard())
+    let msg =  bincode::serde::decode_borrowed_from_slice(r.as_ref(), bincode::config::standard())
         .wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to deserialize message")?;
 
     Ok(msg)

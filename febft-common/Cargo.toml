@@ -70,6 +70,7 @@ channel_custom_dump_lfb = ["dsrust"]
 channel_custom_dump_mqueue = ["dsrust"]
 
 serialize_serde = ["serde", "serde-big-array"]
+serialize_bincode = ["bincode"]
 
 [dependencies]
 futures = "0.3.26"
@@ -115,8 +116,10 @@ async-tls = { version = "0.11.1", git = "https://github.com/nuno1212s/async-tls.
 log = "0.4.17"
 log4rs = { version = "1.1.1", features = ["file_appender"] }
 
-serde = { version = "1.0.153", features = ["rc"], optional = true }
+serde = { version = "1.0.147", features = ["rc"], optional = true }
 serde-big-array = { version = "0.5.1", optional = true }
+
+bincode = {version = "2.0.0-rc.2", optional = true}
 
 [build-dependencies]
 itertools = "0.10.5"

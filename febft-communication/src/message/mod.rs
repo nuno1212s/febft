@@ -12,6 +12,10 @@ use futures::AsyncWrite;
 use serde::{Serialize, Deserialize};
 #[cfg(feature = "serialize_bincode")]
 use bincode::{Encode, Decode};
+use bincode::BorrowDecode;
+use bincode::de::{BorrowDecoder, Decoder};
+use bincode::enc::Encoder;
+use bincode::error::{DecodeError, EncodeError};
 
 use futures::io::{
     AsyncWriteExt,
@@ -51,6 +55,7 @@ impl<M> SerializedMessage<M> {
 
 /// Contains a system message as well as its respective header.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
 #[derive(Clone)]
 pub struct StoredMessage<M> {
     header: Header,
@@ -156,6 +161,44 @@ impl<'de> serde::Deserialize<'de> for Header {
     }
 }
 
+#[cfg(feature = "serialize_bincode")]
+impl bincode::Encode for Header {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> std::result::Result<(), EncodeError> {
+        // TODO: improve this, to avoid allocating a `Vec`
+        let mut bytes = vec![0; Self::LENGTH];
+        let hdr: &[u8; Self::LENGTH] = unsafe { std::mem::transmute(self) };
+        bytes.copy_from_slice(&hdr[..]);
+
+        bincode::Encode::encode(hdr, encoder)
+    }
+}
+
+#[cfg(feature = "serialize_bincode")]
+impl bincode::Decode for Header {
+    fn decode<D: Decoder>(decoder: &mut D) -> std::result::Result<Self, DecodeError> {
+        let bytes: Vec<u8> = bincode::Decode::decode(decoder)?;
+
+        let mut hdr: [u8; Self::LENGTH] = [0; Self::LENGTH];
+
+        hdr.copy_from_slice(&bytes);
+
+        Ok(unsafe { std::mem::transmute(hdr) })
+    }
+}
+
+#[cfg(feature = "serialize_bincode")]
+impl<'de> bincode::BorrowDecode<'de> for Header {
+    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> std::result::Result<Self, DecodeError> {
+        let bytes: Vec<u8> = bincode::BorrowDecode::borrow_decode(decoder)?;
+
+        let mut hdr: [u8; Self::LENGTH] = [0; Self::LENGTH];
+
+        hdr.copy_from_slice(&bytes);
+
+        Ok(unsafe { std::mem::transmute(hdr) })
+    }
+}
+
 /// A message to be sent over the wire. The payload should be a serialized
 /// `SystemMessage`, for correctness.
 #[derive(Debug)]
@@ -184,8 +227,6 @@ pub struct NetworkMessage<T> where T: Serializable {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
 pub enum NetworkMessageContent<T> {
-    #[cfg_attr(feature = "serialize_serde", serde(bound(deserialize = "T: Serialize + Deserialize<'de>")))]
-    #[cfg_attr(feature = "serialize_bincode", bincode(bound(deserialize = "T: Encode + Decode")))]
     System(T),
     Ping(PingMessage),
 }

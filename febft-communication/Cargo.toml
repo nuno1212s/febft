@@ -16,7 +16,7 @@ default = ["serialize_serde"]
 crossbeam-channel = "0.5.7"
 febft-common = { path = "../febft-common" }
 febft-capnp = {path = "../febft-capnp", optional = true}
-serde = { version = "1.0.152", features = ["rc"], optional = true }
+serde = { version = "1.0.147", features = ["rc"], optional = true }
 serde_bytes = { version = "0.11.9", optional = true }
 bincode = { version = "2.0.0-rc.2", optional = true }
 bytes = "1.4.0"

@@ -20,8 +20,8 @@ use crate::message::{NetworkMessage, NetworkMessageContent};
 #[cfg(feature = "serialize_serde")]
 pub mod serde;
 
-// #[cfg(feature = "serialize_bincode")]
-// pub mod bincode;
+#[cfg(feature = "serialize_bincode")]
+pub mod bincode;
 
 // #[cfg(feature = "serialize_capnp")]
 // pub mod capnp;
@@ -33,8 +33,8 @@ pub fn serialize_message<T, W>(
     W: Write + AsMut<[u8]>,
     T: Serializable {
 
-    // #[cfg(feature="serialize_bincode")]
-    // bincode::serialize_message(&m, w)?;
+    #[cfg(feature="serialize_bincode")]
+    bincode::serialize_message::<T, W>(&m, w)?;
 
     #[cfg(feature="serialize_serde")]
     serde::serialize_message::<T, W>(&m, w)?;
@@ -60,8 +60,8 @@ pub fn serialize_digest_message<T, W>(
 
 pub fn deserialize_message<T, R>(r: R) -> Result<NetworkMessageContent<T::Message>> where R: Read + AsRef<[u8]>, T: Serializable {
 
-    /*#[cfg(feature="serialize_bincode")]
-    let content = bincode::deserialize_message(r)?;*/
+    #[cfg(feature="serialize_bincode")]
+    let content = bincode::deserialize_message::<T, R>(r)?;
 
     #[cfg(feature="serialize_serde")]
     let content = serde::deserialize_message::<T, R>(r)?;
@@ -80,8 +80,8 @@ pub type Buf = Bytes;
 
 pub trait Serializable
 {
-    /*#[cfg(feature = "serialize_bincode")]
-    type Message: Encode + Decode + for<'a> BorrowDecode<'a> + Send + Clone;*/
+    #[cfg(feature = "serialize_bincode")]
+    type Message: Encode + Decode + for<'a> BorrowDecode<'a> + Send + Clone;
 
     #[cfg(feature = "serialize_serde")]
     type Message: for<'a> Deserialize<'a> + Serialize + Send + Clone;

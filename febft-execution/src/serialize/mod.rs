@@ -1,5 +1,9 @@
 use std::io::{Read, Write};
+#[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "serialize_bincode")]
+use bincode::{Encode, Decode, BorrowDecode};
+
 use febft_common::error::*;
 
 /// Marker trait containing the types used by the application,
@@ -12,15 +16,28 @@ use febft_common::error::*;
 pub trait SharedData: Send {
     /// The application state, which is mutated by client
     /// requests.
+    #[cfg(feature = "serialize_serde")]
     type State: for<'a> Deserialize<'a> + Serialize + Send + Clone;
+
+    #[cfg(feature = "serialize_bincode")]
+    type State: for<'a> Encode + Decode + BorrowDecode<'a> + Send + Clone;
 
     /// Represents the requests forwarded to replicas by the
     /// clients of the BFT system.
+    #[cfg(feature = "serialize_serde")]
     type Request: for<'a> Deserialize<'a> + Serialize + Send + Clone;
+
+    #[cfg(feature = "serialize_bincode")]
+    type Request: for<'a> Encode + Decode + BorrowDecode<'a> + Send + Clone;
 
     /// Represents the replies forwarded to clients by replicas
     /// in the BFT system.
+    #[cfg(feature = "serialize_serde")]
     type Reply: for<'a> Deserialize<'a> + Serialize + Send + Clone;
+
+    #[cfg(feature = "serialize_bincode")]
+    type Reply: for<'a> Encode + Decode + BorrowDecode<'a> + Send + Clone;
+
 
     ///Serialize a state so it can be utilized by the SMR middleware
     ///  (either for network sending or persistent storing)

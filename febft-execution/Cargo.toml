@@ -3,11 +3,10 @@ name = "febft-execution"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [features]
 
 serialize_serde = ["serde"]
+serialize_bincode = ["bincode"]
 
 default = ["serialize_serde"]
 
@@ -15,6 +14,7 @@ default = ["serialize_serde"]
 febft-common = { path = "../febft-common" }
 febft-communication = { path = "../febft-communication" }
 
-serde = { version = "1.0.153", optional = true }
+serde = { version = "1.0.147", optional = true }
+bincode = { version = "2.0.0-rc.2", optional = true }
 
 log = "0.4.17"

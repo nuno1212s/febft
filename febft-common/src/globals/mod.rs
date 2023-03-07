@@ -128,6 +128,7 @@ impl SystemParams {
 
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
 pub struct ReadOnly<T> {
 
     value: T

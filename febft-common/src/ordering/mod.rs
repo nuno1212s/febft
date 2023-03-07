@@ -27,6 +27,7 @@ pub const PERIOD: u32 = 120_000_000;
 /// Represents a sequence number attributed to a client request
 /// during a `Consensus` instance.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
 #[derive(Debug, Copy, Clone, Ord, Eq, PartialEq, Hash)]
 pub struct SeqNo(i32);
 

@@ -101,6 +101,7 @@ impl<D> Debug for PBFTProtocolMessage<D> where D: SharedData {
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
 #[derive(Clone)]
 pub struct ViewChangeMessage<O> {
     view: SeqNo,
@@ -143,6 +144,7 @@ impl<O> ViewChangeMessage<O> {
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
 #[derive(Clone)]
 pub enum ViewChangeMessageKind<O> {
     Stop(Vec<StoredMessage<RequestMessage<O>>>),
@@ -151,6 +153,7 @@ pub enum ViewChangeMessageKind<O> {
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
 #[derive(Clone)]
 pub struct CstMessage<S, O> {
     // NOTE: not the same sequence number used in the
@@ -160,6 +163,7 @@ pub struct CstMessage<S, O> {
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
 #[derive(Clone)]
 pub enum CstMessageKind<S, O> {
     RequestLatestConsensusSeq,
@@ -201,6 +205,7 @@ impl<S, O> CstMessage<S, O> {
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
 #[derive(Clone)]
 pub struct FwdConsensusMessage<O> {
     header: Header,
@@ -231,6 +236,7 @@ impl<O> FwdConsensusMessage<O> {
 /// Different types of consensus messages are represented in the `ConsensusMessageKind`
 /// type.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
 #[derive(Clone)]
 pub struct ConsensusMessage<O> {
     seq: SeqNo,
@@ -256,6 +262,7 @@ impl<O> Debug for ConsensusMessage<O> {
 
 /// Represents one of many different consensus stages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
 #[derive(Clone)]
 pub enum ConsensusMessageKind<O> {
     /// Pre-prepare a request, according to the BFT consensus protocol.
@@ -338,6 +345,7 @@ impl<O> ConsensusMessage<O> {
 ///Observer related messages
 ///@{
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
 #[derive(Clone)]
 pub enum ObserverMessage {
     ///Observer client related messages
@@ -352,6 +360,7 @@ pub enum ObserverMessage {
 
 ///The kinds of events that can be reported by the replicas to observers
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize_bincode", derive(Encode, Decode))]
 #[derive(Clone)]
 pub enum ObserveEventKind {
     ///Report a checkpoint start type event
