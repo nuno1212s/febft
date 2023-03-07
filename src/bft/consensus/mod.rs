@@ -355,6 +355,7 @@ impl<S: Service + 'static> Consensus<S> {
             phase: ProtoPhase::Init,
             tbo: TboQueue::new(next_seq_num),
             deciding_log: DecidingLog::new(node_id),
+
             executor_handle,
             accessory: ConsensusAccessory::Follower,
         }
@@ -658,6 +659,7 @@ impl<S: Service + 'static> Consensus<S> {
                         debug!(
                             "{:?} // Received prepare message {:?} from {:?} while in prepreparing ",
                             self.node_id, d, header.from()
+
                         );
                         self.queue_prepare(header, message);
                         return ConsensusStatus::Deciding;
@@ -666,6 +668,7 @@ impl<S: Service + 'static> Consensus<S> {
                         debug!(
                             "{:?} // Received commit message {:?} from {:?} while in pre preparing",
                             self.node_id, d, header.from()
+
                         );
                         self.queue_commit(header, message);
                         return ConsensusStatus::Deciding;
@@ -874,6 +877,7 @@ impl<S: Service + 'static> Consensus<S> {
                     }
 
                     debug!("{:?} // Completed prepare phase with all prepares Seq {:?}", node.id(), self.sequence_number());
+
                     //We set at 0 since we broadcast the messages above, meaning we will also receive the message.
                     ProtoPhase::Committing(0)
                 } else {
@@ -977,7 +981,7 @@ impl<S: Service + 'static> Consensus<S> {
                     }
 
                     let processed_batch = self.deciding_log.finish_processing_batch().unwrap();
-
+                    
                     debug!("{:?} // Decided consensus phase with all commits Seq {:?}", node.id(), self.sequence_number());
 
                     ConsensusStatus::Decided(processed_batch)

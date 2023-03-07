@@ -338,6 +338,7 @@ pub fn deserialize_message<R, S>(r: R) -> Result<SystemMessage<S::State, S::Requ
     options.traversal_limit_in_words(None);
 
     let reader = capnp::serialize::read_message(r, options).wrapped_msg(
+
         ErrorKind::CommunicationSerialize,
         "Failed to get capnp reader",
     )?;

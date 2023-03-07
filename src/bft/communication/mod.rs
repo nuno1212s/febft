@@ -393,7 +393,7 @@ impl<D> Node<D>
         server_addr: &SocketAddr,
     ) -> Result<NodeConnectionAcceptor> {
         let mut server_addr = server_addr.clone();
-
+        
         server_addr.set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
         //TODO: Maybe add support for asynchronous listeners?
         debug!("{:?} // Binding to address (clients) {:?}", id, server_addr);
@@ -432,6 +432,7 @@ impl<D> Node<D>
         id: NodeId,
         cfg: &NodeConfig,
     ) -> Result<Option<NodeConnectionAcceptor>> {
+
         let peer_addr = cfg.addrs.get(id.into()).ok_or(Error::simple_with_msg(
             ErrorKind::Communication,
             "Failed to get replica facing IP",
@@ -450,7 +451,6 @@ impl<D> Node<D>
                         ErrorKind::Communication,
                         "Failed to get replica facing IP",
                     ))?;
-
             Some(Self::setup_socket(&id, &replica_facing_addr.0).await?)
         };
 
@@ -465,6 +465,7 @@ impl<D> Node<D>
     ) {
         match (node_connector, listener) {
             (TlsNodeAcceptor::Sync(cfg), NodeConnectionAcceptor::Sync(sync_listener)) => {
+
                 let first_cli = self.first_client_id();
 
                 let my_id = self.id();
@@ -543,7 +544,7 @@ impl<D> Node<D>
         debug!("Initializing client facing connections");
 
         let connector = Self::setup_connector(sync_connector, async_connector);
-
+        
         let acceptor = Self::setup_acceptor(sync_acceptor, async_acceptor);
 
         let shared = Arc::new(NodeShared {
@@ -666,7 +667,7 @@ impl<D> Node<D>
         }
 
         let n = cfg.n;
-
+        
         debug!("{:?} // Connect to other replicas", id);
 
         // tx side (connect to replica)
@@ -675,11 +676,13 @@ impl<D> Node<D>
 
             match node.connector.clone() {
                 TlsNodeConnector::Async(async_connector) => {
+
                     let node = node.clone();
 
                     node.tx_side_connect_async(n as u32, async_connector).await;
                 }
                 TlsNodeConnector::Sync(sync_connector) => {
+
                     let node = node.clone();
 
                     node.tx_side_connect_sync(n as u32, sync_connector);
@@ -689,11 +692,13 @@ impl<D> Node<D>
             //Connect to all replicas as a client
             match node.connector.clone() {
                 TlsNodeConnector::Async(async_connector) => {
+
                     let node = node.clone();
 
                     node.tx_side_connect_async(n as u32, async_connector).await;
                 }
                 TlsNodeConnector::Sync(sync_connector) => {
+
                     let node = node.clone();
                     threadpool::execute(move || {
                         node.tx_side_connect_sync(n as u32, sync_connector);
@@ -899,7 +904,7 @@ impl<D> Node<D>
         threadpool::execute(move || {
             // serialize
             start_measurement!(start_serialization);
-
+            
             let mut buf = Vec::with_capacity(512);
 
             let digest = <D as DigestData>::serialize_digest(&message, &mut buf).unwrap();
@@ -921,7 +926,6 @@ impl<D> Node<D>
 
                 message_sent_own!(&comm_stats, before_send_time, my_id);
             } else {
-
                 // Left -> peer turn
                 send_to.value(Left((nonce, digest, buf)), None);
 
@@ -1064,6 +1068,7 @@ impl<D> Node<D>
             };
 
             let buf = Bytes::from(buf);
+
 
             message_digest_time!(&comm_stats, start_serialization);
 
@@ -1650,6 +1655,7 @@ impl<D> Node<D>
                         panic!("Failed using async connector in sync mode");
                     }
                     TlsNodeConnector::Sync(connector) => {
+
                         connector
                     }
                 }.clone();
@@ -1804,6 +1810,7 @@ impl<D> Node<D>
                 peer_id, addr, _try
             );
 
+
             match socket::connect_async(addr).await {
                 Ok(mut sock) => {
 
@@ -1830,6 +1837,7 @@ impl<D> Node<D>
                         // drop this socket
                         error!("{:?} // Failed to connect to the node {:?} {:?} ", self.id, peer_id, err);
                         break;
+
                     }
 
                     // TLS handshake; drop connection if it fails
@@ -1869,6 +1877,7 @@ impl<D> Node<D>
                         self.id, peer_id, addr, err
                     );
                 }
+
             }
 
             // sleep for `SECS` seconds and retry
@@ -2159,6 +2168,11 @@ impl<D> Node<D>
                 break;
             }
 
+            if header.payload_length() == 0 {
+                //IGNORE PING REQUESTS
+                continue;
+            }
+
             // deserialize payload
             let message = match D::deserialize_message(&buf[..header.payload_length()]) {
                 Ok(m) => m,
@@ -2185,6 +2199,7 @@ impl<D> Node<D>
             let msg = Message::System(header, message);
 
             if let Err(inner) = client.push_request(msg) {
+
                 error!(
                     "{:?} // Channel closed, closing tcp connection as well to peer {:?}. {:?}",
                     self.id(),
@@ -2287,6 +2302,7 @@ impl<D> Node<D>
             let msg = Message::System(header, message);
 
             if let Err(inner) = client.push_request(msg) {
+
                 error!(
                     "{:?} // Channel closed, closing tcp connection as well to peer {:?}. {:?}",
                     self.id(),
@@ -2454,7 +2470,7 @@ impl<D> SendNode<D>
 
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
-
+                
                 <Node<D>>::send_impl(
                     message,
                     send_to,
@@ -2481,7 +2497,7 @@ impl<D> SendNode<D>
             .send_tos(self.id, &self.peer_tx, None, targets);
 
         let nonce = self.rng.next_state();
-
+        
         <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce, comm_stats);
     }
 
@@ -2613,6 +2629,7 @@ impl<D> SendTo<D>
 
                 if let Left((n, d, b)) = m {
                     Self::peers(flush, my_id, peer_id, n, d, b, key, &peer_tx, sock, rq_key);
+
                 } else {
                     // optimize code path
                     unreachable!()
@@ -2622,6 +2639,7 @@ impl<D> SendTo<D>
     }
 
     fn me(
+
         my_id: NodeId,
         m: SystemMessage<D::State, D::Request, D::Reply>,
         n: u64,
@@ -2638,7 +2656,7 @@ impl<D> SendTo<D>
             error!("{:?} // Failed to push to myself! {:?}", my_id, inner);
         };
     }
-
+    
     fn peers(
         _flush: bool,
         my_id: NodeId,
@@ -2702,6 +2720,7 @@ impl<D> SerializedSendTo<D>
     }
 
     fn me(
+
         h: Header,
         m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
         cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,

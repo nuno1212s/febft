@@ -113,6 +113,7 @@ pub struct ReplicaConfig<S: Service, T: PersistentLogModeTrait> {
     ///The time limit for creating that batch, in micro seconds
     pub batch_timeout: u128,
     pub max_batch_size: usize,
+
     ///The logging mode
     pub log_mode: PhantomData<T>,
     /// Check out the docs on `NodeConfig`.
@@ -261,6 +262,7 @@ impl<S> Replica<S>
                 global_batch_size,
                 batch_timeout,
                 max_batch_size,
+
                 observer_handle.clone(),
             ),
             executor,
@@ -345,6 +347,7 @@ impl<S> Replica<S>
                  replica.id(),
                  replica.synchronizer.view().leader_set().len(),
                  replica.synchronizer.view().leader_set());
+
 
         Ok(replica)
     }
@@ -709,6 +712,7 @@ impl<S> Replica<S>
         //     self.id(),
         //     Instant::now().duration_since(start)
         // );
+
 
         // yield execution since `signal()`
         // will probably force a value from the

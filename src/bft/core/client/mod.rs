@@ -24,6 +24,7 @@ use crate::bft::error::*;
 use crate::bft::ordering::{Orderable, SeqNo};
 use crate::{measure_ready_rq_time, measure_response_deliver_time, measure_response_rcv_time, measure_sent_rq_info, measure_target_init_time, measure_time_rq_init, start_measurement};
 
+
 use self::unordered_client::{FollowerData, UnorderedClientMode};
 
 use super::SystemParams;
@@ -104,6 +105,7 @@ where
     observer_ready: Mutex<Option<observing_client::Ready>>,
 
     stats: Option<Arc<ClientPerf>>
+
 }
 
 pub trait ClientType<D: SharedData + 'static> {
@@ -134,7 +136,6 @@ pub struct Client<D: SharedData + 'static> {
     data: Arc<ClientData<D>>,
     params: SystemParams,
     node: Arc<Node<D>>,
-
 }
 
 impl<D: SharedData> Clone for Client<D> {
@@ -340,6 +341,7 @@ where
 
         let request_key = get_request_key(session_id, operation_id);
 
+
         let message = T::init_request(session_id, operation_id, operation);
 
         let request_info = get_request_info(session_id, &*self.data);
@@ -398,7 +400,6 @@ where
 
         let operation_id = self.next_operation_id();
 
-
         start_measurement!(init_rq);
 
         let message = T::init_request(session_id, operation_id, operation);
@@ -408,15 +409,15 @@ where
 
         start_measurement!(target_init);
 
+
         // await response
         let request_key = get_request_key(session_id, operation_id);
 
         //We only send the message after storing the callback to prevent us receiving the result without having
         //The callback registered, therefore losing the response
         let (targets, target_count) = T::init_targets(&self);
-
+        
         measure_target_init_time!(&self.data.stats, target_init);
-
 
         start_measurement!(rq_info_init);
 
@@ -451,7 +452,7 @@ where
 
             ready_callback_guard.insert(request_key, ClientAwaker::Callback(callback));
         }
-
+        
         measure_ready_rq_time!(&self.data.stats, rq_ready_init);
 
         self.node.broadcast(message, targets);
@@ -618,6 +619,7 @@ where
 
                         //populate the data with the received payload, even though the
                         //
+
                         *opt_ready = Some(request);
                     }
                 }
@@ -711,6 +713,7 @@ where
 
                             start_measurement!(start_time);
 
+
                             //Check if we have already executed the operation
                             let last_operation_id = last_operation_ids
                                 .get(session_id.into())
@@ -719,6 +722,7 @@ where
 
                             // reply already delivered to application
                             if last_operation_id >= operation_id {
+                                info!("{:?} // Ignoring since the last op id is {:?}", node.id(), last_operation_id);
                                 continue;
                             }
 
@@ -785,6 +789,7 @@ where
                                 );
 
                                 measure_response_deliver_time!(&data.stats, start_time);
+
                             } else {
                                 //If we do not have f+1 replies yet, check if it's still possible to get those
                                 //Replies by taking a look at the target count and currently received replies count

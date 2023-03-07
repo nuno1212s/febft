@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::iter;
+
 use std::ops::{Add, Div, Sub};
 use fastrand::usize;
 use num_bigint::BigUint;
@@ -56,6 +57,7 @@ impl ViewInfo {
         for i in 1..=LEADER_COUNT {
             leader_set.push(quorum_members[(usize::from(seq) + i) % n]);
         }
+
 
         let division = calculate_hash_space_division(&leader_set);
 
@@ -166,8 +168,10 @@ pub fn is_request_in_hash_space(rq: &Digest, hash_space: &(Vec<u8>, Vec<u8>)) ->
 
 /// Division of the hash space
 /// The intervals returned here should be interpreted as [`[a, b], [c, d], ..`]
+
 fn divide_hash_space(size_bytes: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     // all the numbers that we are going to be working with will then be used as powers in 2^x
+
     let mut start = BigUint::zero();
 
     let last_hash : Vec<u8> = iter::repeat(0xFF).take(size_bytes).collect();
@@ -184,7 +188,7 @@ fn divide_hash_space(size_bytes: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)>
     for i in 1..=count {
 
         let slice_start = start.to_bytes_be();
-
+        
         start = start.add(increment.clone());
 
         let slice_end = if i == count {

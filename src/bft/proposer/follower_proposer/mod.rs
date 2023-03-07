@@ -36,6 +36,7 @@ pub struct FollowerProposer<S: Service + 'static> {
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 1024;
 
+
 impl<S: Service + 'static> FollowerProposer<S> {
     pub fn new(
         node: Arc<Node<S::Data>>,

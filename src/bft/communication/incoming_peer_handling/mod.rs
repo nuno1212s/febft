@@ -862,5 +862,4 @@ impl<T> ConnectedPeer<T> where T: Send {
             }
         }
     }
-
 }

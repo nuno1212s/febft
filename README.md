@@ -37,8 +37,8 @@ consult the following papers:
 * Castro, Miguel, and Barbara Liskov. "Practical Byzantine fault tolerance and proactive recovery." ACM Transactions on Computer Systems (TOCS) 20.4 (2002): 398-461.
 * Bessani, Alysson, Joao Sousa, and Eduardo EP Alchieri. "State machine replication for the masses with BFT-SMART." 2014 44th Annual IEEE/IFIP International Conference on Dependable Systems and Networks. IEEE, 2014.
 
-<!-- TODO: include link to thesis -->
-To read more about the architecture of FeBFT, you can check out my MsC thesis.
+<!-- TODO: include link to thesis 
+To read more about the architecture of FeBFT, you can check out my MsC thesis.-->
 
 # How to use this library?
 
@@ -93,3 +93,29 @@ The code is organized as follows:
 
 Other modules should be somewhat self explanatory, especially if you read
 the documentation generated with `cargo doc --features expose_impl` for FeBFT.
+
+# Quick glimpse on performance
+
+We will now take a quick look at the performance versus another similar BFT SMR system, BFT-SMaRt. The test we ran was the microbenchmarks asynchronous test, meant to test the peak performance of the system. 
+
+## Operations per second
+
+![ops_per_second_side_by_side_async](https://user-images.githubusercontent.com/4153112/201152436-7ea6eedb-0c48-4a00-96bb-dab625dfaa79.png)
+
+In this image we are able to see the operations per second of both BFT-SMaRt (left) and FeBFT (right). We can see that FeBFT's performance is much more stable and actually higher. This is due to many architectural factors in FeBFT, which were thought out in order to maximize performance and scalability, as well as factors related to the choice of language to implement this protocol.
+
+The average performance for FeBFT is 111552 +/- 25000. This average includes some lackluster measurements including the initialization and final steps of the program which have a lower performance than the real peak we want to test. As such the 95th percentile average is a better demonstration, in which we get 121914 operations/sec.
+BFT-SMaRt's performance averages at around 43229 +/- 28068. Again similarly to FeBFT, we took the 95th percentile average as we believe it to be the more accurate representation which is 98296 ops/sec.
+
+## RAM Usage
+
+![ram_usage_side_by_side_async](https://user-images.githubusercontent.com/4153112/201156651-c86c8266-f397-4b1f-95c0-7e2225674e8d.png)
+
+In this image we can see the evolution of the utilization of RAM by the system in the leader replica. The graph is represented in Bytes and the scale is 10^10, which means that in the graph the number 1 in the Y axis means we are using 10GB of RAM. BFT-SMaRt's performance is on the left while FeBFT's performance is on the right.
+
+We can clearly see the much more uncontrolled rise in RAM usage of BFT-SMaRt which then gets controlled by the garbage collector. Comparing this with FeBFT which automatically cleans up it's own memory without the need for a garbage collector we can see a very large difference. The rise in usage of RAM by FeBFT is due to it storing all of the messages in the log in RAM at the moment and the test not having enough operations in order to trigger a checkpoint, which would then allow FeBFT to dispose of its log and just keep the checkpoint instead.
+Since BFT-SMaRt does not clean up after itself, in this test where we have many many requests being sent, the garbage collector needs to be called very often and has a lot of work to do, leading to a lot of time where no thread is able to make advancements since they are all waiting to the GC to terminate. This leads to poor and unstable performance when compared with FeBFT.
+
+The graph is also a bit misleading since even though it seems FeBFT's RAM usage rises similarly to BFT-SMaRt's which is not at all true. In reality, FeBFT reached 12 GB of RAM used at the end of the test (it's peak) while BFT-SMaRt's peak memory usage is of 40GB (however that was before it was garbage collected).
+
+### For more information about FeBFT, please visit the wiki here: https://github.com/SecureSolutionsLab/febft/wiki .

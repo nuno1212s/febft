@@ -247,6 +247,7 @@ impl<S: Service + 'static> TimeoutsThread<S> {
                 }).collect();
 
                 if let Err(_) = self.loopback_channel.push_request(Message::Timeout(to_time_out)) {
+
                     info!("Loopback channel has disconnected, disconnecting timeouts thread");
 
                     break;

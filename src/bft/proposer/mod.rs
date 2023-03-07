@@ -133,6 +133,7 @@ impl<S: Service + 'static> Proposer<S> {
                     if self.cancelled.load(Ordering::Relaxed) {
                         break;
                     }
+
                     //We only want to produce batches to the channel if we are the leader, as
                     //Only the leader will propose thing
 
@@ -175,6 +176,7 @@ impl<S: Service + 'static> Proposer<S> {
 
                     let discovered_requests = opt_msgs.is_some();
 
+
                     //TODO: Handle timing out requests
 
                     if let Some(messages) = opt_msgs {
@@ -206,6 +208,7 @@ impl<S: Service + 'static> Proposer<S> {
                                         }
                                     }
                                     SystemMessage::UnOrderedRequest(req) => {
+
                                         unordered_propose.currently_accumulated.push(StoredMessage::new(header, req));
                                     }
                                     SystemMessage::ObserverMessage(msg) => {
@@ -235,12 +238,13 @@ impl<S: Service + 'static> Proposer<S> {
                                          &mut ordered_propose,
                                          &mut last_seq,
                                          &mut debug_stats);
-
+                                         
                     if !discovered_requests {
                         //Yield to prevent active waiting
 
                         std::thread::sleep(Duration::from_millis(5));
                     }
+
 
                 }
             }).unwrap()
@@ -294,7 +298,7 @@ impl<S: Service + 'static> Proposer<S> {
 
                     for request in new_accumulated_vec {
                         let (header, message) = request.into_inner();
-
+                        
                         unordered_batch.add(
                             header.from(),
                             message.session_id(),
@@ -329,6 +333,7 @@ impl<S: Service + 'static> Proposer<S> {
                 let micros_since_last_batch = Instant::now().duration_since(propose.last_proposal).as_micros();
 
                 if micros_since_last_batch <= self.global_batch_time_limit {
+
                     //Batch isn't large enough and time hasn't passed, don't even attempt to propose
                     return;
                 }
@@ -375,6 +380,7 @@ impl<S: Service + 'static> Proposer<S> {
                     let current_batch = std::mem::replace(&mut propose.currently_accumulated,
                                                           next_batch.unwrap_or(Vec::with_capacity(self.node_ref.batch_size() * 2)));
 
+
                     self.propose(*seq, view, current_batch);
 
                     //Stats
@@ -384,6 +390,7 @@ impl<S: Service + 'static> Proposer<S> {
                         /*println!("{:?} // {:?} // {}: batches made {}: message collections {}: total requests collected.",
                                  self.node_ref.id(), duration, debug.batches_made,
                                  debug.collections, debug.collected_per_batch_total);*/
+
 
                         debug.batches_made = 0;
                         debug.collections = 0;
@@ -403,9 +410,6 @@ impl<S: Service + 'static> Proposer<S> {
         view: &ViewInfo,
         currently_accumulated: Vec<StoredMessage<RequestMessage<Request<S>>>>,
     ) {
-        debug!("{:?} // Broadcasting Pre Prepare Seq {:?} to all nodes with {} requests",
-            self.node_ref.id(), seq, currently_accumulated.len());
-
         let message = SystemMessage::Consensus(ConsensusMessage::new(
             seq,
             view.sequence_number(),

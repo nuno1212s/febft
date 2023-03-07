@@ -224,6 +224,7 @@ impl SecureSocketRecvSync {
     
     pub fn new_tls(session: ServerConnection, socket: SyncSocket) -> Self {
         SecureSocketRecvSync::Tls(std::io::BufReader::new(StreamOwned::new(session, socket)))
+
     }
 }
 
@@ -234,6 +235,7 @@ impl SecureSocketSendSync {
     
     pub fn new_tls(session: ClientConnection, socket: SyncSocket) -> Self {
         SecureSocketSendSync::Tls(std::io::BufWriter::new(StreamOwned::new(session, socket)))
+
     }
 }
 

@@ -1,6 +1,8 @@
+
 use crate::{bft, message_peer_sending_thread_sent, start_measurement};
 use crate::bft::benchmarks::CommStats;
 use crate::bft::communication::channel::{ChannelAsyncRx, ChannelAsyncTx, ChannelMixedRx, ChannelMixedTx, ChannelSyncRx, ChannelSyncTx};
+
 use crate::bft::communication::message::WireMessage;
 use crate::bft::communication::socket::{SocketSendAsync, SocketSendSync};
 use crate::bft::communication::{Node, NodeId};
@@ -10,8 +12,11 @@ use log::{debug, error};
 use std::sync::Arc;
 use std::time::Instant;
 
+
 use crate::bft::async_runtime as rt;
 use crate::bft::communication::serialize::SharedData;
+
+
 
 ///Implements the behaviour where each connection has it's own dedicated thread that will handle
 ///Sending messages from it
@@ -37,6 +42,7 @@ pub struct ConnectionHandle {
 impl ConnectionHandle {
     pub fn send(&self, message: WireMessage, rq_key: Option<u64>) -> Result<()> {
         match self.channel.send(SendMessageType::Message(message, Instant::now(), rq_key)) {
+
             Ok(_) => Ok(()),
             Err(error) => {
                 error!("Failed to send to the channel! {:?}", error);
@@ -64,6 +70,7 @@ pub fn initialize_sync_sending_thread_for<D>(
 {
     let (tx, rx) = bft::communication::channel::new_bounded_mixed(QUEUE_SPACE);
 
+
     std::thread::Builder::new()
         .name(format!("Peer {:?} sending thread", peer_id))
         .spawn(move || sync_sending_thread(node, peer_id, socket, rx, comm_stats, sent_rqs))
@@ -83,7 +90,6 @@ fn sync_sending_thread<D>(
 ) where
     D: SharedData + 'static,
 {
-
     loop {
         let recv_result = recv.recv();
 
@@ -105,7 +111,9 @@ fn sync_sending_thread<D>(
                 //
                 // FIXME: sending may hang forever, because of network
                 // problems; add a timeout
+
                 match to_send.write_to_sync(socket.mut_socket(), flush) {
+
                     Ok(_) => {}
                     Err(error) => {
                         error!("Failed to write to socket on client {:?} {:?}", peer_id, error);
@@ -114,6 +122,7 @@ fn sync_sending_thread<D>(
                 }
 
                 message_peer_sending_thread_sent!(&comm_stats, init_time, before_send, to_send);
+
 
                 if let Some(sent_rqs) = &sent_rqs {
                     if let Some(rq_key) = rq_key {
@@ -137,6 +146,7 @@ pub fn initialize_async_sending_task_for<D>(
         D: SharedData + 'static,
 {
     let (tx, rx) = bft::communication::channel::new_bounded_mixed(QUEUE_SPACE);
+
 
     rt::spawn(async_sending_task(node, peer_id, socket, rx, comm_stats));
 
@@ -171,11 +181,13 @@ async fn async_sending_task<D>(
             SendMessage::Message(to_send, init_time, _) => {
                 start_measurement!(before_send);
 
+
                 // send
                 //
                 // FIXME: sending may hang forever, because of network
                 // problems; add a timeout
                 match to_send.write_to(socket.mut_socket(), flush).await {
+
                     Ok(_) => {}
                     Err(_error) => {
                         error!("Failed to write to socket on client {:?}", peer_id);

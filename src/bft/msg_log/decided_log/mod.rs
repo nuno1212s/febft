@@ -356,6 +356,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
 
         self.persistent_log.write_proof_metadata(WriteMode::NonBlockingSync(None),
                                                  metadata).unwrap();
+
     }
 
     /// Finalize a batch of client requests decided on the consensus instance

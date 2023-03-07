@@ -76,6 +76,7 @@ where
         let _connector = match self.node.connector() {
             //NodeConnector::Async(_) => todo!(),
             TlsNodeConnector::Sync(connector) => connector,
+
             _ => {
                 unreachable!()
             }
