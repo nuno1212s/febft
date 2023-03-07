@@ -1,6 +1,7 @@
 use std::io::Read;
 use std::io::Write;
 use bytes::BytesMut;
+use capnp::message::ReaderOptions;
 
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, ObserveEventKind, ObserverMessage, PingMessage, ReplyMessage, RequestMessage, StoredMessage, SystemMessage};
 
@@ -332,7 +333,12 @@ pub fn deserialize_message<R, S>(r: R) -> Result<SystemMessage<S::State, S::Requ
         R: Read,
         S: SharedData + ?Sized,
 {
-    let reader = capnp::serialize::read_message(r, Default::default()).wrapped_msg(
+    let mut options = ReaderOptions::new();
+
+    options.traversal_limit_in_words(None);
+
+    let reader = capnp::serialize::read_message(r, options).wrapped_msg(
+
         ErrorKind::CommunicationSerialize,
         "Failed to get capnp reader",
     )?;

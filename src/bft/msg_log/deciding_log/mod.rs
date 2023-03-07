@@ -21,6 +21,8 @@ use crate::bft::sync::view::ViewInfo;
 /// Basically some utility information about the current batch.
 /// The actual consensus messages are handled by the decided log
 pub struct DecidingLog<S> where S: Service {
+    node_id: NodeId,
+
     // The set of leaders that is currently in vigour for this consensus decision
     leader_set: Vec<NodeId>,
 
@@ -99,8 +101,10 @@ impl<S> Into<CompletedConsensus<S>> for CompletedBatch<S> where S: Service {
 }
 
 impl<S> DecidingLog<S> where S: Service {
-    pub fn new() -> Self {
-        Self {
+    pub fn new(node_id: NodeId) -> Self {
+        Self
+        {
+            node_id,
             leader_set: vec![],
             current_digest: None,
             current_received_pre_prepares: 0,
@@ -151,10 +155,12 @@ impl<S> DecidingLog<S> where S: Service {
                                                   sending_leader,
                                                   self.request_space_slices.len()).as_str()))?;
 
-        for request in &batch_rq_digests {
-            if !crate::bft::sync::view::is_request_in_hash_space(request, slice) {
-                return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
-                                                  "This batch contains requests that are not in the hash space of the leader."));
+        if request_batch.header().from() != self.node_id {
+            for request in &batch_rq_digests {
+                if !crate::bft::sync::view::is_request_in_hash_space(request, slice) {
+                    return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
+                                                      "This batch contains requests that are not in the hash space of the leader."));
+                }
             }
         }
 

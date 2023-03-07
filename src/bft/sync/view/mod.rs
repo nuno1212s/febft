@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::iter;
-use std::ops::{Add, Sub};
+
+use std::ops::{Add, Div, Sub};
+use fastrand::usize;
 use num_bigint::BigUint;
 use num_bigint::ToBigUint;
 use num_traits::identities::Zero;
@@ -36,6 +38,8 @@ impl Orderable for ViewInfo {
     }
 }
 
+const LEADER_COUNT: usize = 3;
+
 impl ViewInfo {
     /// Creates a new instance of `ViewInfo`.
     /// This is meant for when we are working with simple
@@ -48,7 +52,12 @@ impl ViewInfo {
 
         let destined_leader = quorum_members[usize::from(seq) % n];
 
-        let leader_set = vec![destined_leader];
+        let mut leader_set = vec![destined_leader];
+
+        for i in 1..=LEADER_COUNT {
+            leader_set.push(quorum_members[(usize::from(seq) + i) % n]);
+        }
+
 
         let division = calculate_hash_space_division(&leader_set);
 
@@ -129,9 +138,7 @@ impl ViewInfo {
 /// Divides the hash space for client requests across the various leaders.
 /// Each leader should get a similar slice of the pie.
 fn calculate_hash_space_division(leader_set: &Vec<NodeId>) -> BTreeMap<NodeId, (Vec<u8>, Vec<u8>)> {
-    let digest_len_bits = Digest::LENGTH * 8;
-
-    let slices = divide_hash_space(digest_len_bits, leader_set.len());
+    let slices = divide_hash_space(Digest::LENGTH, leader_set.len());
 
     let mut slice_for_leaders = BTreeMap::new();
 
@@ -161,14 +168,9 @@ pub fn is_request_in_hash_space(rq: &Digest, hash_space: &(Vec<u8>, Vec<u8>)) ->
 
 /// Division of the hash space
 /// The intervals returned here should be interpreted as [`[a, b], [c, d], ..`]
-fn divide_hash_space(size: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
+
+fn divide_hash_space(size_bytes: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     // all the numbers that we are going to be working with will then be used as powers in 2^x
-
-    // How large is each slice
-    let slice_size_bits = size / count;
-
-    // How many bytes does it take to represent a digest in this hash space
-    let size_bytes = size / u8::BITS as usize;
 
     let mut start = BigUint::zero();
 
@@ -177,13 +179,7 @@ fn divide_hash_space(size: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     //Byte order does not matter, it's all 1s
     let end = BigUint::from_bytes_be(&last_hash[..]);
 
-    //This is safe since the actual number of bits is very low (at most like the value 256, so a u32 can
-    // Handle that very easily for the foreseeable future 2^33 hashes?)
-    let slice_size_bits_u32 = slice_size_bits as u32;
-
-    // We want to have an interval [a,b], so b cannot be the same as the next groups a or we would get issues
-    // Instead, we just assign the last one the rest of the space
-    let increment = 2.to_biguint().unwrap().pow(slice_size_bits_u32).sub(1.to_biguint().unwrap());
+    let increment = end.clone().div(count.to_biguint().unwrap());
 
     // The final slices for each member
     let mut slices = Vec::with_capacity(count);
@@ -192,8 +188,8 @@ fn divide_hash_space(size: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
     for i in 1..=count {
 
         let slice_start = start.to_bytes_be();
-
-        start = start.add(&increment);
+        
+        start = start.add(increment.clone());
 
         let slice_end = if i == count {
             // Assign the last slice the rest of the space

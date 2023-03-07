@@ -215,6 +215,11 @@ impl ExecutorReplier for ReplicaReplier {
         _seq: Option<SeqNo>,
         batch: BatchReplies<Reply<S>>,
     ) {
+        if batch.len() == 0 {
+            //Ignore empty batches.
+            return;
+        }
+
         crate::bft::threadpool::execute(move || {
             let mut batch = batch.into_inner();
 
@@ -433,7 +438,8 @@ impl<S, T> Executor<S, T>
 
         let m = Message::ExecutionFinishedWithAppstate((seq, cloned_state));
 
-        if let Err(_err) = system_tx.push_request_sync(m) {
+        if let Err(_err) = system_tx.push_request(m) {
+
             error!(
                 "{:?} // FAILED TO DELIVER CHECKPOINT STATE",
                 self.send_node.id()
@@ -458,7 +464,6 @@ impl<S, T> Executor<S, T>
         }
 
         T::execution_finished::<S>(send_node, seq, batch);
-        //self.reply_worker.send(batch).unwrap();
     }
 }
 

@@ -355,7 +355,8 @@ impl<S> DecidedLog<S> where S: Service + 'static {
         let metadata = self.dec_log.all_batches_received(digest, pre_prepare_ordering.clone());
 
         self.persistent_log.write_proof_metadata(WriteMode::NonBlockingSync(None),
-                                                        metadata).unwrap();
+                                                 metadata).unwrap();
+
     }
 
     /// Finalize a batch of client requests decided on the consensus instance
@@ -435,7 +436,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
             update_batch: batch,
             completed_batch: Some(completed_batch),
         });
-        
+
         result
     }
 }

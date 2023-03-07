@@ -145,6 +145,7 @@ impl<S: Service + 'static> Follower<S> {
             None
         };
 
+        //TODO: Rethink this
         let reply_handle = Replier::new(node.id(), node.send_node());
 
         // start executor
@@ -248,7 +249,8 @@ impl<S: Service + 'static> Follower<S> {
             }
         };
 
-        debug!("{:?} // Processing message {:?}", self.id(), message);
+        // debug!("{:?} // Processing message {:?}", self.id(), message);
+
 
         match message {
             Message::System(header, message) => {

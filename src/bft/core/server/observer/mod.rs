@@ -134,8 +134,6 @@ impl<D> Observers<D> where D: SharedData + 'static{
                             
                             let targets = NodeId::targets(registered_obs);
 
-                            debug!("{:?} // Notifying observers of occurrence" , self.send_node.id());
-
                             self.send_node.broadcast(message, targets);
                         }
                     }

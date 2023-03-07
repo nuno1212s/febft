@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use chrono::{DateTime, Utc};
 use crate::bft::communication::channel::{ChannelSyncRx, ChannelSyncTx};
 use crate::bft::communication::message::Message::System;
 use crate::bft::communication::message::{
@@ -14,10 +15,8 @@ use crate::bft::communication::message::{
 };
 use crate::bft::communication::{channel, Node, NodeId};
 use crate::bft::consensus::ConsensusGuard;
-use chrono::{DateTime, Utc};
 use crate::bft::communication::serialize::SharedData;
 use crate::bft::threadpool;
-
 use crate::bft::core::server::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UnorderedBatch};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
@@ -49,6 +48,7 @@ pub struct Proposer<S: Service + 'static> {
     target_global_batch_size: usize,
     //Time limit for generating a batch with target_global_batch_size size
     global_batch_time_limit: u128,
+    max_batch_size: usize,
 
     //For unordered request execution
     executor_handle: ExecutorHandle<S>,
@@ -83,6 +83,7 @@ impl<S: Service + 'static> Proposer<S> {
         consensus_guard: ConsensusGuard,
         target_global_batch_size: usize,
         global_batch_time_limit: u128,
+        max_batch_size: usize,
         observer_handle: ObserverHandle,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -96,6 +97,7 @@ impl<S: Service + 'static> Proposer<S> {
             observer_handle,
             executor_handle,
             pending_decision_log,
+            max_batch_size,
         })
     }
 
@@ -160,8 +162,6 @@ impl<S: Service + 'static> Proposer<S> {
                             }
                         }
                     } else {
-
-                        //TODO: Fix the existence of the possibility that unordered requests are just ignored
                         match self.node_ref.receive_from_clients(Some(Duration::from_micros(self.global_batch_time_limit as u64))) {
                             Ok(msgs) => {
                                 Some(msgs)
@@ -173,6 +173,9 @@ impl<S: Service + 'static> Proposer<S> {
                             }
                         }
                     };
+
+                    let discovered_requests = opt_msgs.is_some();
+
 
                     //TODO: Handle timing out requests
 
@@ -203,13 +206,8 @@ impl<S: Service + 'static> Proposer<S> {
                                         } else {
                                             //TODO: The synchronizer must be notified of this
                                         }
-
-                                        //Store the message in the log in this thread.
-                                        //to_log.push(StoredMessage::new(header, req));
                                     }
                                     SystemMessage::UnOrderedRequest(req) => {
-                                        debug!("{:?} // Received unordered request session {:?}, op id {:?} from {:?}", self.node_ref.id(), req.session_id(), req.sequence_number(),
-                                        header.from());
 
                                         unordered_propose.currently_accumulated.push(StoredMessage::new(header, req));
                                     }
@@ -240,9 +238,14 @@ impl<S: Service + 'static> Proposer<S> {
                                          &mut ordered_propose,
                                          &mut last_seq,
                                          &mut debug_stats);
+                                         
+                    if !discovered_requests {
+                        //Yield to prevent active waiting
 
-                    //Yield to prevent active waiting
-                    std::thread::yield_now();
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+
+
                 }
             }).unwrap()
     }
@@ -289,17 +292,13 @@ impl<S: Service + 'static> Proposer<S> {
 
                 let node_id = self.node_ref.id();
 
-                info!("{:?} // Executing unordered request batch", node_id);
-
                 threadpool::execute(move || {
                     let mut unordered_batch =
                         UnorderedBatch::new_with_cap(new_accumulated_vec.len());
 
                     for request in new_accumulated_vec {
                         let (header, message) = request.into_inner();
-
-                        debug!("{:?} // Adding request session {:?} with op id {:?} and sender {:?}", node_id, message.session_id(), message.sequence_number(), header.from());
-
+                        
                         unordered_batch.add(
                             header.from(),
                             message.session_id(),
@@ -307,8 +306,6 @@ impl<S: Service + 'static> Proposer<S> {
                             message.into_inner_operation(),
                         );
                     }
-
-                    info!("{:?} // Queueing unordered request batch", node_id);
 
                     if let Err(err) = executor_handle.queue_update_unordered(unordered_batch) {
                         error!(
@@ -329,15 +326,13 @@ impl<S: Service + 'static> Proposer<S> {
                        debug: &mut DebugStats) {
 
         //Now let's deal with ordered requests
-        if is_leader && !propose.currently_accumulated.is_empty() {
+        if is_leader {
             let current_batch_size = propose.currently_accumulated.len();
 
-            if current_batch_size < self.target_global_batch_size {
+             if current_batch_size < self.target_global_batch_size {
                 let micros_since_last_batch = Instant::now().duration_since(propose.last_proposal).as_micros();
 
                 if micros_since_last_batch <= self.global_batch_time_limit {
-                    //Yield to prevent active waiting
-                    std::thread::yield_now();
 
                     //Batch isn't large enough and time hasn't passed, don't even attempt to propose
                     return;
@@ -368,18 +363,34 @@ impl<S: Service + 'static> Proposer<S> {
 
                     *last_seq = Some(*seq);
 
+                    let next_batch = if propose.currently_accumulated.len() > self.max_batch_size {
+
+                        //This now contains target_global_size requests. We want this to be our next batch
+                        //Currently accumulated contains the remaining messages to be sent in the next batch
+                        let mut next_batch = propose.currently_accumulated.split_off(propose.currently_accumulated.len() - self.max_batch_size);
+
+                        //So we swap that memory with the other vector memory and we have it!
+                        std::mem::swap(&mut next_batch, &mut propose.currently_accumulated);
+
+                        Some(next_batch)
+                    } else {
+                        None
+                    };
+
                     let current_batch = std::mem::replace(&mut propose.currently_accumulated,
-                                                          Vec::with_capacity(self.node_ref.batch_size() * 2));
+                                                          next_batch.unwrap_or(Vec::with_capacity(self.node_ref.batch_size() * 2)));
+
 
                     self.propose(*seq, view, current_batch);
 
                     //Stats
                     if debug.batches_made % 10000 == 0 {
-                        let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+                        //let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
 
-                        println!("{:?} // {:?} // {}: batches made {}: message collections {}: total requests collected.",
+                        /*println!("{:?} // {:?} // {}: batches made {}: message collections {}: total requests collected.",
                                  self.node_ref.id(), duration, debug.batches_made,
-                                 debug.collections, debug.collected_per_batch_total);
+                                 debug.collections, debug.collected_per_batch_total);*/
+
 
                         debug.batches_made = 0;
                         debug.collections = 0;

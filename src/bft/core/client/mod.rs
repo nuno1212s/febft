@@ -8,10 +8,12 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
+use std::time::Instant;
 
 use futures_timer::Delay;
 use intmap::IntMap;
 use log::{error, debug, info};
+use crate::bft::benchmarks::ClientPerf;
 
 use crate::bft::communication::message::{Message, ReplyMessage, SystemMessage};
 use crate::bft::communication::serialize::SharedData;
@@ -20,6 +22,8 @@ use crate::bft::core::client::observing_client::ObserverClient;
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
 use crate::bft::ordering::{Orderable, SeqNo};
+use crate::{measure_ready_rq_time, measure_response_deliver_time, measure_response_rcv_time, measure_sent_rq_info, measure_target_init_time, measure_time_rq_init, start_measurement};
+
 
 use self::unordered_client::{FollowerData, UnorderedClientMode};
 
@@ -99,6 +103,9 @@ where
     //May have, so we keep this reference in here
     observer: Arc<Mutex<Option<ObserverClient>>>,
     observer_ready: Mutex<Option<observing_client::Ready>>,
+
+    stats: Option<Arc<ClientPerf>>
+
 }
 
 pub trait ClientType<D: SharedData + 'static> {
@@ -253,6 +260,11 @@ where
         // network problems? for now ignore rogue messages...
         let (node, _rogue) = Node::bootstrap(node_config).await?;
 
+        let stats = {
+            None
+            //Some(Arc::new(ClientPerf::new()))
+        };
+
         // create shared data
         let data = Arc::new(ClientData {
             session_counter: AtomicU32::new(0),
@@ -268,6 +280,7 @@ where
 
             observer: Arc::new(Mutex::new(None)),
             observer_ready: Mutex::new(None),
+            stats
         });
 
         let task_data = Arc::clone(&data);
@@ -325,9 +338,9 @@ where
     {
         let session_id = self.session_id;
         let operation_id = self.next_operation_id();
+
         let request_key = get_request_key(session_id, operation_id);
 
-        debug!("{:?} // Operation id is {:?}", self.node.id(), operation_id);
 
         let message = T::init_request(session_id, operation_id, operation);
 
@@ -346,8 +359,6 @@ where
 
             request_info_guard.insert(request_key, sent_info);
         }
-
-        debug!("{:?} // Broadcasting to {} targets", self.id(), target_count);
 
         // broadcast our request to the node group
         self.node.broadcast(message, targets);
@@ -389,7 +400,15 @@ where
 
         let operation_id = self.next_operation_id();
 
+        start_measurement!(init_rq);
+
         let message = T::init_request(session_id, operation_id, operation);
+
+        measure_time_rq_init!(&self.data.stats, init_rq);
+
+
+        start_measurement!(target_init);
+
 
         // await response
         let request_key = get_request_key(session_id, operation_id);
@@ -397,6 +416,10 @@ where
         //We only send the message after storing the callback to prevent us receiving the result without having
         //The callback registered, therefore losing the response
         let (targets, target_count) = T::init_targets(&self);
+        
+        measure_target_init_time!(&self.data.stats, target_init);
+
+        start_measurement!(rq_info_init);
 
         let request_info = get_request_info(session_id, &*self.data);
 
@@ -411,6 +434,11 @@ where
             request_info_guard.insert(request_key, sent_info);
         }
 
+        measure_sent_rq_info!(&self.data.stats, rq_info_init);
+
+
+        start_measurement!(rq_ready_init);
+
         let ready = get_ready::<D>(session_id, &*self.data);
 
         let callback = Callback {
@@ -424,6 +452,8 @@ where
 
             ready_callback_guard.insert(request_key, ClientAwaker::Callback(callback));
         }
+        
+        measure_ready_rq_time!(&self.data.stats, rq_ready_init);
 
         self.node.broadcast(message, targets);
 
@@ -587,7 +617,9 @@ where
                             timed_out: AtomicBool::new(false),
                         };
 
-                        //populate the data with the received payload
+                        //populate the data with the received payload, even though the
+                        //
+
                         *opt_ready = Some(request);
                     }
                 }
@@ -679,7 +711,8 @@ where
                             let session_id = msg_info.session_id();
                             let operation_id = msg_info.sequence_number();
 
-                            debug!("{:?} // Received reply to {:?} session op id {:?} from {:?}", node.id(), session_id, operation_id, header.from());
+                            start_measurement!(start_time);
+
 
                             //Check if we have already executed the operation
                             let last_operation_id = last_operation_ids
@@ -728,11 +761,13 @@ where
                                 1
                             };
 
-                            debug!("Current response count is {}", count);
+                            measure_response_rcv_time!(&data.stats, start_time);
 
                             // wait for the amount of votes that we require identical replies
                             // In a BFT system, this is by default f+1
                             if count >= votes.needed_votes_count {
+                                start_measurement!(start_time);
+
                                 replica_votes.remove(request_key);
 
                                 last_operation_ids.remove(session_id.into());
@@ -752,6 +787,9 @@ where
                                         _ => unreachable!(),
                                     },
                                 );
+
+                                measure_response_deliver_time!(&data.stats, start_time);
+
                             } else {
                                 //If we do not have f+1 replies yet, check if it's still possible to get those
                                 //Replies by taking a look at the target count and currently received replies count

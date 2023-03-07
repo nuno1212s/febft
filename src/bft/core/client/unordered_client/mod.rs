@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use std::sync::{Mutex};
 
 use crate::bft::communication::message::{RequestMessage, SystemMessage};
-use crate::bft::communication::NodeConnector;
+use crate::bft::communication::TlsNodeConnector;
 
 use crate::bft::error::*;
 use crate::bft::{
@@ -75,7 +75,8 @@ where
 
         let _connector = match self.node.connector() {
             //NodeConnector::Async(_) => todo!(),
-            NodeConnector::Sync(connector) => connector,
+            TlsNodeConnector::Sync(connector) => connector,
+
             _ => {
                 unreachable!()
             }

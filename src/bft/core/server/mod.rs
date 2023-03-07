@@ -112,6 +112,8 @@ pub struct ReplicaConfig<S: Service, T: PersistentLogModeTrait> {
     pub global_batch_size: usize,
     ///The time limit for creating that batch, in micro seconds
     pub batch_timeout: u128,
+    pub max_batch_size: usize,
+
     ///The logging mode
     pub log_mode: PhantomData<T>,
     /// Check out the docs on `NodeConfig`.
@@ -131,6 +133,7 @@ impl<S> Replica<S>
             next_consensus_seq,
             global_batch_size,
             batch_timeout,
+            max_batch_size,
             node: node_config,
             service,
             view: _,
@@ -258,6 +261,8 @@ impl<S> Replica<S>
                 consensus_guard,
                 global_batch_size,
                 batch_timeout,
+                max_batch_size,
+
                 observer_handle.clone(),
             ),
             executor,
@@ -331,11 +336,18 @@ impl<S> Replica<S>
             replica.id(),
             global_batch_size
         );
+
         debug!(
             "{:?} // Global batch timeout: {}",
             replica.id(),
             batch_timeout
         );
+
+        println!("{:?} // Leader count: {} ({:?})",
+                 replica.id(),
+                 replica.synchronizer.view().leader_set().len(),
+                 replica.synchronizer.view().leader_set());
+
 
         Ok(replica)
     }
@@ -574,7 +586,7 @@ impl<S> Replica<S>
             }
         };
 
-        debug!("{:?} // Processing message {:?}", self.id(), message);
+        // debug!("{:?} // Processing message {:?}", self.id(), message);
 
         match message {
             Message::System(header, message) => {
@@ -644,13 +656,13 @@ impl<S> Replica<S>
     ) -> Result<()> {
         let seq = self.consensus.sequence_number();
 
-        debug!(
-            "{:?} // Processing consensus message {:?} ",
-            self.id(),
-            message
-        );
+        // debug!(
+        //     "{:?} // Processing consensus message {:?} ",
+        //     self.id(),
+        //     message
+        // );
 
-        let start = Instant::now();
+        // let start = Instant::now();
 
         let status = self.consensus.process_message(
             header,
@@ -694,11 +706,13 @@ impl<S> Replica<S>
         // signal the consensus layer of this event
         self.consensus.signal();
 
-        debug!(
-            "{:?} // Done processing consensus message. Took {:?}",
-            self.id(),
-            Instant::now().duration_since(start)
-        );
+        //
+        // debug!(
+        //     "{:?} // Done processing consensus message. Took {:?}",
+        //     self.id(),
+        //     Instant::now().duration_since(start)
+        // );
+
 
         // yield execution since `signal()`
         // will probably force a value from the

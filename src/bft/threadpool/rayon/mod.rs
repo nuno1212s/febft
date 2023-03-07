@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use rayon::ThreadPoolBuilder;
 
 pub struct ThreadPool {
@@ -27,9 +28,15 @@ impl Builder {
     }
 
     pub fn build(self) -> ThreadPool {
+        let mut builder = ThreadPoolBuilder::new();
+
+        builder = builder.thread_name(|t| {
+            format!("FeBFT-CPU-Worker-{}", t)
+        });
+
         let inner = match self.threads {
-            Some(n) => ThreadPoolBuilder::new().num_threads(n),
-            None => ThreadPoolBuilder::new(),
+            Some(n) => builder.num_threads(n),
+            None => builder,
         }.build().unwrap();
 
         ThreadPool { inner }

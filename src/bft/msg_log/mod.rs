@@ -7,6 +7,8 @@ use crate::bft::communication::message::ConsensusMessage;
 use crate::bft::communication::message::Header;
 use crate::bft::communication::message::RequestMessage;
 use crate::bft::communication::message::StoredMessage;
+use crate::bft::communication::NodeId;
+
 
 use crate::bft::error::*;
 use crate::bft::executable::ExecutorHandle;
@@ -31,7 +33,8 @@ pub mod pending_decision;
 /// Every `PERIOD` messages, the message log is cleared,
 /// and a new log checkpoint is initiated.
 /// TODO: Move this to an env variable as it can be highly dependent on the service implemented on top of it
-pub const PERIOD: u32 = 120_000_000;
+
+pub const PERIOD: u32 = 1000;
 
 /// Information reported after a logging operation.
 pub enum Info {
@@ -63,8 +66,10 @@ pub(crate) fn initialize_pending_request_log<S: Service + 'static>() -> Result<P
     Ok(PendingRequestLog::new())
 }
 
-pub(crate) fn initialize_deciding_log<S: Service + 'static>() -> Result<DecidingLog<S>> {
-    Ok(DecidingLog::new())
+
+pub(crate) fn initialize_deciding_log<S: Service + 'static>(node_id: NodeId) -> Result<DecidingLog<S>> {
+    Ok(DecidingLog::new(node_id))
+
 }
 
 #[inline]

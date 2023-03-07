@@ -61,7 +61,7 @@ impl<S> Replier<S> where S: Service + 'static{
 
         let handle = ReplyHandle::new(ch_tx);
 
-        reply_task.start();
+        //reply_task.start();
 
         handle
     }
