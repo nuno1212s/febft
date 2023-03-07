@@ -1,6 +1,6 @@
 use std::cell::{RefCell};
 use std::io::{Read, Write};
-use capnp::message::ScratchSpaceHeapAllocator;
+use capnp::message::{HeapAllocator, ScratchSpaceHeapAllocator};
 use crate::message::{NetworkMessageContent, PingMessage};
 use crate::serialize::Serializable;
 use febft_common::error::*;
@@ -21,18 +21,21 @@ pub(super) fn serialize_message<T, W>(m: &NetworkMessageContent<T>, w: &mut W) -
         {
             let mut borrow = buffer.buffer().borrow_mut();
 
-            let mut builder = capnp::message::Builder::new(
-                ScratchSpaceHeapAllocator::new(&mut *borrow));
+            //let alloc = ScratchSpaceHeapAllocator::new(&mut *borrow);
+
+            let alloc = HeapAllocator::new();
+
+            let mut builder = capnp::message::Builder::new(alloc);
 
             let mut root: network_messages_capnp::network_message::Builder = builder.init_root();
 
             match m {
                 NetworkMessageContent::System(sys_msg) => {
-                    let buffer = memory_cache.take_mem();
+                    let mut vec = Vec::with_capacity(512);
 
-                    let mut buf_borrow = buffer.buffer().borrow_mut();
+                    T::serialize(&mut vec, sys_msg)?;
 
-                    T::serialize(&mut *buf_borrow, sys_msg)?;
+                    root.reborrow().set_system_message(&vec[..]);
                 }
                 NetworkMessageContent::Ping(ping) => {
                     let mut ping_msg = root.reborrow().init_ping_message();
@@ -63,7 +66,7 @@ pub(super) fn deserialize_message<T, R>(
 
     let network_msg: network_messages_capnp::network_message::Reader = reader.get_root().wrapped_msg(
         ErrorKind::CommunicationSerialize,
-        "Failed to get system msg root",
+        "Failed to get network msg root",
     )?;
 
     let msg = match network_msg.which().unwrap() {
@@ -71,13 +74,13 @@ pub(super) fn deserialize_message<T, R>(
             NetworkMessageContent::System(T::deserialize_message(data)?)
         }
         network_messages_capnp::network_message::WhichReader::SystemMessage(Err(err)) => {
-            return Err(Error::simple(ErrorKind::CommunicationSerialize));
+            return Err(Error::wrapped(ErrorKind::CommunicationSerialize, err));
         }
         network_messages_capnp::network_message::WhichReader::PingMessage(Ok(ping)) => {
             NetworkMessageContent::Ping(PingMessage::new(ping.get_request()))
         }
         network_messages_capnp::network_message::WhichReader::PingMessage(Err(err)) => {
-            return Err(Error::simple(ErrorKind::CommunicationSerialize));
+            return Err(Error::wrapped(ErrorKind::CommunicationSerialize, err));
         }
     };
 

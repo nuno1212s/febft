@@ -17,7 +17,7 @@ use crate::serialize::Serializable;
 
 ///Implements the behaviour where each connection has it's own dedicated thread that will handle
 ///Sending messages from it
-const QUEUE_SPACE: usize = 128;
+const QUEUE_SPACE: usize = 16384;
 
 pub type SendMessage = SendMessageType;
 

@@ -1694,7 +1694,7 @@ impl<T> SendTo<T>
                 if let Left((nonce, digest, data)) = m {
                     let key = sh.as_ref().map(|ref sh| &sh.my_key);
 
-                    let wm = WireMessage::new(my_id, my_id, data, nonce, Some(digest), key);
+                    let wm = WireMessage::new(my_id, peer_id, data, nonce, Some(digest), key);
                     Self::peers(flush, my_id, peer_id, wm, &peer_tx, sock, rq_key);
                 } else {
                     // optimize code path
@@ -1790,7 +1790,7 @@ impl<T> SerializedSendTo<T>
         // create wire msg
         let (msg, raw) = m.into_inner();
 
-        let wm = WireMessage::from_parts(msg.into_inner().0, Bytes::from(raw)).unwrap();
+        let wm = WireMessage::from_parts(msg.into_inner().0, raw).unwrap();
 
         match conn_handle.send(wm, None) {
             Ok(_) => {}

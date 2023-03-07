@@ -60,7 +60,7 @@ pub(super) fn deserialize_message<R: Read, S: Service, P: Serializable>(r: R) ->
     )?;
 
     let message: messages_capnp::system::Reader = reader.get_root()
-        .wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to get msg root")?;
+        .wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to get system msg root")?;
 
     let sys_msg_type = message.which()
         .wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to read which for sys msg")?;

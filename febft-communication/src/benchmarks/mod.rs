@@ -111,7 +111,7 @@ struct CommStatsHelper {
     pub message_signing_time_taken: Vec<Mutex<BenchmarkHelper>>,
     //Time taken to create send to objects
     pub message_send_to_create: Vec<Mutex<BenchmarkHelper>>,
-    //Time taken to pass from threadpool to each individual thread
+    //Time taken to pass from threadpool to each individual thread (time until it is accepted and finished sending)
     pub message_passing_to_send_thread: Vec<Mutex<BenchmarkHelper>>,
 }
 

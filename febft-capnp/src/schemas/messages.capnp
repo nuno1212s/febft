@@ -28,7 +28,3 @@ struct ForwardedRequest {
     header  @0 :Data;
     request @1 :Request;
 }
-
-struct Ping {
-    request    @0 :Bool;
-}

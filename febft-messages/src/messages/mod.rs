@@ -29,7 +29,26 @@ pub enum SystemMessage<S: Service, P: Serializable> {
 
 impl<S, P> Clone for SystemMessage<S, P> where S: Service, P: Serializable {
     fn clone(&self) -> Self {
-        todo!()
+        match self {
+            SystemMessage::OrderedRequest(req) => {
+                SystemMessage::OrderedRequest(req.clone())
+            }
+            SystemMessage::OrderedReply(reply) => {
+                SystemMessage::OrderedReply(reply.clone())
+            }
+            SystemMessage::UnorderedRequest(req) => {
+                SystemMessage::UnorderedRequest(req.clone())
+            }
+            SystemMessage::UnorderedReply(reply) => {
+                SystemMessage::UnorderedReply(reply.clone())
+            }
+            SystemMessage::ForwardedRequests(fwd_reqs) => {
+                SystemMessage::ForwardedRequests(fwd_reqs.clone())
+            }
+            SystemMessage::Protocol(protocol) => {
+                SystemMessage::Protocol(protocol.clone())
+            }
+        }
     }
 }
 

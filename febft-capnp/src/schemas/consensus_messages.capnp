@@ -6,9 +6,10 @@ using SysMsgs = import "messages.capnp";
 struct ProtocolMessage {
 
     union {
-        consensusMessage    @0 :Consensus;
-        viewChangeMessage   @1 :Void;
+        consensusMessage     @0 :Consensus;
+        viewChangeMessage    @1 :Void;
         stateTransferMessage @2 :Void;
+        observerMessage      @3 :ObserverMessage;
     }
 
 }

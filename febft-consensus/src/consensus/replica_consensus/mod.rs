@@ -100,12 +100,12 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
             // serialize raw msg
             let mut buf = Vec::new();
 
-            let digest =
-                <SysMsg<S> as DigestSerializable>::serialize_digest(&message, &mut buf).unwrap();
+            let network_msg = NetworkMessageContent::System(message);
+
+            let digest = febft_communication::serialize::serialize_digest_message(&network_msg, &mut buf)
+                .unwrap();
 
             let buf = Buf::from(buf);
-
-            let network_msg = NetworkMessageContent::System(message);
 
             for peer_id in NodeId::targets(0..n) {
                 let buf_clone = buf.clone();

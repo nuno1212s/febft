@@ -566,8 +566,12 @@ impl<T> Node<T> where T: Serializable {
 
             // TLS handshake; drop connection if it fails
             let sock = if peer_id >= first_cli || my_id >= first_cli {
+                debug!("{:?} // Setting up plain text recv socket for peer {:?}", my_id, peer_id);
+
                 SecureSocketRecvSync::new_plain(sock)
             } else {
+                debug!("{:?} // Setting up SSL recv socket for peer {:?}", my_id, peer_id);
+
                 if let Ok(tls_session) = ServerConnection::new(acceptor.clone()) {
                     SecureSocketRecvSync::new_tls(tls_session, sock)
                 } else {
@@ -620,7 +624,7 @@ impl<T> Node<T> where T: Serializable {
         let mut buf_header = [0; Header::LENGTH];
 
         debug!(
-            "{:?} // Started handling connection from node {}",
+            "{:?} // Started handling connection from node with rand {}",
             my_id, rand
         );
 
@@ -658,8 +662,10 @@ impl<T> Node<T> where T: Serializable {
 
             // TLS handshake; drop connection if it fails
             let sock = if peer_id >= first_cli || my_id >= first_cli {
+                debug!("{:?} // Setting up plain text recv socket for peer {:?}", my_id, peer_id);
                 SecureSocketRecvAsync::Plain(BufReader::new(sock))
             } else {
+                debug!("{:?} // Setting up SSL recv socket for peer {:?}", my_id, peer_id);
                 match acceptor.accept(sock).await {
                     Ok(s) => SecureSocketRecvAsync::new_tls(s),
                     Err(_) => {
@@ -727,18 +733,21 @@ impl<T> Node<T> where T: Serializable {
             buf.resize(header.payload_length(), 0);
 
             // read the peer's payload
-            if let Err(_) = sock.read_exact(&mut buf[..header.payload_length()]).await {
+            if let Err(err) = sock.read_exact(&mut buf[..header.payload_length()]).await {
                 // errors reading -> faulty connection;
                 // drop this socket
+                error!("{:?} // Failed to read header for message for {:?}", self.id, err);
                 break;
             }
 
             // deserialize payload
             let message = match serialize::deserialize_message::<T, &[u8]>(&buf[..header.payload_length()]) {
                 Ok(m) => m,
-                Err(_) => {
+                Err(err) => {
                     // errors deserializing -> faulty connection;
                     // drop this socket
+
+                    error!("{:?} // Failed to deserialize message for {:?} header {:?}", self.id, err, header);
                     break;
                 }
             };
