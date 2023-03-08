@@ -2168,11 +2168,6 @@ impl<D> Node<D>
                 break;
             }
 
-            if header.payload_length() == 0 {
-                //IGNORE PING REQUESTS
-                continue;
-            }
-
             // deserialize payload
             let message = match D::deserialize_message(&buf[..header.payload_length()]) {
                 Ok(m) => m,

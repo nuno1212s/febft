@@ -722,7 +722,6 @@ where
 
                             // reply already delivered to application
                             if last_operation_id >= operation_id {
-                                info!("{:?} // Ignoring since the last op id is {:?}", node.id(), last_operation_id);
                                 continue;
                             }
 
