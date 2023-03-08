@@ -175,12 +175,11 @@ async fn async_sending_task<D>(
             }
         };
 
-        let flush = recv.len() == 0;
+        let flush = true;
 
         match to_send {
             SendMessage::Message(to_send, init_time, _) => {
                 start_measurement!(before_send);
-
 
                 // send
                 //
