@@ -713,7 +713,6 @@ where
 
                             start_measurement!(start_time);
 
-
                             //Check if we have already executed the operation
                             let last_operation_id = last_operation_ids
                                 .get(session_id.into())
