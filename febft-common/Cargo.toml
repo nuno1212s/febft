@@ -19,8 +19,7 @@ default = [
     "crypto_signature_ring_ed25519",
     "crypto_hash_blake3_blake3",
     "collections_randomstate_fxhash",
-    "persistent_db_rocksdb",
-    "serialize_serde"
+    "persistent_db_rocksdb"
 ]
 
 socket_tokio_tcp = ["tokio", "tokio-util"]

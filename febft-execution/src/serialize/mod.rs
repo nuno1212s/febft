@@ -20,7 +20,10 @@ pub trait SharedData: Send {
     type State: for<'a> Deserialize<'a> + Serialize + Send + Clone;
 
     #[cfg(feature = "serialize_bincode")]
-    type State: for<'a> Encode + Decode + BorrowDecode<'a> + Send + Clone;
+    type State: Encode + Decode + for<'a> BorrowDecode<'a> + Send + Clone;
+
+    #[cfg(feature = "serialize_capnp")]
+    type State: Send + Clone;
 
     /// Represents the requests forwarded to replicas by the
     /// clients of the BFT system.
@@ -28,7 +31,10 @@ pub trait SharedData: Send {
     type Request: for<'a> Deserialize<'a> + Serialize + Send + Clone;
 
     #[cfg(feature = "serialize_bincode")]
-    type Request: for<'a> Encode + Decode + BorrowDecode<'a> + Send + Clone;
+    type Request: Encode + Decode + for<'a> BorrowDecode<'a> + Send + Clone;
+
+    #[cfg(feature = "serialize_capnp")]
+    type Request: Send + Clone;
 
     /// Represents the replies forwarded to clients by replicas
     /// in the BFT system.
@@ -36,8 +42,10 @@ pub trait SharedData: Send {
     type Reply: for<'a> Deserialize<'a> + Serialize + Send + Clone;
 
     #[cfg(feature = "serialize_bincode")]
-    type Reply: for<'a> Encode + Decode + BorrowDecode<'a> + Send + Clone;
+    type Reply: Encode + Decode + for<'a> BorrowDecode<'a> + Send + Clone;
 
+    #[cfg(feature = "serialize_capnp")]
+    type Reply: Send + Clone;
 
     ///Serialize a state so it can be utilized by the SMR middleware
     ///  (either for network sending or persistent storing)

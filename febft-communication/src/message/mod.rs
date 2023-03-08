@@ -11,11 +11,7 @@ use futures::AsyncWrite;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 #[cfg(feature = "serialize_bincode")]
-use bincode::{Encode, Decode};
-use bincode::BorrowDecode;
-use bincode::de::{BorrowDecoder, Decoder};
-use bincode::enc::Encoder;
-use bincode::error::{DecodeError, EncodeError};
+use bincode::{Encode, Decode, BorrowDecoder, Encoder, Decoder};
 
 use futures::io::{
     AsyncWriteExt,

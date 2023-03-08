@@ -12,7 +12,7 @@ pub fn serialize_message<T, W>(
 ) -> Result<()> where
     W: Write + AsMut<[u8]>,
     T: Serializable {
-    bincode::encode_into_slice(m,  w.as_mut(), bincode::config::standard())
+    bincode::encode_into_std_write(m,  w, bincode::config::standard())
         .wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to serialize message")?;
 
     Ok(())

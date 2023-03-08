@@ -13,9 +13,10 @@ use either::{
     Right,
     Either,
 };
-
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
+#[cfg(feature = "serialize_bincode")]
+use bincode::{Decode, Encode};
 
 /// Checkpoint period.
 ///

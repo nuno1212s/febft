@@ -9,8 +9,9 @@ pub fn serialize_message<T, W>(
 ) -> Result<()> where
     W: Write + AsMut<[u8]>,
     T: Serializable {
-    bincode::serde::encode_into_slice(m,  w.as_mut(), bincode::config::standard())
-        .wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to serialize message")?;
+
+    bincode::serde::encode_into_std_write(m,  w, bincode::config::standard())
+        .wrapped_msg(ErrorKind::CommunicationSerialize, format!("Failed to serialize message {} bytes len", w.as_mut().len()).as_str())?;
 
     Ok(())
 }

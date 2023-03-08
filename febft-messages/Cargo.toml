@@ -9,7 +9,7 @@ serialize_capnp = ["febft-capnp", "capnp", "febft-communication/serialize_capnp"
 serialize_bincode = ["bincode", "febft-communication/serialize_bincode", "febft-common/serialize_bincode"]
 serialize_serde = ["serde", "febft-communication/serialize_serde", "febft-common/serialize_serde", "bincode"]
 
-default = ["serialize_serde"]
+default = ["serialize_capnp"]
 
 [dependencies]
 febft-common = { path = "../febft-common" }

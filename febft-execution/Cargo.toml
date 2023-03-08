@@ -7,8 +7,9 @@ edition = "2021"
 
 serialize_serde = ["serde"]
 serialize_bincode = ["bincode"]
+serialize_capnp = []
 
-default = ["serialize_serde"]
+default = ["serialize_capnp"]
 
 [dependencies]
 febft-common = { path = "../febft-common" }

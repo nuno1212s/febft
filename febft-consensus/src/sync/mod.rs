@@ -14,7 +14,7 @@ use febft_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_po
 use febft_common::{collections, prng};
 use febft_communication::message::{Header, NetworkMessageContent, StoredMessage, WireMessage};
 use febft_communication::{Node, NodeId};
-use febft_communication::serialize::{Buf, DigestSerializable};
+use febft_communication::serialize::{Buf};
 use febft_execution::executable::{Reply, Request, Service, State};
 use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
 use febft_timeouts::{ClientRqInfo, Timeouts};
@@ -125,7 +125,7 @@ pub(super) struct FinalizeState<O> {
     curr_cid: SeqNo,
     sound: Sound,
     proposed: FwdConsensusMessage<O>,
-    last_proof: Option<Proof<O>>
+    last_proof: Option<Proof<O>>,
 }
 
 pub(super) enum FinalizeStatus<O> {
@@ -737,10 +737,11 @@ impl<S> Synchronizer<S>
                             let (header, message) = {
                                 let mut buf = Vec::new();
 
-                                let forged_pre_prepare : SysMsg<S::Data> = consensus.forge_propose(p.clone(), self).into();
+                                let forged_pre_prepare =
+                                    NetworkMessageContent::System(SystemMessage::from(consensus.forge_propose(p.clone(), self)));
 
-                                //TODO: Is this right?
-                                let digest = <SysMsg<S::Data> as DigestSerializable>::serialize_digest(
+                                let digest = febft_communication::serialize::serialize_digest_message
+                                    ::<SysMsg<S::Data>, Vec<u8>>(
                                     &forged_pre_prepare,
                                     &mut buf,
                                 ).unwrap();
@@ -760,11 +761,18 @@ impl<S> Synchronizer<S>
                                     Some(node_sign.key_pair()),
                                 ).into_inner();
 
-                                if let PBFTProtocolMessage::Consensus(consensus) = PBFTProtocolMessage::from(forged_pre_prepare) {
-                                    (h, consensus)
+                                if let NetworkMessageContent::System(sys_msg) = forged_pre_prepare {
+                                    if let SystemMessage::Protocol(prot_msg) = sys_msg {
+                                        if let PBFTProtocolMessage::Consensus(consensus) = prot_msg.into_inner() {
+                                            (h, consensus)
+                                        } else {
+                                            unreachable!()
+                                        }
+                                    } else {
+                                        unreachable!()
+                                    }
                                 } else {
-                                    //This is basically impossible
-                                    panic!("Returned random message from forge propose?")
+                                    unreachable!()
                                 }
                             };
 
@@ -791,7 +799,7 @@ impl<S> Synchronizer<S>
                                 curr_cid,
                                 sound,
                                 proposed: fwd_request,
-                                last_proof: proof.cloned()
+                                last_proof: proof.cloned(),
                             };
 
                             finalize_view_change!(
@@ -1046,14 +1054,12 @@ impl<S> Synchronizer<S>
             // We are missing the last decision, which should be included in the collect data
             // sent by the leader in the SYNC message
             if let Some(last_proof) = last_proof {
-
                 consensus.catch_up_to_quorum(last_proof.seq_no(), last_proof, log)
                     .expect("Failed to catch up to quorum");
 
 
                 //TODO: Now we must replay this in the executor.
                 // Maybe do a sync write so we can make sure we only execute when it is done
-
             } else {
                 // This maybe happens when a checkpoint is done and the first execution after it
                 // fails, leading to a view change? Don't really know how this would be possible

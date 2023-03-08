@@ -10,7 +10,7 @@ serialize_serde = ["serde", "serde_bytes", "bincode", "bincode/serde"]
 serialize_bincode = ["bincode"]
 serialize_capnp = ["capnp", "capnpc", "febft-capnp"]
 
-default = ["serialize_serde"]
+default = ["serialize_capnp"]
 
 [dependencies]
 crossbeam-channel = "0.5.7"

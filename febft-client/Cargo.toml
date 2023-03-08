@@ -10,14 +10,17 @@ edition = "2021"
 observer_client = ["febft-consensus"]
 
 serialize_serde = ["febft-common/serialize_serde", "febft-communication/serialize_serde", "febft-messages/serialize_serde"]
+serialize_capnp = ["febft-capnp", "febft-communication/serialize_capnp", "febft-messages/serialize_capnp", "febft-execution/serialize_capnp"]
 
 #default = ["observer_client"]
+default = ["serialize_capnp"]
 
 [dependencies]
 febft-common = { path = "../febft-common" }
 febft-communication = { path = "../febft-communication" }
 febft-messages = { path = "../febft-messages" }
 febft-execution = { path = "../febft-execution" }
+febft-capnp = {path = "../febft-capnp", optional = true}
 
 febft-consensus = {path ="../febft-consensus", optional = true}
 

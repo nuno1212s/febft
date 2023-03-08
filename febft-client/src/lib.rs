@@ -89,30 +89,19 @@ impl<P> Deref for Callback<P> {
 
 pub struct NoProtocol;
 
-impl Serializable for NoProtocol {
-    type Message = ();
-
-    fn serialize<W: Write>(w: &mut W, message: &Self::Message) -> Result<()> {
-        Ok(())
-    }
-
-    fn deserialize_message<R: Read>(r: R) -> Result<Self::Message> {
-        Ok(())
-    }
-}
-
 impl ProtocolData for NoProtocol {
     type Message = ();
 
-    fn serialize<W: Write>(w: &mut W, message: &Self::Message) -> Result<()> {
+    #[cfg(feature = "serialize_capnp")]
+    fn serialize_capnp(builder: febft_capnp::consensus_messages_capnp::protocol_message::Builder, message: &Self::Message) -> Result<()> {
         Ok(())
     }
 
-    fn deserialize<R: Read>(r: R) -> Result<Self::Message> {
+    #[cfg(feature = "serialize_capnp")]
+    fn deserialize_capnp(reader: febft_capnp::consensus_messages_capnp::protocol_message::Reader) -> Result<Self::Message> {
         Ok(())
     }
 }
-
 pub struct ClientData<D>
     where
         D: SharedData + 'static,

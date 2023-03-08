@@ -14,7 +14,7 @@ use febft_common::ordering::{Orderable, SeqNo};
 use febft_common::threadpool;
 use febft_communication::message::{NetworkMessage, NetworkMessageContent, SerializedMessage, StoredMessage, StoredSerializedNetworkMessage, WireMessage};
 use febft_communication::{Node, NodeId};
-use febft_communication::serialize::{Buf, DigestSerializable};
+use febft_communication::serialize::{Buf};
 use febft_execution::executable::{Reply, Request, Service, State};
 use intmap::IntMap;
 use log::{debug, error, warn};

@@ -10,13 +10,7 @@ use febft_messages::serialization::capnp as messages_capnp_impl;
 use crate::messages::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, ObserverMessage, PBFTProtocolMessage};
 use crate::sync::view::ViewInfo;
 
-pub(super) fn serialize_protocol_message<W: Write, D: SharedData>(w:&mut W, msg: &PBFTProtocolMessage<D>) -> Result<()> {
-    let allocator = capnp::message::HeapAllocator::new();
-
-    let mut root = capnp::message::Builder::new(allocator);
-
-    let mut writer: consensus_messages_capnp::protocol_message::Builder = root.init_root();
-
+pub(super) fn serialize_protocol_message_builder<D: SharedData>(mut writer: consensus_messages_capnp::protocol_message::Builder, msg: &PBFTProtocolMessage<D>) -> Result<()> {
     match msg {
         PBFTProtocolMessage::Consensus(consensus_msg) => {
             let consensus = writer.reborrow().init_consensus_message();
@@ -97,24 +91,15 @@ pub(super) fn serialize_protocol_message<W: Write, D: SharedData>(w:&mut W, msg:
         }
     }
 
-    capnp::serialize::write_message(w, &root).wrapped_msg(
-        ErrorKind::CommunicationSerialize,
-        "Failed to serialize using capnp",
-    )
+    Ok(())
 }
 
-pub(super) fn deserialize_protocol_message<R: Read, D: SharedData>(r: R) -> Result<PBFTProtocolMessage<D>> {
-    let reader = capnp::serialize::read_message(r, Default::default()).wrapped_msg(
-        ErrorKind::CommunicationSerialize,
-        "Failed to get capnp reader",
-    )?;
-
-    let message: consensus_messages_capnp::protocol_message::Reader = reader.get_root()
-        .wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to get protocol msg root")?;
+pub(super) fn deserialize_protocol_message_reader<D: SharedData>(message: consensus_messages_capnp::protocol_message::Reader)
+    -> Result<PBFTProtocolMessage<D>> {
 
     let which = message.which().wrapped(ErrorKind::CommunicationSerialize)?;
 
-    return match which {
+    return return match which {
         consensus_messages_capnp::protocol_message::WhichReader::ConsensusMessage(Ok(consensus_msg)) => {
             Ok(PBFTProtocolMessage::Consensus(deserialize_consensus_message::<D>(consensus_msg)?))
         }
@@ -209,7 +194,33 @@ pub(super) fn deserialize_protocol_message<R: Read, D: SharedData>(r: R) -> Resu
             Err(Error::wrapped(ErrorKind::CommunicationSerialize, err))
         }
     };
+}
 
+pub(super) fn serialize_protocol_message<W: Write, D: SharedData>(w:&mut W, msg: &PBFTProtocolMessage<D>) -> Result<()> {
+    let allocator = capnp::message::HeapAllocator::new();
+
+    let mut root = capnp::message::Builder::new(allocator);
+
+    let mut writer: consensus_messages_capnp::protocol_message::Builder = root.init_root();
+
+    serialize_protocol_message_builder(writer, msg)?;
+
+    capnp::serialize::write_message(w, &root).wrapped_msg(
+        ErrorKind::CommunicationSerialize,
+        "Failed to serialize using capnp",
+    )
+}
+
+pub(super) fn deserialize_protocol_message<R: Read, D: SharedData>(r: R) -> Result<PBFTProtocolMessage<D>> {
+    let reader = capnp::serialize::read_message(r, Default::default()).wrapped_msg(
+        ErrorKind::CommunicationSerialize,
+        "Failed to get capnp reader",
+    )?;
+
+    let message: consensus_messages_capnp::protocol_message::Reader = reader.get_root()
+        .wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to get protocol msg root")?;
+
+    deserialize_protocol_message_reader(message)
 }
 
 pub (super) fn serialize_consensus_to_writer<W: Write, D: SharedData>(w: &mut W, msg: &ConsensusMessage<D::Request>) -> Result<()> {

@@ -4,6 +4,8 @@ use std::{sync::atomic::{AtomicBool, Ordering}, ops::Deref};
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "serialize_bincode")]
+use bincode::{Decode, Encode};
 
 use super::error::*;
 

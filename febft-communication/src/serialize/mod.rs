@@ -23,24 +23,23 @@ pub mod serde;
 #[cfg(feature = "serialize_bincode")]
 pub mod bincode;
 
-// #[cfg(feature = "serialize_capnp")]
-// pub mod capnp;
+#[cfg(feature = "serialize_capnp")]
+pub mod capnp;
 
 pub fn serialize_message<T, W>(
     m: &NetworkMessageContent<T::Message>,
     w: &mut W,
 ) -> Result<()> where
-    W: Write + AsMut<[u8]>,
+    W: Write + AsRef<[u8]> + AsMut<[u8]>,
     T: Serializable {
-
-    #[cfg(feature="serialize_bincode")]
+    #[cfg(feature = "serialize_bincode")]
     bincode::serialize_message::<T, W>(&m, w)?;
 
-    #[cfg(feature="serialize_serde")]
+    #[cfg(feature = "serialize_serde")]
     serde::serialize_message::<T, W>(&m, w)?;
 
-    // #[cfg(feature="serialize_capnp")]
-    // capnp::serialize_message::<T, W>(m , w)?;
+    #[cfg(feature="serialize_capnp")]
+    capnp::serialize_message::<T, W>(m , w)?;
 
     Ok(())
 }
@@ -59,15 +58,14 @@ pub fn serialize_digest_message<T, W>(
 }
 
 pub fn deserialize_message<T, R>(r: R) -> Result<NetworkMessageContent<T::Message>> where R: Read + AsRef<[u8]>, T: Serializable {
+    #[cfg(feature = "serialize_bincode")]
+        let content = bincode::deserialize_message::<T, R>(r)?;
 
-    #[cfg(feature="serialize_bincode")]
-    let content = bincode::deserialize_message::<T, R>(r)?;
+    #[cfg(feature = "serialize_serde")]
+        let content = serde::deserialize_message::<T, R>(r)?;
 
-    #[cfg(feature="serialize_serde")]
-    let content = serde::deserialize_message::<T, R>(r)?;
-
-    // #[cfg(feature = "serialize_capnp")]
-    // let content = capnp::deserialize_message::<T, R>(r)?;
+    #[cfg(feature = "serialize_capnp")]
+    let content = capnp::deserialize_message::<T, R>(r)?;
 
     Ok(content)
 }
@@ -86,24 +84,19 @@ pub trait Serializable
     #[cfg(feature = "serialize_serde")]
     type Message: for<'a> Deserialize<'a> + Serialize + Send + Clone;
 
-    /*#[cfg(feature = "serialize_capnp")]
-    type Message: Send + Clone;*/
+    #[cfg(feature = "serialize_capnp")]
+    type Message: Send + Clone;
 
-    fn serialize<W: Write + AsRef<[u8]> + AsMut<[u8]>>(
-        w: &mut W,
-        message: &Self::Message,
-    ) -> Result<()>;
+    #[cfg(feature = "serialize_capnp")]
+    fn serialize_message_capnp(builder: febft_capnp::messages_capnp::system::Builder,
+                               msg: &Self::Message) -> Result<()>;
 
-    fn deserialize_message<R: Read + AsRef<[u8]>>(r: R) -> Result<Self::Message>;
-
-    // #[cfg(feature="serialize_capnp")]
-    // fn serialize_message_capnp<W: Write>(w: &mut W, message: &NetworkMessageContent<Self::Message>) -> Result<()>;
-    // 
-    // #[cfg(feature="serialize_capnp")]
-    // fn deserialize_message_capnp<R: Read>(r: R) -> Result<NetworkMessageContent<Self::Message>>;
+    #[cfg(feature = "serialize_capnp")]
+    fn deserialize_message_capnp(reader: febft_capnp::messages_capnp::system::Reader) -> Result<Self::Message>;
 }
 
-pub trait DigestSerializable: Serializable {
+
+/*pub trait DigestSerializable: Serializable {
     /// Extension of `SharedData` to obtain hash digests.
     /// Convenience function to obtain the digest of a request upon
     /// serialization.
@@ -119,5 +112,5 @@ pub trait DigestSerializable: Serializable {
     }
 }
 
-impl<D: Serializable> DigestSerializable for D {}
+impl<D: Serializable> DigestSerializable for D {}*/
 

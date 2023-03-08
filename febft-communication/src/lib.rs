@@ -997,6 +997,8 @@ impl<T> Node<T>
                 message_sent_own!(&comm_stats, before_send_time, id);
             }
 
+            start_measurement!(before_send_time);
+
             // send to others
             for send_to in other_send_tos {
                 let id = match &send_to {
@@ -1010,7 +1012,6 @@ impl<T> Node<T>
 
                 //Measuring time taken to get to the point of sending the message
                 //We don't actually want to measure how long it takes to send the message
-                start_measurement!(before_send_time);
 
                 send_to.value(stored);
 
