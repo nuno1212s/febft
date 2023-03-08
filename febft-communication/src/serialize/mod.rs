@@ -94,7 +94,7 @@ pub trait Serializable
         message: &Self::Message,
     ) -> Result<()>;
 
-    fn deserialize_message<R: Read>(r: R) -> Result<Self::Message>;
+    fn deserialize_message<R: Read + AsRef<[u8]>>(r: R) -> Result<Self::Message>;
 
     // #[cfg(feature="serialize_capnp")]
     // fn serialize_message_capnp<W: Write>(w: &mut W, message: &NetworkMessageContent<Self::Message>) -> Result<()>;

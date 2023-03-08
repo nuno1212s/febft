@@ -883,7 +883,7 @@ impl<T> Node<T>
             // serialize
             start_measurement!(start_serialization);
 
-            let mut buf = Vec::new();
+            let mut buf = Vec::with_capacity(8096);
 
             let digest = serialize::serialize_digest_message::<T, Vec<u8>>(&message, &mut buf).unwrap();
 
@@ -1032,7 +1032,7 @@ impl<T> Node<T>
             start_measurement!(start_serialization);
 
             // serialize
-            let mut buf = Vec::new();
+            let mut buf = Vec::with_capacity(8096);
 
             let digest = match serialize::serialize_digest_message::<T, Vec<u8>>(&message, &mut buf) {
                 Ok(dig) => dig,

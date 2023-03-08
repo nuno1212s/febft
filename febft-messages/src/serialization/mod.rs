@@ -48,7 +48,7 @@ impl<D, P> Serializable for SystemMessage<D, P> where D: SharedData, P: Protocol
         Ok(())
     }
 
-    fn deserialize_message<R: Read>(r: R) -> Result<Self::Message> {
+    fn deserialize_message<R: Read + AsRef<[u8]>>(r: R) -> Result<Self::Message> {
         // #[cfg(feature="serialize_capnp")]
         // capnp::deserialize_message(r)
         

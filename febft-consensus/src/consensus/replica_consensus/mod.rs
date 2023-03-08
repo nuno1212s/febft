@@ -99,7 +99,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
             )));
 
             // serialize raw msg
-            let mut buf = Vec::new();
+            let mut buf = Vec::with_capacity(8096);
 
             let network_msg = NetworkMessageContent::System(message);
 
