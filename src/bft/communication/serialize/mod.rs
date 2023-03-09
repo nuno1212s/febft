@@ -14,9 +14,84 @@ use crate::bft::crypto::hash::{Context, Digest};
 use crate::bft::error::*;
 use crate::bft::msg_log::persistent::ProofInfo;
 
+#[cfg(feature = "serialize_serde")]
+use ::serde::{Deserialize, Serialize};
+
 use super::message::ConsensusMessage;
 
-pub mod serialization_primitives;
+#[cfg(feature = "serialize_capnp")]
+pub mod capnp;
+
+#[cfg(feature = "serialize_serde")]
+pub mod serde;
+
+/// The buffer type used to serialize messages into.
+pub type Buf = Bytes;
+
+pub fn serialize_message<W, D>(w: &mut W, msg: &SystemMessage<D::State, D::Request, D::Reply>) -> Result<()>
+    where W: Write + AsRef<[u8]> + AsMut<[u8]>, D: SharedData {
+
+    #[cfg(feature="serialize_capnp")]
+    capnp::serialize_message::<W, D>(w, msg)?;
+
+    #[cfg(feature = "serialize_serde")]
+    serde::serialize_message::<W, D>(msg, w)?;
+
+    Ok(())
+}
+
+pub fn deserialize_message<R, D>(r: R) -> Result<SystemMessage<D::State, D::Request, D::Reply>> where R: Read + AsRef<[u8]>, D: SharedData {
+
+    #[cfg(feature = "serialize_capnp")]
+    let result = capnp::deserialize_message::<R, D>(r)?;
+
+    #[cfg(feature= "serialize_serde")]
+    let result = serde::deserialize_message::<R, D>(r)?;
+
+    Ok(result)
+}
+
+pub fn serialize_digest<W: Write + AsRef<[u8]> + AsMut<[u8]>, D: SharedData>(
+    message: &SystemMessage<D::State, D::Request, D::Reply>,
+    w: &mut W,
+) -> Result<Digest> {
+    serialize_message::<W, D>(w, message)?;
+
+    let mut ctx = Context::new();
+    ctx.update(w.as_ref());
+    Ok(ctx.finish())
+}
+
+pub fn serialize_consensus<W, D>(w: &mut W, message: &ConsensusMessage<D::Request>) -> Result<()>
+    where
+        W: Write + AsRef<[u8]> + AsMut<[u8]>,
+        D: SharedData,
+{
+
+    #[cfg(feature = "serialize_capnp")]
+    capnp::serialize_consensus::<W, D>(w, message)?;
+
+    #[cfg(feature = "serialize_serde")]
+    serde::serialize_consensus::<W, D>(message, w)?;
+
+    Ok(())
+}
+
+pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
+    where
+        R: Read + AsRef<[u8]>,
+        D: SharedData,
+{
+
+    #[cfg(feature = "serialize_capnp")]
+    let result = capnp::deserialize_consensus::<R, D>(r)?;
+
+    #[cfg(feature = "serialize_serde")]
+    let result = serde::deserialize_consensus::<R, D>(r)?;
+
+    Ok(result)
+}
+
 
 
 /// Marker trait containing the types used by the application,
@@ -27,17 +102,28 @@ pub mod serialization_primitives;
 /// This data type must be Send since it will be sent across
 /// threads for processing and follow up reception
 pub trait SharedData: Send {
-
     /// The application state, which is mutated by client
     /// requests.
+    #[cfg(feature = "serialize_serde")]
+    type State: for<'a> Deserialize<'a> + Serialize + Send + Clone;
+
+    #[cfg(feature = "serialize_capnp")]
     type State: Send + Clone;
 
     /// Represents the requests forwarded to replicas by the
     /// clients of the BFT system.
+    #[cfg(feature = "serialize_serde")]
+    type Request: for<'a> Deserialize<'a> + Serialize + Send + Clone;
+
+    #[cfg(feature = "serialize_capnp")]
     type Request: Send + Clone;
 
     /// Represents the replies forwarded to clients by replicas
     /// in the BFT system.
+    #[cfg(feature = "serialize_serde")]
+    type Reply: for<'a> Deserialize<'a> + Serialize + Send + Clone;
+
+    #[cfg(feature = "serialize_capnp")]
     type Reply: Send + Clone;
 
     ///Serialize a state so it can be utilized by the SMR middleware
@@ -59,33 +145,5 @@ pub trait SharedData: Send {
     ///Deserialize a reply that was generated using the serialize reply function above
     fn deserialize_reply<R>(r: R) -> Result<Self::Reply> where R: Read;
 }
-
-// max no. of bytes to inline before doing a heap alloc
-//const NODE_BUFSIZ: usize = 16384;
-
-/// The buffer type used to serialize messages into.
-pub type Buf = Bytes;
-
-/// Extension of `SharedData` to obtain hash digests.
-pub trait DigestData: SharedData {
-    /// Convenience function to obtain the digest of a request upon
-    /// serialization.
-    fn serialize_digest<W: Write + AsRef<[u8]>> (
-        message: &SystemMessage<Self::State, Self::Request, Self::Reply>,
-        mut w: W,
-    ) -> Result<Digest> {
-        serialization_primitives::serialize_message::<W, Self>(&mut w, message)?;
-
-        let mut ctx = Context::new();
-        ctx.update(w.as_ref());
-        Ok(ctx.finish())
-    }
-
-    fn deserialize_message<R: Read>(r: R) -> Result<SystemMessage<Self::State, Self::Request, Self::Reply>> {
-        serialization_primitives::deserialize_message::<R, Self>(r)
-    }
-}
-
-impl<D: SharedData> DigestData for D {}
 
 

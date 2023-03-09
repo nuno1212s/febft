@@ -2,7 +2,7 @@
 use serde::{Serialize, Deserialize};
 
 #[cfg(feature = "serialize_serde")]
-use serde_big_array::big_array;
+use serde_big_array::BigArray;
 
 use ring::{
     signature as rsig,
@@ -24,14 +24,11 @@ pub struct PublicKey {
     pk: rsig::UnparsedPublicKey<RPubKey>,
 }
 
-#[cfg(feature = "serialize_serde")]
-big_array! { SignatureArray; }
-
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 #[repr(transparent)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct Signature(
-    #[cfg_attr(feature = "serialize_serde", serde(with = "SignatureArray"))]
+    #[cfg_attr(feature = "serialize_serde", serde(with = "BigArray"))]
     [u8; Signature::LENGTH]
 );
 

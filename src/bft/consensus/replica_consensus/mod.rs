@@ -18,7 +18,7 @@ use crate::bft::{
             StoredMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage,
         },
         Node,
-        NodeId, serialize::DigestData,
+        NodeId,
     },
     core::server::{
         follower_handling::{FollowerEvent, FollowerHandle},
@@ -31,6 +31,7 @@ use crate::bft::{
     sync::AbstractSynchronizer,
     threadpool,
 };
+use crate::bft::communication::serialize;
 use crate::bft::communication::serialize::Buf;
 use crate::bft::msg_log::deciding_log::DecidingLog;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
@@ -111,8 +112,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
             // serialize raw msg
             let mut buf = Vec::new();
 
-            let digest =
-                <S::Data as DigestData>::serialize_digest(&message,  &mut buf).unwrap();
+            let digest = serialize::serialize_digest::<Vec<u8>, S::Data>(&message,  &mut buf).unwrap();
 
             let buf = Buf::from(buf);
             

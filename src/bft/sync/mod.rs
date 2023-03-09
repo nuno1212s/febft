@@ -18,7 +18,7 @@ use super::{
             Header, RequestMessage, StoredMessage, SystemMessage, ViewChangeMessage,
             ViewChangeMessageKind, WireMessage,
         },
-        serialize::{Buf, DigestData},
+        serialize::{Buf},
         Node, NodeId,
     },
     consensus::{
@@ -35,6 +35,7 @@ use intmap::IntMap;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+use crate::bft::communication::serialize;
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::decisions::{CollectData, Proof, ViewDecisionPair};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
@@ -752,7 +753,7 @@ impl<S> Synchronizer<S>
 
                                 let forged_pre_prepare = consensus.forge_propose(p.clone(), self);
 
-                                let digest = <S::Data as DigestData>::serialize_digest(
+                                let digest = serialize::serialize_digest::<Vec<u8>, S::Data>(
                                     &forged_pre_prepare,
                                     &mut buf,
                                 ).unwrap();

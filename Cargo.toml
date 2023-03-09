@@ -32,12 +32,13 @@ socket_tokio_tcp = ["tokio", "tokio-util"]
 socket_async_std_tcp = ["async-std"]
 socket_rio_tcp = ["rio"]
 
-serialize_serde = ["serde", "serde-big-array", "serde_bytes"]
+serialize_serde = ["serde", "serde-big-array", "serde_bytes", "bincode"]
+serialize_capnp = []
 
 async_runtime_tokio = ["tokio"]
 async_runtime_async_std = ["async-std"]
 
-async_runtime_metrics= ["tokio-metrics"]
+async_runtime_metrics = ["tokio-metrics"]
 
 crypto_signature_ring_ed25519 = ["ring"]
 crypto_hash_ring_sha2 = ["ring"]
@@ -91,7 +92,7 @@ num_cpus = "1"
 mimalloc = { version = "*", default-features = false }
 
 [dependencies]
-capnp = "0.16.0"
+capnp = { version = "0.16.0"}
 fastrand = "1.7.0"
 bytes = "1.4.0"
 chrono = "0.4"
@@ -119,8 +120,11 @@ tokio-metrics = { version = "0.1.0", optional = true }
 ring = { version = "0.16", optional = true }
 threadpool-crossbeam-channel = { version = "1.8.0", optional = true }
 #async-semaphore = { version = "1", optional = true }
-serde = { version = "1", features = ["derive", "rc"], optional = true }
+
+serde = { version = "1.0.154", features = ["derive", "rc"], optional = true }
 serde-big-array = { version = "0.5.0", optional = true }
+bincode = { version = "2.0.0-rc.2", features = ["serde"], optional = true }
+
 cthpool = { git = "https://github.com/sug0/cthpool", optional = true }
 rayon = { version = "1.5.3", optional = true }
 rio = { version = "0.9", optional = true }
@@ -134,15 +138,15 @@ dsrust = { version = "0.1.9", git = "https://github.com/nuno1212s/DSRust", optio
 #dsrust = { path = "/home/nunogneto/Documents/Development/Rust/dsrust" }
 crossbeam-channel = { version = "0.5.2", optional = true }
 crossbeam-skiplist = "0.1.1"
-rocksdb = {version = "0.20.1", optional = true }
+rocksdb = { version = "0.20.1", optional = true }
 
 log = "0.4.17"
 env_logger = "0.10.0"
-log4rs = {version = "1.1.1", features = ["file_appender"]}
+log4rs = { version = "1.1.1", features = ["file_appender"] }
 #tracing = "0.1.32"
 #tracing-subscriber = { version = "0.3.11", features = ["fmt"] }
 
-thiserror="1.0.32"
+thiserror = "1.0.32"
 num-bigint = "0.4.3"
 num-traits = "0.2.15"
 

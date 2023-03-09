@@ -12,7 +12,6 @@ use crate::bft::ordering::{Orderable, SeqNo};
 use crate::bft::sync::view::ViewInfo;
 
 use super::{Buf, SharedData};
-
 /// This module is meant to handle the serialization of the SMR messages, to allow for the users of this library to only
 /// Have to serialize (and declare) their request, reply and state, instead of also having to do so for all message
 /// types of the SMR protocol.
@@ -20,13 +19,13 @@ use super::{Buf, SharedData};
 const DEFAULT_SERIALIZE_BUFFER_SIZE: usize = 1024;
 
 /// Serialize a wire message into the writer `W`.
-pub fn serialize_message<W, S>(
+pub fn serialize_message<W, D>(
     w: &mut W,
-    m: &SystemMessage<S::State, S::Request, S::Reply>,
+    m: &SystemMessage<D::State, D::Request, D::Reply>,
 ) -> Result<()>
     where
         W: Write,
-        S: SharedData + ?Sized,
+        D: SharedData + ?Sized,
 {
     let mut root = capnp::message::Builder::new(capnp::message::HeapAllocator::new());
 
@@ -41,7 +40,7 @@ pub fn serialize_message<W, S>(
 
             let mut rq = Vec::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_request(&mut rq, req.operation())?;
+            D::serialize_request(&mut rq, req.operation())?;
 
             let rq = Buf::from(rq);
 
@@ -55,7 +54,7 @@ pub fn serialize_message<W, S>(
 
             let mut rq = Vec::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_request(&mut rq, req.operation())?;
+            D::serialize_request(&mut rq, req.operation())?;
 
             let rq = Buf::from(rq);
 
@@ -69,7 +68,7 @@ pub fn serialize_message<W, S>(
 
             let mut rq = Vec::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_reply(&mut rq, reply.payload())?;
+            D::serialize_reply(&mut rq, reply.payload())?;
 
             let bytes = Buf::from(rq);
 
@@ -83,7 +82,7 @@ pub fn serialize_message<W, S>(
 
             let mut rq = Vec::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
 
-            S::serialize_reply(&mut rq, reply.payload())?;
+            D::serialize_reply(&mut rq, reply.payload())?;
 
             let rq = Buf::from(rq);
 
@@ -92,7 +91,7 @@ pub fn serialize_message<W, S>(
         SystemMessage::Consensus(m) => {
             let mut consensus = sys_msg.init_consensus();
 
-            serialize_consensus_message::<S>(&mut consensus, m)?;
+            serialize_consensus_message::<D>(&mut consensus, m)?;
         }
         SystemMessage::ObserverMessage(observer_message) => {
             let capnp_observer = sys_msg.init_observer_message();
@@ -229,11 +228,11 @@ fn deserialize_reply<S>(req: messages_capnp::reply::Reader) -> Result<ReplyMessa
     ))
 }
 
-fn deserialize_unordered_reply<S>(
+fn deserialize_unordered_reply<D>(
     req: messages_capnp::unordered_reply::Reader,
-) -> Result<ReplyMessage<S::Reply>>
+) -> Result<ReplyMessage<D::Reply>>
     where
-        S: SharedData + ?Sized,
+        D: SharedData + ?Sized,
 {
     let session_id: SeqNo = req.get_session_id().into();
     let op_id: SeqNo = req.get_operation_id().into();
@@ -243,15 +242,15 @@ fn deserialize_unordered_reply<S>(
     Ok(ReplyMessage::new(
         session_id,
         op_id,
-        S::deserialize_reply(reply)?,
+        D::deserialize_reply(reply)?,
     ))
 }
 
-fn deserialize_consensus_message<S>(
+fn deserialize_consensus_message<D>(
     consensus_msg: messages_capnp::consensus::Reader,
-) -> Result<ConsensusMessage<S::Request>>
+) -> Result<ConsensusMessage<D::Request>>
     where
-        S: SharedData + ?Sized,
+        D: SharedData + ?Sized,
 {
     let seq_no: SeqNo = consensus_msg.get_seq_no().into();
     let view: SeqNo = consensus_msg.get_view().into();
@@ -274,7 +273,7 @@ fn deserialize_consensus_message<S>(
                     .get_request()
                     .wrapped(ErrorKind::CommunicationSerialize)?;
 
-                let parsed_request = deserialize_request::<S>(request)?;
+                let parsed_request = deserialize_request::<D>(request)?;
 
                 rqs.push(StoredMessage::new(
                     Header::deserialize_from(&header[..])?,
@@ -309,10 +308,10 @@ fn deserialize_consensus_message<S>(
 }
 
 /// Deserialize a persistent consensus message from the log
-pub fn deserialize_consensus<R, S>(r: R) -> Result<ConsensusMessage<S::Request>>
+pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
     where
         R: Read,
-        S: SharedData + ?Sized,
+        D: SharedData + ?Sized,
 {
     let reader = capnp::serialize::read_message(r, Default::default()).wrapped_msg(
         ErrorKind::CommunicationSerialize,
@@ -324,14 +323,14 @@ pub fn deserialize_consensus<R, S>(r: R) -> Result<ConsensusMessage<S::Request>>
         "Failed to get system msg root",
     )?;
 
-    deserialize_consensus_message::<S>(consensus_msg)
+    deserialize_consensus_message::<D>(consensus_msg)
 }
 
 /// Deserialize a wire message from a reader `R`.
-pub fn deserialize_message<R, S>(r: R) -> Result<SystemMessage<S::State, S::Request, S::Reply>>
+pub fn deserialize_message<R, D>(r: R) -> Result<SystemMessage<D::State, D::Request, D::Reply>>
     where
         R: Read,
-        S: SharedData + ?Sized,
+        D: SharedData + ?Sized,
 {
     let mut options = ReaderOptions::new();
 
@@ -354,31 +353,31 @@ pub fn deserialize_message<R, S>(r: R) -> Result<SystemMessage<S::State, S::Requ
 
     match sys_which {
         messages_capnp::system::Which::Request(Ok(req)) => {
-            Ok(SystemMessage::Request(deserialize_request::<S>(req)?))
+            Ok(SystemMessage::Request(deserialize_request::<D>(req)?))
         }
         messages_capnp::system::Which::Request(Err(err)) => {
             Err(format!("{:?}", err).as_str()).wrapped(ErrorKind::CommunicationSerialize)
         }
         messages_capnp::system::Which::UnorderedRequest(Ok(req)) => Ok(
-            SystemMessage::UnOrderedRequest(deserialize_unordered_request::<S>(req)?),
+            SystemMessage::UnOrderedRequest(deserialize_unordered_request::<D>(req)?),
         ),
         messages_capnp::system::Which::UnorderedRequest(Err(err)) => {
             Err(format!("{:?}", err).as_str()).wrapped(ErrorKind::CommunicationSerialize)
         }
         messages_capnp::system::Which::Reply(Ok(req)) => {
-            Ok(SystemMessage::Reply(deserialize_reply::<S>(req)?))
+            Ok(SystemMessage::Reply(deserialize_reply::<D>(req)?))
         }
         messages_capnp::system::Which::Reply(Err(err)) => {
             Err(format!("{:?}", err).as_str()).wrapped(ErrorKind::CommunicationSerialize)
         }
         messages_capnp::system::Which::UnorderedReply(Ok(req)) => Ok(
-            SystemMessage::UnOrderedReply(deserialize_unordered_reply::<S>(req)?),
+            SystemMessage::UnOrderedReply(deserialize_unordered_reply::<D>(req)?),
         ),
         messages_capnp::system::Which::UnorderedReply(Err(err)) => {
             Err(format!("{:?}", err).as_str()).wrapped(ErrorKind::CommunicationSerialize)
         }
         messages_capnp::system::Which::Consensus(Ok(consensus_msg)) => Ok(
-            SystemMessage::Consensus(deserialize_consensus_message::<S>(consensus_msg)?),
+            SystemMessage::Consensus(deserialize_consensus_message::<D>(consensus_msg)?),
         ),
         messages_capnp::system::Which::Consensus(Err(err)) => {
             Err(format!("{:?}", err).as_str()).wrapped(ErrorKind::CommunicationSerialize)

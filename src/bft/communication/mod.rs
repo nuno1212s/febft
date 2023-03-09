@@ -12,7 +12,7 @@ use bytes::{Bytes, BytesMut};
 use dashmap::DashMap;
 use either::{Either, Left, Right};
 
-use futures::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
+use futures::io::{AsyncReadExt, AsyncWriteExt};
 use futures_timer::Delay;
 use intmap::IntMap;
 use log::{debug, error, warn};
@@ -32,9 +32,9 @@ use crate::bft::communication::message::{
 };
 use crate::bft::communication::incoming_peer_handling::{ConnectedPeer, PeerIncomingRqHandling};
 use crate::bft::communication::peer_sending_threads::ConnectionHandle;
-use crate::bft::communication::ping_handler::{PingHandler, PingResponse};
+use crate::bft::communication::ping_handler::{PingHandler};
 
-use crate::bft::communication::serialize::{Buf, DigestData, SharedData};
+use crate::bft::communication::serialize::{Buf, SharedData};
 use crate::bft::communication::socket::{
     AsyncListener, AsyncSocket, SecureSocketRecvAsync, SecureSocketRecvSync, SecureSocketSend,
     SecureSocketSendAsync, SecureSocketSendSync, SocketSendAsync, SocketSendSync, SyncListener,
@@ -48,7 +48,7 @@ use crate::bft::prng;
 use crate::bft::prng::ThreadSafePrng;
 use crate::bft::threadpool;
 use crate::{message_digest_time, message_dispatched, message_sent_own, received_network_rq, start_measurement};
-use crate::bft::ordering::InvalidSeqNo::Small;
+
 
 pub mod channel;
 pub mod message;
@@ -901,7 +901,7 @@ impl<D> Node<D>
 
             let mut buf = Vec::with_capacity(512);
 
-            let digest = <D as DigestData>::serialize_digest(&message, &mut buf).unwrap();
+            let digest = serialize::serialize_digest::<Vec<u8>, D>(&message, &mut buf).unwrap();
 
             let buf = Bytes::from(buf);
 
@@ -1052,7 +1052,7 @@ impl<D> Node<D>
             //TODO: Actually make this work well
             let mut buf = Vec::with_capacity(512);
 
-            let digest = match <D as DigestData>::serialize_digest(&message, &mut buf) {
+            let digest = match serialize::serialize_digest::<Vec<u8>, D>(&message, &mut buf) {
                 Ok(dig) => dig,
                 Err(err) => {
                     error!("Failed to serialize message {:?}. Message is {:?}", err, message);
@@ -2159,7 +2159,7 @@ impl<D> Node<D>
             }
 
             // deserialize payload
-            let message = match D::deserialize_message(&buf[..header.payload_length()]) {
+            let message = match serialize::deserialize_message::<&[u8], D>(&buf[..header.payload_length()]) {
                 Ok(m) => m,
                 Err(err) => {
                     // errors deserializing -> faulty connection;
@@ -2251,7 +2251,7 @@ impl<D> Node<D>
             }
 
             // deserialize payload
-            let message = match D::deserialize_message(&buf[..header.payload_length()]) {
+            let message = match serialize::deserialize_message::<&[u8], D>(&buf[..header.payload_length()]) {
                 Ok(m) => m,
                 Err(err) => {
                     // errors deserializing -> faulty connection;

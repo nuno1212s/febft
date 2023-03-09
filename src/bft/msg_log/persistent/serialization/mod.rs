@@ -1,30 +1,24 @@
-use std::borrow::BorrowMut;
 use std::io::{Read, Write};
 use std::mem::size_of;
 use crate::bft::communication::message::ConsensusMessage;
-use crate::bft::communication::NodeId;
-use crate::bft::communication::serialize::{serialization_primitives, SharedData};
+use crate::bft::communication::{NodeId, serialize};
+use crate::bft::communication::serialize::{SharedData};
 use crate::bft::crypto::hash::Digest;
 use crate::bft::error::*;
 use crate::bft::msg_log::persistent::{ProofInfo};
 use crate::bft::ordering::SeqNo;
 
-/// The persister trait, to add functionality to the Shared Data struct.
-/// The functionality added is ease of serialization for individual consensus messages, which
-/// are then going to be stored in the persistent log.
-pub trait Persister: SharedData {
-    fn serialize_consensus_message<W: Write>(
-        message: &ConsensusMessage<Self::Request>,
-        mut w: W,
-    ) -> Result<()> {
-        serialization_primitives::serialize_consensus::<W, Self>(&mut w, message)
-    }
+pub(super) fn serialize_consensus_message<W: Write + AsRef<[u8]> + AsMut<[u8]>, D: SharedData>(
+    message: &ConsensusMessage<D::Request>,
+    w: &mut W,
+) -> Result<()> {
+    serialize::serialize_consensus::<W, D>(w, message)
+}
 
-    fn deserialize_consensus_message<R: Read>(
-        r: R
-    ) -> Result<ConsensusMessage<Self::Request>> {
-        serialization_primitives::deserialize_consensus::<R, Self>(r)
-    }
+pub(super) fn deserialize_consensus_message<R: Read + AsRef<[u8]>, D: SharedData>(
+    r: R
+) -> Result<ConsensusMessage<D::Request>> {
+    serialize::deserialize_consensus::<R, D>(r)
 }
 
 pub(super) fn make_proof_info(pi: &ProofInfo) -> Result<Vec<u8>>
@@ -164,8 +158,6 @@ pub fn deserialize_proof_info<R>(reader: R) -> Result<ProofInfo> where R: Read {
         pre_prepare_ordering: batch_ordering,
     })
 }
-
-impl<D: SharedData> Persister for D {}
 
 mod objects_capnp {
     #![allow(unused)]

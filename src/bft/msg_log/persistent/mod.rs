@@ -20,7 +20,7 @@ use crate::bft::communication::message::Header;
 use crate::bft::communication::NodeId;
 
 use crate::bft::communication::serialize::{SharedData};
-use crate::bft::msg_log::persistent::serialization::{make_proof_info, Persister};
+use crate::bft::msg_log::persistent::serialization::{make_proof_info};
 
 use crate::bft::crypto::hash::Digest;
 
@@ -1050,7 +1050,7 @@ fn parse_message<S: Service, T>(
 ) -> Result<StoredMessage<ConsensusMessage<Request<S>>>> where T: AsRef<[u8]> {
     let header = Header::deserialize_from(&value.as_ref()[..Header::LENGTH])?;
 
-    let message = <S::Data>::deserialize_consensus_message(&value.as_ref()[Header::LENGTH..])?;
+    let message = serialization::deserialize_consensus_message::<&[u8], S::Data>(&value.as_ref()[Header::LENGTH..])?;
 
     Ok(StoredMessage::new(header, message))
 }
@@ -1064,7 +1064,7 @@ fn write_message<S: Service>(
 
     message.header().serialize_into(buf.as_mut_slice()).unwrap();
 
-    <S::Data>::serialize_consensus_message(message.message(), &mut buf[Header::LENGTH..])?;
+    serialization::serialize_consensus_message::<&mut [u8], S::Data>(message.message(), &mut &mut buf[Header::LENGTH..])?;
 
     let msg_seq = message.message().sequence_number();
 
