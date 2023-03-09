@@ -179,10 +179,6 @@ async fn async_sending_task<T>(
             SendMessage::Message(to_send, init_time, _) => {
                 start_measurement!(before_send);
 
-                // send
-                //
-                // FIXME: sending may hang forever, because of network
-                // problems; add a timeout
                 match to_send.write_to(socket.mut_socket(), true).await {
                     Ok(_) => {}
                     Err(_error) => {

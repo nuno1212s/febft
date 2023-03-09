@@ -617,14 +617,14 @@ impl WireMessage {
         self.header.serialize_into(&mut buf[..]).unwrap();
 
         // FIXME: switch to vectored writes?
-        w.write_all(&buf[..]);
+        w.write_all(&buf[..])?;
 
         if self.payload.len() > 0 {
-            w.write_all(&self.payload[..]);
+            w.write_all(&self.payload[..])?;
         }
 
         if flush {
-            w.flush();
+            w.flush()?;
         }
 
         Ok(())

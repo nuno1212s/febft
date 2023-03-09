@@ -806,9 +806,11 @@ impl<T> Node<T> where T: Serializable {
             buf.resize(Header::LENGTH, 0);
 
             // read the peer's header
-            if let Err(_) = sock.read_exact(&mut buf[..Header::LENGTH]) {
+            if let Err(err) = sock.read_exact(&mut buf[..Header::LENGTH]) {
                 // errors reading -> faulty connection;
                 // drop this socket
+
+                error!("{:?} // Failed to read header for message for {:?}", self.id, err);
                 break;
             }
 
@@ -829,7 +831,7 @@ impl<T> Node<T> where T: Serializable {
             if let Err(err) = sock.read_exact(&mut buf[..header.payload_length()]) {
                 // errors reading -> faulty connection;
                 // drop this socket
-                error!("{:?} // Failed to read header for message for {:?}", self.id, err);
+                error!("{:?} // Failed to read payload for message: {:?}", self.id, err);
                 break;
             }
 
