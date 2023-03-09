@@ -826,23 +826,21 @@ impl<T> Node<T> where T: Serializable {
             buf.resize(header.payload_length(), 0);
 
             // read the peer's payload
-            if let Err(_) = sock.read_exact(&mut buf[..header.payload_length()]) {
+            if let Err(err) = sock.read_exact(&mut buf[..header.payload_length()]) {
                 // errors reading -> faulty connection;
                 // drop this socket
+                error!("{:?} // Failed to read header for message for {:?}", self.id, err);
                 break;
-            }
-
-            if header.payload_length() == 0 {
-                //IGNORE PING REQUESTS
-                continue;
             }
 
             // deserialize payload
             let message = match serialize::deserialize_message::<T, &[u8]>(&buf[..header.payload_length()]) {
                 Ok(m) => m,
-                Err(_) => {
+                Err(err) => {
                     // errors deserializing -> faulty connection;
                     // drop this socket
+
+                    error!("{:?} // Failed to deserialize message for {:?} header {:?}", self.id, err, header);
                     break;
                 }
             };

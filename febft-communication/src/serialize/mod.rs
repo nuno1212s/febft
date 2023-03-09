@@ -113,4 +113,3 @@ pub trait Serializable
 }
 
 impl<D: Serializable> DigestSerializable for D {}*/
-
