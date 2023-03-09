@@ -432,8 +432,8 @@ fn set_listener_options(listener: AsyncListener) -> io::Result<AsyncListener> {
 #[inline]
 fn set_listener_options_replica(listener: SyncListener) -> io::Result<SyncListener> {
     let sock = socket2::SockRef::from(&listener.inner);
-    sock.set_send_buffer_size(8 * 10240 * 1024)?;
-    sock.set_recv_buffer_size(8 * 10240 * 1024)?;
+    sock.set_send_buffer_size(8 * 1024 * 1024)?;
+    sock.set_recv_buffer_size(8 * 1024 * 1024)?;
     sock.set_reuse_address(true)?;
     sock.set_keepalive(true)?;
     sock.set_nodelay(true)?;
@@ -447,8 +447,8 @@ fn set_listener_options_replica(listener: SyncListener) -> io::Result<SyncListen
 #[inline]
 fn set_sockstream_options(connection: AsyncSocket) -> io::Result<AsyncSocket> {
     let sock = socket2::SockRef::from(&connection.inner);
-    sock.set_send_buffer_size(8 * 10240 * 1024)?;
-    sock.set_recv_buffer_size(8 * 10240 * 1024)?;
+    sock.set_send_buffer_size(8 * 1024 * 1024)?;
+    sock.set_recv_buffer_size(8 * 1024 * 1024)?;
     sock.set_keepalive(true)?;
     sock.set_nodelay(true)?;
     // ChannelOption.CONNECT_TIMEOUT_MILLIS ??
@@ -459,8 +459,8 @@ fn set_sockstream_options(connection: AsyncSocket) -> io::Result<AsyncSocket> {
 #[inline]
 fn set_sockstream_options_sync(connection: SyncSocket) -> io::Result<SyncSocket> {
     let sock = socket2::SockRef::from(&connection.inner);
-    sock.set_send_buffer_size(8 * 10240 * 1024)?;
-    sock.set_recv_buffer_size(8 * 10240 * 1024)?;
+    sock.set_send_buffer_size(8 * 1024 * 1024)?;
+    sock.set_recv_buffer_size(8 * 1024 * 1024)?;
     sock.set_keepalive(true)?;
     sock.set_nodelay(true)?;
     // ChannelOption.CONNECT_TIMEOUT_MILLIS ??
