@@ -202,7 +202,7 @@ impl AsyncWrite for AsyncSocket {
 
 pub enum SecureSocketRecvAsync {
     Plain(BufReader<AsyncSocket>),
-    Tls(BufReader<ReadHalf<TlsStream<AsyncSocket>>>),
+    Tls(BufReader<TlsStream<AsyncSocket>>),
 }
 
 pub enum SecureSocketSendAsync {
@@ -236,8 +236,7 @@ impl SecureSocketRecvAsync {
     }
 
     pub fn new_tls(tls_stream_client: TlsStream<AsyncSocket>) -> Self  {
-        let (read, write) = tls_stream_client.split();
-        SecureSocketRecvAsync::Tls(BufReader::new(read))
+        SecureSocketRecvAsync::Tls(BufReader::new(tls_stream_client))
     }
 }
 

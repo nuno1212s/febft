@@ -27,10 +27,15 @@ impl Builder {
     }
 
     pub fn build(self) -> ThreadPool {
+        let mut builder = ThreadPoolBuilder::new();
+
+        builder = builder.thread_name(|thread_n| {
+            format!("FeBFT CPU Worker {}", thread_n)
+        });
 
         let inner = match self.threads {
-            Some(n) => ThreadPoolBuilder::new().num_threads(n),
-            None => ThreadPoolBuilder::new(),
+            Some(n) => builder.num_threads(n),
+            None => builder,
         }.build().unwrap();
 
         ThreadPool { inner }
