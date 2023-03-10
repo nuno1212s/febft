@@ -81,6 +81,8 @@ collections_randomstate_twox_hash = ["twox-hash"]
 persistent_db_rocksdb = ["rocksdb"]
 persistent_db_disabled = []
 
+serialize_serde = ["serde", "serde-big-array"]
+
 [dependencies]
 either = "1.8.1"
 async-tls = "0.12.0"
@@ -94,7 +96,7 @@ thread_local = "1.1.4"
 socket2 = "0.4"
 event-listener = "2.5.2"
 linked-hash-map = "0.5"
-rand_core="0.6.4"
+rand_core= { version = "0.6", features = ["getrandom"] }
 
 async-std = { version = "1", optional = true }
 tokio = { version = "1.25.0", features = ["full"], optional = true }
@@ -106,7 +108,6 @@ threadpool-crossbeam-channel = { version = "1.8.0", optional = true }
 
 serde = { version = "*", features = ["derive", "rc"], optional = true }
 serde-big-array = { version = "0.5.0", optional = true }
-bincode = { version = "2.0.0-rc.2", features = ["serde"], optional = true }
 
 cthpool = { git = "https://github.com/sug0/cthpool", optional = true }
 rayon = { version = "1.5.3", optional = true }

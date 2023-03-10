@@ -2,8 +2,6 @@
 
 using Rust = import "rust.capnp";
 
-$Rust.parentModule("bft::msg_log::persistent::serialization");
-
 struct Digest {
     digest  @0: Data;
 }

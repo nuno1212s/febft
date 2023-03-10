@@ -7,10 +7,10 @@ use log::{debug, error};
 use febft_common::channel::{ChannelMixedRx, ChannelMixedTx, new_bounded_mixed};
 
 use febft_common::error::*;
+use crate::{Node, NodeId};
+use crate::message::{NetworkMessageKind, PingMessage};
+use crate::serialize::Serializable;
 
-use crate::bft::communication::{Node, NodeId};
-use crate::bft::communication::message::{PingMessage, SystemMessage};
-use crate::bft::communication::serialize::SharedData;
 
 pub struct PingInfo {
     tx: ChannelMixedTx<PingResponse>,
@@ -56,7 +56,7 @@ impl PingHandler {
     /// Returns a response receiver that you should receive from to
     /// receive the response to the peer request
     /// The returned channel is blocking on send
-    pub fn ping_peer<D>(&self, node: &Arc<Node<D>>, peer_id: NodeId) -> Result<PingResponseReceiver> where D: SharedData + 'static {
+    pub fn ping_peer<M>(&self, node: &Arc<Node<M>>, peer_id: NodeId) -> Result<PingResponseReceiver> where M: Serializable {
         let (tx, rx) = new_bounded_mixed(1);
 
         {
@@ -76,7 +76,7 @@ impl PingHandler {
 
         debug!("Pinging the node {:?}", peer_id);
 
-        node.send(SystemMessage::Ping(PingMessage::new(true)), peer_id, true);
+        node.send(NetworkMessageKind::Ping(PingMessage::new(true)), peer_id, true);
 
         Ok(PingRespReceiver {
             rx
@@ -84,9 +84,9 @@ impl PingHandler {
     }
 
     /// Handles a received ping from other replicas.
-    pub fn handle_ping_received<D>(&self, node: &Arc<Node<D>>,
+    pub fn handle_ping_received<M>(&self, node: &Arc<Node<M>>,
                                    ping: &PingMessage,
-                                   peer_id: NodeId) where D: SharedData + 'static {
+                                   peer_id: NodeId) where M:Serializable {
         let response = {
             let mut awaiting_response = self.awaiting_response.lock().unwrap();
 
@@ -96,7 +96,7 @@ impl PingHandler {
         if ping.is_request() {
             debug!("Received ping request from node {:?}, sending ping response", peer_id);
 
-            node.send(SystemMessage::Ping(PingMessage::new(false)), peer_id, true);
+            node.send(NetworkMessageKind::Ping(PingMessage::new(false)), peer_id, true);
         } else {
             if let Some(information) = response {
                 let ping_response = Ok(());

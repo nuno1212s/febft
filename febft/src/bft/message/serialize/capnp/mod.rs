@@ -2,12 +2,15 @@ use std::io::Read;
 use std::io::Write;
 use bytes::BytesMut;
 use capnp::message::ReaderOptions;
+use febft_capnp::messages_capnp;
 use febft_common::crypto::hash::Digest;
 
 use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
+use febft_communication::message::{Header, PingMessage, StoredMessage};
 
 use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, ObserveEventKind, ObserverMessage, PingMessage, ReplyMessage, RequestMessage, StoredMessage, SystemMessage};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, ObserverMessage, ReplyMessage, RequestMessage, SystemMessage};
 
 use crate::bft::msg_log::persistent::ProofInfo;
 use crate::bft::sync::view::ViewInfo;
@@ -20,17 +23,13 @@ use super::{Buf, SharedData};
 const DEFAULT_SERIALIZE_BUFFER_SIZE: usize = 1024;
 
 /// Serialize a wire message into the writer `W`.
-pub fn serialize_message<W, D>(
-    w: &mut W,
+pub fn serialize_message< D>(
+    mut sys_msg: messages_capnp::system::Builder,
     m: &SystemMessage<D::State, D::Request, D::Reply>,
 ) -> Result<()>
     where
-        W: Write,
         D: SharedData + ?Sized,
 {
-    let mut root = capnp::message::Builder::new(capnp::message::HeapAllocator::new());
-
-    let mut sys_msg: messages_capnp::system::Builder = root.init_root();
 
     match m {
         SystemMessage::Request(req) => {
@@ -328,25 +327,11 @@ pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
 }
 
 /// Deserialize a wire message from a reader `R`.
-pub fn deserialize_message<R, D>(r: R) -> Result<SystemMessage<D::State, D::Request, D::Reply>>
+pub fn deserialize_message<R, D>(sys_msg : febft_capnp::messages_capnp::system::Reader) -> Result<SystemMessage<D::State, D::Request, D::Reply>>
     where
         R: Read,
         D: SharedData + ?Sized,
 {
-    let mut options = ReaderOptions::new();
-
-    options.traversal_limit_in_words(None);
-
-    let reader = capnp::serialize::read_message(r, options).wrapped_msg(
-
-        ErrorKind::CommunicationSerialize,
-        "Failed to get capnp reader",
-    )?;
-
-    let sys_msg: messages_capnp::system::Reader = reader.get_root().wrapped_msg(
-        ErrorKind::CommunicationSerialize,
-        "Failed to get system msg root",
-    )?;
 
     let sys_which = sys_msg
         .which()
@@ -537,12 +522,4 @@ pub fn serialize_consensus<W, S>(w: &mut W, message: &ConsensusMessage<S::Reques
         ErrorKind::CommunicationSerialize,
         "Failed to serialize using capnp",
     )
-}
-
-mod messages_capnp {
-    #![allow(unused)]
-    include!(concat!(
-    env!("OUT_DIR"),
-    "/messages_capnp.rs"
-    ));
 }

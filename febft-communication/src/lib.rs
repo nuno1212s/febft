@@ -4,25 +4,26 @@ use std::collections::BTreeSet;
 use std::convert::TryFrom;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use async_tls::{TlsAcceptor, TlsConnector};
 use bytes::{Bytes, BytesMut};
 use dashmap::DashMap;
 use either::{Either, Left, Right};
+use futures::AsyncReadExt;
 
-use futures::io::{AsyncReadExt, AsyncWriteExt};
+use futures::io::{ AsyncWriteExt};
 use futures_timer::Delay;
 use intmap::IntMap;
 use log::{debug, error, warn};
-use parking_lot::RwLock;
 
 use rustls::{ClientConfig, ClientConnection, ServerConfig, ServerConnection, ServerName};
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+
 use febft_common::error::*;
 use febft_common::crypto::signature::{KeyPair, PublicKey};
 use febft_common::prng::ThreadSafePrng;
@@ -31,18 +32,12 @@ use febft_common::async_runtime as rt;
 use febft_common::crypto::hash::Digest;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_common::socket::{AsyncListener, AsyncSocket, SecureSocketRecvAsync, SecureSocketRecvSync, SecureSocketSend, SecureSocketSendAsync, SecureSocketSendSync, SocketSendAsync, SocketSendSync, SyncListener, SyncSocket};
-
-use crate::bft::benchmarks::CommStats;
-
-use crate::bft::communication::message::{
-    Header, Message, SerializedMessage, StoredSerializedSystemMessage, SystemMessage, WireMessage,
-};
-use crate::bft::communication::incoming_peer_handling::{ConnectedPeer, PeerIncomingRqHandling};
-use crate::bft::communication::peer_sending_threads::ConnectionHandle;
-use crate::bft::communication::ping_handler::{PingHandler};
-
-use crate::bft::communication::serialize::{Buf, SharedData};
-use crate::{message_digest_time, message_dispatched, message_sent_own, received_network_rq, start_measurement};
+use crate::benchmarks::CommStats;
+use crate::incoming_peer_handling::{ConnectedPeer, PeerIncomingRqHandling};
+use crate::message::{Header, NetworkMessage, NetworkMessageKind, SerializedMessage, StoredSerializedNetworkMessage, WireMessage};
+use crate::peer_sending_threads::ConnectionHandle;
+use crate::ping_handler::PingHandler;
+use crate::serialize::{Buf, Serializable};
 
 
 pub mod message;
@@ -50,6 +45,7 @@ pub mod incoming_peer_handling;
 pub mod peer_sending_threads;
 pub mod serialize;
 pub mod ping_handler;
+pub mod benchmarks;
 
 /// A `NodeId` represents the id of a process in the BFT system.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
@@ -244,12 +240,12 @@ pub enum NodeConnectionAcceptor {
 ///
 /// A `Node` constitutes the core component used in the wire
 /// communication between processes.
-pub struct Node<D: SharedData + 'static> {
+pub struct Node<M: Serializable + 'static> {
     id: NodeId,
     first_cli: NodeId,
     //Handles the incoming connections' buffering and request collection
     //This is polled by the proposer for client requests and by the
-    client_pooling: PeerIncomingRqHandling<Message<D::State, D::Request, D::Reply>>,
+    client_pooling: PeerIncomingRqHandling<NetworkMessage<M>>,
     //Handles the outgoing connection references
     peer_tx: PeerTx,
     //Handles the Pseudo random number generation for this node
@@ -355,16 +351,13 @@ const NODE_CHAN_BOUND: usize = 1024;
 // max no. of SendTo's to inline before doing a heap alloc
 const NODE_VIEWSIZ: usize = 16;
 
-type SendTos<D> = SmallVec<[SendTo<D>; NODE_VIEWSIZ]>;
+type SendTos<M> = SmallVec<[SendTo<M>; NODE_VIEWSIZ]>;
 
-type SerializedSendTos<D> = SmallVec<[SerializedSendTo<D>; NODE_VIEWSIZ]>;
+type SerializedSendTos<M> = SmallVec<[SerializedSendTo<M>; NODE_VIEWSIZ]>;
 
-impl<D> Node<D>
+impl<M> Node<M>
     where
-        D: SharedData + 'static,
-        D::State: Send + Clone + 'static,
-        D::Request: Send + 'static,
-        D::Reply: Send + 'static,
+        M: Serializable + 'static
 {
     fn setup_connector(
         _sync_connector: Arc<ClientConfig>,
@@ -492,7 +485,7 @@ impl<D> Node<D>
     /// are returned in a `Vec`.
     pub async fn bootstrap(
         cfg: NodeConfig,
-    ) -> Result<(Arc<Self>, Vec<Message<D::State, D::Request, D::Reply>>)> {
+    ) -> Result<(Arc<Self>, Vec<NetworkMessage<M>>)> {
         let id = cfg.id;
 
         // initial checks of correctness
@@ -727,7 +720,7 @@ impl<D> Node<D>
     fn resolve_client_rx_connection(
         &self,
         node_id: NodeId,
-    ) -> Option<Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>> {
+    ) -> Option<Arc<ConnectedPeer<NetworkMessage<M>>>> {
         self.client_pooling.resolve_peer_conn(node_id)
     }
 
@@ -762,7 +755,7 @@ impl<D> Node<D>
     }
 
     /// Returns a `SendNode` sharing the same handles as this `Node`.
-    pub fn send_node(self: &Arc<Self>) -> SendNode<D> {
+    pub fn send_node(self: &Arc<Self>) -> SendNode<M> {
         SendNode {
             id: self.id,
             first_cli: self.first_cli,
@@ -776,7 +769,7 @@ impl<D> Node<D>
     }
 
     /// Returns a handle to the loopback channel of this `Node`. (Sending messages to ourselves)
-    pub fn loopback_channel(&self) -> &Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
+    pub fn loopback_channel(&self) -> &Arc<ConnectedPeer<NetworkMessage<M>>> {
         self.client_pooling.loopback_connection()
     }
 
@@ -786,7 +779,7 @@ impl<D> Node<D>
     /// on a single target id.
     pub fn send(
         &self,
-        message: SystemMessage<D::State, D::Request, D::Reply>,
+        message: NetworkMessageKind<M>,
         target: NodeId,
         flush: bool,
     ) {
@@ -833,7 +826,7 @@ impl<D> Node<D>
     /// This variant of `send()` signs the sent message.
     pub fn send_signed(
         &self,
-        message: SystemMessage<D::State, D::Request, D::Reply>,
+        message: NetworkMessageKind<M>,
         target: NodeId,
     ) {
         let comm_stats = received_network_rq!(&self.comm_stats);
@@ -880,8 +873,8 @@ impl<D> Node<D>
 
     #[inline]
     fn send_impl(
-        message: SystemMessage<D::State, D::Request, D::Reply>,
-        send_to: SendTo<D>,
+        message: NetworkMessageKind<M>,
+        send_to: SendTo<M>,
         my_id: NodeId,
         target: NodeId,
         _first_cli: NodeId,
@@ -894,7 +887,7 @@ impl<D> Node<D>
 
             let mut buf = Vec::with_capacity(512);
 
-            let digest = serialize::serialize_digest::<Vec<u8>, D>(&message, &mut buf).unwrap();
+            let digest = serialize::serialize_digest::<Vec<u8>, M>(&message, &mut buf).unwrap();
 
             let buf = Bytes::from(buf);
 
@@ -926,7 +919,7 @@ impl<D> Node<D>
     /// This variant of broadcast does not sign the messages that are sent
     pub fn broadcast(
         &self,
-        message: SystemMessage<D::State, D::Request, D::Reply>,
+        message: NetworkMessageKind<M>,
         targets: impl Iterator<Item=NodeId>,
     ) {
         let comm_stats = received_network_rq!(&self.comm_stats);
@@ -943,7 +936,7 @@ impl<D> Node<D>
     /// This variant of `broadcast()` signs the sent message.
     pub fn broadcast_signed(
         &self,
-        message: SystemMessage<D::State, D::Request, D::Reply>,
+        message: NetworkMessageKind<M>,
         targets: impl Iterator<Item=NodeId>,
     ) {
         start_measurement!(start_time);
@@ -961,7 +954,7 @@ impl<D> Node<D>
         Self::broadcast_impl(message, mine, others, self.first_cli, nonce, comm_stats);
     }
 
-    pub fn broadcast_serialized(&self, messages: IntMap<StoredSerializedSystemMessage<D>>) {
+    pub fn broadcast_serialized(&self, messages: IntMap<StoredSerializedNetworkMessage<M>>) {
         let start_time = Instant::now();
         let headers = messages.values().map(|stored| stored.header());
 
@@ -978,9 +971,9 @@ impl<D> Node<D>
 
     #[inline]
     fn broadcast_serialized_impl(
-        mut messages: IntMap<StoredSerializedSystemMessage<D>>,
-        my_send_to: Option<SerializedSendTo<D>>,
-        other_send_tos: SerializedSendTos<D>,
+        mut messages: IntMap<StoredSerializedNetworkMessage<M>>,
+        my_send_to: Option<SerializedSendTo<M>>,
+        other_send_tos: SerializedSendTos<M>,
         _first_client: NodeId,
         comm_stats: Option<(Arc<CommStats>, Instant)>,
     ) {
@@ -1031,9 +1024,9 @@ impl<D> Node<D>
 
     #[inline]
     fn broadcast_impl(
-        message: SystemMessage<D::State, D::Request, D::Reply>,
-        my_send_to: Option<SendTo<D>>,
-        other_send_tos: SendTos<D>,
+        message: NetworkMessageKind<M>,
+        my_send_to: Option<SendTo<M>>,
+        other_send_tos: SendTos<M>,
         _first_cli: NodeId,
         nonce: u64,
         comm_stats: Option<(Arc<CommStats>, Instant)>,
@@ -1045,7 +1038,7 @@ impl<D> Node<D>
             //TODO: Actually make this work well
             let mut buf = Vec::with_capacity(512);
 
-            let digest = match serialize::serialize_digest::<Vec<u8>, D>(&message, &mut buf) {
+            let digest = match serialize::serialize_digest::<Vec<u8>, M>(&message, &mut buf) {
                 Ok(dig) => dig,
                 Err(err) => {
                     error!("Failed to serialize message {:?}. Message is {:?}", err, message);
@@ -1056,18 +1049,9 @@ impl<D> Node<D>
 
             let buf = Bytes::from(buf);
 
-
             message_digest_time!(&comm_stats, start_serialization);
 
-            let rq_key = match &message {
-                //We only care about requests, as we only want this for the client
-                SystemMessage::Request(req) => {
-                    let session = get_request_key(req.session_id(), req.sequence_number());
-
-                    Some(session)
-                }
-                _ => None,
-            };
+            let rq_key =  None;
 
             // send to ourselves
             if let Some(send_to) = my_send_to {
@@ -1124,7 +1108,7 @@ impl<D> Node<D>
         peer_tx: &PeerTx,
         shared: Option<&Arc<NodeShared>>,
         targets: impl Iterator<Item=NodeId>,
-    ) -> (Option<SendTo<D>>, SendTos<D>) {
+    ) -> (Option<SendTo<M>>, SendTos<M>) {
         let mut my_send_to = None;
         let mut other_send_tos = SendTos::new();
 
@@ -1146,7 +1130,7 @@ impl<D> Node<D>
         my_id: NodeId,
         peer_tx: &PeerTx,
         headers: impl Iterator<Item=&'a Header>,
-    ) -> (Option<SerializedSendTo<D>>, SerializedSendTos<D>) {
+    ) -> (Option<SerializedSendTo<M>>, SerializedSendTos<M>) {
         let mut my_send_to = None;
         let mut other_send_tos = SerializedSendTos::new();
 
@@ -1167,8 +1151,8 @@ impl<D> Node<D>
         my_id: NodeId,
         peer_tx: &PeerTx,
         headers: impl Iterator<Item=&'a Header>,
-        mine: &mut Option<SerializedSendTo<D>>,
-        others: &mut SerializedSendTos<D>,
+        mine: &mut Option<SerializedSendTo<M>>,
+        others: &mut SerializedSendTos<M>,
     ) {
         for header in headers {
             let id = header.to();
@@ -1229,8 +1213,8 @@ impl<D> Node<D>
         shared: Option<&Arc<NodeShared>>,
         tx_peers: &PeerTx,
         targets: impl Iterator<Item=NodeId>,
-        mine: &mut Option<SendTo<D>>,
-        others: &mut SendTos<D>,
+        mine: &mut Option<SendTo<M>>,
+        others: &mut SendTos<M>,
     ) {
         for id in targets {
             if id == my_id {
@@ -1296,9 +1280,9 @@ impl<D> Node<D>
         my_id: NodeId,
         peer_id: NodeId,
         shared: Option<&Arc<NodeShared>>,
-        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+        cli: Arc<ConnectedPeer<NetworkMessage<M>>>,
         peer_tx: &PeerTx,
-    ) -> Result<SendTo<D>> {
+    ) -> Result<SendTo<M>> {
         let shared = shared.map(|sh| Arc::clone(sh));
         if my_id == peer_id {
             Ok(SendTo::Me {
@@ -1348,18 +1332,18 @@ impl<D> Node<D>
     pub fn receive_from_clients(
         &self,
         timeout: Option<Duration>,
-    ) -> Result<Vec<Message<D::State, D::Request, D::Reply>>> {
+    ) -> Result<Vec<NetworkMessage<M>>> {
         self.client_pooling.receive_from_clients(timeout)
     }
 
     pub fn try_recv_from_clients(
         &self,
-    ) -> Result<Option<Vec<Message<D::State, D::Request, D::Reply>>>> {
+    ) -> Result<Option<Vec<NetworkMessage<M>>>> {
         self.client_pooling.try_receive_from_clients()
     }
 
     //Receive messages from the replicas we are connected to
-    pub fn receive_from_replicas(&self) -> Result<Message<D::State, D::Request, D::Reply>> {
+    pub fn receive_from_replicas(&self) -> Result<NetworkMessage<M>> {
         self.client_pooling.receive_from_replicas()
     }
 
@@ -2152,7 +2136,7 @@ impl<D> Node<D>
             }
 
             // deserialize payload
-            let message = match serialize::deserialize_message::<&[u8], D>(&buf[..header.payload_length()]) {
+            let message = match serialize::deserialize_message::<&[u8], M>(&buf[..header.payload_length()]) {
                 Ok(m) => m,
                 Err(err) => {
                     // errors deserializing -> faulty connection;
@@ -2165,7 +2149,7 @@ impl<D> Node<D>
             //Also handle ping requests and prevent them from being inserted into the
             //Request handling system.
             match &message {
-                SystemMessage::Ping(ping_message) => {
+                NetworkMessageKind::Ping(ping_message) => {
                     //Handle the incoming ping requests
                     self.ping_handler.handle_ping_received(&self, ping_message, peer_id);
 
@@ -2174,7 +2158,7 @@ impl<D> Node<D>
                 _ => {}
             };
 
-            let msg = Message::System(header, message);
+            let msg = NetworkMessage::new(header, message);
 
             if let Err(inner) = client.push_request(msg) {
                 error!(
@@ -2244,7 +2228,7 @@ impl<D> Node<D>
             }
 
             // deserialize payload
-            let message = match serialize::deserialize_message::<&[u8], D>(&buf[..header.payload_length()]) {
+            let message = match serialize::deserialize_message::<&[u8], M>(&buf[..header.payload_length()]) {
                 Ok(m) => m,
                 Err(err) => {
                     // errors deserializing -> faulty connection;
@@ -2259,10 +2243,7 @@ impl<D> Node<D>
             //Also handle ping requests and prevent them from being inserted into the
             //Request handling system.
             let req_key = match &message {
-                SystemMessage::Request(req) => {
-                    Some(get_request_key(req.session_id(), req.sequence_number()))
-                }
-                SystemMessage::Ping(ping_message) => {
+                NetworkMessageKind::Ping(ping_message) => {
                     //Handle the incoming ping requests
                     self.ping_handler.handle_ping_received(&self, ping_message, peer_id);
 
@@ -2271,7 +2252,7 @@ impl<D> Node<D>
                 _ => None,
             };
 
-            let msg = Message::System(header, message);
+            let msg = NetworkMessage::new(header, message);
 
             if let Err(inner) = client.push_request(msg) {
                 error!(
@@ -2288,9 +2269,9 @@ impl<D> Node<D>
                 comm_stats.register_rq_received(peer_id);
             }
 
-            if let Some(req_recv) = &self.recv_rqs {
+            if let Some( req_recv) = &self.recv_rqs {
                 if let Some(req_key) = req_key {
-                    let guard = req_recv.read();
+                    let guard = (req_recv).read().unwrap();
 
                     let bucket = &guard[req_key as usize % guard.len()];
 
@@ -2311,18 +2292,18 @@ impl<D> Node<D>
 }
 
 /// Represents a node with sending capabilities only.
-pub struct SendNode<D: SharedData + 'static> {
+pub struct SendNode<M: Serializable + 'static> {
     id: NodeId,
     first_cli: NodeId,
     shared: Arc<NodeShared>,
     rng: prng::State,
     peer_tx: PeerTx,
-    parent_node: Arc<Node<D>>,
-    channel: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+    parent_node: Arc<Node<M>>,
+    channel: Arc<ConnectedPeer<NetworkMessage<M>>>,
     comm_stats: Option<Arc<CommStats>>,
 }
 
-impl<D: SharedData> Clone for SendNode<D> {
+impl<M: Serializable> Clone for SendNode<M> {
     fn clone(&self) -> Self {
         Self {
             id: self.id,
@@ -2337,22 +2318,19 @@ impl<D: SharedData> Clone for SendNode<D> {
     }
 }
 
-impl<D> SendNode<D>
+impl<M> SendNode<M>
     where
-        D: SharedData + 'static,
-        D::State: Send + Clone + 'static,
-        D::Request: Send + 'static,
-        D::Reply: Send + 'static,
+        M: Serializable
 {
     pub fn id(&self) -> NodeId {
         self.id
     }
 
-    pub fn loopback_channel(&self) -> &Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>> {
+    pub fn loopback_channel(&self) -> &Arc<ConnectedPeer<NetworkMessage<M>>> {
         &self.channel
     }
 
-    pub fn parent_node(&self) -> &Arc<Node<D>> {
+    pub fn parent_node(&self) -> &Arc<Node<M>> {
         &self.parent_node
     }
 
@@ -2361,7 +2339,7 @@ impl<D> SendNode<D>
     /// Check the `send()` documentation for `Node`.
     pub fn send(
         &mut self,
-        message: SystemMessage<D::State, D::Request, D::Reply>,
+        message: NetworkMessageKind<M>,
         target: NodeId,
         flush: bool,
     ) {
@@ -2376,7 +2354,7 @@ impl<D> SendNode<D>
             }
             Some(conn) => {
                 let send_to =
-                    match <Node<D>>::send_to(flush, self.id, target, None, conn, &self.peer_tx) {
+                    match <Node<M>>::send_to(flush, self.id, target, None, conn, &self.peer_tx) {
                         Ok(send_to) => send_to,
                         Err(error) => {
                             error!("{:?} // {:?}", self.id, error);
@@ -2394,7 +2372,7 @@ impl<D> SendNode<D>
                     None
                 };
 
-                <Node<D>>::send_impl(
+                <Node<M>>::send_impl(
                     message,
                     send_to,
                     my_id,
@@ -2410,7 +2388,7 @@ impl<D> SendNode<D>
     /// Check the `send_signed()` documentation for `Node`.
     pub fn send_signed(
         &mut self,
-        message: SystemMessage<D::State, D::Request, D::Reply>,
+        message: NetworkMessageKind<M>,
         target: NodeId,
     ) {
         let comm_stats = received_network_rq!(&self.comm_stats);
@@ -2423,7 +2401,7 @@ impl<D> SendNode<D>
                 );
             }
             Some(conn) => {
-                let send_to = match <Node<D>>::send_to(
+                let send_to = match <Node<M>>::send_to(
                     true,
                     self.id,
                     target,
@@ -2442,7 +2420,7 @@ impl<D> SendNode<D>
                 let my_id = self.id;
                 let nonce = self.rng.next_state();
 
-                <Node<D>>::send_impl(
+                <Node<M>>::send_impl(
                     message,
                     send_to,
                     my_id,
@@ -2458,7 +2436,7 @@ impl<D> SendNode<D>
     /// Check the `broadcast()` documentation for `Node`.
     pub fn broadcast(
         &mut self,
-        message: SystemMessage<D::State, D::Request, D::Reply>,
+        message: NetworkMessageKind<M>,
         targets: impl Iterator<Item=NodeId>,
     ) {
         let comm_stats = received_network_rq!(&self.comm_stats);
@@ -2469,13 +2447,13 @@ impl<D> SendNode<D>
 
         let nonce = self.rng.next_state();
 
-        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce, comm_stats);
+        <Node<M>>::broadcast_impl(message, mine, others, self.first_cli, nonce, comm_stats);
     }
 
     /// Check the `broadcast_signed()` documentation for `Node`.
     pub fn broadcast_signed(
         &mut self,
-        message: SystemMessage<D::State, D::Request, D::Reply>,
+        message: NetworkMessageKind<M>,
         targets: impl Iterator<Item=NodeId>,
     ) {
         let comm_stats = received_network_rq!(&self.comm_stats);
@@ -2486,7 +2464,7 @@ impl<D> SendNode<D>
 
         let nonce = self.rng.next_state();
 
-        <Node<D>>::broadcast_impl(message, mine, others, self.first_cli, nonce, comm_stats);
+        <Node<M>>::broadcast_impl(message, mine, others, self.first_cli, nonce, comm_stats);
     }
 }
 
@@ -2497,14 +2475,14 @@ impl<D> SendNode<D>
 // to a network write operation, or channel write operation,
 // depending on whether we're sending a message to a peer node
 // or ourselves
-pub enum SendTo<D: SharedData> {
+pub enum SendTo<M: Serializable> {
     Me {
         // our id
         my_id: NodeId,
         // shared data
         shared: Option<Arc<NodeShared>>,
         // a handle to our client handle
-        tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+        tx: Arc<ConnectedPeer<NetworkMessage<M>>>,
     },
     Peers {
         // should we flush write calls?
@@ -2520,16 +2498,16 @@ pub enum SendTo<D: SharedData> {
         // handle to socket
         sock: ConnectionHandle,
         // a handle to the message channel of the corresponding client
-        tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+        tx: Arc<ConnectedPeer<NetworkMessage<M>>>,
     },
 }
 
-pub enum SerializedSendTo<D: SharedData> {
+pub enum SerializedSendTo<M: Serializable> {
     Me {
         // our id
         id: NodeId,
         // a handle to our client handle
-        tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+        tx: Arc<ConnectedPeer<NetworkMessage<M>>>,
     },
     Peers {
         // the id of the peer
@@ -2541,16 +2519,13 @@ pub enum SerializedSendTo<D: SharedData> {
         // handle to socket
         sock: ConnectionHandle,
         // a handle to the message channel of the corresponding client
-        tx: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+        tx: Arc<ConnectedPeer<NetworkMessage<M>>>,
     },
 }
 
-impl<D> SendTo<D>
+impl<M> SendTo<M>
     where
-        D: SharedData + 'static,
-        D::State: Send + Clone + 'static,
-        D::Request: Send + 'static,
-        D::Reply: Send + 'static,
+M: Serializable
 {
     fn socket_type(&self) -> Option<&ConnectionHandle> {
         match self {
@@ -2564,7 +2539,7 @@ impl<D> SendTo<D>
         m: Either<
             (u64, Digest, Buf),
             (
-                SystemMessage<D::State, D::Request, D::Reply>,
+                NetworkMessageKind<M>,
                 u64,
                 Digest,
                 Buf,
@@ -2610,18 +2585,18 @@ impl<D> SendTo<D>
 
     fn me(
         my_id: NodeId,
-        m: SystemMessage<D::State, D::Request, D::Reply>,
+        m: NetworkMessageKind<M>,
         n: u64,
         d: Digest,
         b: Buf,
         sk: Option<&KeyPair>,
-        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+        cli: Arc<ConnectedPeer<NetworkMessage<M>>>,
     ) {
         // create wire msg
         let (h, _) = WireMessage::new(my_id, my_id, b, n, Some(d), sk).into_inner();
 
         // send
-        if let Err(inner) = cli.push_request(Message::System(h, m)) {
+        if let Err(inner) = cli.push_request(NetworkMessage::new(h, m)) {
             error!("{:?} // Failed to push to myself! {:?}", my_id, inner);
         };
     }
@@ -2653,12 +2628,9 @@ impl<D> SendTo<D>
     }
 }
 
-impl<D> SerializedSendTo<D>
+impl<M> SerializedSendTo<M>
     where
-        D: SharedData + 'static,
-        D::State: Send + Clone + 'static,
-        D::Request: Send + 'static,
-        D::Reply: Send + 'static,
+M: Serializable
 {
     fn socket_type(&self) -> Option<&ConnectionHandle> {
         match self {
@@ -2670,7 +2642,7 @@ impl<D> SerializedSendTo<D>
     fn value(
         self,
         h: Header,
-        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
+        m: SerializedMessage<NetworkMessageKind<M>>,
     ) {
         match self {
             SerializedSendTo::Me { tx, .. } => {
@@ -2690,15 +2662,15 @@ impl<D> SerializedSendTo<D>
 
     fn me(
         h: Header,
-        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
-        cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+        m: SerializedMessage<NetworkMessageKind<M>>,
+        cli: Arc<ConnectedPeer<NetworkMessage<M>>>,
     ) {
         let (original, _) = m.into_inner();
 
         let myself = h.from;
 
         // send to ourselves
-        if let Err(err) = cli.push_request(Message::System(h, original)) {
+        if let Err(err) = cli.push_request(NetworkMessage::new(h, original)) {
             error!("{:?} // FAILED TO SEND TO MYSELF {:?}", myself, err);
         }
     }
@@ -2706,10 +2678,10 @@ impl<D> SerializedSendTo<D>
     fn peers(
         peer_id: NodeId,
         h: Header,
-        m: SerializedMessage<SystemMessage<D::State, D::Request, D::Reply>>,
+        m: SerializedMessage<NetworkMessageKind<M>>,
         peer_tx: &PeerTx,
         conn_handle: ConnectionHandle,
-        _cli: Arc<ConnectedPeer<Message<D::State, D::Request, D::Reply>>>,
+        _cli: Arc<ConnectedPeer<NetworkMessage<M>>>,
     ) {
         // create wire msg
         let (_, raw) = m.into_inner();

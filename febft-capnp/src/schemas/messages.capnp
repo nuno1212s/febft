@@ -1,7 +1,6 @@
 @0x94a43df6c359e805;
 
 using Rust = import "rust.capnp";
-$Rust.parentModule("bft::communication::serialize::capnp");
 
 struct System {
     union {

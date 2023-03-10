@@ -6,10 +6,10 @@ use dashmap::DashMap;
 
 use log::{error, info};
 use febft_common::channel;
-use febft_common::channel::{ChannelMultRx, ChannelMultTx, ChannelSyncRx, ChannelSyncTx, new_bounded_sync, TryRecvError};
+use febft_common::channel::{ChannelMultRx, ChannelMultTx, ChannelSyncRx, ChannelSyncTx, TryRecvError};
 use febft_common::error::*;
 
-use crate::bft::communication::{NODE_CHAN_BOUND, NodeId};
+use crate::{NODE_CHAN_BOUND, NodeId};
 
 fn channel_init<T>(capacity: usize) -> (ChannelMultTx<T>, ChannelMultRx<T>) {
     channel::new_bounded_mult(capacity)
@@ -276,7 +276,7 @@ pub struct ReplicaHandling<T> where T: Send {
 
 impl<T> ReplicaHandling<T> where T: Send {
     pub fn new(capacity: usize) -> Arc<Self> {
-        let (sender, receiver) = new_bounded_sync(capacity);
+        let (sender, receiver) = channel::new_bounded_sync(capacity);
 
         Arc::new(
             Self {

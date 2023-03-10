@@ -16,6 +16,8 @@ use crate::bft::msg_log::persistent::ProofInfo;
 #[cfg(feature = "serialize_serde")]
 use ::serde::{Deserialize, Serialize};
 use febft_common::crypto::hash::{Context, Digest};
+use febft_communication::serialize::Serializable;
+use crate::bft::message::{ConsensusMessage, SystemMessage};
 
 use super::message::ConsensusMessage;
 
@@ -27,40 +29,6 @@ pub mod serde;
 
 /// The buffer type used to serialize messages into.
 pub type Buf = Bytes;
-
-pub fn serialize_message<W, D>(w: &mut W, msg: &SystemMessage<D::State, D::Request, D::Reply>) -> Result<()>
-    where W: Write + AsRef<[u8]> + AsMut<[u8]>, D: SharedData {
-
-    #[cfg(feature="serialize_capnp")]
-    capnp::serialize_message::<W, D>(w, msg)?;
-
-    #[cfg(feature = "serialize_serde")]
-    serde::serialize_message::<W, D>(msg, w)?;
-
-    Ok(())
-}
-
-pub fn deserialize_message<R, D>(r: R) -> Result<SystemMessage<D::State, D::Request, D::Reply>> where R: Read + AsRef<[u8]>, D: SharedData {
-
-    #[cfg(feature = "serialize_capnp")]
-    let result = capnp::deserialize_message::<R, D>(r)?;
-
-    #[cfg(feature= "serialize_serde")]
-    let result = serde::deserialize_message::<R, D>(r)?;
-
-    Ok(result)
-}
-
-pub fn serialize_digest<W: Write + AsRef<[u8]> + AsMut<[u8]>, D: SharedData>(
-    message: &SystemMessage<D::State, D::Request, D::Reply>,
-    w: &mut W,
-) -> Result<Digest> {
-    serialize_message::<W, D>(w, message)?;
-
-    let mut ctx = Context::new();
-    ctx.update(w.as_ref());
-    Ok(ctx.finish())
-}
 
 pub fn serialize_consensus<W, D>(w: &mut W, message: &ConsensusMessage<D::Request>) -> Result<()>
     where
@@ -92,7 +60,20 @@ pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
     Ok(result)
 }
 
+impl<D> Serializable for SystemMessage<D::State, D::Request, D::Reply>  where D:SharedData + 'static{
+    type Message = SystemMessage<D::State, D::Reply, D::Reply>;
 
+    #[cfg(feature="serialize_capnp")]
+    fn serialize_capnp(builder: febft_capnp::messages_capnp::system::Builder, msg: &Self::Message) -> Result<()> {
+        capnp::serialize_message::<D>(builder, msg)?;
+
+        Ok(())
+    }
+    #[cfg(feature="serialize_capnp")]
+    fn deserialize_capnp(reader: febft_capnp::messages_capnp::system::Reader) -> Result<Self::Message> {
+       capnp::deserialize_message::<D>(reader)
+    }
+}
 
 /// Marker trait containing the types used by the application,
 /// as well as routines to serialize the application data.

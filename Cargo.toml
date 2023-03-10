@@ -2,6 +2,8 @@
 
 members = [
     "febft-common",
+    "febft-communication",
+    "febft-capnp",
     "febft"
 ]
 

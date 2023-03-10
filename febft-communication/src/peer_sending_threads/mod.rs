@@ -2,19 +2,15 @@ use febft_common::error::*;
 use febft_common::channel::{ChannelMixedRx, ChannelMixedTx};
 use febft_common::{async_runtime as rt, channel};
 
-use crate::{bft, message_peer_sending_thread_sent, start_measurement};
-use crate::bft::benchmarks::CommStats;
-
-use crate::bft::communication::message::WireMessage;
-use crate::bft::communication::socket::{SocketSendAsync, SocketSendSync};
-use crate::bft::communication::{Node, NodeId};
 use dashmap::DashMap;
 use log::{debug, error};
 use std::sync::Arc;
 use std::time::Instant;
-
-use crate::bft::communication::serialize::SharedData;
-
+use febft_common::socket::{SocketSendAsync, SocketSendSync};
+use crate::message::WireMessage;
+use crate::{message_peer_sending_thread_sent, Node, NodeId, start_measurement};
+use crate::benchmarks::CommStats;
+use crate::serialize::Serializable;
 
 
 ///Implements the behaviour where each connection has it's own dedicated thread that will handle
@@ -57,15 +53,15 @@ impl ConnectionHandle {
     }
 }
 
-pub fn initialize_sync_sending_thread_for<D>(
-    node: Arc<Node<D>>,
+pub fn initialize_sync_sending_thread_for<M>(
+    node: Arc<Node<M>>,
     peer_id: NodeId,
     socket: SocketSendSync,
     comm_stats: Option<Arc<CommStats>>,
     sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>,
 ) -> ConnectionHandle
     where
-        D: SharedData + 'static,
+        M: Serializable,
 {
     let (tx, rx) = channel::new_bounded_mixed(QUEUE_SPACE);
 
@@ -79,15 +75,15 @@ pub fn initialize_sync_sending_thread_for<D>(
 }
 
 ///Receives requests from the queue and sends them using the provided socket
-fn sync_sending_thread<D>(
-    node: Arc<Node<D>>,
+fn sync_sending_thread<M>(
+    node: Arc<Node<M>>,
     peer_id: NodeId,
     mut socket: SocketSendSync,
     recv: ChannelMixedRx<SendMessage>,
     comm_stats: Option<Arc<CommStats>>,
     sent_rqs: Option<Arc<Vec<DashMap<u64, ()>>>>,
 ) where
-    D: SharedData + 'static,
+    M: Serializable
 {
     loop {
         let recv_result = recv.recv();
@@ -135,14 +131,14 @@ fn sync_sending_thread<D>(
     node.tx_connect_node_sync(peer_id, None);
 }
 
-pub fn initialize_async_sending_task_for<D>(
-    node: Arc<Node<D>>,
+pub fn initialize_async_sending_task_for<M>(
+    node: Arc<Node<M>>,
     peer_id: NodeId,
     socket: SocketSendAsync,
     comm_stats: Option<Arc<CommStats>>,
 ) -> ConnectionHandle
     where
-        D: SharedData + 'static,
+        M: Serializable,
 {
     let (tx, rx) = channel::new_bounded_mixed(QUEUE_SPACE);
 
@@ -153,14 +149,14 @@ pub fn initialize_async_sending_task_for<D>(
 
 
 ///Receives requests from the queue and sends them using the provided socket
-async fn async_sending_task<D>(
-    node: Arc<Node<D>>,
+async fn async_sending_task<M>(
+    node: Arc<Node<M>>,
     peer_id: NodeId,
     mut socket: SocketSendAsync,
     mut recv: ChannelMixedRx<SendMessage>,
     comm_stats: Option<Arc<CommStats>>,
 ) where
-    D: SharedData + 'static,
+    M: Serializable,
 {
     loop {
         let recv_result = recv.recv_async().await;

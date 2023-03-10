@@ -8,10 +8,10 @@ use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, TryRecvError};
 use febft_common::crypto::hash::Digest;
 use febft_common::ordering::SeqNo;
-use crate::bft::communication::message::Message;
-use crate::bft::communication::NodeId;
-use crate::bft::communication::incoming_peer_handling::ConnectedPeer;
+use febft_communication::incoming_peer_handling::ConnectedPeer;
+use febft_communication::NodeId;
 use crate::bft::executable::{Reply, Request, Service, State};
+use crate::bft::message::Message;
 
 const CHANNEL_SIZE: usize = 1024;
 
@@ -89,7 +89,7 @@ struct TimeoutsThread<S: Service + 'static> {
     channel_rx: ChannelSyncRx<TimeoutMessage>,
     //Loopback so we can deliver the timeouts to the main consensus thread so they can be
     //processed
-    loopback_channel: Arc<ConnectedPeer<Message<State<S>, Request<S>, Reply<S>>>>,
+    loopback_channel: ChannelSyncTx<Message<State<S>, Request<S>, Reply<S>>>,
     //How long between each timeout iteration
     iteration_delay: u64,
 }
@@ -99,7 +99,7 @@ impl Timeouts {
     ///Initialize the timeouts thread and return a handle to it
     /// This handle can then be used everywhere timeouts are needed.
     pub fn new<S: Service + 'static>(iteration_delay: u64,
-                                     loopback_channel: Arc<ConnectedPeer<Message<State<S>, Request<S>, Reply<S>>>>) -> Self {
+                                     loopback_channel: ChannelSyncTx<Message<State<S>, Request<S>, Reply<S>>>) -> Self {
         let tx = TimeoutsThread::<S>::new(iteration_delay, loopback_channel);
 
         Self {
@@ -164,12 +164,11 @@ impl Timeouts {
 }
 
 impl<S: Service + 'static> TimeoutsThread<S> {
-    fn new(iteration_delay: u64, loopback_channel: Arc<ConnectedPeer<Message<State<S>, Request<S>, Reply<S>>>>) -> ChannelSyncTx<TimeoutMessage> {
+    fn new(iteration_delay: u64, loopback_channel: ChannelSyncTx<Message<State<S>, Request<S>, Reply<S>>>) -> ChannelSyncTx<TimeoutMessage> {
         let (tx, rx) = channel::new_bounded_sync(CHANNEL_SIZE);
 
         std::thread::Builder::new().name("Timeout Thread".to_string())
             .spawn(move || {
-
                 let timeout_thread = Self {
                     pending_timeouts: Default::default(),
                     pending_timeouts_reverse_search: Default::default(),
@@ -248,7 +247,6 @@ impl<S: Service + 'static> TimeoutsThread<S> {
                 }).collect();
 
                 if let Err(_) = self.loopback_channel.push_request(Message::Timeout(to_time_out)) {
-
                     info!("Loopback channel has disconnected, disconnecting timeouts thread");
 
                     break;

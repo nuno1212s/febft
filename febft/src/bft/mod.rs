@@ -14,6 +14,7 @@ pub mod sync;
 pub mod timeouts;
 pub mod msg_log;
 pub mod config;
+pub mod message;
 
 use std::ops::Drop;
 
