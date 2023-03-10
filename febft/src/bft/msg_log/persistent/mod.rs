@@ -19,13 +19,8 @@ use febft_common::error::*;
 use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_common::persistentdb::KVDB;
+use febft_communication::message::{Header, StoredMessage};
 
-use crate::bft::communication::message::{ConsensusMessage, StoredMessage};
-use crate::bft::communication::message::ConsensusMessageKind;
-use crate::bft::communication::message::Header;
-use crate::bft::communication::NodeId;
-
-use crate::bft::communication::serialize::{SharedData};
 use crate::bft::msg_log::persistent::serialization::{make_proof_info};
 
 
@@ -34,6 +29,8 @@ use crate::bft::{
     executable::{Request, Service, State},
 };
 use crate::bft::executable::ExecutionRequest::Read;
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
+use crate::bft::message::serialize::SharedData;
 use crate::bft::msg_log::decided_log::BatchExecutionInfo;
 use crate::bft::msg_log::decisions::{Decision, OnGoingDecision, Proof, ProofMetadata};
 use crate::bft::sync::view::ViewInfo;

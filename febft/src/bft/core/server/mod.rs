@@ -10,13 +10,14 @@ use chrono::DateTime;
 use log::{debug, warn};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+use febft_common::channel;
 
 use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
+use febft_communication::{Node, NodeConfig, NodeId};
+use febft_communication::message::NetworkMessage;
 
 use crate::bft::benchmarks::BatchMeta;
-use crate::bft::communication::message::{ConsensusMessage, CstMessage, ForwardedRequestsMessage, Header, Message, ObserveEventKind, RequestMessage, StoredMessage, SystemMessage, ViewChangeMessage};
-use crate::bft::communication::{Node, NodeConfig, NodeId};
 use crate::bft::consensus::{AbstractConsensus, Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
@@ -24,6 +25,7 @@ use crate::bft::cst::{install_recovery_state, CollabStateTransfer, CstProgress, 
 use crate::bft::executable::{
     Executor, ExecutorHandle, ReplicaReplier, Reply, Request, Service, State,
 };
+use crate::bft::message::{Message, ObserveEventKind, SystemMessage};
 use crate::bft::msg_log;
 use crate::bft::msg_log::{Info};
 use crate::bft::msg_log::decided_log::DecidedLog;
@@ -92,7 +94,7 @@ pub struct Replica<S: Service + 'static> {
     // The proposer of this replica
     proposer: Arc<Proposer<S>>,
     // The networking layer for a Node in the network (either Client or Replica)
-    node: Arc<Node<S::Data>>,
+    node: Arc<Node<SystemMessage<State<S>, Request<S>, Reply<S>>>>,
     //A handle to the observer worker thread
     observer_handle: ObserverHandle,
 }
@@ -204,6 +206,8 @@ impl<S> Replica<S>
 
         debug!("Initializing executor.");
 
+        let (exec_tx, exec_rx) = channel::new_bounded_sync(1024);
+
         // start executor
         Executor::<S, ReplicaReplier>::new(
             reply_handle,
@@ -211,6 +215,7 @@ impl<S> Replica<S>
             service,
             state,
             node.send_node(),
+            exec_tx.clone(),
             Some(observer_handle.clone()),
         )?;
 
@@ -218,7 +223,7 @@ impl<S> Replica<S>
 
         debug!("Initializing timeouts");
         // start timeouts handler
-        let timeouts = Timeouts::new::<S>(500, Arc::clone(node.loopback_channel()));
+        let timeouts = Timeouts::new::<S>(500, exec_tx.clone());
 
         // TODO:
         // - client req timeout base dur configure param
@@ -263,7 +268,6 @@ impl<S> Replica<S>
                 global_batch_size,
                 batch_timeout,
                 max_batch_size,
-
                 observer_handle.clone(),
             ),
             executor,
@@ -278,39 +282,37 @@ impl<S> Replica<S>
 
         // handle rogue messages
         for message in rogue {
-            match message {
-                Message::System(header, message) => {
-                    match message {
-                        SystemMessage::Request(request) => {
-                            replica.request_received(header, request);
-                        }
-                        SystemMessage::Consensus(message) => {
-                            replica.consensus.queue(header, message);
-                        }
-                        // FIXME: handle rogue reply messages
-                        SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
-                        // FIXME: handle rogue cst messages
-                        SystemMessage::Cst(_) => warn!("Rogue cst message detected"),
-                        // FIXME: handle rogue view change messages
-                        SystemMessage::ViewChange(_) => warn!("Rogue view change message detected"),
-                        // FIXME: handle rogue forwarded requests messages
-                        SystemMessage::ForwardedRequests(_) => {
-                            warn!("Rogue forwarded requests message detected")
-                        }
-                        SystemMessage::ObserverMessage(_) => {
-                            warn!("Rogue observer message detected")
-                        }
-                        SystemMessage::UnOrderedRequest(_) => {
-                            warn!("Rogue unordered request message")
-                        }
-                        SystemMessage::FwdConsensus(_) => {
-                            warn!("Rogue fwd consensus message observed.")
-                        }
-                        SystemMessage::Ping(_) => {}
-                    }
+            let NetworkMessage { header, message } = message;
+
+            let sys_msg = message.into();
+
+            match sys_msg {
+                SystemMessage::Request(request) => {
+                    replica.request_received(header, request);
                 }
-                // ignore other messages for now
-                _ => (),
+                SystemMessage::Consensus(message) => {
+                    replica.consensus.queue(header, message);
+                }
+                // FIXME: handle rogue reply messages
+                SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
+                // FIXME: handle rogue cst messages
+                SystemMessage::Cst(_) => warn!("Rogue cst message detected"),
+                // FIXME: handle rogue view change messages
+                SystemMessage::ViewChange(_) => warn!("Rogue view change message detected"),
+                // FIXME: handle rogue forwarded requests messages
+                SystemMessage::ForwardedRequests(_) => {
+                    warn!("Rogue forwarded requests message detected")
+                }
+                SystemMessage::ObserverMessage(_) => {
+                    warn!("Rogue observer message detected")
+                }
+                SystemMessage::UnOrderedRequest(_) => {
+                    warn!("Rogue unordered request message")
+                }
+                SystemMessage::FwdConsensus(_) => {
+                    warn!("Rogue fwd consensus message observed.")
+                }
+                SystemMessage::Ping(_) => {}
             }
         }
 
@@ -435,6 +437,8 @@ impl<S> Replica<S>
     fn update_retrieving_state(&mut self) -> Result<()> {
         debug!("{:?} // Retrieving state...", self.id());
         let message = self.node.receive_from_replicas().unwrap();
+
+
 
         match message {
             Message::System(header, message) => {

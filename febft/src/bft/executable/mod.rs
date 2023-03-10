@@ -7,14 +7,15 @@ use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 
 use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
+use febft_communication::{NodeId, SendNode};
+use febft_communication::message::NetworkMessageKind;
 
 use crate::bft::benchmarks::BatchMeta;
-use crate::bft::communication::message::{Message, ObserveEventKind, ReplyMessage, SystemMessage};
-use crate::bft::communication::serialize::SharedData;
-use crate::bft::communication::{ NodeId, SendNode};
 
 use crate::bft::core::server::client_replier::ReplyHandle;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
+use crate::bft::message::serialize::SharedData;
+use crate::bft::message::{Message, ObserveEventKind, ReplyMessage, SystemMessage};
 
 /// Represents a single client update request, to be executed.
 #[derive(Clone)]
@@ -182,7 +183,7 @@ const EXECUTING_BUFFER: usize = 8096;
 
 pub trait ExecutorReplier: Send {
     fn execution_finished<S: Service>(
-        node: SendNode<S::Data>,
+        node: SendNode<SystemMessage<State<S>, Request<S>, Reply<S>>>,
         seq: Option<SeqNo>,
         batch: BatchReplies<Reply<S>>,
     );
@@ -192,7 +193,7 @@ pub struct FollowerReplier;
 
 impl ExecutorReplier for FollowerReplier {
     fn execution_finished<S: Service>(
-        node: SendNode<<S as Service>::Data>,
+        node: SendNode<SystemMessage<State<S>, Request<S>, Reply<S>>>,
         seq: Option<SeqNo>,
         batch: BatchReplies<Reply<S>>,
     ) {
@@ -209,7 +210,7 @@ pub struct ReplicaReplier;
 
 impl ExecutorReplier for ReplicaReplier {
     fn execution_finished<S: Service>(
-        mut send_node: SendNode<<S as Service>::Data>,
+        mut send_node: SendNode<SystemMessage<State<S>, Request<S>, Reply<S>>>,
         _seq: Option<SeqNo>,
         batch: BatchReplies<Reply<S>>,
     ) {
@@ -249,7 +250,7 @@ impl ExecutorReplier for ReplicaReplier {
 
             // deliver last reply
             if let Some((message, last_peer_id)) = curr_send {
-                send_node.send(message, last_peer_id, true);
+                send_node.send(NetworkMessageKind::from(message), last_peer_id, true);
             } else {
                 // slightly optimize code path;
                 // the previous if branch will always execute
@@ -268,6 +269,7 @@ pub struct Executor<S: Service + 'static, T: ExecutorReplier> {
     e_rx: ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>,
     reply_worker: ReplyHandle<S>,
     send_node: SendNode<S::Data>,
+    loopback_channel: ChannelSyncTx<Message<State<S>, Request<S>, Reply<S>>>,
     observer_handle: Option<ObserverHandle>,
 
     p: PhantomData<T>,
@@ -347,7 +349,8 @@ impl<S, T> Executor<S, T>
         handle: ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>,
         mut service: S,
         current_state: Option<(State<S>, Vec<Request<S>>)>,
-        send_node: SendNode<S::Data>,
+        send_node: SendNode<SystemMessage<State<S>, Request<S>, Reply<S>>>,
+        loopback_channel: ChannelSyncTx<Message<State<S>, Request<S>, Reply<S>>>,
         observer: Option<ObserverHandle>,
     ) -> Result<()> {
         let (state, requests) = if let Some((state, requests)) = current_state {
@@ -362,6 +365,7 @@ impl<S, T> Executor<S, T>
             state,
             reply_worker,
             send_node,
+            loopback_channel,
             observer_handle: observer,
             p: Default::default(),
         };
@@ -432,11 +436,9 @@ impl<S, T> Executor<S, T>
     fn deliver_checkpoint_state(&self, seq: SeqNo) {
         let cloned_state = self.state.clone();
 
-        let system_tx = self.send_node.loopback_channel().clone();
-
         let m = Message::ExecutionFinishedWithAppstate((seq, cloned_state));
 
-        if let Err(_err) = system_tx.push_request(m) {
+        if let Err(_err) = self.loopback_channel.send(m) {
 
             error!(
                 "{:?} // FAILED TO DELIVER CHECKPOINT STATE",

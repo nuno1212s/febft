@@ -17,10 +17,12 @@ use serde::{Deserialize, Serialize};
 use febft_common::crypto::hash::Digest;
 use febft_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_queue_message, tbo_pop_message};
 use febft_common::{collections, prng};
-use febft_communication::message::{Header, StoredMessage};
+use febft_communication::message::{Header, NetworkMessageKind, StoredMessage, WireMessage};
+use febft_communication::{Node, NodeId, serialize};
+use febft_communication::serialize::Buf;
 use crate::bft::consensus::Consensus;
 use crate::bft::executable::{Reply, Request, Service, State};
-use crate::bft::message::{FwdConsensusMessage, RequestMessage, ViewChangeMessage, ViewChangeMessageKind};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ForwardedRequestsMessage, FwdConsensusMessage, RequestMessage, SystemMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::decisions::{CollectData, Proof, ViewDecisionPair};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
@@ -480,7 +482,7 @@ impl<S> Synchronizer<S>
         log: &mut DecidedLog<S>,
         pending_rq_log: &PendingRequestLog<S>,
         consensus: &mut Consensus<S>,
-        node: &Node<S::Data>,
+        node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
     ) -> SynchronizerStatus
     {
         match *self.phase.borrow() {
@@ -783,7 +785,7 @@ impl<S> Synchronizer<S>
                             let targets = NodeId::targets(0..current_view.params().n())
                                 .filter(move |&id| id != node_id);
 
-                            node.broadcast(message, targets);
+                            node.broadcast(NetworkMessageKind::from(message), targets);
 
                             let state = FinalizeState {
                                 curr_cid,
@@ -911,7 +913,7 @@ impl<S> Synchronizer<S>
         log: &mut DecidedLog<S>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<S>,
-        node: &Node<S::Data>,
+        node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
     ) -> Option<()>
     {
         let state = self.finalize_state.borrow_mut().take()?;
@@ -942,7 +944,7 @@ impl<S> Synchronizer<S>
     pub fn begin_view_change(
         &self,
         timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
-        node: &Node<S::Data>,
+        node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
         timeouts: &Timeouts,
         _log: &DecidedLog<S>,
     )
@@ -1022,7 +1024,7 @@ impl<S> Synchronizer<S>
         log: &mut DecidedLog<S>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<S>,
-        node: &Node<S::Data>,
+        node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
     ) -> SynchronizerStatus
     {
         let FinalizeState {
@@ -1129,7 +1131,7 @@ impl<S> Synchronizer<S>
     /// Has not received the requests from the client)
     pub fn forward_requests(&self,
                             timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
-                            node: &Node<S::Data>,
+                            node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
                             log: &PendingRequestLog<S>) {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {}
@@ -1176,7 +1178,7 @@ impl<S> Synchronizer<S>
     fn highest_proof<'a>(
         guard: &'a IntMap<StoredMessage<ViewChangeMessage<Request<S>>>>,
         view: &ViewInfo,
-        node: &Node<S::Data>,
+        node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
     ) -> Option<&'a Proof<Request<S>>> {
         highest_proof::<S, _>(&view, node, guard.values())
     }
@@ -1381,7 +1383,7 @@ fn normalized_collects<'a, O: 'a>(
 }
 
 fn signed_collects<S>(
-    node: &Node<S::Data>,
+    node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
     collects: Vec<StoredMessage<ViewChangeMessage<Request<S>>>>,
 ) -> Vec<StoredMessage<ViewChangeMessage<Request<S>>>>
     where
@@ -1396,7 +1398,7 @@ fn signed_collects<S>(
         .collect()
 }
 
-fn validate_signature<'a, S, M>(node: &'a Node<S::Data>, stored: &'a StoredMessage<M>) -> bool
+fn validate_signature<'a, S, M>(node: &'a Node<SystemMessage<State<S>, Request<S>, Reply<S>>>, stored: &'a StoredMessage<M>) -> bool
     where
         S: Service + Send + 'static,
         State<S>: Send + Clone + 'static,
@@ -1422,7 +1424,7 @@ fn validate_signature<'a, S, M>(node: &'a Node<S::Data>, stored: &'a StoredMessa
 
 fn highest_proof<'a, S, I>(
     view: &ViewInfo,
-    node: &Node<S::Data>,
+    node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
     collects: I,
 ) -> Option<&'a Proof<Request<S>>>
     where

@@ -15,14 +15,11 @@ use febft_common::collections;
 use febft_common::collections::ConcurrentHashMap;
 use febft_common::crypto::hash::Digest;
 use febft_common::ordering::Orderable;
+use febft_communication::message::{NetworkMessageKind, StoredMessage};
+use febft_communication::{Node, NodeId};
 
-use crate::bft::communication::message::{
-    ForwardedRequestsMessage, RequestMessage, StoredMessage, SystemMessage, ViewChangeMessage,
-    ViewChangeMessageKind, ConsensusMessage, ConsensusMessageKind,
-};
-
-use crate::bft::communication::{Node, NodeId};
-use crate::bft::executable::{Request, Service};
+use crate::bft::executable::{Reply, Request, Service, State};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ForwardedRequestsMessage, RequestMessage, SystemMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
@@ -65,7 +62,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         log: &DecidedLog<S>,
         pending_rq_log: &PendingRequestLog<S>,
         timeouts: &Timeouts,
-        node: &Node<S::Data>,
+        node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
     ) {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
@@ -90,7 +87,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
             ViewChangeMessageKind::StopData(collect),
         ));
 
-        node.send_signed(message, current_leader);
+        node.send_signed(NetworkMessageKind::from(message), current_leader);
     }
 
     /// Start a new view change
@@ -122,7 +119,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
 
         let targets = NodeId::targets(0..current_view.params().n());
 
-        node.broadcast(message, targets);
+        node.broadcast(NetworkMessageKind::from(message), targets);
     }
 
 
@@ -384,7 +381,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     ) {
         let message = SystemMessage::ForwardedRequests(ForwardedRequestsMessage::new(timed_out));
         let targets = NodeId::targets(0..base_sync.view().params().n());
-        node.broadcast(message, targets);
+        node.broadcast(NetworkMessageKind::from(message), targets);
     }
 
     /// Obtain the requests that we know have timed out

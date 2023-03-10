@@ -6,13 +6,13 @@ use fastrand::usize;
 use num_bigint::BigUint;
 use num_bigint::ToBigUint;
 use num_traits::identities::Zero;
-use crate::bft::communication::NodeId;
 use crate::bft::core::SystemParams;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use febft_common::crypto::hash::Digest;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_common::error::*;
+use febft_communication::NodeId;
 
 /// This struct contains information related with an
 /// active `febft` view.

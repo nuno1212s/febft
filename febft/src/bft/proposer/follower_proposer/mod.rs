@@ -1,14 +1,14 @@
 use std::sync::{atomic::AtomicBool, Arc};
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
+use febft_communication::message::StoredMessage;
+use febft_communication::Node;
 
 use crate::bft::{
-    communication::{
-        message::{RequestMessage, StoredMessage},
-        Node,
-    },
     executable::{ExecutorHandle, Service},
 };
+use crate::bft::executable::{Reply, Request, State};
+use crate::bft::message::{RequestMessage, SystemMessage};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 
@@ -25,7 +25,7 @@ pub struct FollowerProposer<S: Service + 'static> {
     cancelled: AtomicBool,
 
     //Reference to the network node
-    node_ref: Arc<Node<S::Data>>,
+    node_ref: Arc<Node<SystemMessage<State<S>, Request<S>, Reply<S>>>>,
 
     //The target
     target_global_batch_size: usize,
@@ -40,7 +40,7 @@ const BATCH_CHANNEL_SIZE: usize = 1024;
 
 impl<S: Service + 'static> FollowerProposer<S> {
     pub fn new(
-        node: Arc<Node<S::Data>>,
+        node: Arc<Node<SystemMessage<State<S>, Request<S>, Reply<S>>>>,
         log: Arc<PendingRequestLog<S>>,
         executor: ExecutorHandle<S>,
         target_global_batch_size: usize,

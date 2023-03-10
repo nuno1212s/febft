@@ -19,10 +19,11 @@ use febft_common::collections;
 use febft_common::collections::HashMap;
 use febft_common::crypto::hash::Digest;
 use febft_common::ordering::{Orderable, SeqNo};
+use febft_communication::message::{Header, NetworkMessageKind};
+use febft_communication::{Node, NodeId};
 
-use crate::bft::communication::message::{CstMessage, CstMessageKind, Header, SystemMessage};
-use crate::bft::communication::{Node, NodeId};
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State};
+use crate::bft::message::{CstMessage, CstMessageKind, SystemMessage};
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog};
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
@@ -243,7 +244,7 @@ impl<S> CollabStateTransfer<S>
         message: CstMessage<State<S>, Request<S>>,
         synchronizer: &Arc<T>,
         log: &DecidedLog<S>,
-        node: &Node<S::Data>,
+        node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
     ) where
         T: AbstractSynchronizer<S>,
     {
@@ -258,7 +259,7 @@ impl<S> CollabStateTransfer<S>
             message.sequence_number(),
             CstMessageKind::ReplyState(snapshot),
         ));
-        node.send(reply, header.from(), true);
+        node.send(NetworkMessageKind::from(reply), header.from(), true);
     }
 
     /// Advances the state of the CST state machine.
@@ -268,7 +269,7 @@ impl<S> CollabStateTransfer<S>
         synchronizer: &Arc<T>,
         consensus: &K,
         log: &DecidedLog<S>,
-        node: &Node<S::Data>,
+        node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
     ) -> CstStatus<State<S>, Request<S>>
         where
             T: AbstractSynchronizer<S>,
@@ -288,7 +289,7 @@ impl<S> CollabStateTransfer<S>
                             CstMessageKind::ReplyLatestConsensusSeq(consensus.sequence_number());
                         let reply =
                             SystemMessage::Cst(CstMessage::new(message.sequence_number(), kind));
-                        node.send(reply, header.from(), true);
+                        node.send(NetworkMessageKind::from(reply), header.from(), true);
                     }
                     CstMessageKind::RequestState => {
                         self.process_reply_state(header, message, synchronizer, log, node);
@@ -518,7 +519,7 @@ impl<S> CollabStateTransfer<S>
 
         let targets = NodeId::targets(0..current_view.params().n());
 
-        node.broadcast(message, targets);
+        node.broadcast(NetworkMessageKind::from(message), targets);
     }
 
     /// Used by a recovering node to retrieve the latest state.
@@ -546,6 +547,6 @@ impl<S> CollabStateTransfer<S>
         // Overloading the replicas
         let message = SystemMessage::Cst(CstMessage::new(cst_seq, CstMessageKind::RequestState));
         let targets = NodeId::targets(0..current_view.params().n());
-        node.broadcast(message, targets);
+        node.broadcast(NetworkMessageKind::from(message), targets);
     }
 }

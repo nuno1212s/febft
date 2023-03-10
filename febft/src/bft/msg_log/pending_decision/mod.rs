@@ -4,10 +4,10 @@ use febft_common::collections::ConcurrentHashMap;
 use febft_common::crypto::hash::Digest;
 use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo};
-use crate::bft::communication::message::{Header, RequestMessage, StoredMessage};
-use crate::bft::communication::NodeId;
+use febft_communication::message::{Header, StoredMessage};
 use crate::bft::executable::Request;
 use crate::bft::executable::Service;
+use crate::bft::message::RequestMessage;
 use crate::bft::msg_log::operation_key;
 
 /// The log for requests that have been received but not yet decided by the system

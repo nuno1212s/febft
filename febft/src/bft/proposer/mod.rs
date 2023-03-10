@@ -9,16 +9,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Utc};
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_common::threadpool;
-use crate::bft::communication::message::Message::System;
-use crate::bft::communication::message::{
-    ConsensusMessage, ConsensusMessageKind, Header, ObserverMessage, RequestMessage, StoredMessage,
-    SystemMessage,
-};
-use crate::bft::communication::{Node, NodeId};
+use febft_communication::message::{NetworkMessage, NetworkMessageKind, StoredMessage};
+use febft_communication::Node;
 use crate::bft::consensus::ConsensusGuard;
-use crate::bft::communication::serialize::SharedData;
 use crate::bft::core::server::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UnorderedBatch};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, RequestMessage, SystemMessage};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
@@ -32,7 +28,7 @@ pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
 pub struct Proposer<S: Service + 'static> {
-    node_ref: Arc<Node<S::Data>>,
+    node_ref: Arc<Node<SystemMessage<State<S>, Request<S>, Reply<S>>>>,
 
     synchronizer: Arc<Synchronizer<S>>,
     timeouts: Timeouts,
@@ -73,7 +69,7 @@ const BATCH_CHANNEL_SIZE: usize = 128;
 
 impl<S: Service + 'static> Proposer<S> {
     pub fn new(
-        node: Arc<Node<S::Data>>,
+        node: Arc<Node<SystemMessage<State<S>, Request<S>, Reply<S>>>>,
         sync: Arc<Synchronizer<S>>,
         pending_decision_log: Arc<PendingRequestLog<S>>,
         timeouts: Timeouts,
@@ -182,49 +178,48 @@ impl<S: Service + 'static> Proposer<S> {
                         debug_stats.collections += 1;
 
                         for message in messages {
-                            if let System(header, sysmsg) = message {
-                                match sysmsg {
-                                    SystemMessage::Request(req) => {
-                                        let rq_digest = header.unique_digest();
+                            let NetworkMessage { header, message } = message;
 
-                                        /*let key = logg::operation_key(&header, &req);
+                            let sysmsg = message.into();
+                            
+                            match sysmsg {
+                                SystemMessage::Request(req) => {
+                                    let rq_digest = header.unique_digest();
 
-                                        let current_seq_for_client = lock_guard.get(key)
-                                            .copied()
-                                            .unwrap_or(SeqNo::ZERO);
+                                    /*let key = logg::operation_key(&header, &req);
 
-                                        if req.sequence_number() < current_seq_for_client {
-                                            //Avoid repeating requests for clients
-                                            continue;
-                                        }*/
+                                    let current_seq_for_client = lock_guard.get(key)
+                                        .copied()
+                                        .unwrap_or(SeqNo::ZERO);
 
-                                        if is_leader && is_request_in_hash_space(&rq_digest,
-                                                                                 our_slice.as_ref().unwrap()) {
-                                            ordered_propose.currently_accumulated.push(StoredMessage::new(header, req));
-                                        } else {
-                                            //TODO: The synchronizer must be notified of this
-                                        }
+                                    if req.sequence_number() < current_seq_for_client {
+                                        //Avoid repeating requests for clients
+                                        continue;
+                                    }*/
+
+                                    if is_leader && is_request_in_hash_space(&rq_digest,
+                                                                             our_slice.as_ref().unwrap()) {
+                                        ordered_propose.currently_accumulated.push(StoredMessage::new(header, req));
+                                    } else {
+                                        //TODO: The synchronizer must be notified of this
                                     }
-                                    SystemMessage::UnOrderedRequest(req) => {
-
-                                        unordered_propose.currently_accumulated.push(StoredMessage::new(header, req));
-                                    }
-                                    SystemMessage::ObserverMessage(msg) => {
-                                        if let ObserverMessage::ObserverRegister = msg {
-                                            //Avoid sending these messages to the main replica
-                                            //Processing thread and just process them here instead as it
-                                            //Does not delay the process
-                                            let observer_message = MessageType::Conn(ConnState::Connected(header.from()));
-
-                                            if let Err(_) = self.observer_handle.tx().send(observer_message) {
-                                                error!("Failed to send messages to the observer handle.");
-                                            }
-                                        }
-                                    }
-                                    _ => {}
                                 }
-                            } else {
-                                warn!("Client sent a message that he should not have sent!");
+                                SystemMessage::UnOrderedRequest(req) => {
+                                    unordered_propose.currently_accumulated.push(StoredMessage::new(header, req));
+                                }
+                                SystemMessage::ObserverMessage(msg) => {
+                                    if let ObserverMessage::ObserverRegister = msg {
+                                        //Avoid sending these messages to the main replica
+                                        //Processing thread and just process them here instead as it
+                                        //Does not delay the process
+                                        let observer_message = MessageType::Conn(ConnState::Connected(header.from()));
+
+                                        if let Err(_) = self.observer_handle.tx().send(observer_message) {
+                                            error!("Failed to send messages to the observer handle.");
+                                        }
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -236,14 +231,12 @@ impl<S: Service + 'static> Proposer<S> {
                                          &mut ordered_propose,
                                          &mut last_seq,
                                          &mut debug_stats);
-                                         
+
                     if !discovered_requests {
                         //Yield to prevent active waiting
 
                         std::thread::sleep(Duration::from_millis(5));
                     }
-
-
                 }
             }).unwrap()
     }
@@ -296,7 +289,7 @@ impl<S: Service + 'static> Proposer<S> {
 
                     for request in new_accumulated_vec {
                         let (header, message) = request.into_inner();
-                        
+
                         unordered_batch.add(
                             header.from(),
                             message.session_id(),
@@ -327,7 +320,7 @@ impl<S: Service + 'static> Proposer<S> {
         if is_leader {
             let current_batch_size = propose.currently_accumulated.len();
 
-             if current_batch_size < self.target_global_batch_size {
+            if current_batch_size < self.target_global_batch_size {
                 let micros_since_last_batch = Instant::now().duration_since(propose.last_proposal).as_micros();
 
                 if micros_since_last_batch <= self.global_batch_time_limit {
@@ -416,7 +409,7 @@ impl<S: Service + 'static> Proposer<S> {
 
         let targets = view.quorum_members().iter().copied();
 
-        self.node_ref.broadcast_signed(message, targets);
+        self.node_ref.broadcast_signed(NetworkMessageKind::from(message), targets);
     }
 
     pub fn cancel(&self) {

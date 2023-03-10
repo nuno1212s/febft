@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use febft_common::crypto::hash::Digest;
 use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo};
-use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, StoredMessage};
+use febft_communication::message::StoredMessage;
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 
 /// Represents a local checkpoint.
 ///

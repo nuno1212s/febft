@@ -3,9 +3,12 @@ use std::mem::size_of;
 use febft_common::crypto::hash::Digest;
 use febft_common::error::*;
 use febft_common::ordering::SeqNo;
+use febft_communication::NodeId;
 use crate::bft::communication::message::ConsensusMessage;
 use crate::bft::communication::{NodeId, serialize};
 use crate::bft::communication::serialize::{SharedData};
+use crate::bft::message::{ConsensusMessage, serialize};
+use crate::bft::message::serialize::SharedData;
 use crate::bft::msg_log::persistent::{ProofInfo};
 
 pub(super) fn serialize_consensus_message<W: Write + AsRef<[u8]> + AsMut<[u8]>, D: SharedData>(

@@ -108,7 +108,9 @@ impl<M> From<(Header, NetworkMessageKind<M>)> for NetworkMessage<M> where M: Ser
     }
 }
 
-/// The type of network message
+/// The type of network message you want to send
+/// To initialize a System message, you should use the [`From<M::Message>`] implementation
+/// that is available.
 pub enum NetworkMessageKind<M> where M: Serializable {
     Ping(PingMessage),
     System(System<M::Message>),
@@ -117,6 +119,25 @@ pub enum NetworkMessageKind<M> where M: Serializable {
 impl<M> From<System<M::Message>> for NetworkMessageKind<M> where M: Serializable {
     fn from(value: System<M::Message>) -> Self {
         NetworkMessageKind::System(value)
+    }
+}
+
+impl<M> From<M::Message> for NetworkMessageKind<M> where M:Serializable {
+    fn from(value: M::Message) -> Self {
+        NetworkMessageKind::from(System::from(value))
+    }
+}
+
+impl<M> Into<M::Message> for NetworkMessageKind<M> where M :Serializable {
+    fn into(self) -> M::Message {
+        match self {
+            NetworkMessageKind::Ping(_) => {
+                unreachable!()
+            }
+            NetworkMessageKind::System(msg) => {
+                msg.inner
+            }
+        }
     }
 }
 

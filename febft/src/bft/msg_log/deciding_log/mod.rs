@@ -6,12 +6,13 @@ use febft_common::crypto::hash::{Context, Digest};
 
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
+use febft_communication::message::StoredMessage;
+use febft_communication::NodeId;
 
 
 use crate::bft::benchmarks::BatchMeta;
-use crate::bft::communication::message::{ConsensusMessage, StoredMessage};
-use crate::bft::communication::NodeId;
 use crate::bft::executable::{Request, Service};
+use crate::bft::message::ConsensusMessage;
 use crate::bft::msg_log::decisions::StoredConsensusMessage;
 use crate::bft::msg_log::persistent::PersistentLog;
 use crate::bft::sync::view::ViewInfo;

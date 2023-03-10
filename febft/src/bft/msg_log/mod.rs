@@ -3,17 +3,14 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::bft::communication::message::ConsensusMessage;
-use crate::bft::communication::message::Header;
-use crate::bft::communication::message::RequestMessage;
-use crate::bft::communication::message::StoredMessage;
-use crate::bft::communication::NodeId;
-
 
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
+use febft_communication::message::StoredMessage;
+use febft_communication::NodeId;
 use crate::bft::executable::ExecutorHandle;
 use crate::bft::executable::Service;
+use crate::bft::message::{ConsensusMessage, RequestMessage};
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::deciding_log::{DecidingLog};
 use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog};
