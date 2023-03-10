@@ -1,0 +1,98 @@
+[package]
+name = "febft"
+version = "0.1.0"
+description = "A BFT SMR library in Rust!"
+authors = ["Tiago Carvalho <up201605259@fc.up.pt>", "Nuno Neto <up201703898@fc.up.pt>"]
+edition = "2018"
+license = "MIT"
+homepage = "https://github.com/febft/febft"
+repository = "https://github.com/febft/febft"
+documentation = "https://docs.rs/febft"
+readme = "README.md"
+
+[features]
+# Consult the crate documentation for more details on the features.
+default = [
+    "febft-common/async_runtime_tokio",
+    "febft-common/threadpool_rayon",
+    "febft-common/socket_tokio_tcp",
+    "febft-common/channel_flume_mpmc",
+    "febft-common/channel_sync_crossbeam",
+    "febft-common/channel_mixed_flume",
+    "febft-common/channel_mult_custom_dump",
+    "febft-common/crypto_signature_ring_ed25519",
+    "febft-common/crypto_hash_blake3_blake3",
+    "febft-common/collections_randomstate_fxhash",
+    "febft-common/persistent_db_rocksdb",
+    "serialize_capnp"
+]
+
+serialize_serde = ["serde", "serde-big-array", "serde_bytes", "bincode"]
+serialize_capnp = []
+
+[build-dependencies]
+capnpc = "0.16.2"
+
+[dev-dependencies]
+bincode = "1"
+num_cpus = "1"
+mimalloc = { version = "*", default-features = false }
+
+[dependencies]
+febft-common = { path = "../febft-common" }
+
+capnp = { version = "0.16.0" }
+fastrand = "1.7.0"
+bytes = "1.4.0"
+chrono = "0.4"
+intmap = "2.0.0"
+either = "1"
+oneshot = "0.1"
+futures = "0.3.21"
+futures-timer = "3"
+async-tls = "0.12.0"
+rustls = "0.20.6"
+webpki = "0.22.0"
+parking_lot = "0.12.1"
+dashmap = "5.1.0"
+thread_local = "1.1.4"
+num_cpus = "1"
+socket2 = "0.4"
+event-listener = "2.5.2"
+linked-hash-map = "0.5"
+rand_core = { version = "0.6", features = ["getrandom"] }
+smallvec = { version = "1", features = ["union", "write", "const_generics"] }
+async-std = { version = "1", optional = true }
+tokio = { version = "1.25.0", features = ["full"], optional = true }
+tokio-util = { version = "0.7.1", features = ["compat"], optional = true }
+tokio-metrics = { version = "0.1.0", optional = true }
+ring = { version = "0.16", optional = true }
+threadpool-crossbeam-channel = { version = "1.8.0", optional = true }
+#async-semaphore = { version = "1", optional = true }
+
+serde = { version = "*", features = ["derive", "rc"], optional = true }
+serde-big-array = { version = "0.5.0", optional = true }
+bincode = { version = "2.0.0-rc.2", features = ["serde"], optional = true }
+
+flume = { version = "0.10", optional = true }
+async-channel = { version = "1", optional = true }
+twox-hash = { version = "1", optional = true }
+serde_bytes = { version = "0.11", optional = true }
+fxhash = { version = "0.2", optional = true }
+dsrust = { version = "0.1.9", git = "https://github.com/nuno1212s/DSRust", optional = true }
+#dsrust = { path = "/home/nunogneto/Documents/Development/Rust/dsrust" }
+crossbeam-channel = { version = "0.5.2", optional = true }
+crossbeam-skiplist = "0.1.1"
+rocksdb = { version = "0.20.1", optional = true }
+
+log = "0.4.17"
+env_logger = "0.10.0"
+log4rs = { version = "1.1.1", features = ["file_appender"] }
+#tracing = "0.1.32"
+#tracing-subscriber = { version = "0.3.11", features = ["fmt"] }
+
+thiserror = "1.0.32"
+num-bigint = "0.4.3"
+num-traits = "0.2.15"
+
+
