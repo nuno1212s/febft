@@ -8,7 +8,7 @@ edition = "2021"
 [features]
 
 default =  [
-"serialize_serde"]
+"serialize_capnp"]
 serialize_serde = ["serde", "bincode", "serde_bytes"]
 serialize_capnp = ["febft-capnp", "capnp"]
 
