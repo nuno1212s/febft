@@ -11,6 +11,7 @@ use log::{debug, warn};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use febft_common::channel;
+use febft_common::channel::{ChannelSyncRx, TryRecvError};
 
 use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
@@ -25,7 +26,7 @@ use crate::bft::executable::{
     Executor, ExecutorHandle, ReplicaReplier, Reply, Request, Service, State,
 };
 use crate::bft::message::{ConsensusMessage, CstMessage, ForwardedRequestsMessage, Message, ObserveEventKind, RequestMessage, SystemMessage, ViewChangeMessage};
-use crate::bft::message::serialize::PBFTConsensus;
+use crate::bft::message::serialize::{PBFTConsensus, SharedData};
 use crate::bft::msg_log;
 use crate::bft::msg_log::{Info};
 use crate::bft::msg_log::decided_log::DecidedLog;
@@ -95,6 +96,8 @@ pub struct Replica<S: Service + 'static> {
     proposer: Arc<Proposer<S>>,
     // The networking layer for a Node in the network (either Client or Replica)
     node: Arc<Node<PBFTConsensus<S::Data>>>,
+    // THe handle to the execution and timeouts handler
+    execution_rx: ChannelSyncRx<Message<State<S>, Request<S>, Reply<S>>>,
     //A handle to the observer worker thread
     observer_handle: ObserverHandle,
 }
@@ -208,8 +211,6 @@ impl<S> Replica<S>
 
         let (exec_tx, exec_rx) = channel::new_bounded_sync(1024);
 
-        //TODO: Listen to this rx
-
         // start executor
         Executor::<S, ReplicaReplier>::new(
             reply_handle,
@@ -276,6 +277,7 @@ impl<S> Replica<S>
             observer_handle: observer_handle.clone(),
             unordered_rq_guard: Arc::new(Default::default()),
             pending_request_log,
+            execution_rx: exec_rx,
             decided_log,
         };
 
@@ -366,6 +368,20 @@ impl<S> Replica<S>
     pub fn run(&mut self) -> Result<()> {
         // TODO: exit condition?
         loop {
+
+            //Receive things from timeouts and execution handler without blocking
+            while let Ok(message) = self.execution_rx.try_recv() {
+                match message {
+                    Message::Timeout(timeout_kind) => {
+                        self.timeout_received(timeout_kind);
+                    }
+                    Message::ExecutionFinishedWithAppstate((seq, appstate)) => {
+                        self.execution_finished_with_appstate(seq, appstate)?;
+                    }
+                    _ => {}
+                }
+            }
+
             match self.phase {
                 ReplicaPhase::RetrievingState => self.update_retrieving_state()?,
                 ReplicaPhase::NormalPhase => self.update_normal_phase()?,

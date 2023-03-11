@@ -2,6 +2,7 @@ use log::{debug, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use febft_common::channel;
+use febft_common::channel::ChannelSyncRx;
 
 use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
@@ -13,7 +14,7 @@ use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::ReplicaPhase;
 use crate::bft::cst::{install_recovery_state, CollabStateTransfer, CstProgress, CstStatus};
 use crate::bft::executable::{Executor, ExecutorHandle, FollowerReplier, Reply, Request, Service, State};
-use crate::bft::message::{ConsensusMessage, SystemMessage};
+use crate::bft::message::{ConsensusMessage, Message, SystemMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log;
 use crate::bft::msg_log::{Info};
@@ -76,6 +77,8 @@ pub struct Follower<S: Service + 'static> {
     decided_log: DecidedLog<S>,
 
     pending_rq_log: Arc<PendingRequestLog<S>>,
+
+    execution_rx: ChannelSyncRx<Message<State<S>, Request<S>, Reply<S>>>,
 
     node: Arc<Node<PBFTConsensus<S::Data>>>,
 }
@@ -197,6 +200,7 @@ impl<S: Service + 'static> Follower<S> {
             timeouts,
             phase_stack: None,
             decided_log,
+            execution_rx: ex_rx,
             pending_rq_log: pending_request_log,
         })
     }
@@ -208,6 +212,19 @@ impl<S: Service + 'static> Follower<S> {
 
     pub fn run(&mut self) -> Result<()> {
         loop {
+            //Receive things from timeouts and execution handler without blocking
+            while let Ok(message) = self.execution_rx.try_recv() {
+                match message {
+                    Message::Timeout(timeout_kind) => {
+                        self.timeout_received(timeout_kind);
+                    }
+                    Message::ExecutionFinishedWithAppstate((seq, appstate)) => {
+                        self.execution_finished_with_appstate(seq, appstate)?;
+                    }
+                    _ => {}
+                }
+            }
+
             match self.phase {
                 FollowerPhase::NormalPhase => todo!(),
                 FollowerPhase::RetrievingStatePhase => todo!(),
