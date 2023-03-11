@@ -1,11 +1,13 @@
 use std::ops::Deref;
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
+use febft_communication::{NodeId, SendNode};
+use febft_communication::message::{NetworkMessageKind, System};
 
-use crate::bft::communication::{NodeId, SendNode};
-use crate::bft::communication::message::{ReplyMessage, SystemMessage};
 
-use crate::bft::executable::{Reply, Service, BatchReplies};
+use crate::bft::executable::{Reply, Service, BatchReplies, State, Request};
+use crate::bft::message::{ReplyMessage, SystemMessage};
+use crate::bft::message::serialize::PBFTConsensus;
 
 type RepliesType<S> = BatchReplies<S>;
 
@@ -13,27 +15,25 @@ type RepliesType<S> = BatchReplies<S>;
 /// This is currently not being used (we are currently using the thread pool)
 pub struct Replier<S> where S: Service + 'static {
     node_id: NodeId,
-    channel:  ChannelSyncRx<RepliesType<Reply<S>>>,
-    send_node: SendNode<S::Data>,
+    channel: ChannelSyncRx<RepliesType<Reply<S>>>,
+    send_node: SendNode<PBFTConsensus<S::Data>>,
 }
 
 pub struct ReplyHandle<S> where S: Service {
-    inner: ChannelSyncTx<RepliesType<Reply<S>>>
+    inner: ChannelSyncTx<RepliesType<Reply<S>>>,
 }
 
-const REPLY_CHANNEL_SIZE : usize = 1024;
+const REPLY_CHANNEL_SIZE: usize = 1024;
 
-impl<S> ReplyHandle<S> where S:Service {
-
+impl<S> ReplyHandle<S> where S: Service {
     pub fn new(replier: ChannelSyncTx<RepliesType<Reply<S>>>) -> Self {
         Self {
             inner: replier
         }
     }
-
 }
 
-impl<S> Deref for ReplyHandle<S> where S:Service {
+impl<S> Deref for ReplyHandle<S> where S: Service {
     type Target = ChannelSyncTx<RepliesType<Reply<S>>>;
 
     fn deref(&self) -> &Self::Target {
@@ -49,9 +49,8 @@ impl<S> Clone for ReplyHandle<S> where S: Service {
     }
 }
 
-impl<S> Replier<S> where S: Service + 'static{
-
-    pub fn new(node_id: NodeId, send_node: SendNode<S::Data>) -> ReplyHandle<S> {
+impl<S> Replier<S> where S: Service + 'static {
+    pub fn new(node_id: NodeId, send_node: SendNode<PBFTConsensus<S::Data>>) -> ReplyHandle<S> {
         let (ch_tx, ch_rx) = channel::new_bounded_sync(REPLY_CHANNEL_SIZE);
 
         let reply_task = Self {
@@ -68,7 +67,6 @@ impl<S> Replier<S> where S: Service + 'static{
     }
 
     pub fn start(mut self) {
-
         std::thread::Builder::new().name(format!("{:?} // Reply thread", self.node_id))
             .spawn(move || {
                 loop {
@@ -90,18 +88,18 @@ impl<S> Replier<S> where S: Service + 'static{
                         // branch, perhaps we can come up with a better approach,
                         // but for now this will do
                         if let Some((message, last_peer_id)) = curr_send.take() {
-
                             let flush = peer_id != last_peer_id;
                             self.send_node.send(message, last_peer_id, flush);
                         }
 
                         // store previous reply message and peer id,
                         // for the next iteration
-                        let message = SystemMessage::Reply(ReplyMessage::new(
-                            session_id,
-                            operation_id,
-                            payload,
-                        ));
+                        let message = NetworkMessageKind::from(System::from(
+                            SystemMessage::Reply(ReplyMessage::new(
+                                session_id,
+                                operation_id,
+                                payload,
+                            ))));
 
                         curr_send = Some((message, peer_id));
                     }
@@ -115,11 +113,7 @@ impl<S> Replier<S> where S: Service + 'static{
                         // (there is always at least one request in the batch)
                         unreachable!();
                     }
-
-
                 }
             }).expect("Failed to launch thread for client replier!");
-
     }
-
 }

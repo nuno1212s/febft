@@ -8,13 +8,12 @@ use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::{NodeId, SendNode};
-use febft_communication::message::NetworkMessageKind;
-
-use crate::bft::benchmarks::BatchMeta;
+use febft_communication::benchmarks::BatchMeta;
+use febft_communication::message::{NetworkMessageKind, System};
 
 use crate::bft::core::server::client_replier::ReplyHandle;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
-use crate::bft::message::serialize::SharedData;
+use crate::bft::message::serialize::{PBFTConsensus, SharedData};
 use crate::bft::message::{Message, ObserveEventKind, ReplyMessage, SystemMessage};
 
 /// Represents a single client update request, to be executed.
@@ -183,7 +182,7 @@ const EXECUTING_BUFFER: usize = 8096;
 
 pub trait ExecutorReplier: Send {
     fn execution_finished<S: Service>(
-        node: SendNode<SystemMessage<State<S>, Request<S>, Reply<S>>>,
+        node: SendNode<PBFTConsensus<S::Data>>,
         seq: Option<SeqNo>,
         batch: BatchReplies<Reply<S>>,
     );
@@ -193,7 +192,7 @@ pub struct FollowerReplier;
 
 impl ExecutorReplier for FollowerReplier {
     fn execution_finished<S: Service>(
-        node: SendNode<SystemMessage<State<S>, Request<S>, Reply<S>>>,
+        node: SendNode<PBFTConsensus<S::Data>>,
         seq: Option<SeqNo>,
         batch: BatchReplies<Reply<S>>,
     ) {
@@ -210,7 +209,7 @@ pub struct ReplicaReplier;
 
 impl ExecutorReplier for ReplicaReplier {
     fn execution_finished<S: Service>(
-        mut send_node: SendNode<SystemMessage<State<S>, Request<S>, Reply<S>>>,
+        mut send_node: SendNode<PBFTConsensus<S::Data>>,
         _seq: Option<SeqNo>,
         batch: BatchReplies<Reply<S>>,
     ) {
@@ -237,7 +236,7 @@ impl ExecutorReplier for ReplicaReplier {
                 // but for now this will do
                 if let Some((message, last_peer_id)) = curr_send.take() {
                     let flush = peer_id != last_peer_id;
-                    send_node.send(message, last_peer_id, flush);
+                    send_node.send(NetworkMessageKind::from(System::from(message)), last_peer_id, flush);
                 }
 
                 // store previous reply message and peer id,
@@ -250,7 +249,7 @@ impl ExecutorReplier for ReplicaReplier {
 
             // deliver last reply
             if let Some((message, last_peer_id)) = curr_send {
-                send_node.send(NetworkMessageKind::from(message), last_peer_id, true);
+                send_node.send(NetworkMessageKind::from(System::from(message)), last_peer_id, true);
             } else {
                 // slightly optimize code path;
                 // the previous if branch will always execute
@@ -268,7 +267,7 @@ pub struct Executor<S: Service + 'static, T: ExecutorReplier> {
     state: State<S>,
     e_rx: ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>,
     reply_worker: ReplyHandle<S>,
-    send_node: SendNode<S::Data>,
+    send_node: SendNode<PBFTConsensus<S::Data>>,
     loopback_channel: ChannelSyncTx<Message<State<S>, Request<S>, Reply<S>>>,
     observer_handle: Option<ObserverHandle>,
 
@@ -349,7 +348,7 @@ impl<S, T> Executor<S, T>
         handle: ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>,
         mut service: S,
         current_state: Option<(State<S>, Vec<Request<S>>)>,
-        send_node: SendNode<SystemMessage<State<S>, Request<S>, Reply<S>>>,
+        send_node: SendNode<PBFTConsensus<S::Data>>,
         loopback_channel: ChannelSyncTx<Message<State<S>, Request<S>, Reply<S>>>,
         observer: Option<ObserverHandle>,
     ) -> Result<()> {

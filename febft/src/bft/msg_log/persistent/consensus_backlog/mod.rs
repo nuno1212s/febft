@@ -10,7 +10,6 @@ use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
 
 use crate::bft::{
-    benchmarks::BatchMeta,
     executable::{ExecutorHandle, Request, Service, UpdateBatch},
 };
 

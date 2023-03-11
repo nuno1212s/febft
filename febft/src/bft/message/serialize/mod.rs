@@ -7,10 +7,10 @@
 //! expected to be implemented by the user.
 
 use std::io::{Read, Write};
+use std::marker::PhantomData;
 use bytes::Bytes;
 use febft_common::error::*;
 
-use crate::bft::communication::message::SystemMessage;
 use crate::bft::msg_log::persistent::ProofInfo;
 
 #[cfg(feature = "serialize_serde")]
@@ -18,8 +18,6 @@ use ::serde::{Deserialize, Serialize};
 use febft_common::crypto::hash::{Context, Digest};
 use febft_communication::serialize::Serializable;
 use crate::bft::message::{ConsensusMessage, SystemMessage};
-
-use super::message::ConsensusMessage;
 
 #[cfg(feature = "serialize_capnp")]
 pub mod capnp;
@@ -60,8 +58,10 @@ pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
     Ok(result)
 }
 
-impl<D> Serializable for SystemMessage<D::State, D::Request, D::Reply>  where D:SharedData + 'static{
-    type Message = SystemMessage<D::State, D::Reply, D::Reply>;
+pub struct PBFTConsensus<D: SharedData>(PhantomData<D>);
+
+impl<D> Serializable for PBFTConsensus<D>  where D:SharedData + 'static{
+    type Message = SystemMessage<D::State, D::Request, D::Reply>;
 
     #[cfg(feature="serialize_capnp")]
     fn serialize_capnp(builder: febft_capnp::messages_capnp::system::Builder, msg: &Self::Message) -> Result<()> {
@@ -69,6 +69,7 @@ impl<D> Serializable for SystemMessage<D::State, D::Request, D::Reply>  where D:
 
         Ok(())
     }
+
     #[cfg(feature="serialize_capnp")]
     fn deserialize_capnp(reader: febft_capnp::messages_capnp::system::Reader) -> Result<Self::Message> {
        capnp::deserialize_message::<D>(reader)

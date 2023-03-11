@@ -19,11 +19,12 @@ use febft_common::collections;
 use febft_common::collections::HashMap;
 use febft_common::crypto::hash::Digest;
 use febft_common::ordering::{Orderable, SeqNo};
-use febft_communication::message::{Header, NetworkMessageKind};
+use febft_communication::message::{Header, NetworkMessageKind, System};
 use febft_communication::{Node, NodeId};
 
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State};
 use crate::bft::message::{CstMessage, CstMessageKind, SystemMessage};
+use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog};
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
@@ -244,7 +245,7 @@ impl<S> CollabStateTransfer<S>
         message: CstMessage<State<S>, Request<S>>,
         synchronizer: &Arc<T>,
         log: &DecidedLog<S>,
-        node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
+        node: &Node<PBFTConsensus<S::Data>>,
     ) where
         T: AbstractSynchronizer<S>,
     {
@@ -259,7 +260,7 @@ impl<S> CollabStateTransfer<S>
             message.sequence_number(),
             CstMessageKind::ReplyState(snapshot),
         ));
-        node.send(NetworkMessageKind::from(reply), header.from(), true);
+        node.send(NetworkMessageKind::from(System::from(reply)), header.from(), true);
     }
 
     /// Advances the state of the CST state machine.
@@ -269,7 +270,7 @@ impl<S> CollabStateTransfer<S>
         synchronizer: &Arc<T>,
         consensus: &K,
         log: &DecidedLog<S>,
-        node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
+        node: &Node<PBFTConsensus<S::Data>>,
     ) -> CstStatus<State<S>, Request<S>>
         where
             T: AbstractSynchronizer<S>,
@@ -289,7 +290,7 @@ impl<S> CollabStateTransfer<S>
                             CstMessageKind::ReplyLatestConsensusSeq(consensus.sequence_number());
                         let reply =
                             SystemMessage::Cst(CstMessage::new(message.sequence_number(), kind));
-                        node.send(NetworkMessageKind::from(reply), header.from(), true);
+                        node.send(NetworkMessageKind::from(System::from(reply)), header.from(), true);
                     }
                     CstMessageKind::RequestState => {
                         self.process_reply_state(header, message, synchronizer, log, node);
@@ -434,7 +435,7 @@ impl<S> CollabStateTransfer<S>
     /// Returns a bool to signify if we must move to the Retrieving state
     /// If the timeout is no longer relevant, returns false (Can remain in current phase)
     pub fn cst_request_timed_out(&mut self, seq: SeqNo, synchronizer: &Arc<Synchronizer<S>>,
-                                 timeouts: &Timeouts, node: &Node<S::Data>) -> bool {
+                                 timeouts: &Timeouts, node: &Node<PBFTConsensus<S::Data>>) -> bool {
         let status = self.timed_out(seq);
 
         match status {
@@ -495,7 +496,7 @@ impl<S> CollabStateTransfer<S>
         &mut self,
         synchronizer: &Arc<T>,
         timeouts: &Timeouts,
-        node: &Node<S::Data>,
+        node: &Node<PBFTConsensus<S::Data>>,
     ) where
         T: AbstractSynchronizer<S>
     {
@@ -519,7 +520,7 @@ impl<S> CollabStateTransfer<S>
 
         let targets = NodeId::targets(0..current_view.params().n());
 
-        node.broadcast(NetworkMessageKind::from(message), targets);
+        node.broadcast(NetworkMessageKind::from(System::from(message)), targets);
     }
 
     /// Used by a recovering node to retrieve the latest state.
@@ -527,7 +528,7 @@ impl<S> CollabStateTransfer<S>
         &mut self,
         synchronizer: &Arc<T>,
         timeouts: &Timeouts,
-        node: &Node<S::Data>,
+        node: &Node<PBFTConsensus<S::Data>>,
     ) where
         T: AbstractSynchronizer<S>
     {
@@ -547,6 +548,6 @@ impl<S> CollabStateTransfer<S>
         // Overloading the replicas
         let message = SystemMessage::Cst(CstMessage::new(cst_seq, CstMessageKind::RequestState));
         let targets = NodeId::targets(0..current_view.params().n());
-        node.broadcast(NetworkMessageKind::from(message), targets);
+        node.broadcast(NetworkMessageKind::from(System::from(message)), targets);
     }
 }

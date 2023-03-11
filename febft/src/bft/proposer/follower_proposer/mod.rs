@@ -9,6 +9,7 @@ use crate::bft::{
 };
 use crate::bft::executable::{Reply, Request, State};
 use crate::bft::message::{RequestMessage, SystemMessage};
+use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 
@@ -25,7 +26,7 @@ pub struct FollowerProposer<S: Service + 'static> {
     cancelled: AtomicBool,
 
     //Reference to the network node
-    node_ref: Arc<Node<SystemMessage<State<S>, Request<S>, Reply<S>>>>,
+    node_ref: Arc<Node<PBFTConsensus<S::Data>>>,
 
     //The target
     target_global_batch_size: usize,
@@ -40,7 +41,7 @@ const BATCH_CHANNEL_SIZE: usize = 1024;
 
 impl<S: Service + 'static> FollowerProposer<S> {
     pub fn new(
-        node: Arc<Node<SystemMessage<State<S>, Request<S>, Reply<S>>>>,
+        node: Arc<Node<PBFTConsensus<S::Data>>>,
         log: Arc<PendingRequestLog<S>>,
         executor: ExecutorHandle<S>,
         target_global_batch_size: usize,

@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 use febft_common::error::*;
-use crate::bft::communication::message::{ConsensusMessage, SystemMessage};
-use crate::bft::communication::serialize::SharedData;
+use crate::bft::message::serialize::SharedData;
+use crate::bft::message::{ConsensusMessage, SystemMessage};
 
 pub fn serialize_message<W, D>(
     m: &SystemMessage<D::State, D::Request, D::Reply>,

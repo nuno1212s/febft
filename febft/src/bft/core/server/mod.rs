@@ -15,9 +15,8 @@ use febft_common::channel;
 use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::{Node, NodeConfig, NodeId};
-use febft_communication::message::NetworkMessage;
+use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, StoredMessage, System};
 
-use crate::bft::benchmarks::BatchMeta;
 use crate::bft::consensus::{AbstractConsensus, Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::observer::{MessageType, ObserverHandle};
@@ -25,7 +24,8 @@ use crate::bft::cst::{install_recovery_state, CollabStateTransfer, CstProgress, 
 use crate::bft::executable::{
     Executor, ExecutorHandle, ReplicaReplier, Reply, Request, Service, State,
 };
-use crate::bft::message::{Message, ObserveEventKind, SystemMessage};
+use crate::bft::message::{ConsensusMessage, CstMessage, ForwardedRequestsMessage, Message, ObserveEventKind, RequestMessage, SystemMessage, ViewChangeMessage};
+use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log;
 use crate::bft::msg_log::{Info};
 use crate::bft::msg_log::decided_log::DecidedLog;
@@ -94,7 +94,7 @@ pub struct Replica<S: Service + 'static> {
     // The proposer of this replica
     proposer: Arc<Proposer<S>>,
     // The networking layer for a Node in the network (either Client or Replica)
-    node: Arc<Node<SystemMessage<State<S>, Request<S>, Reply<S>>>>,
+    node: Arc<Node<PBFTConsensus<S::Data>>>,
     //A handle to the observer worker thread
     observer_handle: ObserverHandle,
 }
@@ -207,6 +207,8 @@ impl<S> Replica<S>
         debug!("Initializing executor.");
 
         let (exec_tx, exec_rx) = channel::new_bounded_sync(1024);
+
+        //TODO: Listen to this rx
 
         // start executor
         Executor::<S, ReplicaReplier>::new(
@@ -438,48 +440,39 @@ impl<S> Replica<S>
         debug!("{:?} // Retrieving state...", self.id());
         let message = self.node.receive_from_replicas().unwrap();
 
+        let NetworkMessage { header, message } = message;
 
+        let sys_msg = message.into();
 
-        match message {
-            Message::System(header, message) => {
-                match message {
-                    SystemMessage::ForwardedRequests(requests) => {
-                        // FIXME: is this the correct behavior? to save forwarded requests
-                        // while we are retrieving state...
-                        self.forwarded_requests_received(requests);
-                    }
-                    SystemMessage::Request(request) => {
-                        self.request_received(header, request);
-                    }
-                    SystemMessage::Consensus(message) => {
-                        self.consensus.queue(header, message);
-                    }
-                    SystemMessage::FwdConsensus(_) => {
-                        //Replicas do not receive forwarded consensus messages.
-                    }
-                    SystemMessage::ViewChange(message) => {
-                        self.synchronizer.queue(header, message);
-                    }
-                    SystemMessage::Cst(message) => {
-                        self.adv_cst(header, message)?;
-                    }
-                    // FIXME: handle rogue reply messages
-                    // Should never
-                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
-                    SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
-                    SystemMessage::UnOrderedRequest(_) => {
-                        warn!("Rogue unordered request message detected")
-                    }
-                    SystemMessage::Ping(_) => {}
-                }
+        match sys_msg {
+            SystemMessage::Cst(message) => {
+                self.adv_cst(header, message)?;
             }
-            Message::Timeout(timeout_kind) => {
-                self.timeout_received(timeout_kind);
+            SystemMessage::ForwardedRequests(requests) => {
+                // FIXME: is this the correct behavior? to save forwarded requests
+                // while we are retrieving state...
+                self.forwarded_requests_received(requests);
             }
-            Message::ExecutionFinishedWithAppstate(_) => {
-                // TODO: verify if ignoring the checkpoint state while
-                // receiving state from peer nodes is correct
+            SystemMessage::Request(request) => {
+                self.request_received(header, request);
             }
+            SystemMessage::Consensus(message) => {
+                self.consensus.queue(header, message);
+            }
+            SystemMessage::FwdConsensus(_) => {
+                //Replicas do not receive forwarded consensus messages.
+            }
+            SystemMessage::ViewChange(message) => {
+                self.synchronizer.queue(header, message);
+            }
+            // FIXME: handle rogue reply messages
+            // Should never
+            SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
+            SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
+            SystemMessage::UnOrderedRequest(_) => {
+                warn!("Rogue unordered request message detected")
+            }
+            SystemMessage::Ping(_) => {}
         }
 
         Ok(())
@@ -493,7 +486,7 @@ impl<S> Replica<S>
         let message = match self.synchronizer.poll() {
             SynchronizerPollStatus::Recv => self.node.receive_from_replicas()?,
             SynchronizerPollStatus::NextMessage(h, m) => {
-                Message::System(h, SystemMessage::ViewChange(m))
+                NetworkMessage::new(h, NetworkMessageKind::from(System::from(SystemMessage::ViewChange(m))))
             }
             SynchronizerPollStatus::ResumeViewChange => {
                 self.synchronizer.resume_view_change(
@@ -508,48 +501,36 @@ impl<S> Replica<S>
             }
         };
 
-        match message {
-            Message::System(header, message) => {
-                match message {
-                    SystemMessage::Consensus(message) => {
-                        self.consensus.queue(header, message);
-                    }
-                    SystemMessage::FwdConsensus(_) => {
-                        //Live replicas don't accept forwarded consensus messages
-                        // These messages are destined for followers
-                    }
-                    SystemMessage::ForwardedRequests(requests) => {
-                        self.forwarded_requests_received(requests);
-                    }
-                    SystemMessage::Request(request) => {
-                        //How did this get here?
-                        self.request_received(header, request);
-                    }
-                    SystemMessage::Cst(message) => {
-                        self.process_off_context_cst_msg(header, message)?;
-                    }
-                    SystemMessage::ViewChange(message) => {
-                        return self.adv_sync(header, message);
-                    }
-                    // FIXME: handle rogue reply messages
-                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
-                    SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
-                    SystemMessage::UnOrderedRequest(_) => todo!(),
-                    SystemMessage::Ping(_) => {}
-                }
+        let NetworkMessage { header, message } = message;
+
+        let sys_msg = message.into();
+
+        match sys_msg {
+            SystemMessage::Consensus(message) => {
+                self.consensus.queue(header, message);
             }
-            //////// XXX XXX XXX XXX
-            //
-            // TODO: check if simply copying the behavior over from the
-            // normal phase is correct here
-            //
-            //
-            Message::Timeout(timeout_kind) => {
-                self.timeout_received(timeout_kind);
+            SystemMessage::FwdConsensus(_) => {
+                //Live replicas don't accept forwarded consensus messages
+                // These messages are destined for followers
             }
-            Message::ExecutionFinishedWithAppstate((seq, appstate)) => {
-                self.execution_finished_with_appstate(seq, appstate)?;
+            SystemMessage::ForwardedRequests(requests) => {
+                self.forwarded_requests_received(requests);
             }
+            SystemMessage::Request(request) => {
+                //How did this get here?
+                self.request_received(header, request);
+            }
+            SystemMessage::Cst(message) => {
+                self.process_off_context_cst_msg(header, message)?;
+            }
+            SystemMessage::ViewChange(message) => {
+                return self.adv_sync(header, message);
+            }
+            // FIXME: handle rogue reply messages
+            SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
+            SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
+            SystemMessage::UnOrderedRequest(_) => todo!(),
+            SystemMessage::Ping(_) => {}
         }
 
         Ok(true)
@@ -579,7 +560,7 @@ impl<S> Replica<S>
         let message = match polled_message {
             ConsensusPollStatus::Recv => self.node.receive_from_replicas()?,
             ConsensusPollStatus::NextMessage(h, m) => {
-                Message::System(h, SystemMessage::Consensus(m))
+                NetworkMessage::new(h, NetworkMessageKind::from(System::from(SystemMessage::Consensus(m))))
             }
             ConsensusPollStatus::TryProposeAndRecv => {
                 self.consensus.advance_init_phase();
@@ -591,63 +572,56 @@ impl<S> Replica<S>
             }
         };
 
+        let NetworkMessage { header, message } = message;
+
+        let message = message.into();
+
         // debug!("{:?} // Processing message {:?}", self.id(), message);
-
         match message {
-            Message::System(header, message) => {
-                match message {
-                    SystemMessage::ForwardedRequests(requests) => {
-                        self.forwarded_requests_received(requests);
-                    }
-                    SystemMessage::Request(request) => {
-                        self.request_received(header, request);
-                    }
-                    SystemMessage::Cst(message) => {
-                        self.process_off_context_cst_msg(header, message)?;
-                    }
-                    SystemMessage::ViewChange(message) => {
-                        let status = self.synchronizer.process_message(
-                            header,
-                            message,
-                            &self.timeouts,
-                            &mut self.decided_log,
-                            &self.pending_request_log,
-                            &mut self.consensus,
-                            &self.node,
-                        );
+            SystemMessage::ForwardedRequests(requests) => {
+                self.forwarded_requests_received(requests);
+            }
+            SystemMessage::Request(request) => {
+                self.request_received(header, request);
+            }
+            SystemMessage::Cst(message) => {
+                self.process_off_context_cst_msg(header, message)?;
+            }
+            SystemMessage::ViewChange(message) => {
+                let status = self.synchronizer.process_message(
+                    header,
+                    message,
+                    &self.timeouts,
+                    &mut self.decided_log,
+                    &self.pending_request_log,
+                    &mut self.consensus,
+                    &self.node,
+                );
 
-                        self.synchronizer.signal();
+                self.synchronizer.signal();
 
-                        match status {
-                            SynchronizerStatus::Nil => (),
-                            SynchronizerStatus::Running => {
-                                self.switch_phase(ReplicaPhase::SyncPhase)
-                            }
-                            // should not happen...
-                            _ => {
-                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer);
-                            }
-                        }
+                match status {
+                    SynchronizerStatus::Nil => (),
+                    SynchronizerStatus::Running => {
+                        self.switch_phase(ReplicaPhase::SyncPhase)
                     }
-                    SystemMessage::Consensus(message) => {
-                        self.adv_consensus(header, message)?;
+                    // should not happen...
+                    _ => {
+                        return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer);
                     }
-                    SystemMessage::FwdConsensus(_message) => {
-                        warn!("Replicas cannot process forwarded consensus messages! They must receive the preprepare messages straight from leaders!");
-                    }
-                    // FIXME: handle rogue reply messages
-                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
-                    SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
-                    SystemMessage::UnOrderedRequest(_) => todo!(),
-                    SystemMessage::Ping(_) => {}
                 }
             }
-            Message::Timeout(timeout_kind) => {
-                self.timeout_received(timeout_kind);
+            SystemMessage::Consensus(message) => {
+                self.adv_consensus(header, message)?;
             }
-            Message::ExecutionFinishedWithAppstate((seq, appstate)) => {
-                self.execution_finished_with_appstate(seq, appstate)?;
+            SystemMessage::FwdConsensus(_message) => {
+                warn!("Replicas cannot process forwarded consensus messages! They must receive the preprepare messages straight from leaders!");
             }
+            // FIXME: handle rogue reply messages
+            SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
+            SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
+            SystemMessage::UnOrderedRequest(_) => todo!(),
+            SystemMessage::Ping(_) => {}
         }
 
         Ok(())

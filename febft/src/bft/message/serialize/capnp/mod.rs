@@ -9,7 +9,6 @@ use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, PingMessage, StoredMessage};
 
-use crate::bft::communication::message::{ConsensusMessage, ConsensusMessageKind, Header, ObserveEventKind, ObserverMessage, PingMessage, ReplyMessage, RequestMessage, StoredMessage, SystemMessage};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, ObserverMessage, ReplyMessage, RequestMessage, SystemMessage};
 
 use crate::bft::msg_log::persistent::ProofInfo;
@@ -163,11 +162,6 @@ pub fn serialize_message< D>(
         }
         _ => return Err("Unsupported system message").wrapped(ErrorKind::CommunicationSerialize),
     }
-
-    capnp::serialize::write_message(w, &root).wrapped_msg(
-        ErrorKind::CommunicationSerialize,
-        "Failed to serialize using capnp",
-    )?;
 
     Ok(())
 }
@@ -327,9 +321,8 @@ pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
 }
 
 /// Deserialize a wire message from a reader `R`.
-pub fn deserialize_message<R, D>(sys_msg : febft_capnp::messages_capnp::system::Reader) -> Result<SystemMessage<D::State, D::Request, D::Reply>>
+pub fn deserialize_message<D>(sys_msg : febft_capnp::messages_capnp::system::Reader) -> Result<SystemMessage<D::State, D::Request, D::Reply>>
     where
-        R: Read,
         D: SharedData + ?Sized,
 {
 

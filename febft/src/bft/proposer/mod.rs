@@ -9,12 +9,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Utc};
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_common::threadpool;
-use febft_communication::message::{NetworkMessage, NetworkMessageKind, StoredMessage};
+use febft_communication::message::{NetworkMessage, NetworkMessageKind, StoredMessage, System};
 use febft_communication::Node;
 use crate::bft::consensus::ConsensusGuard;
 use crate::bft::core::server::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UnorderedBatch};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, RequestMessage, SystemMessage};
+use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
@@ -28,7 +29,7 @@ pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
 pub struct Proposer<S: Service + 'static> {
-    node_ref: Arc<Node<SystemMessage<State<S>, Request<S>, Reply<S>>>>,
+    node_ref: Arc<Node<PBFTConsensus<S::Data>>>,
 
     synchronizer: Arc<Synchronizer<S>>,
     timeouts: Timeouts,
@@ -69,7 +70,7 @@ const BATCH_CHANNEL_SIZE: usize = 128;
 
 impl<S: Service + 'static> Proposer<S> {
     pub fn new(
-        node: Arc<Node<SystemMessage<State<S>, Request<S>, Reply<S>>>>,
+        node: Arc<Node<PBFTConsensus<S::Data>>>,
         sync: Arc<Synchronizer<S>>,
         pending_decision_log: Arc<PendingRequestLog<S>>,
         timeouts: Timeouts,
@@ -181,7 +182,7 @@ impl<S: Service + 'static> Proposer<S> {
                             let NetworkMessage { header, message } = message;
 
                             let sysmsg = message.into();
-                            
+
                             match sysmsg {
                                 SystemMessage::Request(req) => {
                                     let rq_digest = header.unique_digest();
@@ -409,7 +410,7 @@ impl<S: Service + 'static> Proposer<S> {
 
         let targets = view.quorum_members().iter().copied();
 
-        self.node_ref.broadcast_signed(NetworkMessageKind::from(message), targets);
+        self.node_ref.broadcast_signed(NetworkMessageKind::from(System::from(message)), targets);
     }
 
     pub fn cancel(&self) {

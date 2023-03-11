@@ -17,14 +17,13 @@ use febft_common::crypto::hash::Digest;
 
 use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
+use febft_communication::{measure_ready_rq_time, measure_response_deliver_time, measure_response_rcv_time, measure_sent_rq_info, measure_target_init_time, measure_time_rq_init, Node, NodeConfig, NodeId, start_measurement};
+use febft_communication::benchmarks::ClientPerf;
+use febft_communication::message::{NetworkMessage, NetworkMessageKind, System};
 
-use crate::bft::benchmarks::ClientPerf;
-
-use crate::bft::communication::message::{Message, ReplyMessage, SystemMessage};
-use crate::bft::communication::serialize::SharedData;
-use crate::bft::communication::{Node, NodeConfig, NodeId};
 use crate::bft::core::client::observing_client::ObserverClient;
-use crate::{measure_ready_rq_time, measure_response_deliver_time, measure_response_rcv_time, measure_sent_rq_info, measure_target_init_time, measure_time_rq_init, start_measurement};
+use crate::bft::message::serialize::{PBFTConsensus, SharedData};
+use crate::bft::message::{Message, ReplyMessage, SystemMessage};
 
 
 use self::unordered_client::{FollowerData, UnorderedClientMode};
@@ -84,8 +83,8 @@ impl<P> Deref for Callback<P> {
 }
 
 pub struct ClientData<D>
-where
-    D: SharedData + 'static,
+    where
+        D: SharedData + 'static,
 {
     //The global session counter, so we don't have two client objects with the same session number
     session_counter: AtomicU32,
@@ -106,8 +105,7 @@ where
     observer: Arc<Mutex<Option<ObserverClient>>>,
     observer_ready: Mutex<Option<observing_client::Ready>>,
 
-    stats: Option<Arc<ClientPerf>>
-
+    stats: Option<Arc<ClientPerf>>,
 }
 
 pub trait ClientType<D: SharedData + 'static> {
@@ -119,7 +117,7 @@ pub trait ClientType<D: SharedData + 'static> {
     ) -> SystemMessage<D::State, D::Request, D::Reply>;
 
     ///The return types for the iterator
-    type Iter: Iterator<Item = NodeId>;
+    type Iter: Iterator<Item=NodeId>;
 
     ///Initialize the targets for the requests according with the type of request made
     ///
@@ -137,7 +135,7 @@ pub struct Client<D: SharedData + 'static> {
     operation_counter: SeqNo,
     data: Arc<ClientData<D>>,
     params: SystemParams,
-    node: Arc<Node<D>>,
+    node: Arc<Node<PBFTConsensus<D>>>,
 }
 
 impl<D: SharedData> Clone for Client<D> {
@@ -237,11 +235,11 @@ pub struct ReplicaVotes {
 }
 
 impl<D> Client<D>
-where
-    D: SharedData + 'static,
-    D::State: Send + Clone + 'static,
-    D::Request: Send + 'static,
-    D::Reply: Send + 'static,
+    where
+        D: SharedData + 'static,
+        D::State: Send + Clone + 'static,
+        D::Request: Send + 'static,
+        D::Reply: Send + 'static,
 {
     /// Bootstrap a client in `febft`.
     pub async fn bootstrap(cfg: ClientConfig) -> Result<Self> {
@@ -282,7 +280,7 @@ where
 
             observer: Arc::new(Mutex::new(None)),
             observer_ready: Mutex::new(None),
-            stats
+            stats,
         });
 
         let task_data = Arc::clone(&data);
@@ -335,8 +333,8 @@ where
     /// on top of `febft`.
     //
     pub async fn update<T>(&mut self, operation: D::Request) -> Result<D::Reply>
-    where
-        T: ClientType<D>,
+        where
+            T: ClientType<D>,
     {
         let session_id = self.session_id;
         let operation_id = self.next_operation_id();
@@ -363,7 +361,7 @@ where
         }
 
         // broadcast our request to the node group
-        self.node.broadcast(message, targets);
+        self.node.broadcast(NetworkMessageKind::from(System::from(message)), targets);
 
         // await response
         let ready = get_ready::<D>(session_id, &*self.data);
@@ -418,7 +416,7 @@ where
         //We only send the message after storing the callback to prevent us receiving the result without having
         //The callback registered, therefore losing the response
         let (targets, target_count) = T::init_targets(&self);
-        
+
         measure_target_init_time!(&self.data.stats, target_init);
 
         start_measurement!(rq_info_init);
@@ -454,10 +452,10 @@ where
 
             ready_callback_guard.insert(request_key, ClientAwaker::Callback(callback));
         }
-        
+
         measure_ready_rq_time!(&self.data.stats, rq_ready_init);
 
-        self.node.broadcast(message, targets);
+        self.node.broadcast(NetworkMessageKind::from(System::from(message)), targets);
 
         Self::start_timeout(
             self.node.clone(),
@@ -478,7 +476,7 @@ where
     ///Start performing a timeout for a given request.
     /// TODO: Repeat the request/do something else to fix this
     fn start_timeout(
-        node: Arc<Node<D>>,
+        node: Arc<Node<PBFTConsensus<D>>>,
         session_id: SeqNo,
         rq_id: SeqNo,
         client_data: Arc<ClientData<D>>,
@@ -699,147 +697,144 @@ where
     ///This task might become a large bottleneck with the scenario of few clients with high concurrent rqs,
     /// As the replicas will make very large batches and respond to all the sent requests in one go.
     /// This leaves this thread with a very large task to do in a very short time and it just can't keep up
-    fn message_recv_task(params: SystemParams, data: Arc<ClientData<D>>, node: Arc<Node<D>>) {
+    fn message_recv_task(params: SystemParams, data: Arc<ClientData<D>>, node: Arc<Node<PBFTConsensus<D>>>) {
         // use session id as key
         let mut last_operation_ids: IntMap<SeqNo> = IntMap::new();
         let mut replica_votes: IntMap<ReplicaVotes> = IntMap::new();
 
         while let Ok(message) = node.receive_from_replicas() {
-            match message {
-                Message::System(header, message) => {
-                    match &message {
-                        SystemMessage::Reply(msg_info)
-                        | SystemMessage::UnOrderedReply(msg_info) => {
-                            let session_id = msg_info.session_id();
-                            let operation_id = msg_info.sequence_number();
+            let NetworkMessage { header, message } = message;
 
-                            start_measurement!(start_time);
+            let sys_msg = message.into();
 
-                            //Check if we have already executed the operation
-                            let last_operation_id = last_operation_ids
-                                .get(session_id.into())
-                                .copied()
-                                .unwrap_or(SeqNo::ZERO);
+            match &sys_msg {
+                SystemMessage::Reply(msg_info)
+                | SystemMessage::UnOrderedReply(msg_info) => {
+                    let session_id = msg_info.session_id();
+                    let operation_id = msg_info.sequence_number();
 
-                            // reply already delivered to application
-                            if last_operation_id >= operation_id {
-                                continue;
-                            }
+                    start_measurement!(start_time);
 
-                            let request_key = get_request_key(session_id, operation_id);
+                    //Check if we have already executed the operation
+                    let last_operation_id = last_operation_ids
+                        .get(session_id.into())
+                        .copied()
+                        .unwrap_or(SeqNo::ZERO);
 
-                            //Get the votes for the instance
-                            let votes = IntMapEntry::get(request_key, &mut replica_votes)
-                                .or_insert_with(|| {
-                                    let request_info = get_request_info(session_id, &*data);
+                    // reply already delivered to application
+                    if last_operation_id >= operation_id {
+                        continue;
+                    }
 
-                                    Self::create_replica_votes(request_info, request_key, &params)
-                                });
+                    let request_key = get_request_key(session_id, operation_id);
 
-                            //Check if replicas try to vote twice on the same consensus instance
-                            if votes.voted.contains(&header.from()) {
-                                error!(
+                    //Get the votes for the instance
+                    let votes = IntMapEntry::get(request_key, &mut replica_votes)
+                        .or_insert_with(|| {
+                            let request_info = get_request_info(session_id, &*data);
+
+                            Self::create_replica_votes(request_info, request_key, &params)
+                        });
+
+                    //Check if replicas try to vote twice on the same consensus instance
+                    if votes.voted.contains(&header.from()) {
+                        error!(
                                     "Replica {:?} voted twice for the same request, ignoring!",
                                     header.from()
                                 );
 
-                                continue;
-                            }
-
-                            votes.voted.insert(header.from());
-
-                            //Get how many equal responses we have received and see if we can deliver the state to the client
-                            let count = if votes.digests.contains_key(header.digest()) {
-                                //Increment the amount of votes that reply has
-                                *(votes.digests.get_mut(header.digest()).unwrap()) += 1;
-
-                                votes.digests.get(header.digest()).unwrap().clone()
-                            } else {
-                                //Register the newly received reply (has not been seen yet)
-                                votes.digests.insert(header.digest().clone(), 1);
-
-                                1
-                            };
-
-                            measure_response_rcv_time!(&data.stats, start_time);
-
-                            // wait for the amount of votes that we require identical replies
-                            // In a BFT system, this is by default f+1
-                            if count >= votes.needed_votes_count {
-                                start_measurement!(start_time);
-
-                                replica_votes.remove(request_key);
-
-                                last_operation_ids.remove(session_id.into());
-                                last_operation_ids.insert(session_id.into(), operation_id);
-
-                                //Get the wakers for this request and deliver the payload
-
-                                let ready = get_ready::<D>(session_id, &*data);
-
-                                Self::deliver_response(
-                                    node.id(),
-                                    request_key,
-                                    ready,
-                                    match message {
-                                        SystemMessage::Reply(message)
-                                        | SystemMessage::UnOrderedReply(message) => message,
-                                        _ => unreachable!(),
-                                    },
-                                );
-
-                                measure_response_deliver_time!(&data.stats, start_time);
-
-                            } else {
-                                //If we do not have f+1 replies yet, check if it's still possible to get those
-                                //Replies by taking a look at the target count and currently received replies count
-
-                                let mut total_count: usize = 0;
-
-                                for (_, count) in votes.digests.iter() {
-                                    total_count += count;
-                                }
-
-                                if total_count >= votes.contacted_nodes {
-                                    //We already got all of our responses, so it's impossible to get f+1 equal reponses
-                                    //What we will do now is call the awakers with an Err result
-                                    replica_votes.remove(request_key);
-
-                                    //Clean up the memory corresponding to this request
-                                    last_operation_ids.remove(session_id.into());
-                                    last_operation_ids.insert(session_id.into(), operation_id);
-
-                                    //Get the wakers for this request and deliver the payload
-                                    let ready = get_ready::<D>(session_id, &*data);
-
-                                    Self::deliver_error(
-                                        node.id(),
-                                        request_key,
-                                        ready,
-                                        (session_id, operation_id),
-                                    );
-                                }
-                            }
-
-                            continue;
-                        }
-                        _ => {}
+                        continue;
                     }
 
-                    match message {
-                        SystemMessage::ObserverMessage(message) => {
-                            let msg =
-                                Message::System(header, SystemMessage::ObserverMessage(message));
+                    votes.voted.insert(header.from());
 
-                            //Pass this message off to the observing module
-                            ObserverClient::handle_observed_message(&data, msg);
+                    //Get how many equal responses we have received and see if we can deliver the state to the client
+                    let count = if votes.digests.contains_key(header.digest()) {
+                        //Increment the amount of votes that reply has
+                        *(votes.digests.get_mut(header.digest()).unwrap()) += 1;
+
+                        votes.digests.get(header.digest()).unwrap().clone()
+                    } else {
+                        //Register the newly received reply (has not been seen yet)
+                        votes.digests.insert(header.digest().clone(), 1);
+
+                        1
+                    };
+
+                    measure_response_rcv_time!(&data.stats, start_time);
+
+                    // wait for the amount of votes that we require identical replies
+                    // In a BFT system, this is by default f+1
+                    if count >= votes.needed_votes_count {
+                        start_measurement!(start_time);
+
+                        replica_votes.remove(request_key);
+
+                        last_operation_ids.remove(session_id.into());
+                        last_operation_ids.insert(session_id.into(), operation_id);
+
+                        //Get the wakers for this request and deliver the payload
+
+                        let ready = get_ready::<D>(session_id, &*data);
+
+                        Self::deliver_response(
+                            node.id(),
+                            request_key,
+                            ready,
+                            match sys_msg {
+                                SystemMessage::Reply(message)
+                                | SystemMessage::UnOrderedReply(message) => message,
+                                _ => unreachable!(),
+                            },
+                        );
+
+                        measure_response_deliver_time!(&data.stats, start_time);
+                    } else {
+                        //If we do not have f+1 replies yet, check if it's still possible to get those
+                        //Replies by taking a look at the target count and currently received replies count
+
+                        let mut total_count: usize = 0;
+
+                        for (_, count) in votes.digests.iter() {
+                            total_count += count;
                         }
-                        // FIXME: handle rogue messages on clients
-                        _ => panic!("rogue message detected"),
+
+                        if total_count >= votes.contacted_nodes {
+                            //We already got all of our responses, so it's impossible to get f+1 equal reponses
+                            //What we will do now is call the awakers with an Err result
+                            replica_votes.remove(request_key);
+
+                            //Clean up the memory corresponding to this request
+                            last_operation_ids.remove(session_id.into());
+                            last_operation_ids.insert(session_id.into(), operation_id);
+
+                            //Get the wakers for this request and deliver the payload
+                            let ready = get_ready::<D>(session_id, &*data);
+
+                            Self::deliver_error(
+                                node.id(),
+                                request_key,
+                                ready,
+                                (session_id, operation_id),
+                            );
+                        }
                     }
+
+                    continue;
                 }
-                // we don't receive any other type of messages as a client node
-                _ => (),
+                _ => {}
+            }
+
+            match sys_msg {
+                SystemMessage::ObserverMessage(message) => {
+                    let msg =
+                        Message::System(header, SystemMessage::ObserverMessage(message));
+
+                    //Pass this message off to the observing module
+                    ObserverClient::handle_observed_message(&data, msg);
+                }
+                // FIXME: handle rogue messages on clients
+                _ => panic!("rogue message detected"),
             }
         }
     }

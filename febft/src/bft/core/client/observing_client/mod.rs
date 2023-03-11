@@ -1,8 +1,4 @@
-use crate::bft::communication::message::{
-    Message, ObserveEventKind, ObserverMessage, SystemMessage,
-};
-use crate::bft::communication::serialize::SharedData;
-use crate::bft::communication::NodeId;
+
 use crate::bft::core::client::{Client, ClientData};
 use core::task::{Context, Waker};
 use log::{error, warn};
@@ -12,6 +8,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use febft_common::ordering::Orderable;
+use febft_communication::message::{NetworkMessage, NetworkMessageKind, System};
+use febft_communication::NodeId;
+use crate::bft::message::{Message, ObserveEventKind, ObserverMessage, SystemMessage};
+use crate::bft::message::serialize::SharedData;
 
 ///Callback to when the replicas send their notifications
 ///When a new observe event is received, this function will be executed
@@ -42,7 +42,7 @@ impl ObserverClient {
 
         //Register the observer clients with the client node
         client.node.broadcast(
-            SystemMessage::ObserverMessage(ObserverMessage::ObserverRegister),
+            NetworkMessageKind::from(System::from(SystemMessage::ObserverMessage(ObserverMessage::ObserverRegister))),
             targets,
         );
 

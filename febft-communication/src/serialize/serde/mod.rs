@@ -1,7 +1,5 @@
 use std::io::{Read, Write};
 use febft_common::error::*;
-use crate::bft::communication::message::{ConsensusMessage, SystemMessage};
-use crate::bft::communication::serialize::SharedData;
 use crate::message::NetworkMessageKind;
 use crate::serialize::Serializable;
 

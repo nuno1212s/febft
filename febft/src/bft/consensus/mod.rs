@@ -18,20 +18,19 @@ use febft_common::crypto::hash::Digest;
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_queue_message, tbo_pop_message};
+use febft_communication::message::{Header, StoredMessage};
+use febft_communication::{Node, NodeId};
 
 use self::replica_consensus::ReplicaConsensus;
-use crate::bft::communication::message::{
-    ConsensusMessage, ConsensusMessageKind, Header, StoredMessage,
-};
 use crate::bft::consensus::replica_consensus::ReplicaPreparingPollStatus;
-use super::communication::message::{RequestMessage, SystemMessage};
-use super::communication::{Node, NodeId};
 use super::core::server::follower_handling::FollowerHandle;
 use super::core::server::observer::ObserverHandle;
 use super::executable::Reply;
 use super::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::cst::RecoveryState;
 use crate::bft::executable::{ExecutorHandle, Request, Service, State};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, RequestMessage, SystemMessage};
+use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::{BatchExecutionInfo, DecidedLog};
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
 use crate::bft::msg_log::decisions::Proof;
@@ -270,7 +269,7 @@ pub trait AbstractConsensus<S: Service> {
 }
 
 ///Base consensus state machine implementation
-pub struct Consensus<S: Service> {
+pub struct Consensus<S: Service + 'static> {
     node_id: NodeId,
     phase: ProtoPhase,
     tbo: TboQueue<Request<S>>,
@@ -286,7 +285,7 @@ pub struct Consensus<S: Service> {
 
 ///Accessory services for the base consensus instance
 /// This is structured like this to reuse as much code as possible so we can reduce fault locations
-pub enum ConsensusAccessory<S: Service> {
+pub enum ConsensusAccessory<S: Service + 'static> {
     Follower,
     Replica(ReplicaConsensus<S>),
 }
@@ -562,7 +561,7 @@ impl<S: Service + 'static> Consensus<S> {
         synchronizer: &Synchronizer<S>,
         timeouts: &Timeouts,
         log: &mut DecidedLog<S>,
-        node: &Node<S::Data>,
+        node: &Node<PBFTConsensus<S::Data>>,
     ) {
         match &mut self.accessory {
             ConsensusAccessory::Follower => {}
@@ -592,7 +591,7 @@ impl<S: Service + 'static> Consensus<S> {
         synchronizer: &Synchronizer<S>,
         timeouts: &Timeouts,
         log: &mut DecidedLog<S>,
-        node: &Node<S::Data>,
+        node: &Node<PBFTConsensus<S::Data>>,
     ) -> ConsensusStatus<S> {
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just

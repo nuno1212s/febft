@@ -1,18 +1,20 @@
 use log::{debug, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use febft_common::channel;
 
 use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
+use febft_communication::{Node, NodeConfig, NodeId};
+use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, System};
 
-use crate::bft::benchmarks::BatchMeta;
-use crate::bft::communication::message::{ConsensusMessage, Header, Message, SystemMessage};
-use crate::bft::communication::{Node, NodeConfig, NodeId};
 use crate::bft::consensus::{AbstractConsensus, Consensus, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::ReplicaPhase;
 use crate::bft::cst::{install_recovery_state, CollabStateTransfer, CstProgress, CstStatus};
-use crate::bft::executable::{Executor, ExecutorHandle, FollowerReplier, Request, Service, State};
+use crate::bft::executable::{Executor, ExecutorHandle, FollowerReplier, Reply, Request, Service, State};
+use crate::bft::message::{ConsensusMessage, SystemMessage};
+use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log;
 use crate::bft::msg_log::{Info};
 use crate::bft::msg_log::decided_log::DecidedLog;
@@ -75,7 +77,7 @@ pub struct Follower<S: Service + 'static> {
 
     pending_rq_log: Arc<PendingRequestLog<S>>,
 
-    node: Arc<Node<S::Data>>,
+    node: Arc<Node<PBFTConsensus<S::Data>>>,
 }
 
 pub struct FollowerConfig<S: Service, T: PersistentLogModeTrait> {
@@ -149,6 +151,10 @@ impl<S: Service + 'static> Follower<S> {
         //TODO: Rethink this
         let reply_handle = Replier::new(node.id(), node.send_node());
 
+        let (ex_tx, ex_rx) = channel::new_bounded_sync(1024);
+
+        //TODO: Listen to this rx
+
         // start executor
         Executor::<S, FollowerReplier>::new(
             reply_handle,
@@ -156,6 +162,7 @@ impl<S: Service + 'static> Follower<S> {
             service,
             state,
             node.send_node(),
+            ex_tx.clone(),
             None,
         )?;
 
@@ -177,7 +184,7 @@ impl<S: Service + 'static> Follower<S> {
             batch_timeout,
         );
 
-        let timeouts = Timeouts::new::<S>(500, Arc::clone(node.loopback_channel()));
+        let timeouts = Timeouts::new::<S>(500, ex_tx);
 
         Ok(Self {
             phase: FollowerPhase::NormalPhase,
@@ -238,7 +245,7 @@ impl<S: Service + 'static> Follower<S> {
         let message = match polled_message {
             ConsensusPollStatus::Recv => self.node.receive_from_replicas()?,
             ConsensusPollStatus::NextMessage(h, m) => {
-                Message::System(h, SystemMessage::Consensus(m))
+                NetworkMessage::new(h, NetworkMessageKind::from(System::from(SystemMessage::Consensus(m))))
             }
             ConsensusPollStatus::TryProposeAndRecv => {
                 self.consensus.advance_init_phase();
@@ -250,81 +257,73 @@ impl<S: Service + 'static> Follower<S> {
             }
         };
 
+        let NetworkMessage { header, message } = message;
+
+        let message = message.into();
         // debug!("{:?} // Processing message {:?}", self.id(), message);
 
-
         match message {
-            Message::System(header, message) => {
-                match message {
-                    SystemMessage::Request(_) | SystemMessage::ForwardedRequests(_) => {
-                        //Followers do not accept ordered requests
-                        warn!("Received ordered request while follower, cannot process so ignoring.");
+            SystemMessage::Request(_) | SystemMessage::ForwardedRequests(_) => {
+                //Followers do not accept ordered requests
+                warn!("Received ordered request while follower, cannot process so ignoring.");
+            }
+            SystemMessage::UnOrderedRequest(_) => {
+                warn!("Unordered requests should be delivered straight to the executor.")
+            }
+            SystemMessage::Cst(message) => {
+                let status = self.cst.process_message(
+                    CstProgress::Message(header, message),
+                    &self.synchronizer,
+                    &self.consensus,
+                    &self.decided_log,
+                    &mut self.node,
+                );
+                match status {
+                    CstStatus::Nil => (),
+                    // should not happen...
+                    _ => {
+                        return Err("Invalid state reached!")
+                            .wrapped(ErrorKind::CoreServer);
                     }
-                    SystemMessage::UnOrderedRequest(_) => {
-                        warn!("Unordered requests should be delivered straight to the executor.")
-                    }
-                    SystemMessage::Cst(message) => {
-                        let status = self.cst.process_message(
-                            CstProgress::Message(header, message),
-                            &self.synchronizer,
-                            &self.consensus,
-                            &self.decided_log,
-                            &mut self.node,
-                        );
-                        match status {
-                            CstStatus::Nil => (),
-                            // should not happen...
-                            _ => {
-                                return Err("Invalid state reached!")
-                                    .wrapped(ErrorKind::CoreServer);
-                            }
-                        }
-                    }
-                    SystemMessage::ViewChange(message) => {
-                        let status = self.synchronizer.process_message(
-                            header,
-                            message,
-                            &self.timeouts,
-                            &mut self.decided_log,
-                            &self.pending_rq_log,
-                            &mut self.consensus,
-                            &self.node,
-                        );
-
-                        self.synchronizer.signal();
-
-                        match status {
-                            SynchronizerStatus::Nil => (),
-                            SynchronizerStatus::Running => {
-                                self.switch_phase(FollowerPhase::SyncPhase)
-                            }
-                            // should not happen...
-                            _ => {
-                                return Err("Invalid state reached!")
-                                    .wrapped(ErrorKind::CoreServer);
-                            }
-                        }
-                    }
-                    SystemMessage::Consensus(message) => {
-                        self.adv_consensus(header, message)?;
-                    }
-                    SystemMessage::FwdConsensus(message) => {
-                        let (header, message) = message.into_inner();
-
-                        self.adv_consensus(header, message)?;
-                    }
-                    // FIXME: handle rogue reply messages
-                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
-                    SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
-                    SystemMessage::Ping(_) => {}
                 }
             }
-            Message::Timeout(timeout_kind) => {
-                self.timeout_received(timeout_kind);
+            SystemMessage::ViewChange(message) => {
+                let status = self.synchronizer.process_message(
+                    header,
+                    message,
+                    &self.timeouts,
+                    &mut self.decided_log,
+                    &self.pending_rq_log,
+                    &mut self.consensus,
+                    &self.node,
+                );
+
+                self.synchronizer.signal();
+
+                match status {
+                    SynchronizerStatus::Nil => (),
+                    SynchronizerStatus::Running => {
+                        self.switch_phase(FollowerPhase::SyncPhase)
+                    }
+                    // should not happen...
+                    _ => {
+                        return Err("Invalid state reached!")
+                            .wrapped(ErrorKind::CoreServer);
+                    }
+                }
             }
-            Message::ExecutionFinishedWithAppstate((seq, appstate)) => {
-                self.execution_finished_with_appstate(seq, appstate)?;
+            SystemMessage::Consensus(message) => {
+                self.adv_consensus(header, message)?;
             }
+            SystemMessage::FwdConsensus(message) => {
+                let (header, message) = message.into_inner();
+
+                self.adv_consensus(header, message)?;
+            }
+            // FIXME: handle rogue reply messages
+            SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
+            SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
+            SystemMessage::Ping(_) => {}
         }
 
         Ok(())
@@ -336,7 +335,7 @@ impl<S: Service + 'static> Follower<S> {
         let message = match self.synchronizer.poll() {
             SynchronizerPollStatus::Recv => self.node.receive_from_replicas()?,
             SynchronizerPollStatus::NextMessage(h, m) => {
-                Message::System(h, SystemMessage::ViewChange(m))
+                NetworkMessage::new(h, NetworkMessageKind::from(System::from(SystemMessage::ViewChange(m))))
             }
             SynchronizerPollStatus::ResumeViewChange => {
                 self.synchronizer.resume_view_change(
@@ -352,103 +351,91 @@ impl<S: Service + 'static> Follower<S> {
             }
         };
 
+        let NetworkMessage {header, message} = message;
+
+        let message = message.into();
+
         match message {
-            Message::System(header, message) => {
-                match message {
-                    SystemMessage::ForwardedRequests(_) | SystemMessage::Request(_) => {
-                        //Followers cannot process ordered requests
-                        warn!("Received ordered request while follower, cannot process so ignoring.");
-                    }
-                    SystemMessage::Consensus(message) => {
-                        self.consensus.queue(header, message);
-                    }
-                    SystemMessage::FwdConsensus(fwdConsensus) => {
-                        let (h, m) = fwdConsensus.into_inner();
+            SystemMessage::ForwardedRequests(_) | SystemMessage::Request(_) => {
+                //Followers cannot process ordered requests
+                warn!("Received ordered request while follower, cannot process so ignoring.");
+            }
+            SystemMessage::Consensus(message) => {
+                self.consensus.queue(header, message);
+            }
+            SystemMessage::FwdConsensus(fwdConsensus) => {
+                let (h, m) = fwdConsensus.into_inner();
 
-                        //TODO: Verify signature of replica
+                //TODO: Verify signature of replica
 
-                        self.consensus.queue(h, m);
+                self.consensus.queue(h, m);
+            }
+            SystemMessage::Cst(message) => {
+                let status = self.cst.process_message(
+                    CstProgress::Message(header, message),
+                    &self.synchronizer,
+                    &self.consensus,
+                    &self.decided_log,
+                    &mut self.node,
+                );
+                match status {
+                    CstStatus::Nil => (),
+                    // should not happen...
+                    _ => {
+                        return Err("Invalid state reached!")
+                            .wrapped(ErrorKind::CoreServer);
                     }
-                    SystemMessage::Cst(message) => {
-                        let status = self.cst.process_message(
-                            CstProgress::Message(header, message),
-                            &self.synchronizer,
-                            &self.consensus,
-                            &self.decided_log,
-                            &mut self.node,
-                        );
-                        match status {
-                            CstStatus::Nil => (),
-                            // should not happen...
-                            _ => {
-                                return Err("Invalid state reached!")
-                                    .wrapped(ErrorKind::CoreServer);
-                            }
-                        }
-                    }
-                    SystemMessage::ViewChange(message) => {
-                        let status = self.synchronizer.process_message(
-                            header,
-                            message,
-                            &self.timeouts,
-                            &mut self.decided_log,
-                            &self.pending_rq_log,
-                            &mut self.consensus,
-                            &mut self.node,
-                        );
-
-                        self.synchronizer.signal();
-
-                        match status {
-                            SynchronizerStatus::Nil => return Ok(false),
-                            SynchronizerStatus::Running => (),
-                            SynchronizerStatus::NewView => {
-                                //Our current view has been updated and we have no more state operations
-                                //to perform. This happens if we are a correct replica and therefore do not need
-                                //To update our state or if we are a replica that was incorrect and whose state has
-                                //Already been updated from the Cst protocol
-                                self.switch_phase(FollowerPhase::NormalPhase);
-
-                                return Ok(false);
-                            }
-                            SynchronizerStatus::RunCst => {
-                                //This happens when a new view is being introduced and we are not up to date
-                                //With the rest of the replicas. This might happen because the replica was faulty
-                                //or any other reason that might cause it to lose some updates from the other replicas
-                                self.switch_phase(FollowerPhase::RetrievingStatePhase);
-
-                                //After we update the state, we go back to the sync phase (this phase) so we can check if we are missing
-                                //Anything or to finalize and go back to the normal phase
-                                self.phase_stack = Some(FollowerPhase::SyncPhase);
-                            }
-                            // should not happen...
-                            _ => {
-                                return Err("Invalid state reached!")
-                                    .wrapped(ErrorKind::CoreServer);
-                            }
-                        }
-                    }
-                    // FIXME: handle rogue reply messages
-                    SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
-                    SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
-                    SystemMessage::UnOrderedRequest(_) => {
-                        warn!("Received request while synchronizing, ignoring.")
-                    }
-                    SystemMessage::Ping(_) => {}
                 }
             }
-            //////// XXX XXX XXX XXX
-            //
-            // TODO: check if simply copying the behavior over from the
-            // normal phase is correct here
-            //
-            //
-            Message::Timeout(timeout_kind) => {
-                self.timeout_received(timeout_kind);
+            SystemMessage::ViewChange(message) => {
+                let status = self.synchronizer.process_message(
+                    header,
+                    message,
+                    &self.timeouts,
+                    &mut self.decided_log,
+                    &self.pending_rq_log,
+                    &mut self.consensus,
+                    &mut self.node,
+                );
+
+                self.synchronizer.signal();
+
+                match status {
+                    SynchronizerStatus::Nil => return Ok(false),
+                    SynchronizerStatus::Running => (),
+                    SynchronizerStatus::NewView => {
+                        //Our current view has been updated and we have no more state operations
+                        //to perform. This happens if we are a correct replica and therefore do not need
+                        //To update our state or if we are a replica that was incorrect and whose state has
+                        //Already been updated from the Cst protocol
+                        self.switch_phase(FollowerPhase::NormalPhase);
+
+                        return Ok(false);
+                    }
+                    SynchronizerStatus::RunCst => {
+                        //This happens when a new view is being introduced and we are not up to date
+                        //With the rest of the replicas. This might happen because the replica was faulty
+                        //or any other reason that might cause it to lose some updates from the other replicas
+                        self.switch_phase(FollowerPhase::RetrievingStatePhase);
+
+                        //After we update the state, we go back to the sync phase (this phase) so we can check if we are missing
+                        //Anything or to finalize and go back to the normal phase
+                        self.phase_stack = Some(FollowerPhase::SyncPhase);
+                    }
+                    // should not happen...
+                    _ => {
+                        return Err("Invalid state reached!")
+                            .wrapped(ErrorKind::CoreServer);
+                    }
+                }
             }
-            Message::ExecutionFinishedWithAppstate((seq, appstate)) => {
-                self.execution_finished_with_appstate(seq, appstate)?;
+            // FIXME: handle rogue reply messages
+            SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
+            SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
+            SystemMessage::UnOrderedRequest(_) => {
+                warn!("Received request while synchronizing, ignoring.")
             }
+            SystemMessage::Ping(_) => {}
         }
 
         Ok(true)
@@ -458,112 +445,105 @@ impl<S: Service + 'static> Follower<S> {
         debug!("{:?} // Retrieving state...", self.id());
         let message = self.node.receive_from_replicas().unwrap();
 
+        let NetworkMessage { header, message} = message;
+
+        let message = message.into();
+
         match message {
-            Message::System(header, message) => {
-                match message {
-                    SystemMessage::ForwardedRequests(_) | SystemMessage::Request(_) => {
-                        //Followers cannot execute ordered requests
-                    }
-                    SystemMessage::Consensus(message) => {
-                        self.consensus.queue(header, message);
-                    }
-                    SystemMessage::FwdConsensus(fwdConsensus) => {
-                        let (h, m) = fwdConsensus.into_inner();
+            SystemMessage::ForwardedRequests(_) | SystemMessage::Request(_) => {
+                //Followers cannot execute ordered requests
+            }
+            SystemMessage::Consensus(message) => {
+                self.consensus.queue(header, message);
+            }
+            SystemMessage::FwdConsensus(fwdConsensus) => {
+                let (h, m) = fwdConsensus.into_inner();
 
-                        //TODO: Check signature
+                //TODO: Check signature
 
-                        self.consensus.queue(h, m);
-                    }
-                    SystemMessage::ViewChange(message) => {
-                        self.synchronizer.queue(header, message);
-                    }
-                    SystemMessage::Cst(message) => {
-                        let status = self.cst.process_message(
-                            CstProgress::Message(header, message),
+                self.consensus.queue(h, m);
+            }
+            SystemMessage::ViewChange(message) => {
+                self.synchronizer.queue(header, message);
+            }
+            SystemMessage::Cst(message) => {
+                let status = self.cst.process_message(
+                    CstProgress::Message(header, message),
+                    &self.synchronizer,
+                    &self.consensus,
+                    &self.decided_log,
+                    &self.node,
+                );
+                match status {
+                    CstStatus::Running => (),
+                    CstStatus::State(state) => {
+                        install_recovery_state(
+                            state,
                             &self.synchronizer,
-                            &self.consensus,
-                            &self.decided_log,
-                            &self.node,
-                        );
-                        match status {
-                            CstStatus::Running => (),
-                            CstStatus::State(state) => {
-                                install_recovery_state(
-                                    state,
-                                    &self.synchronizer,
-                                    &mut self.decided_log,
-                                    &mut self.executor,
-                                    &mut self.consensus,
-                                )?;
+                            &mut self.decided_log,
+                            &mut self.executor,
+                            &mut self.consensus,
+                        )?;
 
-                                let next_phase = self
-                                    .phase_stack
-                                    .take()
-                                    .unwrap_or(FollowerPhase::NormalPhase);
+                        let next_phase = self
+                            .phase_stack
+                            .take()
+                            .unwrap_or(FollowerPhase::NormalPhase);
 
-                                self.switch_phase(next_phase);
-                            }
-                            CstStatus::SeqNo(seq) => {
-                                if self.consensus.sequence_number() < seq {
-                                    // this step will allow us to ignore any messages
-                                    // for older consensus instances we may have had stored;
-                                    //
-                                    // after we receive the latest recovery state, we
-                                    // need to install the then latest sequence no;
-                                    // this is done with the function
-                                    // `install_recovery_state` from cst
-                                    self.consensus.install_sequence_number(seq);
+                        self.switch_phase(next_phase);
+                    }
+                    CstStatus::SeqNo(seq) => {
+                        if self.consensus.sequence_number() < seq {
+                            // this step will allow us to ignore any messages
+                            // for older consensus instances we may have had stored;
+                            //
+                            // after we receive the latest recovery state, we
+                            // need to install the then latest sequence no;
+                            // this is done with the function
+                            // `install_recovery_state` from cst
+                            self.consensus.install_sequence_number(seq);
 
-                                    self.cst.request_latest_state(
-                                        &self.synchronizer,
-                                        &self.timeouts,
-                                        &self.node,
-                                    );
-                                } else {
-                                    self.switch_phase(FollowerPhase::NormalPhase);
-                                }
-                            }
-                            CstStatus::RequestLatestCid => {
-                                self.cst.request_latest_consensus_seq_no(
-                                    &self.synchronizer,
-                                    &self.timeouts,
-                                    &self.node,
-                                );
-                            }
-                            CstStatus::RequestState => {
-                                self.cst.request_latest_state(
-                                    &self.synchronizer,
-                                    &self.timeouts,
-                                    &mut self.node,
-                                );
-                            }
-                            // should not happen...
-                            CstStatus::Nil => {
-                                return Err("Invalid state reached!")
-                                    .wrapped(ErrorKind::CoreServer);
-                            }
+                            self.cst.request_latest_state(
+                                &self.synchronizer,
+                                &self.timeouts,
+                                &self.node,
+                            );
+                        } else {
+                            self.switch_phase(FollowerPhase::NormalPhase);
                         }
                     }
-                    // FIXME: handle rogue reply messages
-                    // Should never
-                    SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
-                    SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
-                    SystemMessage::UnOrderedRequest(_) => {
-                        warn!("Rogue unordered request message detected")
+                    CstStatus::RequestLatestCid => {
+                        self.cst.request_latest_consensus_seq_no(
+                            &self.synchronizer,
+                            &self.timeouts,
+                            &self.node,
+                        );
                     }
-                    SystemMessage::UnOrderedReply(_) => {
-                        warn!("How can I receive a reply here?")
+                    CstStatus::RequestState => {
+                        self.cst.request_latest_state(
+                            &self.synchronizer,
+                            &self.timeouts,
+                            &mut self.node,
+                        );
                     }
-                    SystemMessage::Ping(_) => {}
+                    // should not happen...
+                    CstStatus::Nil => {
+                        return Err("Invalid state reached!")
+                            .wrapped(ErrorKind::CoreServer);
+                    }
                 }
             }
-            Message::Timeout(timeout_kind) => {
-                self.timeout_received(timeout_kind);
+            // FIXME: handle rogue reply messages
+            // Should never
+            SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
+            SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
+            SystemMessage::UnOrderedRequest(_) => {
+                warn!("Rogue unordered request message detected")
             }
-            Message::ExecutionFinishedWithAppstate(_) => {
-                // TODO: verify if ignoring the checkpoint state while
-                // receiving state from peer nodes is correct
+            SystemMessage::UnOrderedReply(_) => {
+                warn!("How can I receive a reply here?")
             }
+            SystemMessage::Ping(_) => {}
         }
 
         Ok(())
@@ -672,9 +652,7 @@ impl<S: Service + 'static> Follower<S> {
                                                       &self.synchronizer,
                                                       &self.timeouts,
                                                       &self.node) {
-
                         self.switch_phase(FollowerPhase::RetrievingStatePhase);
-
                     }
                 }
                 TimeoutKind::ClientRequestTimeout(_timeout_seq) => {

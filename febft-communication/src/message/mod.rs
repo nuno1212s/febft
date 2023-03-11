@@ -25,7 +25,6 @@ use crate::serialize::{Buf, Serializable};
 pub type StoredSerializedNetworkMessage<M> = StoredMessage<SerializedMessage<NetworkMessageKind<M>>>;
 
 
-
 pub struct SerializedMessage<M> {
     original: M,
     raw: Buf,
@@ -92,8 +91,8 @@ impl<M> Orderable for StoredMessage<M> where M: Orderable {
 /// The messages that are going to be sent over the network
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct NetworkMessage<M> where M: Serializable {
-    header: Header,
-    message: NetworkMessageKind<M>,
+    pub header: Header,
+    pub message: NetworkMessageKind<M>,
 }
 
 impl<M> NetworkMessage<M> where M: Serializable {
@@ -111,9 +110,47 @@ impl<M> From<(Header, NetworkMessageKind<M>)> for NetworkMessage<M> where M: Ser
 /// The type of network message you want to send
 /// To initialize a System message, you should use the [`From<M::Message>`] implementation
 /// that is available.
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub enum NetworkMessageKind<M> where M: Serializable {
     Ping(PingMessage),
     System(System<M::Message>),
+}
+
+impl<M> Clone for NetworkMessageKind<M> where M: Serializable {
+    fn clone(&self) -> Self {
+        match self {
+            NetworkMessageKind::Ping(ping) => { NetworkMessageKind::Ping(ping.clone()) }
+            NetworkMessageKind::System(sys) => { NetworkMessageKind::System(sys.clone()) }
+        }
+    }
+}
+
+impl<M> NetworkMessageKind<M> where M: Serializable {
+    pub fn from(msg: System<M::Message>) -> Self {
+        NetworkMessageKind::System(msg)
+    }
+
+    pub fn deref_system(&self) -> &M::Message {
+        match self {
+            NetworkMessageKind::Ping(_) => {
+                unreachable!()
+            }
+            NetworkMessageKind::System(sys) => {
+                sys
+            }
+        }
+    }
+
+    pub fn into(self) -> M::Message {
+        match self {
+            NetworkMessageKind::Ping(_) => {
+                unreachable!()
+            }
+            NetworkMessageKind::System(sys_msg) => {
+                sys_msg.inner
+            }
+        }
+    }
 }
 
 impl<M> From<System<M::Message>> for NetworkMessageKind<M> where M: Serializable {
@@ -122,26 +159,7 @@ impl<M> From<System<M::Message>> for NetworkMessageKind<M> where M: Serializable
     }
 }
 
-impl<M> From<M::Message> for NetworkMessageKind<M> where M:Serializable {
-    fn from(value: M::Message) -> Self {
-        NetworkMessageKind::from(System::from(value))
-    }
-}
-
-impl<M> Into<M::Message> for NetworkMessageKind<M> where M :Serializable {
-    fn into(self) -> M::Message {
-        match self {
-            NetworkMessageKind::Ping(_) => {
-                unreachable!()
-            }
-            NetworkMessageKind::System(msg) => {
-                msg.inner
-            }
-        }
-    }
-}
-
-impl<M> Debug for NetworkMessageKind<M> where M :Serializable {
+impl<M> Debug for NetworkMessageKind<M> where M: Serializable {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             NetworkMessageKind::Ping(ping) => {
@@ -156,11 +174,12 @@ impl<M> Debug for NetworkMessageKind<M> where M :Serializable {
 
 /// A system message, relating to the protocol that is utilizing this communication framework
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-pub struct System<M> {
+#[derive(Clone)]
+pub struct System<M: Clone> {
     inner: M,
 }
 
-impl<M> Deref for System<M> {
+impl<M: Clone> Deref for System<M> {
     type Target = M;
 
     fn deref(&self) -> &Self::Target {
@@ -168,7 +187,7 @@ impl<M> Deref for System<M> {
     }
 }
 
-impl<M> From<M> for System<M> {
+impl<M: Clone> From<M> for System<M> {
     fn from(value: M) -> Self {
         System { inner: value }
     }

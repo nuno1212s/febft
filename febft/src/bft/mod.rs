@@ -3,8 +3,6 @@
 //! By default, it is hidden to the user, unless explicitly enabled
 //! with the feature flag `expose_impl`.
 
-pub mod benchmarks;
-pub mod communication;
 pub mod consensus;
 pub mod core;
 pub mod cst;

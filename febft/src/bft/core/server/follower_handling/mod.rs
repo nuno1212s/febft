@@ -3,13 +3,12 @@ use std::sync::Arc;
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 use febft_common::globals::ReadOnly;
-use crate::bft::communication::message::{
-    ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, StoredMessage,
-    SystemMessage, ViewChangeMessage, ViewChangeMessageKind,
-};
-use crate::bft::communication::{Node, NodeId, SendNode};
+use febft_communication::message::{NetworkMessageKind, StoredMessage, System};
+use febft_communication::{Node, NodeId, SendNode};
 use crate::bft::core::server::ViewInfo;
-use crate::bft::executable::{Request, Service};
+use crate::bft::executable::{Reply, Request, Service, State};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, SystemMessage, ViewChangeMessage, ViewChangeMessageKind};
+use crate::bft::message::serialize::PBFTConsensus;
 
 /// The message type of the channel
 pub type ChannelMsg<S> = FollowerEvent<S>;
@@ -32,7 +31,7 @@ pub enum FollowerEvent<S: Service> {
 struct FollowersFollowing<S: Service + 'static> {
     own_id: NodeId,
     followers: Vec<NodeId>,
-    send_node: SendNode<S::Data>,
+    send_node: SendNode<PBFTConsensus<S::Data>>,
     rx: ChannelSyncRx<ChannelMsg<S>>,
 }
 
@@ -48,7 +47,7 @@ pub struct FollowerHandle<S: Service> {
 impl<S: Service + 'static> FollowersFollowing<S> {
     /// Starts the follower handling thread and returns a cloneable handle that
     /// can be used to deliver messages to it.
-    pub fn init_follower_handling(id: NodeId, node: &Arc<Node<S::Data>>) -> FollowerHandle<S> {
+    pub fn init_follower_handling(id: NodeId, node: &Arc<Node<PBFTConsensus<S::Data>>>) -> FollowerHandle<S> {
         let (tx, rx) = channel::new_bounded_sync(1024);
 
         let follower_handling = Self {
@@ -169,7 +168,7 @@ impl<S: Service + 'static> FollowersFollowing<S> {
 
         let targets = self.targets(view);
 
-        self.send_node.broadcast(message, targets.into_iter());
+        self.send_node.broadcast(NetworkMessageKind::from(System::from(message)), targets.into_iter());
     }
 
     /// Handle us having sent a prepare message (notice how pre prepare are handled on reception
@@ -191,7 +190,7 @@ impl<S: Service + 'static> FollowersFollowing<S> {
         let message = SystemMessage::Consensus(prepare);
 
         self.send_node
-            .broadcast(message, self.followers.iter().copied());
+            .broadcast(NetworkMessageKind::from(System::from(message)), self.followers.iter().copied());
     }
 
     /// Handle us having sent a commit message (notice how pre prepare are handled on reception
@@ -212,7 +211,7 @@ impl<S: Service + 'static> FollowersFollowing<S> {
         let message = SystemMessage::Consensus(commit);
 
         self.send_node
-            .broadcast(message, self.followers.iter().copied());
+            .broadcast(NetworkMessageKind::from(System::from(message)), self.followers.iter().copied());
     }
 
     ///
@@ -221,7 +220,11 @@ impl<S: Service + 'static> FollowersFollowing<S> {
         let message = msg.message();
 
         match message.kind() {
-            ViewChangeMessageKind::Stop(_) => {}
+            ViewChangeMessageKind::Stop(_) => {
+                // We kind of need to send these, but then again they should be sent directly to the
+                // followers instead of being forwarded, since they are not sent by the leader
+                // so no real bottleneck is present
+            }
             ViewChangeMessageKind::StopData(_) => {
                 //Followers don't need these messages (only the leader of the quorum needs them)
 
@@ -229,15 +232,16 @@ impl<S: Service + 'static> FollowersFollowing<S> {
             }
             ViewChangeMessageKind::Sync(_) => {
                 //Sync msgs are weird
-                //They are sort of like pre prepare messages so it would be nice for us to
-                //send them like we do preprepare msgs
+                //TODO:
+                // They are sort of like pre prepare messages so it would be nice for us to
+                // send them like we do preprepare msgs
             }
         }
 
         let message = SystemMessage::ViewChange(message.clone());
 
         self.send_node
-            .broadcast(message, self.followers.iter().copied());
+            .broadcast(NetworkMessageKind::from(System::from(message)), self.followers.iter().copied());
     }
 
 }

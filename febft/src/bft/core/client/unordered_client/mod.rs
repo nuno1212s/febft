@@ -4,14 +4,10 @@ use std::sync::{Mutex};
 
 use febft_common::error::*;
 use febft_common::ordering::SeqNo;
-
-use crate::bft::communication::message::{RequestMessage, SystemMessage};
-use crate::bft::communication::TlsNodeConnector;
-
-use crate::bft::{
-    communication::{serialize::SharedData, NodeId},
-};
+use febft_communication::{NodeId, TlsNodeConnector};
 use crate::bft::executable::{Reply, Request, State};
+use crate::bft::message::serialize::SharedData;
+use crate::bft::message::{RequestMessage, SystemMessage};
 
 use super::{Client, ClientType};
 
@@ -123,8 +119,8 @@ where
     fn init_request(
         session_id: SeqNo,
         operation_id: SeqNo,
-        operation: <D as SharedData>::Request,
-    ) -> SystemMessage<<D as SharedData>::State, <D as SharedData>::Request, <D as SharedData>::Reply>
+        operation: D::Request,
+    ) -> SystemMessage<D::State, D::Request, D::Reply>
     {
         SystemMessage::UnOrderedRequest(RequestMessage::new(session_id, operation_id, operation))
     }

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
-use febft_communication::message::StoredMessage;
+use febft_communication::message::{Header, StoredMessage};
 use febft_communication::NodeId;
 use crate::bft::executable::ExecutorHandle;
 use crate::bft::executable::Service;

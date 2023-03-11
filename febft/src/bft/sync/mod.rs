@@ -17,12 +17,13 @@ use serde::{Deserialize, Serialize};
 use febft_common::crypto::hash::Digest;
 use febft_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_queue_message, tbo_pop_message};
 use febft_common::{collections, prng};
-use febft_communication::message::{Header, NetworkMessageKind, StoredMessage, WireMessage};
+use febft_communication::message::{Header, NetworkMessageKind, StoredMessage, System, WireMessage};
 use febft_communication::{Node, NodeId, serialize};
 use febft_communication::serialize::Buf;
 use crate::bft::consensus::Consensus;
 use crate::bft::executable::{Reply, Request, Service, State};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ForwardedRequestsMessage, FwdConsensusMessage, RequestMessage, SystemMessage, ViewChangeMessage, ViewChangeMessageKind};
+use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::decisions::{CollectData, Proof, ViewDecisionPair};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
@@ -126,7 +127,7 @@ pub(super) struct FinalizeState<O> {
     curr_cid: SeqNo,
     sound: Sound,
     proposed: FwdConsensusMessage<O>,
-    last_proof: Option<Proof<O>>
+    last_proof: Option<Proof<O>>,
 }
 
 pub(super) enum FinalizeStatus<O> {
@@ -320,9 +321,11 @@ pub enum SynchronizerStatus {
 /// Represents the status of calling `poll()` on a `Synchronizer`.
 pub enum SynchronizerPollStatus<O> {
     /// The `Replica` associated with this `Synchronizer` should
-    /// poll its main channel for more messages.
+    /// poll its network channel for more messages, as it has no messages
+    /// That can be processed in cache
     Recv,
-    /// A new view change message is available to be processed.
+    /// A new view change message is available to be processed, retrieved from the
+    /// Ordered queue
     NextMessage(Header, ViewChangeMessage<O>),
     /// We need to resume the view change protocol, after
     /// running the CST protocol.
@@ -482,7 +485,7 @@ impl<S> Synchronizer<S>
         log: &mut DecidedLog<S>,
         pending_rq_log: &PendingRequestLog<S>,
         consensus: &mut Consensus<S>,
-        node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
+        node: &Node<PBFTConsensus<S::Data>>,
     ) -> SynchronizerStatus
     {
         match *self.phase.borrow() {
@@ -738,9 +741,10 @@ impl<S> Synchronizer<S>
                             let (header, message) = {
                                 let mut buf = Vec::new();
 
-                                let forged_pre_prepare = consensus.forge_propose(p.clone(), self);
+                                let forged_pre_prepare: NetworkMessageKind<PBFTConsensus<S::Data>> = NetworkMessageKind::from(System::from(
+                                        consensus.forge_propose(p.clone(), self)));
 
-                                let digest = serialize::serialize_digest::<Vec<u8>, S::Data>(
+                                let digest = serialize::serialize_digest::<Vec<u8>, PBFTConsensus<S::Data>>(
                                     &forged_pre_prepare,
                                     &mut buf,
                                 ).unwrap();
@@ -760,7 +764,7 @@ impl<S> Synchronizer<S>
                                     Some(node_sign.key_pair()),
                                 ).into_inner();
 
-                                if let SystemMessage::Consensus(consensus) = forged_pre_prepare {
+                                if let SystemMessage::Consensus(consensus) = forged_pre_prepare.into() {
                                     (h, consensus)
                                 } else {
                                     //This is basically impossible
@@ -785,13 +789,13 @@ impl<S> Synchronizer<S>
                             let targets = NodeId::targets(0..current_view.params().n())
                                 .filter(move |&id| id != node_id);
 
-                            node.broadcast(NetworkMessageKind::from(message), targets);
+                            node.broadcast(NetworkMessageKind::from(System::from(message)), targets);
 
                             let state = FinalizeState {
                                 curr_cid,
                                 sound,
                                 proposed: fwd_request,
-                                last_proof: proof.cloned()
+                                last_proof: proof.cloned(),
                             };
 
                             finalize_view_change!(
@@ -913,7 +917,7 @@ impl<S> Synchronizer<S>
         log: &mut DecidedLog<S>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<S>,
-        node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
+        node: &Node<PBFTConsensus<S::Data>>,
     ) -> Option<()>
     {
         let state = self.finalize_state.borrow_mut().take()?;
@@ -944,7 +948,7 @@ impl<S> Synchronizer<S>
     pub fn begin_view_change(
         &self,
         timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
-        node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
+        node: &Node<PBFTConsensus<S::Data>>,
         timeouts: &Timeouts,
         _log: &DecidedLog<S>,
     )
@@ -1024,7 +1028,7 @@ impl<S> Synchronizer<S>
         log: &mut DecidedLog<S>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<S>,
-        node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
+        node: &Node<PBFTConsensus<S::Data>>,
     ) -> SynchronizerStatus
     {
         let FinalizeState {
@@ -1046,14 +1050,12 @@ impl<S> Synchronizer<S>
             // We are missing the last decision, which should be included in the collect data
             // sent by the leader in the SYNC message
             if let Some(last_proof) = last_proof {
-
                 consensus.catch_up_to_quorum(last_proof.seq_no(), last_proof, log)
                     .expect("Failed to catch up to quorum");
 
 
                 //TODO: Now we must replay this in the executor.
                 // Maybe do a sync write so we can make sure we only execute when it is done
-
             } else {
                 // This maybe happens when a checkpoint is done and the first execution after it
                 // fails, leading to a view change? Don't really know how this would be possible
@@ -1131,7 +1133,7 @@ impl<S> Synchronizer<S>
     /// Has not received the requests from the client)
     pub fn forward_requests(&self,
                             timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
-                            node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
+                            node: &Node<PBFTConsensus<S::Data>>,
                             log: &PendingRequestLog<S>) {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {}
@@ -1178,7 +1180,7 @@ impl<S> Synchronizer<S>
     fn highest_proof<'a>(
         guard: &'a IntMap<StoredMessage<ViewChangeMessage<Request<S>>>>,
         view: &ViewInfo,
-        node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
+        node: &Node<PBFTConsensus<S::Data>>,
     ) -> Option<&'a Proof<Request<S>>> {
         highest_proof::<S, _>(&view, node, guard.values())
     }
@@ -1383,7 +1385,7 @@ fn normalized_collects<'a, O: 'a>(
 }
 
 fn signed_collects<S>(
-    node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
+    node: &Node<PBFTConsensus<S::Data>>,
     collects: Vec<StoredMessage<ViewChangeMessage<Request<S>>>>,
 ) -> Vec<StoredMessage<ViewChangeMessage<Request<S>>>>
     where
@@ -1398,7 +1400,7 @@ fn signed_collects<S>(
         .collect()
 }
 
-fn validate_signature<'a, S, M>(node: &'a Node<SystemMessage<State<S>, Request<S>, Reply<S>>>, stored: &'a StoredMessage<M>) -> bool
+fn validate_signature<'a, S, M>(node: &'a Node<PBFTConsensus<S::Data>>, stored: &'a StoredMessage<M>) -> bool
     where
         S: Service + Send + 'static,
         State<S>: Send + Clone + 'static,
@@ -1424,7 +1426,7 @@ fn validate_signature<'a, S, M>(node: &'a Node<SystemMessage<State<S>, Request<S
 
 fn highest_proof<'a, S, I>(
     view: &ViewInfo,
-    node: &Node<SystemMessage<State<S>, Request<S>, Reply<S>>>,
+    node: &Node<PBFTConsensus<S::Data>>,
     collects: I,
 ) -> Option<&'a Proof<Request<S>>>
     where
