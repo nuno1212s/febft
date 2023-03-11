@@ -22,7 +22,7 @@ use febft_communication::{Node, NodeId, serialize};
 use febft_communication::serialize::Buf;
 use crate::bft::consensus::Consensus;
 use crate::bft::executable::{Reply, Request, Service, State};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ForwardedRequestsMessage, FwdConsensusMessage, RequestMessage, SystemMessage, ViewChangeMessage, ViewChangeMessageKind};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ForwardedRequestsMessage, FwdConsensusMessage, PBFTMessage, RequestMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::decisions::{CollectData, Proof, ViewDecisionPair};
@@ -764,7 +764,7 @@ impl<S> Synchronizer<S>
                                     Some(node_sign.key_pair()),
                                 ).into_inner();
 
-                                if let SystemMessage::Consensus(consensus) = forged_pre_prepare.into() {
+                                if let PBFTMessage::Consensus(consensus) = forged_pre_prepare.into() {
                                     (h, consensus)
                                 } else {
                                     //This is basically impossible

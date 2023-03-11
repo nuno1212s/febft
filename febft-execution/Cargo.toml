@@ -1,0 +1,14 @@
+[package]
+name = "febft-execution"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+
+serialize_capnp = []
+serialize_serde = ["serde"]
+
+[dependencies]
+febft-common = { path = "../febft-common" }
+febft-communication = { path = "../febft-communication" }
+serde = { version = "*", optional = true }

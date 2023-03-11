@@ -23,7 +23,7 @@ use febft_communication::message::{Header, NetworkMessageKind, System};
 use febft_communication::{Node, NodeId};
 
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State};
-use crate::bft::message::{CstMessage, CstMessageKind, SystemMessage};
+use crate::bft::message::{CstMessage, CstMessageKind, PBFTMessage, SystemMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog};
@@ -256,7 +256,7 @@ impl<S> CollabStateTransfer<S>
                 return;
             }
         };
-        let reply = SystemMessage::Cst(CstMessage::new(
+        let reply = PBFTMessage::Cst(CstMessage::new(
             message.sequence_number(),
             CstMessageKind::ReplyState(snapshot),
         ));
@@ -289,7 +289,7 @@ impl<S> CollabStateTransfer<S>
                         let kind =
                             CstMessageKind::ReplyLatestConsensusSeq(consensus.sequence_number());
                         let reply =
-                            SystemMessage::Cst(CstMessage::new(message.sequence_number(), kind));
+                            PBFTMessage::Cst(CstMessage::new(message.sequence_number(), kind));
                         node.send(NetworkMessageKind::from(System::from(reply)), header.from(), true);
                     }
                     CstMessageKind::RequestState => {
@@ -513,7 +513,7 @@ impl<S> CollabStateTransfer<S>
 
         self.phase = ProtoPhase::ReceivingCid(0);
 
-        let message = SystemMessage::Cst(CstMessage::new(
+        let message = PBFTMessage::Cst(CstMessage::new(
             cst_seq,
             CstMessageKind::RequestLatestConsensusSeq,
         ));
@@ -546,7 +546,7 @@ impl<S> CollabStateTransfer<S>
 
         //TODO: Maybe attempt to use followers to rebuild state and avoid
         // Overloading the replicas
-        let message = SystemMessage::Cst(CstMessage::new(cst_seq, CstMessageKind::RequestState));
+        let message = PBFTMessage::Cst(CstMessage::new(cst_seq, CstMessageKind::RequestState));
         let targets = NodeId::targets(0..current_view.params().n());
         node.broadcast(NetworkMessageKind::from(System::from(message)), targets);
     }

@@ -19,16 +19,13 @@ use febft_common::threadpool;
 use febft_communication::message::{NetworkMessageKind, SerializedMessage, StoredMessage, StoredSerializedNetworkMessage, System, WireMessage};
 use febft_communication::{Node, NodeId, serialize};
 use febft_communication::serialize::Buf;
+use febft_messages::messages::{Protocol, SystemMessage};
 
-use crate::bft::{
-    core::server::{
-        follower_handling::{FollowerEvent, FollowerHandle},
-        observer::{MessageType, ObserverHandle},
-    },
-    executable::{Reply, Request, Service, State},
-    sync::AbstractSynchronizer,
-};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, SystemMessage};
+use crate::bft::{core::server::{
+    follower_handling::{FollowerEvent, FollowerHandle},
+    observer::{MessageType, ObserverHandle},
+}, executable::{Reply, Request, Service, State}, PBFT, sync::AbstractSynchronizer};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage, SystemMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::deciding_log::DecidingLog;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
@@ -83,7 +80,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         current_digest: Digest,
         view: ViewInfo,
         msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-        node: &Node<PBFTConsensus<S::Data>>,
+        node: &Node<PBFT<S::Data>>,
     ) {
         let my_id = node.id();
         let view_seq = view.sequence_number();
@@ -99,11 +96,11 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         //Speculate in another thread.
         threadpool::execute(move || {
             // create COMMIT
-            let message = NetworkMessageKind::from(System::from(SystemMessage::Consensus(ConsensusMessage::new(
+            let message = NetworkMessageKind::from(System::from(SystemMessage::ProtocolMessage(Protocol::new(PBFTMessage::Consensus(ConsensusMessage::new(
                 seq,
                 view_seq,
                 ConsensusMessageKind::Commit(current_digest.clone()),
-            ))));
+            ))))));
 
             // serialize raw msg
             let mut buf = Vec::new();
@@ -181,7 +178,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         &mut self,
         curr_view: ViewInfo,
         preparing_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-        _node: &Node<PBFTConsensus<S::Data>>,
+        _node: &Node<PBFT<S::Data>>,
     )
     {
         if let Some(follower_handle) = &self.follower_handle {
@@ -202,7 +199,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         curr_view: ViewInfo,
         preparing_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
         log: &DecidingLog<S>,
-        node: &Node<PBFTConsensus<S::Data>>,
+        node: &Node<PBFT<S::Data>>,
     ) {
         let node_id = node.id();
 
@@ -386,7 +383,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         &self.consensus_guard
     }
 
-    fn take_speculative_commits(&self) -> IntMap<StoredSerializedNetworkMessage<PBFTConsensus<S::Data>>> {
+    fn take_speculative_commits(&self) -> IntMap<StoredSerializedNetworkMessage<PBFT<S::Data>>> {
         let mut map = self.speculative_commits.lock().unwrap();
         std::mem::replace(&mut *map, IntMap::new())
     }

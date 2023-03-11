@@ -19,14 +19,16 @@ use futures::io::{
 use febft_common::crypto::hash::{Context, Digest};
 use febft_common::crypto::signature::{KeyPair, PublicKey, Signature};
 use febft_common::ordering::{Orderable, SeqNo};
-use febft_communication::message::{Header, PingMessage, StoredMessage};
+use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, PingMessage, StoredMessage};
+use febft_messages::messages::RequestMessage;
 
 use crate::bft::timeouts::{Timeout, TimeoutKind};
 use crate::bft::sync::LeaderCollects;
 use crate::bft::cst::RecoveryState;
 use crate::bft::executable::{Reply, Request, State};
-use crate::bft::message::serialize::{Buf, SharedData};
+use crate::bft::message::serialize::{Buf, PBFTConsensus, SharedData};
 use crate::bft::msg_log::decisions::CollectData;
+use crate::bft::PBFT;
 use crate::bft::sync::view::ViewInfo;
 
 pub mod serialize;
@@ -52,23 +54,23 @@ impl<S, O, P> StoredMessage<SystemMessage<S, O, P>> {
 /// The `Message` type encompasses all the messages traded between different
 /// asynchronous tasks in the system.
 ///
-pub enum Message<S, O, P> where S: Send, O: Send, P: Send {
+pub enum Message<D> where D: SharedData {
     /// Client requests and process sub-protocol messages.
-    System(Header, SystemMessage<S, O, P>),
+    System(NetworkMessage<PBFT<D>>),
     /// Same as `Message::ExecutionFinished`, but includes a snapshot of
     /// the application state.
     ///
     /// This is useful for local checkpoints.
-    ExecutionFinishedWithAppstate((SeqNo, S)),
+    ExecutionFinishedWithAppstate((SeqNo, D::State)),
     /// We received a timeout from the timeouts layer.
     Timeout(Timeout),
 }
 
-impl<S, O, P> Debug for Message<S, O, P> where S: Send, O: Send, P: Send {
+impl<D> Debug for Message<D> where D: SharedData {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Message::System(header, msg) => {
-                write!(f, "System message {:?} ({:?})", msg, header.digest())
+            Message::System(network) => {
+                write!(f, "System message {:?} ({:?})", network.header.digest(), network.message)
             }
             Message::ExecutionFinishedWithAppstate(_) => {
                 write!(f, "Execution finished")
@@ -80,82 +82,19 @@ impl<S, O, P> Debug for Message<S, O, P> where S: Send, O: Send, P: Send {
     }
 }
 
-/// A `SystemMessage` corresponds to a message regarding one of the SMR
-/// sub-protocols.
-///
-/// This can be either a `Request` from a client, a `Consensus` message,
-/// or even `ViewChange` messages.
+/// PBFT protocol messages
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub enum SystemMessage<S, O, P> {
-    //Requests that do not need to be logged nor ordered. Notice that
-    //The actual request instance is not different from the ordered requests,
-    //It is up to the developer of the particular services to use
-    //These operations responsibly
-    UnOrderedRequest(RequestMessage<O>),
-    UnOrderedReply(ReplyMessage<P>),
-    Request(RequestMessage<O>),
-    Reply(ReplyMessage<P>),
-    Consensus(ConsensusMessage<O>),
-    FwdConsensus(FwdConsensusMessage<O>),
-    //Collaborative state transfer messages
-    Cst(CstMessage<S, O>),
-    ViewChange(ViewChangeMessage<O>),
-    ForwardedRequests(ForwardedRequestsMessage<O>),
+pub enum PBFTMessage<S, R>  {
+    /// Consensus message
+    Consensus(ConsensusMessage<R>),
+    FwdConsensus(FwdConsensusMessage<R>),
+    /// Consensus state transfer messages
+    Cst(CstMessage<S, R>),
+    /// View change messages
+    ViewChange(ViewChangeMessage<R>),
     //Observer related messages
     ObserverMessage(ObserverMessage),
-    //Ping messages
-    Ping(PingMessage),
-}
-
-impl<S, O, P> Debug for SystemMessage<S, O, P> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SystemMessage::UnOrderedRequest(_req) => {
-                write!(f, "Unordered request")
-            }
-            SystemMessage::UnOrderedReply(_) => {
-                write!(f, "Unordered reply")
-            }
-            SystemMessage::Request(_rq) => {
-                write!(f, "Request")
-            }
-            SystemMessage::Reply(_re) => {
-                write!(f, "Reply")
-            }
-            SystemMessage::Consensus(cs) => {
-                match cs.kind() {
-                    ConsensusMessageKind::PrePrepare(list) => {
-                        write!(f, "Consensus PrePrepare with {}", list.len())
-                    }
-                    ConsensusMessageKind::Prepare(prepare) => {
-                        write!(f, "Consensus prepare {:?}", prepare)
-                    }
-                    ConsensusMessageKind::Commit(commit) => {
-                        write!(f, "Consensus commit {:?}", commit)
-                    }
-                }
-            }
-            SystemMessage::Cst(_cst) => {
-                write!(f, "Cst")
-            }
-            SystemMessage::ViewChange(_vchange) => {
-                write!(f, "view change")
-            }
-            SystemMessage::ForwardedRequests(_fr) => {
-                write!(f, "forwarded requests")
-            }
-            SystemMessage::ObserverMessage(_message) => {
-                write!(f, "observer message")
-            }
-            SystemMessage::FwdConsensus(_) => {
-                write!(f, "Fwd consensus message")
-            }
-            SystemMessage::Ping(_) => {
-                write!(f, "Ping message")
-            }
-        }
-    }
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
@@ -276,29 +215,6 @@ impl<S, O> CstMessage<S, O> {
     }
 }
 
-/// Represents a request from a client.
-///
-/// The `O` type argument symbolizes the client operation to be performed
-/// over the replicated state.
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct RequestMessage<O> {
-    session_id: SeqNo,
-    operation_id: SeqNo,
-    operation: O,
-}
-
-/// Represents a reply to a client.
-///
-/// The `P` type argument symbolizes the response payload.
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct ReplyMessage<P> {
-    session_id: SeqNo,
-    operation_id: SeqNo,
-    payload: P,
-}
-
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct FwdConsensusMessage<O> {
@@ -374,60 +290,6 @@ pub enum ConsensusMessageKind<O> {
     /// The `Digest` represents the hash of the serialized `PRE-PREPARE`,
     /// where the batch of requests were proposed.
     Commit(Digest),
-}
-
-impl<O> Orderable for RequestMessage<O> {
-    fn sequence_number(&self) -> SeqNo {
-        self.operation_id
-    }
-}
-
-impl<O> RequestMessage<O> {
-    /// Creates a new `RequestMessage`.
-    pub fn new(sess: SeqNo, id: SeqNo, operation: O) -> Self {
-        Self { operation, operation_id: id, session_id: sess }
-    }
-
-    /// Returns a reference to the operation of type `O`.
-    pub fn operation(&self) -> &O {
-        &self.operation
-    }
-
-    pub fn session_id(&self) -> SeqNo {
-        self.session_id
-    }
-
-    /// Unwraps this `RequestMessage`.
-    pub fn into_inner_operation(self) -> O {
-        self.operation
-    }
-}
-
-impl<P> Orderable for ReplyMessage<P> {
-    fn sequence_number(&self) -> SeqNo {
-        self.operation_id
-    }
-}
-
-impl<P> ReplyMessage<P> {
-    /// Creates a new `ReplyMessage`.
-    pub fn new(sess: SeqNo, id: SeqNo, payload: P) -> Self {
-        Self { payload, operation_id: id, session_id: sess }
-    }
-
-    /// Returns a reference to the payload of type `P`.
-    pub fn payload(&self) -> &P {
-        &self.payload
-    }
-
-    pub fn session_id(&self) -> SeqNo {
-        self.session_id
-    }
-
-    /// Unwraps this `ReplyMessage`.
-    pub fn into_inner(self) -> (SeqNo, SeqNo, P) {
-        (self.session_id, self.operation_id, self.payload)
-    }
 }
 
 impl<O> Orderable for ConsensusMessage<O> {
@@ -589,13 +451,13 @@ impl Debug for ObserveEventKind {
 
 ///}@
 
-impl<S: Send, O: Send, P: Send> Message<S, O, P> {
+impl<D: SharedData> Message<D> {
     /// Returns the `Header` of this message, if it is
     /// a `SystemMessage`.
     pub fn header(&self) -> Result<&Header> {
         match self {
-            Message::System(ref h, _) =>
-                Ok(h),
+            Message::System(msg) =>
+                Ok(&msg.header),
             Message::ExecutionFinishedWithAppstate(_) =>
                 Err("Expected System found ExecutionFinishedWithAppstate")
                     .wrapped(ErrorKind::CommunicationMessage),

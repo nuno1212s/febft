@@ -70,12 +70,16 @@ impl ObserverClient {
 
     pub(super) fn handle_observed_message<D>(
         client_data: &Arc<ClientData<D>>,
-        observed_msg: Message<D::State, D::Request, D::Reply>,
+        observed_msg: Message<D>,
     ) where
         D: SharedData + 'static,
     {
         match observed_msg {
-            Message::System(header, sys_msg) => {
+            Message::System(network_msg) => {
+                let NetworkMessage {header, message} = network_msg;
+
+                let sys_msg = message.into();
+
                 match sys_msg {
                     SystemMessage::ObserverMessage(observed_msg) => {
                         match observed_msg {

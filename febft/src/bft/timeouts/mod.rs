@@ -89,7 +89,7 @@ struct TimeoutsThread<S: Service + 'static> {
     channel_rx: ChannelSyncRx<TimeoutMessage>,
     //Loopback so we can deliver the timeouts to the main consensus thread so they can be
     //processed
-    loopback_channel: ChannelSyncTx<Message<State<S>, Request<S>, Reply<S>>>,
+    loopback_channel: ChannelSyncTx<Message<S::Data>>,
     //How long between each timeout iteration
     iteration_delay: u64,
 }
@@ -99,7 +99,7 @@ impl Timeouts {
     ///Initialize the timeouts thread and return a handle to it
     /// This handle can then be used everywhere timeouts are needed.
     pub fn new<S: Service + 'static>(iteration_delay: u64,
-                                     loopback_channel: ChannelSyncTx<Message<State<S>, Request<S>, Reply<S>>>) -> Self {
+                                     loopback_channel: ChannelSyncTx<S::Data>) -> Self {
         let tx = TimeoutsThread::<S>::new(iteration_delay, loopback_channel);
 
         Self {
@@ -164,7 +164,7 @@ impl Timeouts {
 }
 
 impl<S: Service + 'static> TimeoutsThread<S> {
-    fn new(iteration_delay: u64, loopback_channel: ChannelSyncTx<Message<State<S>, Request<S>, Reply<S>>>) -> ChannelSyncTx<TimeoutMessage> {
+    fn new(iteration_delay: u64, loopback_channel: ChannelSyncTx<Message<S::Data>>) -> ChannelSyncTx<TimeoutMessage> {
         let (tx, rx) = channel::new_bounded_sync(CHANNEL_SIZE);
 
         std::thread::Builder::new().name("Timeout Thread".to_string())

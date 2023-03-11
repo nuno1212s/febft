@@ -2,7 +2,6 @@
 
 using Rust = import "rust.capnp";
 
-
 struct Request {
     sessionId   @0 :UInt32;
     operationId @1 :UInt32;

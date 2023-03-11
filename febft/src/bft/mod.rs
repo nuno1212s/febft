@@ -26,6 +26,11 @@ use log4rs::{
 use febft_common::error::*;
 use febft_common::{async_runtime, socket, threadpool};
 use febft_common::globals::Flag;
+use febft_messages::messages::SystemMessage;
+use febft_messages::serialize::System;
+use crate::bft::message::serialize::PBFTConsensus;
+
+pub type PBFT<D> = System<D, PBFTConsensus<D>>;
 
 static INITIALIZED: Flag = Flag::new();
 

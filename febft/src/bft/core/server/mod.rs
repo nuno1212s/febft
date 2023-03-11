@@ -97,7 +97,7 @@ pub struct Replica<S: Service + 'static> {
     // The networking layer for a Node in the network (either Client or Replica)
     node: Arc<Node<PBFTConsensus<S::Data>>>,
     // THe handle to the execution and timeouts handler
-    execution_rx: ChannelSyncRx<Message<State<S>, Request<S>, Reply<S>>>,
+    execution_rx: ChannelSyncRx<Message<S::Data>>,
     //A handle to the observer worker thread
     observer_handle: ObserverHandle,
 }

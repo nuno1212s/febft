@@ -78,7 +78,7 @@ pub struct Follower<S: Service + 'static> {
 
     pending_rq_log: Arc<PendingRequestLog<S>>,
 
-    execution_rx: ChannelSyncRx<Message<State<S>, Request<S>, Reply<S>>>,
+    execution_rx: ChannelSyncRx<Message<S::Data>>,
 
     node: Arc<Node<PBFTConsensus<S::Data>>>,
 }

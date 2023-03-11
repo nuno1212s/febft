@@ -37,6 +37,7 @@ use crate::bft::msg_log::decisions::Proof;
 use crate::bft::msg_log::Info;
 
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
+use crate::bft::PBFT;
 
 use crate::bft::sync::view::ViewInfo;
 use crate::bft::timeouts::{Timeout, Timeouts};
@@ -561,7 +562,7 @@ impl<S: Service + 'static> Consensus<S> {
         synchronizer: &Synchronizer<S>,
         timeouts: &Timeouts,
         log: &mut DecidedLog<S>,
-        node: &Node<PBFTConsensus<S::Data>>,
+        node: &Node<PBFT<S::Data>>,
     ) {
         match &mut self.accessory {
             ConsensusAccessory::Follower => {}
@@ -591,7 +592,7 @@ impl<S: Service + 'static> Consensus<S> {
         synchronizer: &Synchronizer<S>,
         timeouts: &Timeouts,
         log: &mut DecidedLog<S>,
-        node: &Node<PBFTConsensus<S::Data>>,
+        node: &Node<PBFT<S::Data>>,
     ) -> ConsensusStatus<S> {
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just
