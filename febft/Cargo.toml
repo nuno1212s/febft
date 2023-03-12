@@ -27,8 +27,10 @@ default = [
     "serialize_capnp"
 ]
 
-serialize_serde = ["febft-capnp", "serde", "serde_bytes", "bincode", "febft-common/serialize_serde"]
-serialize_capnp = ["febft-capnp"]
+serialize_serde = ["febft-capnp", "serde", "serde_bytes", "bincode", "febft-common/serialize_serde",
+    "febft-communication/serialize_serde", "febft-execution/serialize_serde", "febft-messages/serialize_serde"]
+serialize_capnp = ["febft-capnp", "febft-execution/serialize_capnp", "febft-communication/serialize_capnp",
+    "febft-messages/serialize_capnp"]
 
 [dev-dependencies]
 bincode = "1"
@@ -37,10 +39,10 @@ mimalloc = { version = "*", default-features = false }
 
 [dependencies]
 febft-common = { path = "../febft-common" }
-febft-communication = {path = "../febft-communication"}
-febft-execution = {path = "../febft-execution"}
-febft-messages = {path = "../febft-messages"}
-febft-capnp = {path ="../febft-capnp", optional = true}
+febft-communication = { path = "../febft-communication" }
+febft-execution = { path = "../febft-execution" }
+febft-messages = { path = "../febft-messages" }
+febft-capnp = { path = "../febft-capnp", optional = true }
 
 capnp = { version = "0.16" }
 fastrand = "1.7.0"

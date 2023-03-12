@@ -96,11 +96,11 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         //Speculate in another thread.
         threadpool::execute(move || {
             // create COMMIT
-            let message = NetworkMessageKind::from(System::from(SystemMessage::ProtocolMessage(Protocol::new(PBFTMessage::Consensus(ConsensusMessage::new(
+            let message = NetworkMessageKind::from(SystemMessage::ProtocolMessage(Protocol::new(PBFTMessage::Consensus(ConsensusMessage::new(
                 seq,
                 view_seq,
                 ConsensusMessageKind::Commit(current_digest.clone()),
-            ))))));
+            )))));
 
             // serialize raw msg
             let mut buf = Vec::new();

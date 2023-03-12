@@ -126,8 +126,8 @@ impl<M> Clone for NetworkMessageKind<M> where M: Serializable {
 }
 
 impl<M> NetworkMessageKind<M> where M: Serializable {
-    pub fn from(msg: System<M::Message>) -> Self {
-        NetworkMessageKind::System(msg)
+    pub fn from(msg: M::Message) -> Self {
+        NetworkMessageKind::System(System::from(msg))
     }
 
     pub fn deref_system(&self) -> &M::Message {

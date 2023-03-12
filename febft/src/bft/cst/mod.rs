@@ -21,6 +21,7 @@ use febft_common::crypto::hash::Digest;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, NetworkMessageKind, System};
 use febft_communication::{Node, NodeId};
+use febft_messages::messages::SystemMessage;
 
 use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State};
 use crate::bft::message::{CstMessage, CstMessageKind, PBFTMessage, SystemMessage};
@@ -28,6 +29,7 @@ use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog};
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
+use crate::bft::PBFT;
 use crate::bft::sync::Synchronizer;
 use crate::bft::sync::view::ViewInfo;
 use crate::bft::timeouts::{TimeoutKind, Timeouts};
@@ -245,7 +247,7 @@ impl<S> CollabStateTransfer<S>
         message: CstMessage<State<S>, Request<S>>,
         synchronizer: &Arc<T>,
         log: &DecidedLog<S>,
-        node: &Node<PBFTConsensus<S::Data>>,
+        node: &Node<PBFT<S::Data>>,
     ) where
         T: AbstractSynchronizer<S>,
     {
@@ -260,7 +262,8 @@ impl<S> CollabStateTransfer<S>
             message.sequence_number(),
             CstMessageKind::ReplyState(snapshot),
         ));
-        node.send(NetworkMessageKind::from(System::from(reply)), header.from(), true);
+
+        node.send(NetworkMessageKind::from( SystemMessage::from_protocol_message(reply)), header.from(), true);
     }
 
     /// Advances the state of the CST state machine.
@@ -270,7 +273,7 @@ impl<S> CollabStateTransfer<S>
         synchronizer: &Arc<T>,
         consensus: &K,
         log: &DecidedLog<S>,
-        node: &Node<PBFTConsensus<S::Data>>,
+        node: &Node<PBFT<S::Data>>,
     ) -> CstStatus<State<S>, Request<S>>
         where
             T: AbstractSynchronizer<S>,

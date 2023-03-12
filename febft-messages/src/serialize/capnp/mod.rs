@@ -14,22 +14,22 @@ pub(super) fn serialize_message<D, P>(builder: messages_capnp::system::Builder, 
         SystemMessage::OrderedRequest(req) => {
             let rq_builder = builder.init_request();
 
-            serialize_request(rq_builder, req)?;
+            serialize_request::<D>(rq_builder, req)?;
         }
         SystemMessage::UnorderedRequest(req) => {
             let unordered_rq_builder = builder.init_unordered_request();
 
-            serialize_request(unordered_rq_builder, req)?;
+            serialize_request::<D>(unordered_rq_builder, req)?;
         }
         SystemMessage::OrderedReply(rep) => {
             let reply_builder = builder.init_reply();
 
-            serialize_reply(reply_builder, rep)?;
+            serialize_reply::<D>(reply_builder, rep)?;
         }
         SystemMessage::UnorderedReply(rep) => {
             let unordered_reply_builder = builder.init_unordered_reply();
 
-            serialize_reply(unordered_reply_builder, rep)?;
+            serialize_reply::<D>(unordered_reply_builder, rep)?;
         }
         SystemMessage::ProtocolMessage(protocol) => {
             let protocol_message_builder = builder.init_protocol();
@@ -39,7 +39,7 @@ pub(super) fn serialize_message<D, P>(builder: messages_capnp::system::Builder, 
         SystemMessage::ForwardedProtocolMessage(fwd_protocol) => {
             let fwd_protocol_builder = builder.init_fwd_protocol();
 
-            serialize_fwd_protocol_message(fwd_protocol_builder, fwd_protocol.message())?;
+            serialize_fwd_protocol_message::<P>(fwd_protocol_builder, fwd_protocol.message())?;
         }
         SystemMessage::ForwardedRequestMessage(fwd_req) => {
             let mut fwd_rqs_builder = builder.init_fwd_requests(fwd_req.requests().len() as u32);
@@ -59,18 +59,7 @@ pub(super) fn serialize_message<D, P>(builder: messages_capnp::system::Builder, 
                 {
                     let mut request = forwarded.reborrow().init_request();
 
-                    let stored_req = stored.message();
-
-                    request.set_session_id(stored_req.session_id().into());
-                    request.set_operation_id(stored_req.sequence_number().into());
-
-                    let mut rq = Vec::with_capacity(DEFAULT_SERIALIZE_BUFFER_SIZE);
-
-                    D::serialize_request(&mut rq, stored_req.operation())?;
-
-                    let rq = Buf::from(rq);
-
-                    request.set_request(rq.as_ref());
+                    serialize_request::<D>(request, stored.message())?;
                 }
             }
         }
@@ -85,16 +74,16 @@ pub(super) fn deserialize_message<D, P>(reader: messages_capnp::system::Reader) 
 
     return match which {
         messages_capnp::system::WhichReader::Request(Ok(req)) => {
-            Ok(SystemMessage::OrderedRequest(deserialize_request(req)?))
+            Ok(SystemMessage::OrderedRequest(deserialize_request::<D>(req)?))
         }
         messages_capnp::system::WhichReader::Reply(Ok(rep)) => {
-            Ok(SystemMessage::OrderedReply(deserialize_reply(rep)?))
+            Ok(SystemMessage::OrderedReply(deserialize_reply::<D>(rep)?))
         }
         messages_capnp::system::WhichReader::UnorderedRequest(Ok(req)) => {
-            Ok(SystemMessage::UnorderedRequest(deserialize_request(req)?))
+            Ok(SystemMessage::UnorderedRequest(deserialize_request::<D>(req)?))
         }
         messages_capnp::system::WhichReader::UnorderedReply(Ok(rep)) => {
-            Ok(SystemMessage::UnorderedReply(deserialize_reply(rep)?))
+            Ok(SystemMessage::UnorderedReply(deserialize_reply::<D>(rep)?))
         }
         messages_capnp::system::WhichReader::Protocol(Ok(protocol)) => {
             Ok(SystemMessage::ProtocolMessage(Protocol::new(P::deserialize_capnp(protocol)?)))
@@ -115,7 +104,7 @@ pub(super) fn deserialize_message<D, P>(reader: messages_capnp::system::Reader) 
                     .get_request()
                     .wrapped(ErrorKind::CommunicationSerialize)?;
 
-                let parsed_request = deserialize_request(request)?;
+                let parsed_request = deserialize_request::<D>(request)?;
 
                 rqs.push(StoredMessage::new(
                     Header::deserialize_from(&header[..])?,
@@ -195,7 +184,7 @@ pub fn deserialize_reply<D>(reader: service_messages_capnp::reply::Reader) -> Re
     Ok(ReplyMessage::new(session, seq_no, operation))
 }
 
-pub fn serialize_fwd_protocol_message<P>(mut builder: messages_capnp::forwarded_protocol::Builder, msg: &StoredMessage<Protocol<P>>) -> Result<()> where P: OrderingProtocol {
+pub fn serialize_fwd_protocol_message<P>(mut builder: messages_capnp::forwarded_protocol::Builder, msg: &StoredMessage<Protocol<P::ProtocolMessage>>) -> Result<()> where P: OrderingProtocol {
     let mut header = [0; Header::LENGTH];
 
     msg.header().serialize_into(&mut header[..])?;
@@ -214,5 +203,5 @@ pub fn deserialize_fwd_protocol_message<P>(reader: messages_capnp::forwarded_pro
 
     let protocol_msg = P::deserialize_capnp(reader.get_message().wrapped(ErrorKind::CommunicationSerialize)?)?;
 
-    Ok(ForwardedProtocolMessage::new(StoredMessage::new(header, protocol_msg)))
+    Ok(ForwardedProtocolMessage::new(StoredMessage::new(header, Protocol::new(protocol_msg))))
 }
