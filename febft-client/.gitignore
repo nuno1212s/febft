@@ -1,0 +1,7 @@
+# ignore cargo stuff
+/target
+Cargo.lock
+
+# ignore vim :mksession
+/*.vim
+.DS_Store

@@ -2,11 +2,11 @@
 name = "febft-pbft-consensus"
 version = "0.1.0"
 description = "A BFT SMR library in Rust!"
-authors = ["Tiago Carvalho <up201605259@fc.up.pt>", "Nuno Neto <up201703898@fc.up.pt>"]
-edition = "2018"
+authors = ["Nuno Neto <up201703898@fc.up.pt>"]
+edition = "2021"
 license = "MIT"
-homepage = "https://github.com/febft/febft"
-repository = "https://github.com/febft/febft"
+homepage = "https://github.com/nuno1212s/febft"
+repository = "https://github.com/nuno1212s/febft"
 documentation = "https://docs.rs/febft"
 readme = "README.md"
 

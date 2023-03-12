@@ -2,6 +2,13 @@
 name = "febft-execution"
 version = "0.1.0"
 edition = "2021"
+description = "The execution layer of the FeBFT SMR BFT"
+authors = ["Nuno Neto <up201703898@fc.up.pt>"]
+license = "MIT"
+homepage = "https://github.com/nuno1212s/febft"
+repository = "https://github.com/nuno1212s/febft"
+documentation = "https://docs.rs/febft"
+readme = "README.md"
 
 [features]
 

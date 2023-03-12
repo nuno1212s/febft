@@ -2,6 +2,14 @@
 name = "febft-communication"
 version = "0.1.0"
 edition = "2021"
+description = "A communication layer for the FeBFT protocol"
+authors = ["Nuno Neto <up201703898@fc.up.pt>"]
+license = "MIT"
+homepage = "https://github.com/nuno1212s/febft"
+repository = "https://github.com/nuno1212s/febft"
+documentation = "https://docs.rs/febft"
+readme = "README.md"
+
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

@@ -1,3 +1,11 @@
+description = "The FeBFT protocol"
+authors = ["Nuno Neto <up201703898@fc.up.pt>"]
+license = "MIT"
+homepage = "https://github.com/nuno1212s/febft"
+repository = "https://github.com/nuno1212s/febft"
+documentation = "https://docs.rs/febft"
+readme = "README.md"
+
 [workspace]
 
 members = [
