@@ -20,16 +20,17 @@ use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_queue_message, tbo_pop_message};
 use febft_communication::message::{Header, StoredMessage};
 use febft_communication::{Node, NodeId};
+use febft_execution::app::{Reply, Request, Service, State};
+use febft_messages::messages::{RequestMessage, SystemMessage};
 
 use self::replica_consensus::ReplicaConsensus;
 use crate::bft::consensus::replica_consensus::ReplicaPreparingPollStatus;
 use super::core::server::follower_handling::FollowerHandle;
 use super::core::server::observer::ObserverHandle;
-use super::executable::Reply;
 use super::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::cst::RecoveryState;
-use crate::bft::executable::{ExecutorHandle, Request, Service, State};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, RequestMessage, SystemMessage};
+use crate::bft::executable::ExecutorHandle;
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::{BatchExecutionInfo, DecidedLog};
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
@@ -517,15 +518,15 @@ impl<S: Service + 'static> Consensus<S> {
         &self,
         requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         synchronizer: &K,
-    ) -> SystemMessage<State<S>, Request<S>, Reply<S>>
+    ) -> SystemMessage<S::Data, PBFTConsensus<S::Data>>
         where
             K: AbstractSynchronizer<S>,
     {
-        SystemMessage::Consensus(ConsensusMessage::new(
+        SystemMessage::from_protocol_message(PBFTMessage::Consensus(ConsensusMessage::new(
             self.sequence_number(),
             synchronizer.view().sequence_number(),
             ConsensusMessageKind::PrePrepare(requests),
-        ))
+        )))
     }
 
     pub fn catch_up_to_quorum(&mut self,

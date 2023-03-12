@@ -96,11 +96,11 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         //Speculate in another thread.
         threadpool::execute(move || {
             // create COMMIT
-            let message = NetworkMessageKind::from(SystemMessage::ProtocolMessage(Protocol::new(PBFTMessage::Consensus(ConsensusMessage::new(
+            let message = NetworkMessageKind::from(SystemMessage::from_protocol_message(PBFTMessage::Consensus(ConsensusMessage::new(
                 seq,
                 view_seq,
                 ConsensusMessageKind::Commit(current_digest.clone()),
-            )))));
+            ))));
 
             // serialize raw msg
             let mut buf = Vec::new();
@@ -144,7 +144,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         // Also, since we can have # Leaders > f, if the leaders didn't partake in this
         // Instance we would have situations where faults joined with leaders would cause
         // Unresponsiveness
-        let message = SystemMessage::Consensus(ConsensusMessage::new(
+        let message = PBFTMessage::Consensus(ConsensusMessage::new(
             seq,
             view.sequence_number(),
             ConsensusMessageKind::Prepare(current_digest),
@@ -152,7 +152,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
 
         let targets = NodeId::targets(0..view.params().n());
 
-        node.broadcast_signed(NetworkMessageKind::from(System::from(message)), targets);
+        node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
 
         //Notify the followers
         if let Some(follower_handle) = &self.follower_handle {
