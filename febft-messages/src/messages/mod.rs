@@ -4,6 +4,9 @@ use febft_communication::message::StoredMessage;
 use febft_execution::serialize::SharedData;
 use crate::serialize::OrderingProtocol;
 
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
+
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub enum SystemMessage<D: SharedData, P> {
     ///An ordered request

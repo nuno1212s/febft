@@ -3,6 +3,8 @@ use febft_common::error::*;
 use febft_communication::serialize::Serializable;
 use febft_execution::serialize::SharedData;
 use crate::messages::SystemMessage;
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
 
 #[cfg(feature = "serialize_capnp")]
 pub mod capnp;

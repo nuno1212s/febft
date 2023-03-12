@@ -24,12 +24,17 @@ default = [
     "febft-common/crypto_hash_blake3_blake3",
     "febft-common/collections_randomstate_fxhash",
     "febft-common/persistent_db_rocksdb",
-    "serialize_capnp"
+    "serialize_serde"
 ]
 
-serialize_serde = ["febft-capnp", "serde", "serde_bytes", "bincode", "febft-common/serialize_serde",
-    "febft-communication/serialize_serde", "febft-execution/serialize_serde", "febft-messages/serialize_serde"]
-serialize_capnp = ["febft-capnp", "febft-execution/serialize_capnp", "febft-communication/serialize_capnp",
+serialize_serde = ["febft-capnp", "serde", "serde_bytes", "bincode",
+    "febft-common/serialize_serde",
+    "febft-communication/serialize_serde",
+    "febft-execution/serialize_serde",
+    "febft-messages/serialize_serde"]
+serialize_capnp = ["febft-capnp",
+    "febft-execution/serialize_capnp",
+    "febft-communication/serialize_capnp",
     "febft-messages/serialize_capnp"]
 
 [dev-dependencies]
