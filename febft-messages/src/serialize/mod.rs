@@ -28,15 +28,15 @@ pub struct System<D: SharedData, P: OrderingProtocol>(PhantomData<D>, PhantomDat
 
 impl<D: SharedData, P: OrderingProtocol> Serializable for System<D, P> {
 
-    type Message = SystemMessage<D, P>;
+    type Message = SystemMessage<D, P::ProtocolMessage>;
 
     #[cfg(feature = "serialize_capnp")]
     fn serialize_capnp(builder: febft_capnp::messages_capnp::system::Builder, msg: &Self::Message) -> Result<()> {
-        capnp::serialize_message(builder, msg)
+        capnp::serialize_message::<D, P>(builder, msg)
     }
 
     #[cfg(feature = "serialize_capnp")]
     fn deserialize_capnp(reader: febft_capnp::messages_capnp::system::Reader) -> Result<Self::Message> {
-        capnp::deserialize_message(reader)
+        capnp::deserialize_message::<D, P>(reader)
     }
 }

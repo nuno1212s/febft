@@ -6,9 +6,9 @@ use febft_common::error::*;
 use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::StoredMessage;
+use febft_execution::app::{Request, Service, State, UpdateBatch};
 
 use crate::bft::cst::RecoveryState;
-use crate::bft::executable::{Request, Service, State, UpdateBatch};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::msg_log::{Info, operation_key, PERIOD};
 use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog, Proof};

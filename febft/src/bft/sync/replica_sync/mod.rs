@@ -17,13 +17,15 @@ use febft_common::crypto::hash::Digest;
 use febft_common::ordering::Orderable;
 use febft_communication::message::{NetworkMessageKind, StoredMessage, System};
 use febft_communication::{Node, NodeId};
+use febft_execution::app::{Request, Service};
+use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
 
-use crate::bft::executable::{Reply, Request, Service, State};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ForwardedRequestsMessage, RequestMessage, SystemMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::message::serialize::PBFTConsensus;
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
+use crate::bft::PBFT;
 use crate::bft::sync::view::ViewInfo;
 use crate::bft::timeouts::{ClientRqInfo, TimeoutKind, Timeouts};
 
@@ -63,7 +65,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         log: &DecidedLog<S>,
         pending_rq_log: &PendingRequestLog<S>,
         timeouts: &Timeouts,
-        node: &Node<PBFTConsensus<S::Data>>,
+        node: &Node<PBFT<S::Data>>,
     ) {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
@@ -83,12 +85,12 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
             //The N of the network (With reconfigurable views)
             .collect_data(previous_view.params().f());
 
-        let message = SystemMessage::ViewChange(ViewChangeMessage::new(
+        let message = PBFTMessage::ViewChange(ViewChangeMessage::new(
             current_view_seq,
             ViewChangeMessageKind::StopData(collect),
         ));
 
-        node.send_signed(NetworkMessageKind::from(System::from(message)), current_leader);
+        node.send_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), current_leader);
     }
 
     /// Start a new view change
@@ -98,7 +100,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         &self,
         base_sync: &Synchronizer<S>,
         timeouts: &Timeouts,
-        node: &Node<PBFTConsensus<S::Data>>,
+        node: &Node<PBFT<S::Data>>,
         timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
     ) {
         // stop all timers
@@ -113,14 +115,14 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
 
         //TODO: Timeout this request and keep sending it until we have achieved a new regency
 
-        let message = SystemMessage::ViewChange(ViewChangeMessage::new(
+        let message = PBFTMessage::ViewChange(ViewChangeMessage::new(
             current_view.sequence_number().next(),
             ViewChangeMessageKind::Stop(requests),
         ));
 
         let targets = NodeId::targets(0..current_view.params().n());
 
-        node.broadcast(NetworkMessageKind::from(System::from(message)), targets);
+        node.broadcast(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
     }
 
 
@@ -377,12 +379,12 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
         &self,
         base_sync: &Synchronizer<S>,
         timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
-        node: &Node<PBFTConsensus<S::Data>>,
+        node: &Node<PBFT<S::Data>>,
         _log: &PendingRequestLog<S>,
     ) {
-        let message = SystemMessage::ForwardedRequests(ForwardedRequestsMessage::new(timed_out));
+        let message = SystemMessage::ForwardedRequestMessage(ForwardedRequestsMessage::new(timed_out));
         let targets = NodeId::targets(0..base_sync.view().params().n());
-        node.broadcast(NetworkMessageKind::from(System::from(message)), targets);
+        node.broadcast(NetworkMessageKind::from(message), targets);
     }
 
     /// Obtain the requests that we know have timed out

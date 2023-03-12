@@ -1,4 +1,3 @@
-
 use crate::bft::core::client::{Client, ClientData};
 use core::task::{Context, Waker};
 use log::{error, warn};
@@ -10,8 +9,9 @@ use std::task::Poll;
 use febft_common::ordering::Orderable;
 use febft_communication::message::{NetworkMessage, NetworkMessageKind, System};
 use febft_communication::NodeId;
-use crate::bft::message::{Message, ObserveEventKind, ObserverMessage, SystemMessage};
-use crate::bft::message::serialize::SharedData;
+use febft_execution::serialize::SharedData;
+use febft_messages::messages::SystemMessage;
+use crate::bft::message::{Message, ObserveEventKind, ObserverMessage, PBFTMessage};
 
 ///Callback to when the replicas send their notifications
 ///When a new observe event is received, this function will be executed
@@ -42,7 +42,7 @@ impl ObserverClient {
 
         //Register the observer clients with the client node
         client.node.broadcast(
-            NetworkMessageKind::from(System::from(SystemMessage::ObserverMessage(ObserverMessage::ObserverRegister))),
+            NetworkMessageKind::from(SystemMessage::from_protocol_message(PBFTMessage::ObserverMessage(ObserverMessage::ObserverRegister))),
             targets,
         );
 
@@ -80,8 +80,8 @@ impl ObserverClient {
 
                 let sys_msg = message.into();
 
-                match sys_msg {
-                    SystemMessage::ObserverMessage(observed_msg) => {
+                match sys_msg.into_protocol_message() {
+                    PBFTMessage::ObserverMessage(observed_msg) => {
                         match observed_msg {
                             ObserverMessage::ObserverRegister
                             | ObserverMessage::ObserverUnregister => {
@@ -151,7 +151,7 @@ impl ObserverClient {
                                                     ObserveEventKind::NormalPhase((view2, seq2)),
                                                 ) if seq == seq2
                                                     && view.sequence_number()
-                                                        == view2.sequence_number() => {}
+                                                    == view2.sequence_number() => {}
                                                 (
                                                     ObserveEventKind::ViewChangePhase,
                                                     ObserveEventKind::ViewChangePhase,
@@ -210,11 +210,8 @@ impl ObserverClient {
                                     }
                                 }
                             }
-                        }
-                    }
-                    _ => {
-                        error!("Wrong sys message type!")
-                    }
+                        }}
+                    _ => {}
                 }
             }
             _ => {

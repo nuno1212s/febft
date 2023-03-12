@@ -20,11 +20,12 @@ use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::{measure_ready_rq_time, measure_response_deliver_time, measure_response_rcv_time, measure_sent_rq_info, measure_target_init_time, measure_time_rq_init, Node, NodeConfig, NodeId, start_measurement};
 use febft_communication::benchmarks::ClientPerf;
 use febft_communication::message::{NetworkMessage, NetworkMessageKind, System};
+use febft_execution::serialize::SharedData;
+use febft_messages::messages::{ReplyMessage, SystemMessage};
 
 use crate::bft::core::client::observing_client::ObserverClient;
-use crate::bft::message::serialize::{PBFTConsensus, SharedData};
-use crate::bft::message::{Message, ReplyMessage, SystemMessage};
-
+use crate::bft::{PBFT, SysMsg};
+use crate::bft::message::{Message, PBFTMessage};
 
 use self::unordered_client::{FollowerData, UnorderedClientMode};
 
@@ -114,7 +115,7 @@ pub trait ClientType<D: SharedData + 'static> {
         session_id: SeqNo,
         operation_id: SeqNo,
         operation: D::Request,
-    ) -> SystemMessage<D::State, D::Request, D::Reply>;
+    ) -> SysMsg<D>;
 
     ///The return types for the iterator
     type Iter: Iterator<Item=NodeId>;
@@ -135,7 +136,7 @@ pub struct Client<D: SharedData + 'static> {
     operation_counter: SeqNo,
     data: Arc<ClientData<D>>,
     params: SystemParams,
-    node: Arc<Node<PBFTConsensus<D>>>,
+    node: Arc<Node<PBFT<D>>>,
 }
 
 impl<D: SharedData> Clone for Client<D> {
@@ -361,7 +362,7 @@ impl<D> Client<D>
         }
 
         // broadcast our request to the node group
-        self.node.broadcast(NetworkMessageKind::from(System::from(message)), targets);
+        self.node.broadcast(NetworkMessageKind::from(message), targets);
 
         // await response
         let ready = get_ready::<D>(session_id, &*self.data);
@@ -455,7 +456,7 @@ impl<D> Client<D>
 
         measure_ready_rq_time!(&self.data.stats, rq_ready_init);
 
-        self.node.broadcast(NetworkMessageKind::from(System::from(message)), targets);
+        self.node.broadcast(NetworkMessageKind::from(message), targets);
 
         Self::start_timeout(
             self.node.clone(),
@@ -476,7 +477,7 @@ impl<D> Client<D>
     ///Start performing a timeout for a given request.
     /// TODO: Repeat the request/do something else to fix this
     fn start_timeout(
-        node: Arc<Node<PBFTConsensus<D>>>,
+        node: Arc<Node<PBFT<D>>>,
         session_id: SeqNo,
         rq_id: SeqNo,
         client_data: Arc<ClientData<D>>,
@@ -697,7 +698,7 @@ impl<D> Client<D>
     ///This task might become a large bottleneck with the scenario of few clients with high concurrent rqs,
     /// As the replicas will make very large batches and respond to all the sent requests in one go.
     /// This leaves this thread with a very large task to do in a very short time and it just can't keep up
-    fn message_recv_task(params: SystemParams, data: Arc<ClientData<D>>, node: Arc<Node<PBFTConsensus<D>>>) {
+    fn message_recv_task(params: SystemParams, data: Arc<ClientData<D>>, node: Arc<Node<PBFT<D>>>) {
         // use session id as key
         let mut last_operation_ids: IntMap<SeqNo> = IntMap::new();
         let mut replica_votes: IntMap<ReplicaVotes> = IntMap::new();
@@ -708,8 +709,8 @@ impl<D> Client<D>
             let sys_msg = message.into();
 
             match &sys_msg {
-                SystemMessage::Reply(msg_info)
-                | SystemMessage::UnOrderedReply(msg_info) => {
+                SystemMessage::OrderedReply(msg_info)
+                | SystemMessage::UnorderedReply(msg_info) => {
                     let session_id = msg_info.session_id();
                     let operation_id = msg_info.sequence_number();
 
@@ -782,8 +783,8 @@ impl<D> Client<D>
                             request_key,
                             ready,
                             match sys_msg {
-                                SystemMessage::Reply(message)
-                                | SystemMessage::UnOrderedReply(message) => message,
+                                SystemMessage::OrderedReply(message)
+                                | SystemMessage::UnorderedReply(message) => message,
                                 _ => unreachable!(),
                             },
                         );
@@ -826,12 +827,17 @@ impl<D> Client<D>
             }
 
             match sys_msg {
-                SystemMessage::ObserverMessage(message) => {
-                    let msg =
-                        Message::System(header, SystemMessage::ObserverMessage(message));
+                SystemMessage::ProtocolMessage(message) => {
+                    match message.payload() {
+                        PBFTMessage::ObserverMessage(obs) => {
+                            let msg =
+                                Message::System(NetworkMessage::new(header, NetworkMessageKind::from(SystemMessage::ProtocolMessage(message))));
 
-                    //Pass this message off to the observing module
-                    ObserverClient::handle_observed_message(&data, msg);
+                            //Pass this message off to the observing module
+                            ObserverClient::handle_observed_message(&data, msg);
+                        }
+                        _ => {}
+                    }
                 }
                 // FIXME: handle rogue messages on clients
                 _ => panic!("rogue message detected"),

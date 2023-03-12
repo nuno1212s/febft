@@ -19,7 +19,7 @@ use febft_common::crypto::hash::{Context, Digest};
 use febft_communication::serialize::Serializable;
 use febft_execution::serialize::SharedData;
 use febft_messages::serialize::OrderingProtocol;
-use crate::bft::message::{ConsensusMessage, PBFTMessage, SystemMessage};
+use crate::bft::message::{ConsensusMessage, PBFTMessage};
 
 #[cfg(feature = "serialize_capnp")]
 pub mod capnp;
@@ -62,15 +62,16 @@ pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
 pub struct PBFTConsensus<D: SharedData>(PhantomData<D>);
 
 impl<D> OrderingProtocol for PBFTConsensus<D> where D: SharedData {
+
     type ProtocolMessage = PBFTMessage<D::State, D::Request>;
 
     #[cfg(feature = "serialize_capnp")]
-    fn serialize_capnp(builder: febft_capnp::consensus_messages_capnp::consensus::Builder, msg: &Self::ProtocolMessage) -> Result<()> {
-        todo!()
+    fn serialize_capnp(builder: febft_capnp::consensus_messages_capnp::protocol_message::Builder, msg: &Self::ProtocolMessage) -> Result<()> {
+        capnp::serialize_message::<D>(builder, msg)
     }
 
     #[cfg(feature = "serialize_capnp")]
-    fn deserialize_capnp(reader: febft_capnp::consensus_messages_capnp::consensus::Reader) -> Result<Self::ProtocolMessage> {
-        todo!()
+    fn deserialize_capnp(reader: febft_capnp::consensus_messages_capnp::protocol_message::Reader) -> Result<Self::ProtocolMessage> {
+        capnp::deserialize_message::<D>(reader)
     }
 }

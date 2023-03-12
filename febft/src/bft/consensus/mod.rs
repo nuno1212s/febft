@@ -38,7 +38,7 @@ use crate::bft::msg_log::decisions::Proof;
 use crate::bft::msg_log::Info;
 
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
-use crate::bft::PBFT;
+use crate::bft::{PBFT, SysMsg};
 
 use crate::bft::sync::view::ViewInfo;
 use crate::bft::timeouts::{Timeout, Timeouts};
@@ -518,7 +518,7 @@ impl<S: Service + 'static> Consensus<S> {
         &self,
         requests: Vec<StoredMessage<RequestMessage<Request<S>>>>,
         synchronizer: &K,
-    ) -> SystemMessage<S::Data, PBFTConsensus<S::Data>>
+    ) -> SysMsg<S::Data>
         where
             K: AbstractSynchronizer<S>,
     {

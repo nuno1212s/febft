@@ -20,17 +20,13 @@ use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_common::persistentdb::KVDB;
 use febft_communication::message::{Header, StoredMessage};
+use febft_execution::app::{Request, Service, State};
+use febft_execution::serialize::SharedData;
+use crate::bft::executable::ExecutorHandle;
 
 use crate::bft::msg_log::persistent::serialization::{make_proof_info};
 
-
-use crate::bft::executable::ExecutorHandle;
-use crate::bft::{
-    executable::{Request, Service, State},
-};
-use crate::bft::executable::ExecutionRequest::Read;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
-use crate::bft::message::serialize::SharedData;
 use crate::bft::msg_log::decided_log::BatchExecutionInfo;
 use crate::bft::msg_log::decisions::{Decision, OnGoingDecision, Proof, ProofMetadata};
 use crate::bft::sync::view::ViewInfo;

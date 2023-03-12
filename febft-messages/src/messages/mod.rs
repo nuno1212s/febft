@@ -1,10 +1,11 @@
+use std::ops::Deref;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::StoredMessage;
 use febft_execution::serialize::SharedData;
 use crate::serialize::OrderingProtocol;
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-pub enum SystemMessage<D: SharedData, P: OrderingProtocol> {
+pub enum SystemMessage<D: SharedData, P> {
     ///An ordered request
     OrderedRequest(RequestMessage<D::Request>),
     ///An unordered request
@@ -18,18 +19,29 @@ pub enum SystemMessage<D: SharedData, P: OrderingProtocol> {
     ForwardedRequestMessage(ForwardedRequestsMessage<D::Request>),
 
     ///A message related to the protocol
-    ProtocolMessage(Protocol<P::ProtocolMessage>),
+    ProtocolMessage(Protocol<P>),
     ///A protocol message that has been forwarded by another peer
     ForwardedProtocolMessage(ForwardedProtocolMessage<P>),
 }
 
-impl<D, P> SystemMessage<D, P> where D: SharedData, P: OrderingProtocol {
-    pub fn from_protocol_message(msg: P::ProtocolMessage) -> Self {
+impl<D, P> SystemMessage<D, P> where D: SharedData {
+    pub fn from_protocol_message(msg: P) -> Self {
         SystemMessage::ProtocolMessage(Protocol::new(msg))
+    }
+
+    pub fn into_protocol_message(self) -> P {
+        match self {
+            SystemMessage::ProtocolMessage(prot) => {
+                prot.into_inner()
+            }
+            _ => {
+                unreachable!()
+            }
+        }
     }
 }
 
-impl<D, P> Clone for SystemMessage<D, P> where D: SharedData, P: OrderingProtocol {
+impl<D, P> Clone for SystemMessage<D, P> where D: SharedData, P: Clone {
     fn clone(&self) -> Self {
         match self {
             SystemMessage::OrderedRequest(req) => {
@@ -152,6 +164,14 @@ impl<P> Protocol<P> {
     }
 }
 
+impl<P> Deref for Protocol<P> {
+    type Target = P;
+
+    fn deref(&self) -> &Self::Target {
+        &self.payload
+    }
+}
+
 /// A message containing a number of forwarded requests
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
@@ -175,24 +195,27 @@ impl<O> ForwardedRequestsMessage<O> {
 
 /// A message containing a single forwarded consensus message
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-pub struct ForwardedProtocolMessage<P> where P: OrderingProtocol {
-    message: StoredMessage<Protocol<P::ProtocolMessage>>,
+#[derive(Clone)]
+pub struct ForwardedProtocolMessage<P> where {
+    message: StoredMessage<Protocol<P>>,
 }
 
-impl<P> ForwardedProtocolMessage<P> where P: OrderingProtocol {
-    pub fn new(message: StoredMessage<Protocol<P::ProtocolMessage>>) -> Self {
+impl<P> Deref for ForwardedProtocolMessage<P> {
+    type Target = StoredMessage<Protocol<P>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.message
+    }
+}
+
+impl<P> ForwardedProtocolMessage<P> {
+    pub fn new(message: StoredMessage<Protocol<P>>) -> Self {
         Self { message }
     }
 
-    pub fn message(&self) -> &StoredMessage<Protocol<P::ProtocolMessage>> { &self.message }
+    pub fn message(&self) -> &StoredMessage<Protocol<P>> { &self.message }
 
-    pub fn into_inner(self) -> StoredMessage<Protocol<P::ProtocolMessage>> {
+    pub fn into_inner(self) -> StoredMessage<Protocol<P>> {
         self.message
-    }
-}
-
-impl<P> Clone for ForwardedProtocolMessage<P> where P: OrderingProtocol {
-    fn clone(&self) -> Self {
-        ForwardedProtocolMessage::new(self.message.clone())
     }
 }

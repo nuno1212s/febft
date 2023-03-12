@@ -5,10 +5,12 @@ use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 use febft_common::globals::ReadOnly;
 use febft_communication::message::{NetworkMessageKind, StoredMessage, System};
 use febft_communication::{Node, NodeId, SendNode};
+use febft_execution::app::{Request, Service};
+use febft_messages::messages::SystemMessage;
 use crate::bft::core::server::ViewInfo;
-use crate::bft::executable::{Reply, Request, Service, State};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, SystemMessage, ViewChangeMessage, ViewChangeMessageKind};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::message::serialize::PBFTConsensus;
+use crate::bft::PBFT;
 
 /// The message type of the channel
 pub type ChannelMsg<S> = FollowerEvent<S>;
@@ -31,7 +33,7 @@ pub enum FollowerEvent<S: Service> {
 struct FollowersFollowing<S: Service + 'static> {
     own_id: NodeId,
     followers: Vec<NodeId>,
-    send_node: SendNode<PBFTConsensus<S::Data>>,
+    send_node: SendNode<PBFT<S::Data>>,
     rx: ChannelSyncRx<ChannelMsg<S>>,
 }
 
@@ -47,7 +49,7 @@ pub struct FollowerHandle<S: Service> {
 impl<S: Service + 'static> FollowersFollowing<S> {
     /// Starts the follower handling thread and returns a cloneable handle that
     /// can be used to deliver messages to it.
-    pub fn init_follower_handling(id: NodeId, node: &Arc<Node<PBFTConsensus<S::Data>>>) -> FollowerHandle<S> {
+    pub fn init_follower_handling(id: NodeId, node: &Arc<Node<PBFT<S::Data>>>) -> FollowerHandle<S> {
         let (tx, rx) = channel::new_bounded_sync(1024);
 
         let follower_handling = Self {
@@ -89,9 +91,7 @@ impl<S: Service + 'static> FollowersFollowing<S> {
                     }
                 }
                 FollowerEvent::ReceivedViewChangeMsg(view_change_msg) => {
-
                     self.handle_sync_msg(view_change_msg)
-
                 }
             }
         }
@@ -164,11 +164,11 @@ impl<S: Service + 'static> FollowersFollowing<S> {
 
         let pre_prepare = message.message().clone();
 
-        let message = SystemMessage::FwdConsensus(FwdConsensusMessage::new(header, pre_prepare));
+        let message = SystemMessage::from_protocol_message(PBFTMessage::FwdConsensus(FwdConsensusMessage::new(header, pre_prepare)));
 
         let targets = self.targets(view);
 
-        self.send_node.broadcast(NetworkMessageKind::from(System::from(message)), targets.into_iter());
+        self.send_node.broadcast(NetworkMessageKind::from(message), targets.into_iter());
     }
 
     /// Handle us having sent a prepare message (notice how pre prepare are handled on reception
@@ -187,10 +187,10 @@ impl<S: Service + 'static> FollowersFollowing<S> {
         //Clone the messages here in this thread so we don't slow down the consensus thread at all
         let prepare = prepare.message().clone();
 
-        let message = SystemMessage::Consensus(prepare);
+        let message = SystemMessage::from_protocol_message(PBFTMessage::Consensus(prepare));
 
         self.send_node
-            .broadcast(NetworkMessageKind::from(System::from(message)), self.followers.iter().copied());
+            .broadcast(NetworkMessageKind::from(message), self.followers.iter().copied());
     }
 
     /// Handle us having sent a commit message (notice how pre prepare are handled on reception
@@ -208,15 +208,14 @@ impl<S: Service + 'static> FollowersFollowing<S> {
 
         let commit = commit.message().clone();
 
-        let message = SystemMessage::Consensus(commit);
+        let message = SystemMessage::from_protocol_message(PBFTMessage::Consensus(commit));
 
         self.send_node
-            .broadcast(NetworkMessageKind::from(System::from(message)), self.followers.iter().copied());
+            .broadcast(NetworkMessageKind::from(message), self.followers.iter().copied());
     }
 
     ///
     fn handle_sync_msg(&mut self, msg: Arc<ReadOnly<StoredMessage<ViewChangeMessage<Request<S>>>>>) {
-
         let message = msg.message();
 
         match message.kind() {
@@ -238,12 +237,11 @@ impl<S: Service + 'static> FollowersFollowing<S> {
             }
         }
 
-        let message = SystemMessage::ViewChange(message.clone());
+        let message = PBFTMessage::ViewChange(message.clone());
 
         self.send_node
-            .broadcast(NetworkMessageKind::from(System::from(message)), self.followers.iter().copied());
+            .broadcast(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), self.followers.iter().copied());
     }
-
 }
 
 impl<S: Service> Deref for FollowerHandle<S> {

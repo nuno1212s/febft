@@ -20,13 +20,12 @@ use febft_common::crypto::hash::{Context, Digest};
 use febft_common::crypto::signature::{KeyPair, PublicKey, Signature};
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, PingMessage, StoredMessage};
+use febft_execution::serialize::SharedData;
 use febft_messages::messages::RequestMessage;
 
 use crate::bft::timeouts::{Timeout, TimeoutKind};
 use crate::bft::sync::LeaderCollects;
 use crate::bft::cst::RecoveryState;
-use crate::bft::executable::{Reply, Request, State};
-use crate::bft::message::serialize::{Buf, PBFTConsensus, SharedData};
 use crate::bft::msg_log::decisions::CollectData;
 use crate::bft::PBFT;
 use crate::bft::sync::view::ViewInfo;
@@ -85,7 +84,7 @@ impl<D> Debug for Message<D> where D: SharedData {
 /// PBFT protocol messages
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub enum PBFTMessage<S, R>  {
+pub enum PBFTMessage<S, R> {
     /// Consensus message
     Consensus(ConsensusMessage<R>),
     FwdConsensus(FwdConsensusMessage<R>),
@@ -97,21 +96,25 @@ pub enum PBFTMessage<S, R>  {
     ObserverMessage(ObserverMessage),
 }
 
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct ForwardedRequestsMessage<O> {
-    inner: Vec<StoredMessage<RequestMessage<O>>>,
-}
-
-impl<O> ForwardedRequestsMessage<O> {
-    /// Creates a new `ForwardedRequestsMessage`, containing the given client requests.
-    pub fn new(inner: Vec<StoredMessage<RequestMessage<O>>>) -> Self {
-        Self { inner }
-    }
-
-    /// Returns the client requests contained in this `ForwardedRequestsMessage`.
-    pub fn into_inner(self) -> Vec<StoredMessage<RequestMessage<O>>> {
-        self.inner
+impl<S, R> Debug for PBFTMessage<S, R> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PBFTMessage::Consensus(_) => {
+                write!(f, "Consensus ")
+            }
+            PBFTMessage::FwdConsensus(_) => {
+                write!(f, "Forwarded consensus msg")
+            }
+            PBFTMessage::Cst(_) => {
+                write!(f, "CST msg")
+            }
+            PBFTMessage::ViewChange(_) => {
+                write!(f, "View change msg")
+            }
+            PBFTMessage::ObserverMessage(_) => {
+                write!(f, "Observer msg")
+            }
+        }
     }
 }
 

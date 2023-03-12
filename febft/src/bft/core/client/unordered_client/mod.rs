@@ -5,9 +5,9 @@ use std::sync::{Mutex};
 use febft_common::error::*;
 use febft_common::ordering::SeqNo;
 use febft_communication::{NodeId, TlsNodeConnector};
-use crate::bft::executable::{Reply, Request, State};
-use crate::bft::message::serialize::SharedData;
-use crate::bft::message::{RequestMessage, SystemMessage};
+use febft_execution::serialize::SharedData;
+use febft_messages::messages::{RequestMessage, SystemMessage};
+use crate::bft::SysMsg;
 
 use super::{Client, ClientType};
 
@@ -120,9 +120,9 @@ where
         session_id: SeqNo,
         operation_id: SeqNo,
         operation: D::Request,
-    ) -> SystemMessage<D::State, D::Request, D::Reply>
+    ) -> SysMsg<D>
     {
-        SystemMessage::UnOrderedRequest(RequestMessage::new(session_id, operation_id, operation))
+        SystemMessage::UnorderedRequest(RequestMessage::new(session_id, operation_id, operation))
     }
 
     type Iter = impl Iterator<Item = NodeId>;

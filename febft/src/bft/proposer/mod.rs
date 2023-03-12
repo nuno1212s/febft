@@ -1,5 +1,6 @@
 pub mod follower_proposer;
 
+use std::ops::Deref;
 use log::{error, warn, debug, info, trace};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -11,13 +12,17 @@ use febft_common::ordering::{Orderable, SeqNo};
 use febft_common::threadpool;
 use febft_communication::message::{NetworkMessage, NetworkMessageKind, StoredMessage, System};
 use febft_communication::Node;
+use febft_execution::app::{Request, Service, UnorderedBatch};
+use febft_execution::serialize::SharedData;
+use febft_messages::messages::{RequestMessage, SystemMessage};
 use crate::bft::consensus::ConsensusGuard;
 use crate::bft::core::server::observer::{ConnState, MessageType, ObserverHandle};
-use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State, UnorderedBatch};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, RequestMessage, SystemMessage};
+use crate::bft::executable::ExecutorHandle;
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, PBFTMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
+use crate::bft::PBFT;
 use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
 use crate::bft::timeouts::{Timeouts};
 
@@ -29,7 +34,7 @@ pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
 pub struct Proposer<S: Service + 'static> {
-    node_ref: Arc<Node<PBFTConsensus<S::Data>>>,
+    node_ref: Arc<Node<PBFT<S::Data>>>,
 
     synchronizer: Arc<Synchronizer<S>>,
     timeouts: Timeouts,
@@ -70,7 +75,7 @@ const BATCH_CHANNEL_SIZE: usize = 128;
 
 impl<S: Service + 'static> Proposer<S> {
     pub fn new(
-        node: Arc<Node<PBFTConsensus<S::Data>>>,
+        node: Arc<Node<PBFT<S::Data>>>,
         sync: Arc<Synchronizer<S>>,
         pending_decision_log: Arc<PendingRequestLog<S>>,
         timeouts: Timeouts,
@@ -184,7 +189,7 @@ impl<S: Service + 'static> Proposer<S> {
                             let sysmsg = message.into();
 
                             match sysmsg {
-                                SystemMessage::Request(req) => {
+                                SystemMessage::OrderedRequest(req) => {
                                     let rq_digest = header.unique_digest();
 
                                     /*let key = logg::operation_key(&header, &req);
@@ -205,18 +210,25 @@ impl<S: Service + 'static> Proposer<S> {
                                         //TODO: The synchronizer must be notified of this
                                     }
                                 }
-                                SystemMessage::UnOrderedRequest(req) => {
+                                SystemMessage::UnorderedRequest(req) => {
                                     unordered_propose.currently_accumulated.push(StoredMessage::new(header, req));
                                 }
-                                SystemMessage::ObserverMessage(msg) => {
-                                    if let ObserverMessage::ObserverRegister = msg {
-                                        //Avoid sending these messages to the main replica
-                                        //Processing thread and just process them here instead as it
-                                        //Does not delay the process
-                                        let observer_message = MessageType::Conn(ConnState::Connected(header.from()));
+                                SystemMessage::ProtocolMessage(protocol) => {
+                                    match protocol.into_inner() {
+                                        PBFTMessage::ObserverMessage(msg) => {
+                                            if let ObserverMessage::ObserverRegister = msg {
+                                                //Avoid sending these messages to the main replica
+                                                //Processing thread and just process them here instead as it
+                                                //Does not delay the process
+                                                let observer_message = MessageType::Conn(ConnState::Connected(header.from()));
 
-                                        if let Err(_) = self.observer_handle.tx().send(observer_message) {
-                                            error!("Failed to send messages to the observer handle.");
+                                                if let Err(_) = self.observer_handle.tx().send(observer_message) {
+                                                    error!("Failed to send messages to the observer handle.");
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            warn!("Rogue message detected from clients")
                                         }
                                     }
                                 }
@@ -402,7 +414,7 @@ impl<S: Service + 'static> Proposer<S> {
         view: &ViewInfo,
         currently_accumulated: Vec<StoredMessage<RequestMessage<Request<S>>>>,
     ) {
-        let message = SystemMessage::Consensus(ConsensusMessage::new(
+        let message = PBFTMessage::Consensus(ConsensusMessage::new(
             seq,
             view.sequence_number(),
             ConsensusMessageKind::PrePrepare(currently_accumulated),
@@ -410,7 +422,7 @@ impl<S: Service + 'static> Proposer<S> {
 
         let targets = view.quorum_members().iter().copied();
 
-        self.node_ref.broadcast_signed(NetworkMessageKind::from(System::from(message)), targets);
+        self.node_ref.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
     }
 
     pub fn cancel(&self) {

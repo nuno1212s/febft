@@ -5,6 +5,7 @@ use std::{
         atomic::{AtomicBool, Ordering}, Mutex,
     },
 };
+use std::ops::Deref;
 use bytes::BytesMut;
 
 use chrono::Utc;
@@ -19,17 +20,18 @@ use febft_common::threadpool;
 use febft_communication::message::{NetworkMessageKind, SerializedMessage, StoredMessage, StoredSerializedNetworkMessage, System, WireMessage};
 use febft_communication::{Node, NodeId, serialize};
 use febft_communication::serialize::Buf;
+use febft_execution::app::{Reply, Request, Service, State};
+use febft_execution::serialize::SharedData;
 use febft_messages::messages::{Protocol, SystemMessage};
-
-use crate::bft::{core::server::{
-    follower_handling::{FollowerEvent, FollowerHandle},
-    observer::{MessageType, ObserverHandle},
-}, executable::{Reply, Request, Service, State}, PBFT, sync::AbstractSynchronizer};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage, SystemMessage};
+use crate::bft::core::server::follower_handling::{FollowerEvent, FollowerHandle};
+use crate::bft::core::server::observer::{MessageType, ObserverHandle};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::deciding_log::DecidingLog;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
+use crate::bft::PBFT;
+use crate::bft::sync::AbstractSynchronizer;
 use crate::bft::sync::view::ViewInfo;
 
 use super::{
@@ -61,7 +63,7 @@ macro_rules! extract_msg {
 pub struct ReplicaConsensus<S: Service + 'static> {
     missing_requests: VecDeque<Digest>,
     missing_swapbuf: Vec<usize>,
-    speculative_commits: Arc<Mutex<IntMap<StoredSerializedNetworkMessage<PBFTConsensus<S::Data>>>>>,
+    speculative_commits: Arc<Mutex<IntMap<StoredSerializedNetworkMessage<PBFT<S::Data>>>>>,
     consensus_guard: ConsensusGuard,
     observer_handle: ObserverHandle,
     follower_handle: Option<FollowerHandle<S>>,
@@ -106,10 +108,10 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
             let mut buf = Vec::new();
 
             let digest = serialize::serialize_digest::<Vec<u8>,
-                PBFTConsensus<S::Data>>(&message,  &mut buf).unwrap();
+                PBFT<S::Data>>(&message, &mut buf).unwrap();
 
             let buf = Buf::from(buf);
-            
+
             for peer_id in NodeId::targets(0..n) {
                 let buf_clone = buf.clone();
 
@@ -214,7 +216,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
 
             node.broadcast_serialized(speculative_commits);
         } else {
-            let message = SystemMessage::Consensus(ConsensusMessage::new(
+            let message = PBFTMessage::Consensus(ConsensusMessage::new(
                 seq,
                 curr_view.sequence_number(),
                 ConsensusMessageKind::Commit(current_digest.clone()),
@@ -225,7 +227,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
 
             let targets = NodeId::targets(0..curr_view.params().n());
 
-            node.broadcast_signed(NetworkMessageKind::from(System::from(message)), targets);
+            node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
         }
 
         log.batch_meta().lock().unwrap().commit_sent_time = Utc::now();
@@ -391,7 +393,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
 
 #[inline]
 fn valid_spec_commits<S>(
-    speculative_commits: &IntMap<StoredSerializedNetworkMessage<PBFTConsensus<S::Data>>>,
+    speculative_commits: &IntMap<StoredSerializedNetworkMessage<PBFT<S::Data>>>,
     node_id: NodeId,
     seq_no: SeqNo,
     view: &ViewInfo,
@@ -417,8 +419,13 @@ fn valid_spec_commits<S>(
     speculative_commits
         .values()
         .map(|stored| match stored.message().original().deref_system() {
-            SystemMessage::Consensus(c) => c,
-            _ => unreachable!(),
+            SystemMessage::ProtocolMessage(protocol) => {
+                match protocol.deref() {
+                    PBFTMessage::Consensus(consensus) => consensus,
+                    _ => { unreachable!() }
+                }
+            }
+            _ => { unreachable!() }
         })
         .all(|commit| commit.sequence_number() == seq_no)
 }

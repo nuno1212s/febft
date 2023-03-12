@@ -8,15 +8,12 @@ use febft_common::crypto::hash::Digest;
 
 use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
-
-use crate::bft::{
-    executable::{ExecutorHandle, Request, Service, UpdateBatch},
-};
+use febft_execution::app::Service;
+use crate::bft::executable::ExecutorHandle;
 
 use crate::bft::msg_log::decided_log::BatchExecutionInfo;
 use crate::bft::msg_log::Info;
-
-use super::{ResponseMessage, ResponseMsg};
+use crate::bft::msg_log::persistent::{ResponseMessage, ResponseMsg};
 
 ///This is made to handle the backlog when the consensus is working faster than the persistent storage layer.
 /// It holds update batches that are yet to be executed since they are still waiting for the confirmation of the persistent log

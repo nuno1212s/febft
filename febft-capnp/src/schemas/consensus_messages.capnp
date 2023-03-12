@@ -7,8 +7,8 @@ struct ProtocolMessage {
 
     union {
         consensusMessage     @0 :Consensus;
-        viewChangeMessage    @1 :Void;
-        stateTransferMessage @2 :Void;
+        viewChangeMessage    @1 :ViewChange;
+        stateTransferMessage @2 :StateTransfer;
         observerMessage      @3 :ObserverMessage;
     }
 
@@ -22,6 +22,14 @@ struct Consensus {
         prepare    @3 :Data;
         commit     @4 :Data;
     }
+}
+
+struct ViewChange {
+
+}
+
+struct StateTransfer {
+
 }
 
 struct ObserverMessage {

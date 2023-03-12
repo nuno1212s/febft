@@ -21,10 +21,11 @@ use febft_common::crypto::hash::Digest;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, NetworkMessageKind, System};
 use febft_communication::{Node, NodeId};
+use febft_execution::app::{Reply, Request, Service, State};
 use febft_messages::messages::SystemMessage;
+use crate::bft::executable::ExecutorHandle;
 
-use crate::bft::executable::{ExecutorHandle, Reply, Request, Service, State};
-use crate::bft::message::{CstMessage, CstMessageKind, PBFTMessage, SystemMessage};
+use crate::bft::message::{CstMessage, CstMessageKind, PBFTMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog};
@@ -289,11 +290,10 @@ impl<S> CollabStateTransfer<S>
                 let (header, message) = getmessage!(progress, CstStatus::Nil);
                 match message.kind() {
                     CstMessageKind::RequestLatestConsensusSeq => {
-                        let kind =
-                            CstMessageKind::ReplyLatestConsensusSeq(consensus.sequence_number());
-                        let reply =
-                            PBFTMessage::Cst(CstMessage::new(message.sequence_number(), kind));
-                        node.send(NetworkMessageKind::from(System::from(reply)), header.from(), true);
+                        let kind = CstMessageKind::ReplyLatestConsensusSeq(consensus.sequence_number());
+                        let reply = PBFTMessage::Cst(CstMessage::new(message.sequence_number(), kind));
+
+                        node.send(NetworkMessageKind::from(SystemMessage::from_protocol_message(reply)), header.from(), true);
                     }
                     CstMessageKind::RequestState => {
                         self.process_reply_state(header, message, synchronizer, log, node);
@@ -438,7 +438,7 @@ impl<S> CollabStateTransfer<S>
     /// Returns a bool to signify if we must move to the Retrieving state
     /// If the timeout is no longer relevant, returns false (Can remain in current phase)
     pub fn cst_request_timed_out(&mut self, seq: SeqNo, synchronizer: &Arc<Synchronizer<S>>,
-                                 timeouts: &Timeouts, node: &Node<PBFTConsensus<S::Data>>) -> bool {
+                                 timeouts: &Timeouts, node: &Node<PBFT<S::Data>>) -> bool {
         let status = self.timed_out(seq);
 
         match status {
@@ -499,7 +499,7 @@ impl<S> CollabStateTransfer<S>
         &mut self,
         synchronizer: &Arc<T>,
         timeouts: &Timeouts,
-        node: &Node<PBFTConsensus<S::Data>>,
+        node: &Node<PBFT<S::Data>>,
     ) where
         T: AbstractSynchronizer<S>
     {
@@ -523,7 +523,7 @@ impl<S> CollabStateTransfer<S>
 
         let targets = NodeId::targets(0..current_view.params().n());
 
-        node.broadcast(NetworkMessageKind::from(System::from(message)), targets);
+        node.broadcast(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
     }
 
     /// Used by a recovering node to retrieve the latest state.
@@ -531,7 +531,7 @@ impl<S> CollabStateTransfer<S>
         &mut self,
         synchronizer: &Arc<T>,
         timeouts: &Timeouts,
-        node: &Node<PBFTConsensus<S::Data>>,
+        node: &Node<PBFT<S::Data>>,
     ) where
         T: AbstractSynchronizer<S>
     {
@@ -551,6 +551,7 @@ impl<S> CollabStateTransfer<S>
         // Overloading the replicas
         let message = PBFTMessage::Cst(CstMessage::new(cst_seq, CstMessageKind::RequestState));
         let targets = NodeId::targets(0..current_view.params().n());
-        node.broadcast(NetworkMessageKind::from(System::from(message)), targets);
+
+        node.broadcast(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
     }
 }

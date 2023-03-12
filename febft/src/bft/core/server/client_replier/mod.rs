@@ -3,10 +3,9 @@ use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 use febft_communication::{NodeId, SendNode};
 use febft_communication::message::{NetworkMessageKind, System};
+use febft_execution::app::{BatchReplies, Reply, Service};
+use febft_messages::messages::{ReplyMessage, SystemMessage};
 
-
-use crate::bft::executable::{Reply, Service, BatchReplies, State, Request};
-use crate::bft::message::{ReplyMessage, SystemMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::PBFT;
 
@@ -95,12 +94,13 @@ impl<S> Replier<S> where S: Service + 'static {
 
                         // store previous reply message and peer id,
                         // for the next iteration
-                        let message = NetworkMessageKind::from(System::from(
-                            SystemMessage::Reply(ReplyMessage::new(
+                        //TODO: Choose ordered or unordered reply
+                        let message = NetworkMessageKind::from(
+                            SystemMessage::OrderedReply(ReplyMessage::new(
                                 session_id,
                                 operation_id,
                                 payload,
-                            ))));
+                            )));
 
                         curr_send = Some((message, peer_id));
                     }

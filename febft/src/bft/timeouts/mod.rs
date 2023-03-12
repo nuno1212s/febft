@@ -10,7 +10,7 @@ use febft_common::crypto::hash::Digest;
 use febft_common::ordering::SeqNo;
 use febft_communication::incoming_peer_handling::ConnectedPeer;
 use febft_communication::NodeId;
-use crate::bft::executable::{Reply, Request, Service, State};
+use febft_execution::app::Service;
 use crate::bft::message::Message;
 
 const CHANNEL_SIZE: usize = 1024;
@@ -99,7 +99,7 @@ impl Timeouts {
     ///Initialize the timeouts thread and return a handle to it
     /// This handle can then be used everywhere timeouts are needed.
     pub fn new<S: Service + 'static>(iteration_delay: u64,
-                                     loopback_channel: ChannelSyncTx<S::Data>) -> Self {
+                                     loopback_channel: ChannelSyncTx<Message<S::Data>>) -> Self {
         let tx = TimeoutsThread::<S>::new(iteration_delay, loopback_channel);
 
         Self {

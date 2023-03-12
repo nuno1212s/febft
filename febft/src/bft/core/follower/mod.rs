@@ -8,15 +8,18 @@ use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::{Node, NodeConfig, NodeId};
 use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, System};
+use febft_execution::app::{Request, Service, State};
+use febft_execution::serialize::SharedData;
+use febft_messages::messages::SystemMessage;
 
 use crate::bft::consensus::{AbstractConsensus, Consensus, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::ReplicaPhase;
 use crate::bft::cst::{install_recovery_state, CollabStateTransfer, CstProgress, CstStatus};
-use crate::bft::executable::{Executor, ExecutorHandle, FollowerReplier, Reply, Request, Service, State};
-use crate::bft::message::{ConsensusMessage, Message, SystemMessage};
+use crate::bft::message::{ConsensusMessage, Message, PBFTMessage};
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::msg_log;
+use crate::bft::{msg_log, PBFT};
+use crate::bft::executable::{Executor, ExecutorHandle, FollowerReplier};
 use crate::bft::msg_log::{Info};
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
@@ -80,7 +83,7 @@ pub struct Follower<S: Service + 'static> {
 
     execution_rx: ChannelSyncRx<Message<S::Data>>,
 
-    node: Arc<Node<PBFTConsensus<S::Data>>>,
+    node: Arc<Node<PBFT<S::Data>>>,
 }
 
 pub struct FollowerConfig<S: Service, T: PersistentLogModeTrait> {
@@ -262,7 +265,7 @@ impl<S: Service + 'static> Follower<S> {
         let message = match polled_message {
             ConsensusPollStatus::Recv => self.node.receive_from_replicas()?,
             ConsensusPollStatus::NextMessage(h, m) => {
-                NetworkMessage::new(h, NetworkMessageKind::from(System::from(SystemMessage::Consensus(m))))
+                NetworkMessage::new(h, NetworkMessageKind::from(SystemMessage::from_protocol_message(PBFTMessage::Consensus(m))))
             }
             ConsensusPollStatus::TryProposeAndRecv => {
                 self.consensus.advance_init_phase();
@@ -280,67 +283,44 @@ impl<S: Service + 'static> Follower<S> {
         // debug!("{:?} // Processing message {:?}", self.id(), message);
 
         match message {
-            SystemMessage::Request(_) | SystemMessage::ForwardedRequests(_) => {
-                //Followers do not accept ordered requests
-                warn!("Received ordered request while follower, cannot process so ignoring.");
-            }
-            SystemMessage::UnOrderedRequest(_) => {
-                warn!("Unordered requests should be delivered straight to the executor.")
-            }
-            SystemMessage::Cst(message) => {
-                let status = self.cst.process_message(
-                    CstProgress::Message(header, message),
-                    &self.synchronizer,
-                    &self.consensus,
-                    &self.decided_log,
-                    &mut self.node,
-                );
-                match status {
-                    CstStatus::Nil => (),
-                    // should not happen...
-                    _ => {
-                        return Err("Invalid state reached!")
-                            .wrapped(ErrorKind::CoreServer);
+            SystemMessage::ProtocolMessage(protocol) => {
+                match protocol.into_inner() {
+                    PBFTMessage::Consensus(message) => {
+                        self.adv_consensus(header, message)?;
                     }
+                    PBFTMessage::ViewChange(view_change) => {
+                        let status = self.synchronizer.process_message(
+                            header,
+                            view_change,
+                            &self.timeouts,
+                            &mut self.decided_log,
+                            &self.pending_rq_log,
+                            &mut self.consensus,
+                            &self.node,
+                        );
+
+                        self.synchronizer.signal();
+
+                        match status {
+                            SynchronizerStatus::Nil => (),
+                            SynchronizerStatus::Running => {
+                                self.switch_phase(FollowerPhase::SyncPhase)
+                            }
+                            // should not happen...
+                            _ => {
+                                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer);
+                            }
+                        }
+                    }
+                    PBFTMessage::Cst(message) => {
+                        self.process_off_context_cst_msg(header, message)?;
+                    }
+                    _ => {}
                 }
             }
-            SystemMessage::ViewChange(message) => {
-                let status = self.synchronizer.process_message(
-                    header,
-                    message,
-                    &self.timeouts,
-                    &mut self.decided_log,
-                    &self.pending_rq_log,
-                    &mut self.consensus,
-                    &self.node,
-                );
-
-                self.synchronizer.signal();
-
-                match status {
-                    SynchronizerStatus::Nil => (),
-                    SynchronizerStatus::Running => {
-                        self.switch_phase(FollowerPhase::SyncPhase)
-                    }
-                    // should not happen...
-                    _ => {
-                        return Err("Invalid state reached!")
-                            .wrapped(ErrorKind::CoreServer);
-                    }
-                }
+            _ => {
+                warn!("Rogue message detected");
             }
-            SystemMessage::Consensus(message) => {
-                self.adv_consensus(header, message)?;
-            }
-            SystemMessage::FwdConsensus(message) => {
-                let (header, message) = message.into_inner();
-
-                self.adv_consensus(header, message)?;
-            }
-            // FIXME: handle rogue reply messages
-            SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
-            SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
-            SystemMessage::Ping(_) => {}
         }
 
         Ok(())
@@ -352,7 +332,7 @@ impl<S: Service + 'static> Follower<S> {
         let message = match self.synchronizer.poll() {
             SynchronizerPollStatus::Recv => self.node.receive_from_replicas()?,
             SynchronizerPollStatus::NextMessage(h, m) => {
-                NetworkMessage::new(h, NetworkMessageKind::from(System::from(SystemMessage::ViewChange(m))))
+                NetworkMessage::new(h, NetworkMessageKind::from(SystemMessage::from_protocol_message(PBFTMessage::ViewChange(m))))
             }
             SynchronizerPollStatus::ResumeViewChange => {
                 self.synchronizer.resume_view_change(
@@ -368,7 +348,7 @@ impl<S: Service + 'static> Follower<S> {
             }
         };
 
-        let NetworkMessage {header, message} = message;
+        let NetworkMessage { header, message } = message;
 
         let message = message.into();
 
@@ -462,7 +442,7 @@ impl<S: Service + 'static> Follower<S> {
         debug!("{:?} // Retrieving state...", self.id());
         let message = self.node.receive_from_replicas().unwrap();
 
-        let NetworkMessage { header, message} = message;
+        let NetworkMessage { header, message } = message;
 
         let message = message.into();
 

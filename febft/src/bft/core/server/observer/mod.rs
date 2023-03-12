@@ -6,8 +6,10 @@ use febft_common::ordering::SeqNo;
 use febft_communication::{NodeId, SendNode};
 use febft_communication::message::{NetworkMessageKind, System};
 use febft_communication::serialize::Serializable;
-use crate::bft::message::{ObserveEventKind, ObserverMessage, SystemMessage};
-use crate::bft::message::serialize::{PBFTConsensus, SharedData};
+use febft_execution::serialize::SharedData;
+use febft_messages::messages::SystemMessage;
+use crate::bft::message::{ObserveEventKind, ObserverMessage, PBFTMessage};
+use crate::bft::{PBFT, SysMsg};
 
 use super::ViewInfo;
 
@@ -37,7 +39,7 @@ impl ObserverHandle {
     }
 }
 
-pub fn start_observers<D>(send_node: SendNode<PBFTConsensus<D>>) -> ObserverHandle where D: SharedData + 'static {
+pub fn start_observers<D>(send_node: SendNode<PBFT<D>>) -> ObserverHandle where D: SharedData + 'static {
     let (tx, rx) = channel::new_bounded_mixed(16834);
 
     let observer_handle = ObserverHandle {
@@ -59,7 +61,7 @@ pub fn start_observers<D>(send_node: SendNode<PBFTConsensus<D>>) -> ObserverHand
 
 struct Observers<D> where D: SharedData + 'static {
     registered_observers: BTreeSet<ObserverType>,
-    send_node: SendNode<PBFTConsensus<D>>,
+    send_node: SendNode<PBFT<D>>,
     rx: ChannelMixedRx<MessageType<ObserverType>>,
     last_normal_event: Option<(ViewInfo, SeqNo)>,
     last_event: Option<ObserveEventKind>,
@@ -93,20 +95,20 @@ impl<D> Observers<D> where D: SharedData + 'static {
                                         info!("{:?} // Observer {:?} has been registered", self.send_node.id(), connected_client);
                                     }
 
-                                    let message = SystemMessage::ObserverMessage(ObserverMessage::ObserverRegisterResponse(res));
+                                    let message = PBFTMessage::ObserverMessage(ObserverMessage::ObserverRegisterResponse(res));
 
-                                    self.send_node.send(NetworkMessageKind::from(System::from(message)), connected_client, true);
+                                    self.send_node.send(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), connected_client, true);
 
                                     if let Some((view, seq)) = &self.last_normal_event {
-                                        let message: SystemMessage<D::State, D::Request, D::Reply> = SystemMessage::ObserverMessage(ObserverMessage::ObservedValue(ObserveEventKind::NormalPhase((view.clone(), seq.clone()))));
+                                        let message: SysMsg<D> = SystemMessage::from_protocol_message(PBFTMessage::ObserverMessage(ObserverMessage::ObservedValue(ObserveEventKind::NormalPhase((view.clone(), seq.clone())))));
 
-                                        self.send_node.send(NetworkMessageKind::from(System::from(message)), connected_client, true);
+                                        self.send_node.send(NetworkMessageKind::from(message), connected_client, true);
                                     }
 
                                     if let Some(last_event) = &self.last_event {
-                                        let message: SystemMessage<D::State, D::Request, D::Reply> = SystemMessage::ObserverMessage(ObserverMessage::ObservedValue(last_event.clone()));
+                                        let message: SysMsg<D> = SystemMessage::from_protocol_message(PBFTMessage::ObserverMessage(ObserverMessage::ObservedValue(last_event.clone())));
 
-                                        self.send_node.send(NetworkMessageKind::from(System::from(message)), connected_client, true);
+                                        self.send_node.send(NetworkMessageKind::from(message), connected_client, true);
                                     }
                                 }
                                 ConnState::Disconnected(disconnected_client) => {
@@ -124,7 +126,7 @@ impl<D> Observers<D> where D: SharedData + 'static {
                             self.last_event = Some(event_type.clone());
 
                             //Send the observed event to the registered observers
-                            let message = SystemMessage::ObserverMessage(ObserverMessage::ObservedValue(event_type));
+                            let message = PBFTMessage::ObserverMessage(ObserverMessage::ObservedValue(event_type));
 
                             let registered_obs = self.registered_observers.iter().copied().map(|f| {
                                 f.0 as usize
@@ -132,7 +134,7 @@ impl<D> Observers<D> where D: SharedData + 'static {
 
                             let targets = NodeId::targets(registered_obs);
 
-                            self.send_node.broadcast(NetworkMessageKind::from(System::from(message)), targets);
+                            self.send_node.broadcast(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
                         }
                     }
                 }

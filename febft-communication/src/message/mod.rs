@@ -151,6 +151,17 @@ impl<M> NetworkMessageKind<M> where M: Serializable {
             }
         }
     }
+
+    pub fn into_system(self) -> M::Message {
+        match self {
+            NetworkMessageKind::Ping(_) => {
+                unreachable!()
+            }
+            NetworkMessageKind::System(sys_msg) => {
+                sys_msg.inner
+            }
+        }
+    }
 }
 
 impl<M> From<System<M::Message>> for NetworkMessageKind<M> where M: Serializable {
