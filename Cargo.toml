@@ -6,7 +6,9 @@ members = [
     "febft-capnp",
     "febft-execution",
     "febft-messages",
-    "febft"
+    "febft-replica",
+    "febft-client",
+    "febft-pbft-consensus"
 ]
 
 # https://doc.rust-lang.org/cargo/reference/profiles.html
