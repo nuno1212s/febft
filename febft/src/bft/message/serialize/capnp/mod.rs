@@ -88,7 +88,7 @@ fn deserialize_consensus_message<D>(
     consensus_msg: consensus_messages_capnp::consensus::Reader,
 ) -> Result<ConsensusMessage<D::Request>>
     where
-        D: SharedData + ?Sized,
+        D: SharedData,
 {
     let seq_no: SeqNo = consensus_msg.get_seq_no().into();
     let view: SeqNo = consensus_msg.get_view().into();
@@ -149,7 +149,7 @@ fn deserialize_consensus_message<D>(
 pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
     where
         R: Read,
-        D: SharedData + ?Sized,
+        D: SharedData,
 {
     let reader = capnp::serialize::read_message(r, Default::default()).wrapped_msg(
         ErrorKind::CommunicationSerialize,
@@ -169,7 +169,7 @@ fn serialize_consensus_message<S>(
     m: &ConsensusMessage<S::Request>,
 ) -> Result<()>
     where
-        S: SharedData + ?Sized,
+        S: SharedData,
 {
     consensus.set_seq_no(m.sequence_number().into());
     consensus.set_view(m.view().into());
@@ -217,7 +217,7 @@ fn serialize_consensus_message<S>(
 pub fn serialize_consensus<W, S>(w: &mut W, message: &ConsensusMessage<S::Request>) -> Result<()>
     where
         W: Write,
-        S: SharedData + ?Sized,
+        S: SharedData,
 {
     let mut root = capnp::message::Builder::new(capnp::message::HeapAllocator::new());
 

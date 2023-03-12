@@ -16,7 +16,7 @@ use crate::bft::consensus::{AbstractConsensus, Consensus, ConsensusPollStatus, C
 use crate::bft::core::server::client_replier::Replier;
 use crate::bft::core::server::ReplicaPhase;
 use crate::bft::cst::{install_recovery_state, CollabStateTransfer, CstProgress, CstStatus};
-use crate::bft::message::{ConsensusMessage, Message, PBFTMessage};
+use crate::bft::message::{ConsensusMessage, CstMessage, Message, PBFTMessage, ViewChangeMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::{msg_log, PBFT};
 use crate::bft::executable::{Executor, ExecutorHandle, FollowerReplier};
@@ -240,13 +240,93 @@ impl<S: Service + 'static> Follower<S> {
         self.phase = phase;
     }
 
+    fn update_retrieving_state(&mut self) -> Result<()> {
+        debug!("{:?} // Retrieving state...", self.id());
+        let message = self.node.receive_from_replicas().unwrap();
+
+        let (header, message_content) = message.into_inner();
+
+        match message_content.into_system() {
+            SystemMessage::ProtocolMessage(protocol_msg) => {
+                match protocol_msg.into_inner() {
+                    PBFTMessage::Cst(cst_message) => {
+                        self.adv_cst(header, cst_message)?;
+                    }
+                    PBFTMessage::ViewChange(message) => {
+                        self.synchronizer.queue(header, message);
+                    }
+                    PBFTMessage::Consensus(consensus) => {
+                        self.consensus.queue(header, consensus);
+                    }
+                    _ => {
+                        warn!("Rogue message detected");
+                    }
+                }
+            }
+            _ => {
+                warn!("Rogue message detected");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Iterate the synchronizer state machine
+    fn update_sync_phase(&mut self) -> Result<bool> {
+        debug!("{:?} // Updating Sync phase", self.id());
+
+        // retrieve a view change message to be processed
+        let message = match self.synchronizer.poll() {
+            SynchronizerPollStatus::Recv => self.node.receive_from_replicas()?,
+            SynchronizerPollStatus::NextMessage(h, m) => {
+                NetworkMessage::new(h, NetworkMessageKind::from(SystemMessage::from_protocol_message(PBFTMessage::ViewChange(m))))
+            }
+            SynchronizerPollStatus::ResumeViewChange => {
+                self.synchronizer.resume_view_change(
+                    &mut self.decided_log,
+                    &self.timeouts,
+                    &mut self.consensus,
+                    &self.node,
+                );
+
+                self.switch_phase(FollowerPhase::NormalPhase);
+                return Ok(false);
+            }
+        };
+
+        let (header,message) = message.into_inner();
+
+        match message.into_system() {
+            SystemMessage::ProtocolMessage(protocol_message) => {
+                match protocol_message.into_inner() {
+                    PBFTMessage::ViewChange(message) => {
+                        return self.adv_sync(header, message);
+                    }
+                    PBFTMessage::Cst(cst_message) => {
+                        self.process_off_context_cst_msg(header, cst_message)?;
+                    }
+                    PBFTMessage::Consensus(consensus) => {
+                        self.consensus.queue(header, consensus);
+                    }
+                    _ => {
+                        warn!("Rogue request detected");
+                    }
+                }
+            }
+            _ => {
+                warn!("Rogue message detected");
+            }
+        }
+
+        Ok(true)
+    }
+
     fn update_normal_phase(&mut self) -> Result<()> {
         // check if we have STOP messages to be processed,
         // and update our phase when we start installing
         // the new view
         if self.synchronizer.can_process_stops() {
             let running = self.update_sync_phase()?;
-
             if running {
                 self.switch_phase(FollowerPhase::SyncPhase);
 
@@ -277,21 +357,18 @@ impl<S: Service + 'static> Follower<S> {
             }
         };
 
-        let NetworkMessage { header, message } = message;
+        let (header,message) = message.into_inner();
 
-        let message = message.into();
-        // debug!("{:?} // Processing message {:?}", self.id(), message);
-
-        match message {
-            SystemMessage::ProtocolMessage(protocol) => {
-                match protocol.into_inner() {
-                    PBFTMessage::Consensus(message) => {
-                        self.adv_consensus(header, message)?;
+        match message.into_system() {
+            SystemMessage::ProtocolMessage(protocol_message) => {
+                match protocol_message.into_inner() {
+                    PBFTMessage::Consensus(consensus) => {
+                        self.adv_consensus(header, consensus)?;
                     }
-                    PBFTMessage::ViewChange(view_change) => {
+                    PBFTMessage::ViewChange(message) => {
                         let status = self.synchronizer.process_message(
                             header,
-                            view_change,
+                            message,
                             &self.timeouts,
                             &mut self.decided_log,
                             &self.pending_rq_log,
@@ -312,240 +389,23 @@ impl<S: Service + 'static> Follower<S> {
                             }
                         }
                     }
-                    PBFTMessage::Cst(message) => {
-                        self.process_off_context_cst_msg(header, message)?;
+                    PBFTMessage::Cst(cst_message) => {
+                        self.process_off_context_cst_msg(header, cst_message)?;
                     }
-                    _ => {}
+                    _ => {
+                        warn!("Rogue request detected");
+                    }
                 }
             }
-            _ => {
-                warn!("Rogue message detected");
+            _=>{
+                warn!("Rogue system message detected");
             }
         }
 
         Ok(())
     }
 
-    /// Iterate the synchronous phase
-    fn update_sync_phase(&mut self) -> Result<bool> {
-        // retrieve a view change message to be processed
-        let message = match self.synchronizer.poll() {
-            SynchronizerPollStatus::Recv => self.node.receive_from_replicas()?,
-            SynchronizerPollStatus::NextMessage(h, m) => {
-                NetworkMessage::new(h, NetworkMessageKind::from(SystemMessage::from_protocol_message(PBFTMessage::ViewChange(m))))
-            }
-            SynchronizerPollStatus::ResumeViewChange => {
-                self.synchronizer.resume_view_change(
-                    &mut self.decided_log,
-                    &self.timeouts,
-                    &mut self.consensus,
-                    &self.node,
-                );
-
-                self.switch_phase(FollowerPhase::NormalPhase);
-
-                return Ok(false);
-            }
-        };
-
-        let NetworkMessage { header, message } = message;
-
-        let message = message.into();
-
-        match message {
-            SystemMessage::ForwardedRequests(_) | SystemMessage::Request(_) => {
-                //Followers cannot process ordered requests
-                warn!("Received ordered request while follower, cannot process so ignoring.");
-            }
-            SystemMessage::Consensus(message) => {
-                self.consensus.queue(header, message);
-            }
-            SystemMessage::FwdConsensus(fwdConsensus) => {
-                let (h, m) = fwdConsensus.into_inner();
-
-                //TODO: Verify signature of replica
-
-                self.consensus.queue(h, m);
-            }
-            SystemMessage::Cst(message) => {
-                let status = self.cst.process_message(
-                    CstProgress::Message(header, message),
-                    &self.synchronizer,
-                    &self.consensus,
-                    &self.decided_log,
-                    &mut self.node,
-                );
-                match status {
-                    CstStatus::Nil => (),
-                    // should not happen...
-                    _ => {
-                        return Err("Invalid state reached!")
-                            .wrapped(ErrorKind::CoreServer);
-                    }
-                }
-            }
-            SystemMessage::ViewChange(message) => {
-                let status = self.synchronizer.process_message(
-                    header,
-                    message,
-                    &self.timeouts,
-                    &mut self.decided_log,
-                    &self.pending_rq_log,
-                    &mut self.consensus,
-                    &mut self.node,
-                );
-
-                self.synchronizer.signal();
-
-                match status {
-                    SynchronizerStatus::Nil => return Ok(false),
-                    SynchronizerStatus::Running => (),
-                    SynchronizerStatus::NewView => {
-                        //Our current view has been updated and we have no more state operations
-                        //to perform. This happens if we are a correct replica and therefore do not need
-                        //To update our state or if we are a replica that was incorrect and whose state has
-                        //Already been updated from the Cst protocol
-                        self.switch_phase(FollowerPhase::NormalPhase);
-
-                        return Ok(false);
-                    }
-                    SynchronizerStatus::RunCst => {
-                        //This happens when a new view is being introduced and we are not up to date
-                        //With the rest of the replicas. This might happen because the replica was faulty
-                        //or any other reason that might cause it to lose some updates from the other replicas
-                        self.switch_phase(FollowerPhase::RetrievingStatePhase);
-
-                        //After we update the state, we go back to the sync phase (this phase) so we can check if we are missing
-                        //Anything or to finalize and go back to the normal phase
-                        self.phase_stack = Some(FollowerPhase::SyncPhase);
-                    }
-                    // should not happen...
-                    _ => {
-                        return Err("Invalid state reached!")
-                            .wrapped(ErrorKind::CoreServer);
-                    }
-                }
-            }
-            // FIXME: handle rogue reply messages
-            SystemMessage::Reply(_) | SystemMessage::UnOrderedReply(_) => warn!("Rogue reply message detected"),
-            SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
-            SystemMessage::UnOrderedRequest(_) => {
-                warn!("Received request while synchronizing, ignoring.")
-            }
-            SystemMessage::Ping(_) => {}
-        }
-
-        Ok(true)
-    }
-
-    fn update_retrieving_phase(&mut self) -> Result<()> {
-        debug!("{:?} // Retrieving state...", self.id());
-        let message = self.node.receive_from_replicas().unwrap();
-
-        let NetworkMessage { header, message } = message;
-
-        let message = message.into();
-
-        match message {
-            SystemMessage::ForwardedRequests(_) | SystemMessage::Request(_) => {
-                //Followers cannot execute ordered requests
-            }
-            SystemMessage::Consensus(message) => {
-                self.consensus.queue(header, message);
-            }
-            SystemMessage::FwdConsensus(fwdConsensus) => {
-                let (h, m) = fwdConsensus.into_inner();
-
-                //TODO: Check signature
-
-                self.consensus.queue(h, m);
-            }
-            SystemMessage::ViewChange(message) => {
-                self.synchronizer.queue(header, message);
-            }
-            SystemMessage::Cst(message) => {
-                let status = self.cst.process_message(
-                    CstProgress::Message(header, message),
-                    &self.synchronizer,
-                    &self.consensus,
-                    &self.decided_log,
-                    &self.node,
-                );
-                match status {
-                    CstStatus::Running => (),
-                    CstStatus::State(state) => {
-                        install_recovery_state(
-                            state,
-                            &self.synchronizer,
-                            &mut self.decided_log,
-                            &mut self.executor,
-                            &mut self.consensus,
-                        )?;
-
-                        let next_phase = self
-                            .phase_stack
-                            .take()
-                            .unwrap_or(FollowerPhase::NormalPhase);
-
-                        self.switch_phase(next_phase);
-                    }
-                    CstStatus::SeqNo(seq) => {
-                        if self.consensus.sequence_number() < seq {
-                            // this step will allow us to ignore any messages
-                            // for older consensus instances we may have had stored;
-                            //
-                            // after we receive the latest recovery state, we
-                            // need to install the then latest sequence no;
-                            // this is done with the function
-                            // `install_recovery_state` from cst
-                            self.consensus.install_sequence_number(seq);
-
-                            self.cst.request_latest_state(
-                                &self.synchronizer,
-                                &self.timeouts,
-                                &self.node,
-                            );
-                        } else {
-                            self.switch_phase(FollowerPhase::NormalPhase);
-                        }
-                    }
-                    CstStatus::RequestLatestCid => {
-                        self.cst.request_latest_consensus_seq_no(
-                            &self.synchronizer,
-                            &self.timeouts,
-                            &self.node,
-                        );
-                    }
-                    CstStatus::RequestState => {
-                        self.cst.request_latest_state(
-                            &self.synchronizer,
-                            &self.timeouts,
-                            &mut self.node,
-                        );
-                    }
-                    // should not happen...
-                    CstStatus::Nil => {
-                        return Err("Invalid state reached!")
-                            .wrapped(ErrorKind::CoreServer);
-                    }
-                }
-            }
-            // FIXME: handle rogue reply messages
-            // Should never
-            SystemMessage::Reply(_) => warn!("Rogue reply message detected"),
-            SystemMessage::ObserverMessage(_) => warn!("Rogue observer message detected"),
-            SystemMessage::UnOrderedRequest(_) => {
-                warn!("Rogue unordered request message detected")
-            }
-            SystemMessage::UnOrderedReply(_) => {
-                warn!("How can I receive a reply here?")
-            }
-            SystemMessage::Ping(_) => {}
-        }
-
-        Ok(())
-    }
-
+    /// Advance the consensus phase with a received message
     fn adv_consensus(
         &mut self,
         header: Header,
@@ -580,17 +440,12 @@ impl<S: Service + 'static> Follower<S> {
             // FIXME: execution layer needs to receive the id
             // attributed by the consensus layer to each op,
             // to execute in order
-            ConsensusStatus::Decided(completed_batch) => {
-                if let Some(batch) =
-                    self.decided_log
-                        .finalize_batch(seq, completed_batch)?
-                {
-                    let (info, batch, _) = batch.into();
+            ConsensusStatus::Decided(batch_digest) => {
+                if let Some(exec_info) =
+                    //Should the execution be scheduled here or will it be scheduled by the persistent log?
+                    self.decided_log.finalize_batch(seq, batch_digest)? {
+                    let (info, batch, completed_batch) = exec_info.into();
 
-                    //Send the finalized batch to the rq finalizer
-                    //So everything can be removed from the correct logs and
-                    //Given to the service thread to execute
-                    //self.rq_finalizer.queue_finalize(info, meta, rqs);
                     match info {
                         Info::Nil => self.executor.queue_update(batch),
                         // execute and begin local checkpoint
@@ -618,6 +473,145 @@ impl<S: Service + 'static> Follower<S> {
         // will probably force a value from the
         // TBO queue in the consensus layer
         // std::hint::spin_loop();
+        Ok(())
+    }
+
+    /// Advance the sync phase of the algorithm
+    fn adv_sync(&mut self, header: Header,
+                message: ViewChangeMessage<Request<S>>) -> Result<bool> {
+        let status = self.synchronizer.process_message(
+            header,
+            message,
+            &self.timeouts,
+            &mut self.decided_log,
+            &self.pending_rq_log,
+            &mut self.consensus,
+            &mut self.node,
+        );
+
+        self.synchronizer.signal();
+
+        match status {
+            SynchronizerStatus::Nil => return Ok(false),
+            SynchronizerStatus::Running => (),
+            SynchronizerStatus::NewView => {
+                //Our current view has been updated and we have no more state operations
+                //to perform. This happens if we are a correct replica and therefore do not need
+                //To update our state or if we are a replica that was incorrect and whose state has
+                //Already been updated from the Cst protocol
+                self.switch_phase(FollowerPhase::NormalPhase);
+
+                return Ok(false);
+            }
+            SynchronizerStatus::RunCst => {
+                //This happens when a new view is being introduced and we are not up to date
+                //With the rest of the replicas. This might happen because the replica was faulty
+                //or any other reason that might cause it to lose some updates from the other replicas
+                self.switch_phase(FollowerPhase::RetrievingStatePhase);
+
+                //After we update the state, we go back to the sync phase (this phase) so we can check if we are missing
+                //Anything or to finalize and go back to the normal phase
+                self.phase_stack = Some(FollowerPhase::SyncPhase);
+            }
+            // should not happen...
+            _ => {
+                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Advance the consensus state transfer machine
+    fn adv_cst(&mut self, header: Header, message: CstMessage<State<S>, Request<S>>) -> Result<()> {
+        let status = self.cst.process_message(
+            CstProgress::Message(header, message),
+            &self.synchronizer,
+            &self.consensus,
+            &self.decided_log,
+            &self.node,
+        );
+
+        match status {
+            CstStatus::Running => (),
+            CstStatus::State(state) => {
+                install_recovery_state(
+                    state,
+                    &self.synchronizer,
+                    &mut self.decided_log,
+                    &mut self.executor,
+                    &mut self.consensus,
+                )?;
+
+                // If we were in the middle of performing a view change, then continue that
+                // View change. If not, then proceed to the normal phase
+                let next_phase =
+                    self.phase_stack.take().unwrap_or(FollowerPhase::NormalPhase);
+
+                self.switch_phase(next_phase);
+            }
+            CstStatus::SeqNo(seq) => {
+                if self.consensus.sequence_number() < seq {
+                    // this step will allow us to ignore any messages
+                    // for older consensus instances we may have had stored;
+                    //
+                    // after we receive the latest recovery state, we
+                    // need to install the then latest sequence no;
+                    // this is done with the function
+                    // `install_recovery_state` from cst
+                    self.consensus.install_sequence_number(seq);
+
+                    self.cst.request_latest_state(
+                        &self.synchronizer,
+                        &self.timeouts,
+                        &self.node,
+                    );
+                } else {
+                    self.switch_phase(FollowerPhase::NormalPhase);
+                }
+            }
+            CstStatus::RequestLatestCid => {
+                self.cst.request_latest_consensus_seq_no(
+                    &self.synchronizer,
+                    &self.timeouts,
+                    &self.node,
+                );
+            }
+            CstStatus::RequestState => {
+                self.cst.request_latest_state(
+                    &self.synchronizer,
+                    &self.timeouts,
+                    &mut self.node,
+                );
+            }
+            // should not happen...
+            CstStatus::Nil => {
+                return Err("Invalid state reached!")
+                    .wrapped(ErrorKind::CoreServer);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Process a CST message that was received while we are executing another phase
+    fn process_off_context_cst_msg(&mut self, header: Header, message: CstMessage<State<S>, Request<S>>) -> Result<()> {
+        let status = self.cst.process_message(
+            CstProgress::Message(header, message),
+            &self.synchronizer,
+            &self.consensus,
+            &self.decided_log,
+            &mut self.node,
+        );
+
+        match status {
+            CstStatus::Nil => (),
+            // should not happen...
+            _ => {
+                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer);
+            }
+        }
+
         Ok(())
     }
 

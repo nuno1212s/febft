@@ -99,6 +99,10 @@ impl<M> NetworkMessage<M> where M: Serializable {
     pub fn new(header: Header, message: NetworkMessageKind<M>) -> Self {
         Self { header, message }
     }
+
+    pub fn into_inner(self) -> (Header, NetworkMessageKind<M>) {
+        (self.header, self.message)
+    }
 }
 
 impl<M> From<(Header, NetworkMessageKind<M>)> for NetworkMessage<M> where M: Serializable {
