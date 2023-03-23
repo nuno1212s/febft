@@ -24,6 +24,8 @@ mod custom_dump;
 #[cfg(feature = "channel_sync_crossbeam")]
 mod crossbeam;
 
+mod oneshot_spsc;
+
 /**
  * ASYNCHRONOUS CHANNEL
  */
@@ -402,6 +404,20 @@ pub fn new_bounded_mult<T>(bound: usize) -> (ChannelMultTx<T>, ChannelMultRx<T>)
     let (tx, rx) = custom_dump::bounded_mult_channel(bound);
 
     (ChannelMultTx { inner: tx }, ChannelMultRx { inner: rx })
+}
+
+/*
+  One shot channels
+  @{
+ */
+
+pub type OneShotTx<T> = oneshot_spsc::OneShotTx<T>;
+
+pub type OneShotRx<T> = oneshot_spsc::OneShotRx<T>;
+
+#[inline]
+pub fn new_oneshot_channel<T>() -> (OneShotTx<T>, OneShotRx<T>) {
+    oneshot_spsc::new_oneshot()
 }
 
 /**
