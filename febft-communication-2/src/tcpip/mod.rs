@@ -15,6 +15,8 @@ use crate::client_pooling::{ConnectedPeer, PeerIncomingRqHandling};
 use crate::message::{NetworkMessage, NetworkMessageKind, StoredSerializedNetworkMessage};
 use crate::serialize::Serializable;
 
+pub mod connections; 
+
 ///Represents the server addresses of a peer
 ///Clients will only have 1 address while replicas will have 2 addresses (1 for facing clients,
 /// 1 for facing replicas)
@@ -210,18 +212,18 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
     }
 
     fn loopback_channel(&self) -> &Arc<ConnectedPeer<NetworkMessage<M>>> {
-        todo!()
+        self.client_pooling.loopback_connection()
     }
 
     fn receive_from_clients(&self, timeout: Option<Duration>) -> Result<Vec<NetworkMessage<M>>> {
-        todo!()
+        self.client_pooling.receive_from_clients(timeout)
     }
 
     fn try_recv_from_clients(&self) -> Result<Option<Vec<NetworkMessage<M>>>> {
-        todo!()
+        self.client_pooling.try_receive_from_clients()
     }
 
     fn receive_from_replicas(&self) -> Result<NetworkMessage<M>> {
-        todo!()
+        self.client_pooling.receive_from_replicas()
     }
 }
