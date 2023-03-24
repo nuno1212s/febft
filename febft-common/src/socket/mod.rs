@@ -3,6 +3,7 @@
 use std::io;
 use std::io::{BufRead, Read, Write};
 use std::net::SocketAddr;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -11,11 +12,9 @@ use async_tls::{
     server::TlsStream as TlsStreamSrv,
 };
 use async_tls::server::TlsStream;
+use either::Either;
 
-use futures::io::{
-    AsyncRead,
-    AsyncWrite,
-};
+use futures::io::{AsyncRead, AsyncWrite, BufReader, BufWriter};
 
 use rustls::{ClientConnection, ServerConnection, StreamOwned};
 
@@ -221,21 +220,144 @@ impl SecureSocketRecvSync {
     pub fn new_plain(socket: SyncSocket) -> Self {
         SecureSocketRecvSync::Plain(std::io::BufReader::new(socket))
     }
-    
+
     pub fn new_tls(session: ServerConnection, socket: SyncSocket) -> Self {
         SecureSocketRecvSync::Tls(std::io::BufReader::new(StreamOwned::new(session, socket)))
-
     }
 }
 
 impl SecureSocketSendSync {
     pub fn new_plain(socket: SyncSocket) -> Self {
-        SecureSocketSendSync::Plain(std::io::BufWriter::new(socket))
+        SecureSocketSendSync::Plain(io::BufWriter::new(socket))
     }
-    
-    pub fn new_tls(session: ClientConnection, socket: SyncSocket) -> Self {
-        SecureSocketSendSync::Tls(std::io::BufWriter::new(StreamOwned::new(session, socket)))
 
+    pub fn new_tls(session: ClientConnection, socket: SyncSocket) -> Self {
+        let owned = StreamOwned::new(session, socket);
+
+        SecureSocketSendSync::Tls(io::BufWriter::new(owned))
+    }
+}
+
+pub enum SecureWriteHalfSync {
+    Plain(WriteHalfSync),
+    Tls(Either<ClientConnection, ServerConnection>, WriteHalfSync),
+}
+
+pub enum SecureReadHalfSync {
+    Plain(ReadHalfSync),
+    Tls(Either<ClientConnection, ServerConnection>, ReadHalfSync),
+}
+
+impl Read for SecureReadHalfSync {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            SecureReadHalfSync::Plain(plain) => {
+                plain.read(buf)
+            }
+            SecureReadHalfSync::Tls(tls_conn, sock) => {
+                tls_conn.read_tls(sock)?;
+
+                let state = tls_conn.process_new_packets()?;
+
+                //FIXME: Is this correct, since we can read a different
+                // Amount of packets as in the read tls one above
+                if state.plaintext_bytes_to_read() {
+                    tls_conn.reader().read(buf)
+                } else {
+                    Ok(0)
+                }
+            }
+        }
+    }
+}
+
+impl Write for SecureWriteHalfSync {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            SecureWriteHalfSync::Plain(write_half) => {
+                write_half.write(buf)
+            }
+            SecureWriteHalfSync::Tls(tls_conn, socket) => {
+                tls_conn.writer().write(buf)?;
+
+                //FIXME: Is this even correct? Will it write the correct amount of bytes?
+                // Since we are returning a different result that can write a different
+                // Amount of bytes, this can get confused and miss count it?
+                let io_state = tls_conn.process_new_packets()?;
+
+                if io_state.tls_bytes_to_write() {
+                    tls_conn.write_tls(socket)
+                }
+            }
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush()
+    }
+}
+
+pub enum SecureWriteHalfAsync {
+    Plain(WriteHalfAsync),
+    Tls(Either<
+        BufWriter<futures::io::WriteHalf<TlsStream<AsyncSocket>>>,
+        BufWriter<futures::io::WriteHalf<TlsStreamCli<AsyncSocket>>>
+    >),
+}
+
+pub enum SecureReadHalfAsync {
+    Plain(ReadHalfAsync),
+    Tls(Either<
+        BufReader<futures::io::ReadHalf<TlsStream<AsyncSocket>>>,
+        BufReader<futures::io::ReadHalf<TlsStreamCli<AsyncSocket>>>
+    >),
+}
+
+impl AsyncWrite for SecureWriteHalfAsync {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        match &mut *self {
+            SecureWriteHalfAsync::Plain(inner) => {
+                Pin::new(inner).poll_write(cx, buf)
+            }
+            SecureWriteHalfAsync::Tls(inner) => {
+                Pin::new(inner).poll_write(cx, buf)
+            }
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            SecureWriteHalfAsync::Plain(inner) => {
+                Pin::new(inner).poll_flush(cx)
+            }
+            SecureWriteHalfAsync::Tls(inner) => {
+                Pin::new(inner).poll_flush(cx)
+            }
+        }
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            SecureWriteHalfAsync::Plain(inner) => {
+                Pin::new(inner).poll_close(cx)
+            }
+            SecureWriteHalfAsync::Tls(inner) => {
+                Pin::new(inner).poll_close(cx)
+            }
+        }
+    }
+}
+
+impl AsyncRead for SecureReadHalfAsync {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<io::Result<usize>> {
+        match &mut *self {
+            SecureReadHalfAsync::Plain(inner) => {
+                Pin::new(inner).poll_read(cx, buf)
+            }
+            SecureReadHalfAsync::Tls(inner) => {
+                Pin::new(inner).poll_read(cx, buf)
+            }
+        }
     }
 }
 
@@ -253,6 +375,92 @@ pub struct SocketSendSync {
 
 ///A socket abstraction to use asynchronously
 pub struct SocketSendAsync(SecureSocketSendAsync);
+
+pub enum WriteHalf {
+    Async(WriteHalfAsync),
+    Sync(WriteHalfSync),
+}
+
+pub struct WriteHalfAsync {
+    #[cfg(feature = "socket_tokio_tcp")]
+    inner: BufWriter<tokio_tcp::WriteHalf>,
+    #[cfg(feature = "socket_async_tcp")]
+    inner: BufWriter<async_std_tcp::WriteHalf>,
+}
+
+pub struct WriteHalfSync {
+    inner: io::BufWriter<std_tcp::WriteHalf>,
+}
+
+pub enum ReadHalf {
+    Async(ReadHalfAsync),
+    Sync(ReadHalfSync),
+}
+
+pub struct ReadHalfAsync {
+    #[cfg(feature = "socket_tokio_tcp")]
+    inner: BufReader<tokio_tcp::ReadHalf>,
+    #[cfg(feature = "socket_async_tcp")]
+    inner: BufReader<async_std_tcp::ReadHalf>,
+}
+
+pub struct ReadHalfSync {
+    inner: io::BufReader<std_tcp::ReadHalf>,
+}
+
+impl AsyncRead for ReadHalfAsync {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>>
+    {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for WriteHalfAsync {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>>
+    {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<()>>
+    {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_close(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<()>>
+    {
+        Pin::new(&mut self.inner).poll_close(cx)
+    }
+}
+
+impl Read for ReadHalfSync {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+impl Write for WriteHalfSync {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
 
 impl SocketSendSync {
     pub fn new(socket: SecureSocketSendSync) -> Self {

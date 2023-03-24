@@ -1,4 +1,5 @@
 use std::io;
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::ops::{Deref, DerefMut};
 
@@ -17,7 +18,7 @@ pub fn bind<A: Into<SocketAddr>>(addr: A) -> io::Result<Listener> {
 
 pub fn connect<A: Into<SocketAddr>>(addr: A) -> io::Result<Socket> {
     TcpStream::connect(addr.into())
-        .map(|s| {Socket::new(s)})
+        .map(|s| { Socket::new(s) })
 }
 
 impl Listener {
@@ -50,6 +51,40 @@ impl DerefMut for Socket {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
+}
+
+pub struct WriteHalf {
+    inner: Socket,
+}
+
+pub struct ReadHalf {
+    inner: Socket,
+}
+
+impl Read for ReadHalf {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+impl Write for WriteHalf {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+pub(super) fn split(socket: Socket) -> (WriteHalf, ReadHalf) {
+    let new_socket = socket.inner.try_clone().expect("Failed to split socket");
+
+    (WriteHalf {
+        inner: Socket { inner: new_socket }
+    }, ReadHalf {
+        inner: socket
+    })
 }
 
 #[cfg(windows)]

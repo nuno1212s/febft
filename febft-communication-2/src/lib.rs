@@ -4,11 +4,13 @@ use intmap::IntMap;
 use crate::message::{NetworkMessage, NetworkMessageKind, StoredSerializedNetworkMessage};
 use crate::serialize::Serializable;
 use febft_common::error::*;
+use crate::client_pooling::ConnectedPeer;
 
 pub mod serialize;
 pub mod message;
 pub mod tcpip;
 pub mod cpu_workers;
+pub mod client_pooling;
 
 /// A `NodeId` represents the id of a process in the BFT system.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
@@ -104,6 +106,9 @@ pub trait Node<M: Serializable + 'static> {
 
     /// Broadcast the serialized messages provided
     fn broadcast_serialized(&self, messages: IntMap<StoredSerializedNetworkMessage<M>>);
+
+    /// Get a reference to our loopback channel
+    fn loopback_channel(&self) -> &Arc<ConnectedPeer<NetworkMessage<M>>>;
 
     /// Receive messages from the clients we are connected to
     /// Blocks if there are no pending requests to collect.

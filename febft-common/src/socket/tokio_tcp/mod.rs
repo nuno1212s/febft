@@ -1,14 +1,14 @@
 use std::io;
+use std::io::{Read, Write};
 use std::pin::Pin;
 use std::net::SocketAddr;
+use std::ops::{Deref, DerefMut};
 use std::task::{Poll, Context};
 
 use tokio::net::{TcpStream, TcpListener};
 use futures::io::{AsyncRead, AsyncWrite};
-use tokio_util::compat::{
-    Compat,
-    TokioAsyncReadCompatExt,
-};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 pub struct Socket {
     inner: Compat<TcpStream>,
@@ -51,9 +51,9 @@ impl Socket {
 
 impl AsyncRead for Socket {
     fn poll_read(
-        mut self: Pin<&mut Self>, 
-        cx: &mut Context<'_>, 
-        buf: &mut [u8]
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
     ) -> Poll<io::Result<usize>>
     {
         Pin::new(&mut self.inner).poll_read(cx, buf)
@@ -62,29 +62,77 @@ impl AsyncRead for Socket {
 
 impl AsyncWrite for Socket {
     fn poll_write(
-        mut self: Pin<&mut Self>, 
-        cx: &mut Context<'_>, 
-        buf: &[u8]
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
     ) -> Poll<io::Result<usize>>
     {
         Pin::new(&mut self.inner).poll_write(cx, buf)
     }
 
     fn poll_flush(
-        mut self: Pin<&mut Self>, 
-        cx: &mut Context<'_>
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
     ) -> Poll<io::Result<()>>
     {
         Pin::new(&mut self.inner).poll_flush(cx)
     }
 
     fn poll_close(
-        mut self: Pin<&mut Self>, 
-        cx: &mut Context<'_>
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
     ) -> Poll<io::Result<()>>
     {
         Pin::new(&mut self.inner).poll_close(cx)
     }
+}
+
+/// The write half of a socket
+/// We utilize the OwnedWriteHalf instead of
+/// [`tokio::io::split`] as https://users.rust-lang.org/t/why-i-have-to-use-tokio-tcpstream-split-for-concurrent-read-writes/47755/3
+/// suggests it is more efficient and does not require a mutex
+pub struct WriteHalf {
+    inner: Compat<OwnedWriteHalf>,
+}
+
+/// The read half of a socket
+pub struct ReadHalf {
+    inner: Compat<OwnedReadHalf>,
+}
+
+impl Deref for WriteHalf {
+    type Target = Compat<OwnedWriteHalf>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for WriteHalf {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl Deref for ReadHalf {
+    type Target = Compat<OwnedReadHalf>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for ReadHalf {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+pub(super) fn split_socket(sock: Socket) -> (WriteHalf, ReadHalf) {
+    let (read, write) = sock.inner.into_inner().into_split();
+
+    (WriteHalf { inner: write.compat_write() },
+     ReadHalf { inner: read.compat() })
 }
 
 #[cfg(windows)]
