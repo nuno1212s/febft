@@ -8,14 +8,14 @@ use futures::{AsyncReadExt, AsyncWriteExt};
 use futures_timer::Delay;
 use log::{debug, error, warn};
 use rustls::ServerConnection;
-use febft_common::socket::{AsyncListener, AsyncSocket, SecureSocketRecvAsync, SecureSocketRecvSync, SecureSocketSend, SecureSocketSendAsync, SocketSendAsync};
+use febft_common::socket::{AsyncListener, AsyncSocket, SecureReadHalf, SecureSocketAsync, SecureWriteHalf};
 use febft_common::{async_runtime as rt, prng, socket};
 use crate::message::{Header, WireMessage};
 use crate::NodeId;
 use crate::serialize::Serializable;
 use crate::tcpip::connections::conn_establish::ConnectionHandler;
 use crate::tcpip::connections::PeerConnections;
-use crate::tcpip::{PeerAddr, TlsNodeConnector};
+use crate::tcpip::{PeerAddr, TlsNodeAcceptor, TlsNodeConnector};
 
 pub type Callback = Option<Box<dyn FnOnce(bool) + Send>>;
 
@@ -35,7 +35,7 @@ pub(super) fn setup_conn_acceptor_task<M: Serializable + 'static>(tcp_listener: 
 }
 
 pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc<ConnectionHandler<M>>,
-                                                               connections: &PeerConnections<M>,
+                                                               connections: Arc<PeerConnections<M>>,
                                                                peer_id: NodeId, addr: PeerAddr) {
     rt::spawn(async move {
         if !conn_handler.register_connecting_to_node(peer_id) {
@@ -57,14 +57,14 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
         //If I'm a client I will always use the client facing addr
         //While if I'm a replica I'll connect to the replica addr (clients only have this addr)
         let addr = if conn_handler.id() >= conn_handler.first_cli() {
-            addr.client_addr.clone()
+            addr.client_facing_socket.clone()
         } else {
             //We are a replica, but we are connecting to a client, so
             //We need the client addr.
             if peer_id >= conn_handler.first_cli() {
-                addr.client_addr.clone()
+                addr.client_facing_socket.clone()
             } else {
-                match addr.replica_addr.as_ref() {
+                match addr.replica_facing_socket.as_ref() {
                     Some(addr) => addr,
                     None => {
                         error!(
@@ -108,7 +108,7 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
                 peer_id, addr, _try
             );
 
-            match socket::connect_async(addr).await {
+            match socket::connect_async(addr.0).await {
                 Ok(mut sock) => {
 
                     // create header
@@ -144,10 +144,10 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
                             my_id, peer_id
                         );
 
-                        SecureSocketSendAsync::new_plain(sock)
+                        SecureSocketAsync::new_plain(sock)
                     } else {
-                        match connector.connect(hostname, sock).await {
-                            Ok(s) => SecureSocketSendAsync::new_tls(s),
+                        match connector.connect(addr.1, sock).await {
+                            Ok(s) => SecureSocketAsync::new_tls_client(s),
                             Err(err) => {
                                 error!("{:?} // Failed to connect to the node {:?} {:?} ", self.id, peer_id, err);
                                 break;
@@ -155,12 +155,14 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
                         }
                     };
 
-                    let final_sock = SecureSocketSend::Async(SocketSendAsync::new(sock));
+                    let (write, read) = sock.split();
+
+                    let write = SecureWriteHalf::Async(write);
+                    let read = SecureReadHalf::Async(read);
+
+                    connections.handle_connection_established(peer_id, (write, read));
 
                     conn_handler.done_connecting_to_node(&peer_id);
-
-                    //TODO: Split the socket
-                    //connections.handle_connection_established(peer_id, );
 
                     if let Some(callback) = callback {
                         callback(true);
@@ -196,7 +198,7 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
                                                                         connections: Arc<PeerConnections<M>>,
                                                                         mut sock: AsyncSocket) {
     rt::spawn(async move {
-        let acceptor = if let TlsNodeConnector::Async(connector) = &conn_handler.tls_acceptor {
+        let acceptor = if let TlsNodeAcceptor::Async(connector) = &conn_handler.tls_acceptor {
             connector.clone()
         } else {
             panic!("Using Tls sync acceptor with async networking")
@@ -232,12 +234,20 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
                 Err(_) => break,
             };
 
+            if !conn_handler.register_connecting_to_node(peer_id) {
+                warn!("{:?} // Tried to connect to node that I'm already connecting to {:?}",
+                self.id, peer_id);
+                //Drop the connection since we are already establishing connection
+
+                return;
+            }
+
             // TLS handshake; drop connection if it fails
             let sock = if peer_id >= first_cli || my_id >= first_cli {
-                SecureSocketRecvAsync::new_plain(sock)
+                SecureSocketAsync::new_plain(sock)
             } else {
                 match acceptor.accept(sock).await {
-                    Ok(s) => SecureSocketRecvAsync::new_tls(s),
+                    Ok(s) => SecureSocketAsync::new_tls_server(s),
                     Err(_) => {
                         error!(
                             "{:?} // Failed to setup tls connection to node {:?}",
@@ -251,9 +261,17 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
 
             debug!("{:?} // Received new connection from id {:?}", my_id, peer_id);
 
-            todo!(connections.handle_connection_established(peer_id, ););
+            let (write, read) = sock.split();
+
+            let write = SecureWriteHalf::Async(write);
+            let read = SecureReadHalf::Async(read);
+
+            connections.handle_connection_established(peer_id, (write, read));
+
+            conn_handler.done_connecting_to_node(&peer_id);
 
             return;
         }
+
     });
 }

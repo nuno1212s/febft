@@ -36,3 +36,4 @@ pub mod threadpool;
 pub mod persistentdb;
 pub mod channel;
 pub mod socket;
+pub mod mem_pool;

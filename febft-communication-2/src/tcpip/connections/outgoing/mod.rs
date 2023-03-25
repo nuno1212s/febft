@@ -1,18 +1,19 @@
 use febft_common::channel::ChannelMixedRx;
-use febft_common::socket::SecureSocketSend;
+use febft_common::socket::{SecureWriteHalf, SecureWriteHalfSync};
+
 use crate::tcpip::connections::{PeerConnection, SerializedMessage};
 
 pub mod asynchronous;
 pub mod synchronous;
 
 pub (super) fn spawn_outgoing_task_handler(connection_rx: ChannelMixedRx<SerializedMessage>,
-                                           socket: SecureSocketSend) {
+                                           socket: SecureWriteHalf) {
     match socket {
-        SecureSocketSend::Async(asynchronous) => {
-            asynchronous::spawn_outgoing_task(connection_rx, asynchronous.inner);
+        SecureWriteHalf::Async(asynchronous) => {
+            asynchronous::spawn_outgoing_task(connection_rx, asynchronous);
         }
-        SecureSocketSend::Sync(synchronous) => {
-            synchronous::spawn_outgoing_thread(connection_rx, synchronous.inner);
+        SecureWriteHalf::Sync(synchronous) => {
+            synchronous::spawn_outgoing_thread(connection_rx, synchronous);
         }
     }
 }

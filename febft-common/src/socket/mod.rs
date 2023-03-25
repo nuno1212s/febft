@@ -1,5 +1,6 @@
 //! Abstractions over different socket types of crates in the Rust ecosystem.
 
+use std::fs::read;
 use std::io;
 use std::io::{BufRead, Read, Write};
 use std::net::SocketAddr;
@@ -13,8 +14,10 @@ use async_tls::{
 };
 use async_tls::server::TlsStream;
 use either::Either;
+use futures::AsyncReadExt;
 
 use futures::io::{AsyncRead, AsyncWrite, BufReader, BufWriter};
+use futures_io::{AsyncRead, AsyncWrite};
 
 use rustls::{ClientConnection, ServerConnection, StreamOwned};
 
@@ -30,6 +33,9 @@ mod async_std_tcp;
 mod rio_tcp;
 
 mod std_tcp;
+
+const WRITE_BUFFER_SIZE: usize = 8 * 1024;
+const READ_BUFFER_SIZE: usize = 8 * 1024;
 
 /// A `Listener` represents a socket listening on new communications
 /// initiated by peer nodes in the BFT system.
@@ -138,6 +144,26 @@ impl SyncListener {
     }
 }
 
+impl AsyncSocket {
+    pub(super) fn split(self) -> (WriteHalfAsync, ReadHalfAsync) {
+        let (write, read) =
+            #[cfg(feature = "socket_tokio_tcp")]
+                tokio_tcp::split_socket(self.inner);
+        #[cfg(feature = "socket_async_std_tcp")]
+        async_std_tcp::split_socket(self.inner);
+
+        //Buffer both the connections
+        let write_buffered = BufWriter::with_capacity(WRITE_BUFFER_SIZE, write);
+        let read_buffered = BufReader::with_capacity(READ_BUFFER_SIZE, read);
+
+        (WriteHalfAsync {
+            inner: write_buffered,
+        }, ReadHalfAsync {
+            inner: read_buffered
+        })
+    }
+}
+
 impl AsyncRead for AsyncSocket {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -176,65 +202,50 @@ impl AsyncWrite for AsyncSocket {
     }
 }
 
-pub enum SecureSocketRecvAsync {
-    Plain(futures::io::BufReader<AsyncSocket>),
-    Tls(futures::io::BufReader<TlsStreamSrv<AsyncSocket>>),
+pub enum SecureWriteHalf {
+    Async(SecureWriteHalfAsync),
+    Sync(SecureWriteHalfSync)
 }
 
-pub enum SecureSocketSendAsync {
-    Plain(futures::io::BufWriter<AsyncSocket>),
-    Tls(futures::io::BufWriter<TlsStreamCli<AsyncSocket>>),
+pub enum SecureReadHalf {
+    Async(SecureReadHalfAsync),
+    Sync(SecureReadHalfSync)
 }
 
-pub enum SecureSocketRecvSync {
-    Plain(std::io::BufReader<SyncSocket>),
-    Tls(std::io::BufReader<StreamOwned<ServerConnection, SyncSocket>>),
+pub enum SecureSocketSync {
+    Plain(SyncSocket),
+    Tls(Either<ClientConnection, ServerConnection>, SyncSocket),
 }
 
-pub enum SecureSocketSendSync {
-    Plain(std::io::BufWriter<SyncSocket>),
-    Tls(std::io::BufWriter<StreamOwned<ClientConnection, SyncSocket>>),
-}
+impl SecureSocketSync {
 
-impl SecureSocketRecvAsync {
-    pub fn new_plain(socket: AsyncSocket) -> Self {
-        SecureSocketRecvAsync::Plain(futures::io::BufReader::new(socket))
-    }
-
-    pub fn new_tls(session: TlsStream<AsyncSocket>) -> Self {
-        SecureSocketRecvAsync::Tls(futures::io::BufReader::new(session))
-    }
-}
-
-impl SecureSocketSendAsync {
-    pub fn new_plain(socket: AsyncSocket) -> Self {
-        SecureSocketSendAsync::Plain(futures::io::BufWriter::new(socket))
-    }
-
-    pub fn new_tls(session: TlsStreamCli<AsyncSocket>) -> Self {
-        SecureSocketSendAsync::Tls(futures::io::BufWriter::new(session))
-    }
-}
-
-impl SecureSocketRecvSync {
     pub fn new_plain(socket: SyncSocket) -> Self {
-        SecureSocketRecvSync::Plain(std::io::BufReader::new(socket))
+        Self::Plain(socket)
     }
 
-    pub fn new_tls(session: ServerConnection, socket: SyncSocket) -> Self {
-        SecureSocketRecvSync::Tls(std::io::BufReader::new(StreamOwned::new(session, socket)))
-    }
-}
-
-impl SecureSocketSendSync {
-    pub fn new_plain(socket: SyncSocket) -> Self {
-        SecureSocketSendSync::Plain(io::BufWriter::new(socket))
+    pub fn new_tls_server(tls_conn: ServerConnection, socket: SyncSocket) -> Self {
+        Self::Tls(Either::Right(tls_conn), socket)
     }
 
-    pub fn new_tls(session: ClientConnection, socket: SyncSocket) -> Self {
-        let owned = StreamOwned::new(session, socket);
+    pub fn new_tls_client(tls_conn: ClientConnection, socket: SyncSocket) -> Self {
+        Self::Tls(Either::Left(tls_conn), socket)
+    }
 
-        SecureSocketSendSync::Tls(io::BufWriter::new(owned))
+    pub fn split(self) -> (SecureWriteHalfSync, SecureReadHalfSync) {
+        match self {
+            SecureSocketSync::Plain(socket) => {
+                let (write_half, read_half) = socket.split();
+
+                (SecureWriteHalfSync::Plain(write_half),
+                 SecureReadHalfSync::Plain(read_half))
+            }
+            SecureSocketSync::Tls(connection, socket) => {
+                let (write, read) = socket.split();
+
+                (SecureWriteHalfSync::Tls(connection.clone(), write),
+                 SecureReadHalfSync::Tls(connection, read))
+            }
+        }
     }
 }
 
@@ -252,7 +263,7 @@ impl Read for SecureReadHalfSync {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self {
             SecureReadHalfSync::Plain(plain) => {
-                plain.read(buf)
+                std::io::Read::read(plain, buf)
             }
             SecureReadHalfSync::Tls(tls_conn, sock) => {
                 tls_conn.read_tls(sock)?;
@@ -295,6 +306,70 @@ impl Write for SecureWriteHalfSync {
     fn flush(&mut self) -> io::Result<()> {
         self.flush()
     }
+}
+
+pub enum SecureSocketAsync {
+    Plain(AsyncSocket),
+    Tls(Either<TlsStream<AsyncSocket>, TlsStreamCli<AsyncSocket>>)
+}
+
+impl SecureSocketAsync {
+
+    pub fn new_plain(socket: AsyncSocket) -> Self {
+        Self::Plain(socket)
+    }
+
+    pub fn new_tls_server(stream: TlsStream<AsyncSocket>) -> Self {
+        Self::Tls(Either::Left(stream))
+    }
+
+    pub fn new_tls_client(stream: TlsStreamCli<AsyncSocket>) -> Self {
+        Self::Tls(Either::Right(stream))
+    }
+
+    pub fn split(self) -> (SecureWriteHalfAsync, SecureReadHalfAsync) {
+        match self {
+            SecureSocketAsync::Plain(socket) => {
+                let (write, read) = socket.split();
+
+                (SecureWriteHalfAsync::Plain(write),
+                    SecureReadHalfAsync::Plain(read))
+            }
+            SecureSocketAsync::Tls(tls_stream) => {
+                //Unfortunately in this situation I don't think we can use async socket's efficient OS level split
+                // Since the stream requires duplex access. So we must wrap this in a bilock from futures
+
+                match tls_stream {
+                    Either::Left(stream) => {
+                        //Wrap in bilock
+                        let (read, write) = futures::AsyncReadExt::split(stream);
+
+                        //We have to wrap these at this point instead of at the lower level
+                        // since we can't use the same method but that's fine I guess
+                        let read_buffered = BufReader::with_capacity(READ_BUFFER_SIZE, read);
+                        let write_buffered = BufWriter::with_capacity(WRITE_BUFFER_SIZE, write);
+
+                        (SecureWriteHalfAsync::Tls(Either::Left(write_buffered)),
+                        SecureReadHalfAsync::Tls(Either::Left(read_buffered)))
+                    }
+                    Either::Right(stream) => {
+                        //Wrap in bi lock
+                        let (read, write) = futures::AsyncReadExt::split(stream);
+
+                        //We have to wrap these at this point instead of at the lower level
+                        // since we can't use the same method but that's fine I guess
+                        let read_buffered = BufReader::with_capacity(READ_BUFFER_SIZE, read);
+                        let write_buffered = BufWriter::with_capacity(WRITE_BUFFER_SIZE, write);
+
+                        (SecureWriteHalfAsync::Tls(Either::Right(write_buffered)),
+                         SecureReadHalfAsync::Tls(Either::Right(read_buffered)))
+                    }
+                }
+            }
+        }
+
+    }
+
 }
 
 pub enum SecureWriteHalfAsync {
@@ -360,21 +435,6 @@ impl AsyncRead for SecureReadHalfAsync {
         }
     }
 }
-
-///Client stores asynchronous socket references (Client->replica, replica -> client)
-///Replicas stores synchronous socket references (Replica -> Replica)
-pub enum SecureSocketSend {
-    Async(SocketSendAsync),
-    Sync(SocketSendSync),
-}
-
-///A socket abstraction to use synchronously
-pub struct SocketSendSync {
-    socket: SecureSocketSendSync,
-}
-
-///A socket abstraction to use asynchronously
-pub struct SocketSendAsync(SecureSocketSendAsync);
 
 pub enum WriteHalf {
     Async(WriteHalfAsync),
@@ -462,40 +522,18 @@ impl Write for WriteHalfSync {
     }
 }
 
-impl SocketSendSync {
-    pub fn new(socket: SecureSocketSendSync) -> Self {
-        Self {
-            socket,
-        }
-    }
+impl SyncSocket {
 
-    pub fn socket(&self) -> &SecureSocketSendSync {
-        &self.socket
-    }
+    pub fn split(self) -> (WriteHalfSync, ReadHalfSync) {
+        let (write, read) = std_tcp::split(self.inner);
 
-    pub fn mut_socket(&mut self) -> &mut SecureSocketSendSync {
-        &mut self.socket
-    }
-}
+        let write_buffered = io::BufWriter::with_capacity(WRITE_BUFFER_SIZE, write);
 
-impl SocketSendAsync {
-    pub fn new(socket: SecureSocketSendAsync) -> Self {
-        Self(socket)
-    }
+        let read_buffered = io::BufReader::with_capacity(READ_BUFFER_SIZE, read);
 
-    pub fn socket(&self) -> &SecureSocketSendAsync {
-        &self.0
+        (WriteHalfSync { inner: write_buffered },
+         ReadHalfSync { inner: read_buffered })
     }
-
-    pub fn mut_socket(&mut self) -> &mut SecureSocketSendAsync
-    {
-        &mut self.0
-    }
-}
-
-pub enum SecureSocketRecv {
-    Async(SecureSocketRecvAsync),
-    Sync(SecureSocketRecvSync),
 }
 
 impl Write for SyncSocket {
@@ -510,114 +548,11 @@ impl Write for SyncSocket {
 
 impl Read for SyncSocket {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.inner.read(buf)
+        std::io::Read::read(&mut self.inner, buf)
     }
 
     fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
-        self.inner.read_exact(buf)
-    }
-}
-
-impl Write for SecureSocketSendSync {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self {
-            SecureSocketSendSync::Plain(socket) => {
-                socket.write(buf)
-            }
-            SecureSocketSendSync::Tls(stream) => {
-                stream.write(buf)
-            }
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match self {
-            SecureSocketSendSync::Plain(socket) => {
-                socket.flush()
-            }
-            SecureSocketSendSync::Tls(stream) => {
-                stream.flush()
-            }
-        }
-    }
-}
-
-impl Read for SecureSocketRecvSync {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self {
-            SecureSocketRecvSync::Plain(socket) => {
-                socket.read(buf)
-            }
-            SecureSocketRecvSync::Tls(stream) => {
-                stream.read(buf)
-            }
-        }
-    }
-}
-
-impl AsyncRead for SecureSocketRecvAsync {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>>
-    {
-        match &mut *self {
-            SecureSocketRecvAsync::Plain(inner) => {
-                Pin::new(inner).poll_read(cx, buf)
-            }
-            SecureSocketRecvAsync::Tls(inner) => {
-                Pin::new(inner).poll_read(cx, buf)
-            }
-        }
-    }
-}
-
-impl AsyncWrite for SecureSocketSendAsync {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>>
-    {
-        match &mut *self {
-            SecureSocketSendAsync::Plain(inner) => {
-                Pin::new(inner).poll_write(cx, buf)
-            }
-            SecureSocketSendAsync::Tls(inner) => {
-                Pin::new(inner).poll_write(cx, buf)
-            }
-        }
-    }
-
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<io::Result<()>>
-    {
-        match &mut *self {
-            SecureSocketSendAsync::Plain(inner) => {
-                Pin::new(inner).poll_flush(cx)
-            }
-            SecureSocketSendAsync::Tls(inner) => {
-                Pin::new(inner).poll_flush(cx)
-            }
-        }
-    }
-
-    fn poll_close(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<io::Result<()>>
-    {
-        match &mut *self {
-            SecureSocketSendAsync::Plain(inner) => {
-                Pin::new(inner).poll_close(cx)
-            }
-            SecureSocketSendAsync::Tls(inner) => {
-                Pin::new(inner).poll_close(cx)
-            }
-        }
+        std::io::Read::read_exact(&mut self.inner, buf)
     }
 }
 

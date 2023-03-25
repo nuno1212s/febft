@@ -5,26 +5,23 @@ use febft_common::socket::{AsyncSocket, SyncSocket};
 use febft_common::error::*;
 use crate::NodeId;
 use crate::serialize::Serializable;
-use crate::tcpip::{TlsNodeAcceptor, TlsNodeConnector};
-use crate::tcpip::connections::PeerConnections;
+use crate::tcpip::{PeerAddr, TlsNodeAcceptor, TlsNodeConnector};
+use crate::tcpip::connections::{PeerConnection, PeerConnections};
 
 mod synchronous;
 mod asynchronous;
 
 /// Connection handler
-pub(super) struct ConnectionHandler<M: Serializable + 'static> {
+pub struct ConnectionHandler {
     peer_id: NodeId,
     first_cli: NodeId,
-    peer_connections: Arc<PeerConnections<M>>,
     connector: TlsNodeConnector,
     tls_acceptor: TlsNodeAcceptor,
     currently_connecting: Mutex<BTreeSet<NodeId>>,
-
 }
 
-impl<M: Serializable> ConnectionHandler<M> {
+impl ConnectionHandler {
     pub fn new(peer_id: NodeId, first_cli: NodeId,
-               peer_connections: Arc<PeerConnections<M>>,
                node_connector: TlsNodeConnector, node_acceptor: TlsNodeAcceptor) -> Arc<Self> {
         Arc::new(
             ConnectionHandler {
@@ -33,7 +30,6 @@ impl<M: Serializable> ConnectionHandler<M> {
                 connector: node_connector,
                 tls_acceptor: node_acceptor,
                 currently_connecting: Mutex::new(BTreeSet::new()),
-                peer_connections,
             }
         )
     }
@@ -58,11 +54,25 @@ impl<M: Serializable> ConnectionHandler<M> {
         connection_guard.remove(peer_id);
     }
 
-    pub fn accept_conn(self: &Arc<Self>, socket: Either<(AsyncSocket), (SyncSocket)>) {
+    pub fn connect_to_node<M: Serializable + 'static>(self: &Arc<Self>, peer_connections: &Arc<PeerConnections<M>>,
+                                                      peer_id: NodeId, peer_addr: PeerAddr) {
+        match &self.connector {
+            TlsNodeConnector::Async(_) => {
+                asynchronous::connect_to_node_async(Arc::clone(self),
+                                                    Arc::clone(&peer_connections),
+                                                    peer_id, peer_addr)
+            }
+            TlsNodeConnector::Sync(_) => {
+                todo!()
+            }
+        }
+    }
+
+    pub fn accept_conn<M: Serializable + 'static>(self: &Arc<Self>, peer_connections: &Arc<PeerConnections<M>>, socket: Either<(AsyncSocket), (SyncSocket)>) {
         match socket {
             Either::Left(asynchronous) => {
                 asynchronous::handle_server_conn_established(Arc::clone(self),
-                                                             self.peer_connections.clone(),
+                                                             peer_connections.clone(),
                                                              asynchronous, );
             }
             Either::Right(_) => {

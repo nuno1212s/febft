@@ -1,16 +1,19 @@
 use std::sync::Arc;
+
 use bytes::BytesMut;
 use futures::AsyncReadExt;
 use log::error;
+
 use febft_common::async_runtime as rt;
-use febft_common::socket::SecureSocketRecvAsync;
+use febft_common::socket::SecureReadHalfAsync;
+
 use crate::client_pooling::ConnectedPeer;
 use crate::cpu_workers;
 use crate::message::{Header, NetworkMessage};
 use crate::serialize::Serializable;
 
 pub(super) fn spawn_incoming_task<M: Serializable + 'static>(peer: Arc<ConnectedPeer<NetworkMessage<M>>>,
-                                                             mut socket: SecureSocketRecvAsync) {
+                                                             mut socket: SecureReadHalfAsync) {
     rt::spawn(async move {
         let mut read_buffer = BytesMut::with_capacity(Header::LENGTH);
 

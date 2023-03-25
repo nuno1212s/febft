@@ -2,20 +2,24 @@ use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
 use async_tls::{TlsAcceptor, TlsConnector};
 use intmap::IntMap;
 use log::debug;
 use rustls::{ClientConfig, ServerConfig};
+
+use febft_common::async_runtime as rt;
+use febft_common::error::*;
 use febft_common::prng::ThreadSafePrng;
 use febft_common::socket::{AsyncListener, SyncListener};
-use febft_common::error::*;
-use febft_common::async_runtime as rt;
+
 use crate::{Node, NodeId};
 use crate::client_pooling::{ConnectedPeer, PeerIncomingRqHandling};
 use crate::message::{NetworkMessage, NetworkMessageKind, StoredSerializedNetworkMessage};
 use crate::serialize::Serializable;
+use crate::tcpip::connections::PeerConnections;
 
-pub mod connections; 
+pub mod connections;
 
 ///Represents the server addresses of a peer
 ///Clients will only have 1 address while replicas will have 2 addresses (1 for facing clients,
@@ -71,8 +75,8 @@ pub struct TcpNode<M: Serializable + 'static> {
     first_cli: NodeId,
     // The thread safe pseudo random number generator
     rng: ThreadSafePrng,
-    // The connector used to establish connections to other nodes
-    connector: TlsNodeConnector,
+    // The connections that are currently being maintained by us to other peers
+    peer_connection: PeerConnections<M>,
     //Handles the incoming connections' buffering and request collection
     //This is polled by the proposer for client requests and by the
     client_pooling: PeerIncomingRqHandling<NetworkMessage<M>>,
@@ -139,42 +143,6 @@ impl<M: Serializable + 'static> TcpNode<M> {
         };
 
         Ok(replica_listener)
-    }
-
-    /// Sets up the thread or task (depending on runtime) to receive new connection attempts
-    fn setup_socket_connection_workers_socket(
-        self: Arc<Self>,
-        node_connector: TlsNodeAcceptor,
-        listener: NodeConnectionAcceptor,
-    ) {
-        match (node_connector, listener) {
-            (TlsNodeAcceptor::Sync(cfg), NodeConnectionAcceptor::Sync(sync_listener)) => {
-                let first_cli = self.first_client_id();
-
-                let my_id = self.id();
-
-                let sync_acceptor = cfg.clone();
-
-                std::thread::Builder::new()
-                    .name(format!("{:?} connection acceptor", self.id()))
-                    .spawn(move || {
-                        self.rx_side_accept_sync(first_cli, my_id, sync_listener, sync_acceptor);
-                    })
-                    .expect("Failed to start replica's connection acceptor");
-            }
-            (TlsNodeAcceptor::Async(cfg), NodeConnectionAcceptor::Async(async_listener)) => {
-                let first_cli = self.first_client_id();
-
-                let my_id = self.id();
-
-                let async_acceptor = cfg.clone();
-
-                rt::spawn(self.rx_side_accept(first_cli, my_id, async_listener, async_acceptor));
-            }
-            (_, _) => {
-                unreachable!()
-            }
-        }
     }
 }
 

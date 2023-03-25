@@ -1,9 +1,11 @@
 use log::error;
+
 use febft_common::channel::ChannelMixedRx;
-use febft_common::socket::SecureSocketSendSync;
+use febft_common::socket::SecureWriteHalfSync;
+
 use crate::tcpip::connections::SerializedMessage;
 
-pub (super) fn spawn_outgoing_thread(mut rx: ChannelMixedRx<SerializedMessage>, mut socket: SecureSocketSendSync) {
+pub (super) fn spawn_outgoing_thread(mut rx: ChannelMixedRx<SerializedMessage>, mut socket: SecureWriteHalfSync) {
 
     std::thread::Builder::new()
         .name(format!("Outgoing connection thread"))

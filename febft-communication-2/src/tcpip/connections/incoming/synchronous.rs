@@ -2,14 +2,14 @@ use std::io::Read;
 use std::sync::Arc;
 use bytes::BytesMut;
 use log::error;
-use febft_common::socket::SecureSocketRecvSync;
+use febft_common::socket::{SecureReadHalfSync};
 use crate::client_pooling::ConnectedPeer;
 use crate::cpu_workers;
 use crate::message::{Header, NetworkMessage};
 use crate::serialize::Serializable;
 
 pub(super) fn spawn_incoming_thread<M: Serializable + 'static>(peer: Arc<ConnectedPeer<NetworkMessage<M>>>,
-                                                               mut socket: SecureSocketRecvSync) {
+                                                               mut socket: SecureReadHalfSync) {
     std::thread::Builder::new()
         .spawn(|| {
             loop {
