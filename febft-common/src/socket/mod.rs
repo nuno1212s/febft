@@ -2,10 +2,11 @@
 
 use std::fs::read;
 use std::io;
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, ErrorKind, Read, Write};
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
 
 use async_tls::{
@@ -14,12 +15,12 @@ use async_tls::{
 };
 use async_tls::server::TlsStream;
 use either::Either;
-use futures::AsyncReadExt;
+use futures::{AsyncRead, AsyncReadExt, AsyncWrite};
 
-use futures::io::{AsyncRead, AsyncWrite, BufReader, BufWriter};
-use futures_io::{AsyncRead, AsyncWrite};
+use futures::io::{BufReader, BufWriter};
+use log::error;
 
-use rustls::{ClientConnection, ServerConnection, StreamOwned};
+use rustls::{ClientConnection, Error, IoState, ServerConnection, StreamOwned};
 
 use crate::error;
 
@@ -146,11 +147,10 @@ impl SyncListener {
 
 impl AsyncSocket {
     pub(super) fn split(self) -> (WriteHalfAsync, ReadHalfAsync) {
-        let (write, read) =
-            #[cfg(feature = "socket_tokio_tcp")]
-                tokio_tcp::split_socket(self.inner);
+        #[cfg(feature = "socket_tokio_tcp")]
+            let (write, read) = tokio_tcp::split_socket(self.inner);
         #[cfg(feature = "socket_async_std_tcp")]
-        async_std_tcp::split_socket(self.inner);
+            let (write, read) = async_std_tcp::split_socket(self.inner);
 
         //Buffer both the connections
         let write_buffered = BufWriter::with_capacity(WRITE_BUFFER_SIZE, write);
@@ -204,12 +204,12 @@ impl AsyncWrite for AsyncSocket {
 
 pub enum SecureWriteHalf {
     Async(SecureWriteHalfAsync),
-    Sync(SecureWriteHalfSync)
+    Sync(SecureWriteHalfSync),
 }
 
 pub enum SecureReadHalf {
     Async(SecureReadHalfAsync),
-    Sync(SecureReadHalfSync)
+    Sync(SecureReadHalfSync),
 }
 
 pub enum SecureSocketSync {
@@ -218,7 +218,6 @@ pub enum SecureSocketSync {
 }
 
 impl SecureSocketSync {
-
     pub fn new_plain(socket: SyncSocket) -> Self {
         Self::Plain(socket)
     }
@@ -242,8 +241,10 @@ impl SecureSocketSync {
             SecureSocketSync::Tls(connection, socket) => {
                 let (write, read) = socket.split();
 
-                (SecureWriteHalfSync::Tls(connection.clone(), write),
-                 SecureReadHalfSync::Tls(connection, read))
+                let shared_conn = Arc::new(Mutex::new(connection));
+
+                (SecureWriteHalfSync::Tls(shared_conn.clone(), write),
+                 SecureReadHalfSync::Tls(shared_conn, read))
             }
         }
     }
@@ -251,12 +252,12 @@ impl SecureSocketSync {
 
 pub enum SecureWriteHalfSync {
     Plain(WriteHalfSync),
-    Tls(Either<ClientConnection, ServerConnection>, WriteHalfSync),
+    Tls(Arc<Mutex<Either<ClientConnection, ServerConnection>>>, WriteHalfSync),
 }
 
 pub enum SecureReadHalfSync {
     Plain(ReadHalfSync),
-    Tls(Either<ClientConnection, ServerConnection>, ReadHalfSync),
+    Tls(Arc<Mutex<Either<ClientConnection, ServerConnection>>>, ReadHalfSync),
 }
 
 impl Read for SecureReadHalfSync {
@@ -266,16 +267,47 @@ impl Read for SecureReadHalfSync {
                 std::io::Read::read(plain, buf)
             }
             SecureReadHalfSync::Tls(tls_conn, sock) => {
-                tls_conn.read_tls(sock)?;
+                match &mut *tls_conn.lock().unwrap() {
+                    Either::Left(tls_conn) => {
+                        tls_conn.read_tls(sock)?;
 
-                let state = tls_conn.process_new_packets()?;
+                        match tls_conn.process_new_packets() {
+                            Ok(state) => {
+                                //FIXME: Is this correct, since we can read a different
+                                // Amount of packets as in the read tls one above
+                                if state.plaintext_bytes_to_read() > 0 {
+                                    tls_conn.reader().read(buf)
+                                } else {
+                                    Ok(0)
+                                }
+                            }
+                            Err(err) => {
+                                error!("Failed to process new tls packets {:?}", err);
 
-                //FIXME: Is this correct, since we can read a different
-                // Amount of packets as in the read tls one above
-                if state.plaintext_bytes_to_read() {
-                    tls_conn.reader().read(buf)
-                } else {
-                    Ok(0)
+                                Err(io::Error::new(ErrorKind::BrokenPipe, ""))
+                            }
+                        }
+                    }
+                    Either::Right(tls_conn) => {
+                        tls_conn.read_tls(sock)?;
+
+                        match tls_conn.process_new_packets() {
+                            Ok(state) => {
+                                //FIXME: Is this correct, since we can read a different
+                                // Amount of packets as in the read tls one above
+                                if state.plaintext_bytes_to_read() > 0 {
+                                    tls_conn.reader().read(buf)
+                                } else {
+                                    Ok(0)
+                                }
+                            }
+                            Err(err) => {
+                                error!("Failed to process new tls packets {:?}", err);
+
+                                Err(io::Error::new(ErrorKind::BrokenPipe, ""))
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -289,32 +321,93 @@ impl Write for SecureWriteHalfSync {
                 write_half.write(buf)
             }
             SecureWriteHalfSync::Tls(tls_conn, socket) => {
-                tls_conn.writer().write(buf)?;
+                match &mut *tls_conn.lock().unwrap() {
+                    Either::Left(tls_conn) => {
+                        tls_conn.writer().write(buf)?;
 
-                //FIXME: Is this even correct? Will it write the correct amount of bytes?
-                // Since we are returning a different result that can write a different
-                // Amount of bytes, this can get confused and miss count it?
-                let io_state = tls_conn.process_new_packets()?;
+                        //FIXME: Is this even correct? Will it write the correct amount of bytes?
+                        // Since we are returning a different result that can write a different
+                        // Amount of bytes, this can get confused and miss count it?
+                        match tls_conn.process_new_packets() {
+                            Ok(state) => {
+                                //FIXME: Is this correct, since we can read a different
+                                // Amount of packets as in the read tls one above
 
-                if io_state.tls_bytes_to_write() {
-                    tls_conn.write_tls(socket)
+                                if state.tls_bytes_to_write() > 0 {
+                                    tls_conn.write_tls(socket)
+                                } else {
+                                    Ok(0)
+                                }
+                            }
+                            Err(err) => {
+                                error!("Failed to process new tls packets {:?}", err);
+
+                                Err(io::Error::new(ErrorKind::BrokenPipe, ""))
+                            }
+                        }
+                    }
+                    Either::Right(tls_conn) => {
+                        tls_conn.writer().write(buf)?;
+
+                        //FIXME: Is this even correct? Will it write the correct amount of bytes?
+                        // Since we are returning a different result that can write a different
+                        // Amount of bytes, this can get confused and miss count it?
+                        match tls_conn.process_new_packets() {
+                            Ok(state) => {
+                                //FIXME: Is this correct, since we can read a different
+                                // Amount of packets as in the read tls one above
+
+                                if state.tls_bytes_to_write() > 0 {
+                                    tls_conn.write_tls(socket)
+                                } else {
+                                    Ok(0)
+                                }
+                            }
+                            Err(err) => {
+                                error!("Failed to process new tls packets {:?}", err);
+
+                                Err(io::Error::new(ErrorKind::BrokenPipe, ""))
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.flush()
+        match self {
+            SecureWriteHalfSync::Plain(socket) => {
+                socket.flush()
+            }
+            SecureWriteHalfSync::Tls(tls_conn, socket2) => {
+                match &mut *tls_conn.lock().unwrap() {
+                    Either::Left(tls_conn) => {
+                        while tls_conn.wants_write() {
+                            tls_conn.write_tls(socket2)?;
+                        }
+
+                        socket2.flush()
+                    }
+                    Either::Right(tls_conn) => {
+                        while tls_conn.wants_write() {
+                            tls_conn.write_tls(socket2)?;
+                        }
+
+                        socket2.flush()
+                    }
+                }
+            }
+        }
     }
 }
 
 pub enum SecureSocketAsync {
     Plain(AsyncSocket),
-    Tls(Either<TlsStream<AsyncSocket>, TlsStreamCli<AsyncSocket>>)
+    Tls(Either<TlsStream<AsyncSocket>, TlsStreamCli<AsyncSocket>>),
 }
 
 impl SecureSocketAsync {
-
     pub fn new_plain(socket: AsyncSocket) -> Self {
         Self::Plain(socket)
     }
@@ -333,7 +426,7 @@ impl SecureSocketAsync {
                 let (write, read) = socket.split();
 
                 (SecureWriteHalfAsync::Plain(write),
-                    SecureReadHalfAsync::Plain(read))
+                 SecureReadHalfAsync::Plain(read))
             }
             SecureSocketAsync::Tls(tls_stream) => {
                 //Unfortunately in this situation I don't think we can use async socket's efficient OS level split
@@ -350,7 +443,7 @@ impl SecureSocketAsync {
                         let write_buffered = BufWriter::with_capacity(WRITE_BUFFER_SIZE, write);
 
                         (SecureWriteHalfAsync::Tls(Either::Left(write_buffered)),
-                        SecureReadHalfAsync::Tls(Either::Left(read_buffered)))
+                         SecureReadHalfAsync::Tls(Either::Left(read_buffered)))
                     }
                     Either::Right(stream) => {
                         //Wrap in bi lock
@@ -367,9 +460,7 @@ impl SecureSocketAsync {
                 }
             }
         }
-
     }
-
 }
 
 pub enum SecureWriteHalfAsync {
@@ -389,48 +480,76 @@ pub enum SecureReadHalfAsync {
 }
 
 impl AsyncWrite for SecureWriteHalfAsync {
-    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
         match &mut *self {
             SecureWriteHalfAsync::Plain(inner) => {
                 Pin::new(inner).poll_write(cx, buf)
             }
             SecureWriteHalfAsync::Tls(inner) => {
-                Pin::new(inner).poll_write(cx, buf)
+                match inner {
+                    Either::Left(left) => {
+                        Pin::new(left).poll_write(cx, buf)
+                    }
+                    Either::Right(right) => {
+                        Pin::new(right).poll_write(cx, buf)
+                    }
+                }
             }
         }
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match &mut *self {
             SecureWriteHalfAsync::Plain(inner) => {
                 Pin::new(inner).poll_flush(cx)
             }
             SecureWriteHalfAsync::Tls(inner) => {
-                Pin::new(inner).poll_flush(cx)
+                match inner {
+                    Either::Left(left) => {
+                        Pin::new(left).poll_flush(cx)
+                    }
+                    Either::Right(right) => {
+                        Pin::new(right).poll_flush(cx)
+                    }
+                }
             }
         }
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match &mut *self {
             SecureWriteHalfAsync::Plain(inner) => {
                 Pin::new(inner).poll_close(cx)
             }
             SecureWriteHalfAsync::Tls(inner) => {
-                Pin::new(inner).poll_close(cx)
+                match inner {
+                    Either::Left(left) => {
+                        Pin::new(left).poll_close(cx)
+                    }
+                    Either::Right(right) => {
+                        Pin::new(right).poll_close(cx)
+                    }
+                }
             }
         }
     }
 }
 
 impl AsyncRead for SecureReadHalfAsync {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<io::Result<usize>> {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<io::Result<usize>> {
         match &mut *self {
             SecureReadHalfAsync::Plain(inner) => {
                 Pin::new(inner).poll_read(cx, buf)
             }
             SecureReadHalfAsync::Tls(inner) => {
-                Pin::new(inner).poll_read(cx, buf)
+                match inner {
+                    Either::Left(left) => {
+                        Pin::new(left).poll_read(cx, buf)
+                    }
+                    Either::Right(right) => {
+                        Pin::new(right).poll_read(cx, buf)
+                    }
+                }
             }
         }
     }
@@ -523,7 +642,6 @@ impl Write for WriteHalfSync {
 }
 
 impl SyncSocket {
-
     pub fn split(self) -> (WriteHalfSync, ReadHalfSync) {
         let (write, read) = std_tcp::split(self.inner);
 

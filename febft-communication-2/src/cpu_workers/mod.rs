@@ -10,6 +10,9 @@ use crate::serialize::Serializable;
 
 //TODO: Statistics
 
+/// Serialize and digest a given message.
+/// Returns a OneShotRx that can be recv() or awaited depending on whether it's being used
+/// in synchronous or asynchronous workloads.
 pub(crate) fn serialize_digest_message<M: Serializable>(message: NetworkMessageKind<M>) -> OneShotRx<Result<(Bytes, Digest)>> {
     let (tx, rx) = new_oneshot_channel();
 
@@ -36,6 +39,10 @@ pub(crate) fn serialize_digest_message<M: Serializable>(message: NetworkMessageK
     rx
 }
 
+/// Deserialize the message that is contained in the given payload.
+/// Returns a OneShotRx that can be recv() or awaited depending on whether it's being used
+/// in synchronous or asynchronous workloads.
+/// Also returns the bytes so we can re utilize them for our next operation.
 pub(crate) fn deserialize_message<M: Serializable>(header: Header, payload: BytesMut) -> OneShotRx<Result<(NetworkMessageKind<M>, BytesMut)>> {
     let (tx, rx) = new_oneshot_channel();
 

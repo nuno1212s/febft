@@ -53,6 +53,26 @@ impl DerefMut for Socket {
     }
 }
 
+impl Write for Socket {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        (&mut self.inner).write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        (&mut self.inner).flush()
+    }
+}
+
+impl Read for Socket {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        std::io::Read::read(&mut self.inner, buf)
+    }
+
+    fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        std::io::Read::read_exact(&mut self.inner, buf)
+    }
+}
+
 pub struct WriteHalf {
     inner: Socket,
 }

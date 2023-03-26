@@ -4,9 +4,9 @@ use std::pin::Pin;
 use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
 use std::task::{Poll, Context};
+use futures::{AsyncRead, AsyncWrite};
 
 use tokio::net::{TcpStream, TcpListener};
-use futures::io::{AsyncRead, AsyncWrite};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
@@ -99,32 +99,41 @@ pub struct WriteHalf {
 pub struct ReadHalf {
     inner: Compat<OwnedReadHalf>,
 }
-
-impl Deref for WriteHalf {
-    type Target = Compat<OwnedWriteHalf>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
+impl AsyncRead for ReadHalf {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>>
+    {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
     }
 }
 
-impl DerefMut for WriteHalf {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
+impl AsyncWrite for WriteHalf {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>>
+    {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
     }
-}
 
-impl Deref for ReadHalf {
-    type Target = Compat<OwnedReadHalf>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<()>>
+    {
+        Pin::new(&mut self.inner).poll_flush(cx)
     }
-}
 
-impl DerefMut for ReadHalf {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
+    fn poll_close(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<()>>
+    {
+        Pin::new(&mut self.inner).poll_close(cx)
     }
 }
 
