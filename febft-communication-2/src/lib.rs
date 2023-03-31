@@ -1,16 +1,26 @@
+#![feature(async_fn_in_trait)]
+
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use async_tls::{TlsAcceptor, TlsConnector};
 use intmap::IntMap;
+use rustls::{ClientConfig, ServerConfig};
 use crate::message::{NetworkMessage, NetworkMessageKind, StoredSerializedNetworkMessage};
 use crate::serialize::Serializable;
 use febft_common::error::*;
 use crate::client_pooling::ConnectedPeer;
+#[cfg(feature = "serialize_serde")]
+use serde::{Deserialize, Serialize};
+use crate::config::NodeConfig;
+use crate::tcpip::{ConnectionType, NodeConnectionAcceptor, TlsNodeAcceptor, TlsNodeConnector};
 
 pub mod serialize;
 pub mod message;
 pub mod tcpip;
 pub mod cpu_workers;
 pub mod client_pooling;
+pub mod config;
 
 /// A `NodeId` represents the id of a process in the BFT system.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
@@ -80,11 +90,12 @@ impl From<NodeId> for u32 {
     }
 }
 
+
 /// A network node. Handles all the connections between nodes.
 pub trait Node<M: Serializable + 'static> {
 
     /// Bootstrap the node
-    async fn bootstrap() -> Result<(Arc<Self>, Vec<NetworkMessage<M>>)>;
+    async fn bootstrap(node_config: NodeConfig) -> Result<(Arc<Self>, Vec<NetworkMessage<M>>)>;
 
     /// Reports the id of this `Node`.
     fn id(&self) -> NodeId;

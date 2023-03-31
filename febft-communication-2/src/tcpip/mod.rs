@@ -4,17 +4,19 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_tls::{TlsAcceptor, TlsConnector};
+use futures_timer::Delay;
 use intmap::IntMap;
 use log::debug;
 use rustls::{ClientConfig, ServerConfig};
 
-use febft_common::async_runtime as rt;
+use febft_common::{async_runtime as rt, socket, threadpool};
 use febft_common::error::*;
 use febft_common::prng::ThreadSafePrng;
 use febft_common::socket::{AsyncListener, SyncListener};
 
 use crate::{Node, NodeId};
 use crate::client_pooling::{ConnectedPeer, PeerIncomingRqHandling};
+use crate::config::{NodeConfig, TlsConfig};
 use crate::message::{NetworkMessage, NetworkMessageKind, StoredSerializedNetworkMessage};
 use crate::serialize::Serializable;
 use crate::tcpip::connections::PeerConnections;
@@ -24,16 +26,17 @@ pub mod connections;
 ///Represents the server addresses of a peer
 ///Clients will only have 1 address while replicas will have 2 addresses (1 for facing clients,
 /// 1 for facing replicas)
+#[derive(Clone)]
 pub struct PeerAddr {
-    replica_facing_socket: (SocketAddr, String),
-    client_facing_socket: Option<(SocketAddr, String)>,
+    client_socket: (SocketAddr, String),
+    replica_socket: Option<(SocketAddr, String)>,
 }
 
 impl PeerAddr {
     pub fn new(client_addr: (SocketAddr, String)) -> Self {
         Self {
-            replica_facing_socket: client_addr,
-            client_facing_socket: None,
+            client_socket: client_addr,
+            replica_socket: None,
         }
     }
 
@@ -42,8 +45,8 @@ impl PeerAddr {
         replica_addr: (SocketAddr, String),
     ) -> Self {
         Self {
-            replica_facing_socket: client_addr,
-            client_facing_socket: Some(replica_addr),
+            client_socket: client_addr,
+            replica_socket: Some(replica_addr),
         }
     }
 }
@@ -76,12 +79,62 @@ pub struct TcpNode<M: Serializable + 'static> {
     // The thread safe pseudo random number generator
     rng: ThreadSafePrng,
     // The connections that are currently being maintained by us to other peers
-    peer_connection: PeerConnections<M>,
+    peer_connection: Arc<PeerConnections<M>>,
     //Handles the incoming connections' buffering and request collection
     //This is polled by the proposer for client requests and by the
-    client_pooling: PeerIncomingRqHandling<NetworkMessage<M>>,
+    client_pooling: Arc<PeerIncomingRqHandling<NetworkMessage<M>>>,
     //A set of the nodes we are currently attempting to connect to
     currently_connecting: Mutex<BTreeSet<NodeId>>,
+}
+
+
+impl<M: Serializable + 'static> TcpNode<M> {
+    async fn setup_client_facing_socket<T>(
+        id: NodeId,
+        addr: PeerAddr,
+    ) -> Result<NodeConnectionAcceptor> where T: ConnectionType {
+        debug!("{:?} // Attempt to setup client facing socket.", id);
+        let server_addr = &addr.client_socket;
+
+        T::setup_socket(&id, &server_addr.0).await
+    }
+
+    async fn setup_replica_facing_socket<T>(
+        id: NodeId,
+        peer_addr: PeerAddr,
+    ) -> Result<Option<NodeConnectionAcceptor>>
+        where T: ConnectionType {
+
+        if let Some((socket, _)) = peer_addr.replica_socket {
+            Ok(Some(T::setup_socket(&id, &socket).await?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn setup_network<CT>(id: NodeId, addr: PeerAddr, cfg: TlsConfig) ->
+    (TlsNodeConnector, TlsNodeAcceptor, Result<NodeConnectionAcceptor>, Result<Option<NodeConnectionAcceptor>>)
+        where CT: ConnectionType
+    {
+        debug!("Initializing TLS configurations.");
+
+        let async_acceptor: TlsAcceptor = cfg.async_server_config.into();
+        let async_connector: TlsConnector = cfg.async_client_config.into();
+
+        let sync_acceptor = Arc::new(cfg.sync_server_config);
+        let sync_connector = Arc::new(cfg.sync_client_config);
+
+        let connector = CT::setup_connector(sync_connector, async_connector);
+
+        let acceptor = CT::setup_acceptor(sync_acceptor, async_acceptor);
+
+        //Initialize the client facing server
+        let client_listener = Self::setup_client_facing_socket::<AsyncConn>(id, addr.clone()).await;
+
+        let replica_listener = Self::setup_replica_facing_socket::<AsyncConn>(id, addr.clone()).await;
+
+        (connector, acceptor, client_listener, replica_listener)
+    }
 }
 
 pub trait ConnectionType {
@@ -98,57 +151,150 @@ pub trait ConnectionType {
         server_addr: &SocketAddr, ) -> Result<NodeConnectionAcceptor>;
 }
 
-impl<M: Serializable + 'static> TcpNode<M> {
-    async fn setup_client_facing_socket<T>(
-        id: NodeId,
-        cfg: &NodeConfig,
-    ) -> Result<NodeConnectionAcceptor> where T: ConnectionType {
-        debug!("{:?} // Attempt to setup client facing socket.", id);
+pub struct SyncConn;
+pub struct AsyncConn;
 
-        let peer_addr = cfg.addrs.get(id.into()).ok_or(Error::simple_with_msg(
-            ErrorKind::Communication,
-            "Failed to get client facing IP",
-        ))?;
-
-        let server_addr = &peer_addr.client_addr;
-
-        T::setup_socket(&id, &server_addr.0).await
+impl ConnectionType for SyncConn {
+    fn setup_connector(sync_connector: Arc<ClientConfig>, async_connector: TlsConnector) -> TlsNodeConnector {
+        TlsNodeConnector::Sync(sync_connector)
     }
 
-    async fn setup_replica_facing_socket<T>(
-        id: NodeId,
-        cfg: &NodeConfig,
-    ) -> Result<Option<NodeConnectionAcceptor>>
-        where T: ConnectionType {
-        let peer_addr = cfg.addrs.get(id.into()).ok_or(Error::simple_with_msg(
-            ErrorKind::Communication,
-            "Failed to get replica facing IP",
-        ))?;
+    fn setup_acceptor(sync_acceptor: Arc<ServerConfig>, async_acceptor: TlsAcceptor) -> TlsNodeAcceptor {
+        TlsNodeAcceptor::Sync(sync_acceptor)
+    }
 
-        //Initialize the replica<->replica facing server
-        let replica_listener = if id >= cfg.first_cli {
-            //Clients don't have a replica<->replica facing server
-            None
-        } else {
-            let replica_facing_addr =
-                peer_addr
-                    .replica_addr
-                    .as_ref()
-                    .ok_or(Error::simple_with_msg(
-                        ErrorKind::Communication,
-                        "Failed to get replica facing IP",
-                    ))?;
+    async fn setup_socket(id: &NodeId, server_addr: &SocketAddr) -> Result<NodeConnectionAcceptor> {
+        Ok(NodeConnectionAcceptor::Sync(socket::bind_sync_server(server_addr.clone())?))
+    }
+}
 
-            Some(T::setup_socket(&id, &replica_facing_addr.0).await?)
-        };
+impl ConnectionType for AsyncConn {
+    fn setup_connector(sync_connector: Arc<ClientConfig>, async_connector: TlsConnector) -> TlsNodeConnector {
+        TlsNodeConnector::Async(async_connector)
+    }
 
-        Ok(replica_listener)
+    fn setup_acceptor(sync_acceptor: Arc<ServerConfig>, async_acceptor: TlsAcceptor) -> TlsNodeAcceptor {
+        TlsNodeAcceptor::Async(async_acceptor)
+    }
+
+    async fn setup_socket(id: &NodeId, server_addr: &SocketAddr) -> Result<NodeConnectionAcceptor> {
+        Ok(NodeConnectionAcceptor::Async(socket::bind_async_server(server_addr.clone()).await?))
     }
 }
 
 impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
-    async fn bootstrap() -> Result<(Arc<Self>, Vec<NetworkMessage<M>>)> {
-        todo!()
+    async fn bootstrap(cfg: NodeConfig) -> Result<(Arc<Self>, Vec<NetworkMessage<M>>)> {
+        let id = cfg.id;
+
+        debug!("Initializing sockets.");
+
+        let tcp_config = cfg.tcp_config;
+
+        let addr = tcp_config.addrs.get(id.0 as u64).expect("Failed to get my own IP address").clone();
+
+        let network = tcp_config.network_config;
+
+        let (connector, acceptor,
+            client_socket, replica_socket) =
+            Self::setup_network(id, addr, network).await;
+
+        //Setup all the peer message reception handling.
+        let peers = Arc::new(PeerIncomingRqHandling::new(
+            cfg.id,
+            cfg.first_cli,
+            cfg.client_pool_config,
+        ));
+
+        let peer_connections = PeerConnections::new(id, cfg.first_cli,
+                                                    connector, acceptor, peers.clone());
+
+
+        debug!("Initializing connection listeners");
+        peer_connections.clone().setup_tcp_listener(client_socket?);
+
+        if let Some(replica) = replica_socket? {
+            peer_connections.clone().setup_tcp_listener(replica);
+        }
+
+        let shared = Arc::new(NodeShared {
+            my_key: cfg.sk,
+            peer_keys: cfg.pk,
+        });
+
+        debug!("Initializing node peer handling.");
+
+        let ping_handler = PingHandler::new();
+
+        let rng = ThreadSafePrng::new();
+
+        //TESTING
+        let sent_rqs = if id > cfg.first_cli {
+            None
+
+            /*Some(Arc::new(
+                std::iter::repeat_with(|| DashMap::with_capacity(20000))
+                    .take(30)
+                    .collect(),
+            ))*/
+        } else {
+            None
+        };
+
+        let rcv_rqs =
+            if id < cfg.first_cli {
+                None
+
+                //
+                // //We want the replicas to log recved requests
+                // let arc = Arc::new(RwLock::new(
+                //     std::iter::repeat_with(|| { DashMap::with_capacity(20000) })
+                //         .take(30)
+                //         .collect()));
+                //
+                // let rqs = arc.clone();
+                //
+                // std::thread::Builder::new().name(String::from("Logging thread")).spawn(move || {
+                //     loop {
+                //         let new_vec: Vec<DashMap<u64, ()>> = std::iter::repeat_with(|| { DashMap::with_capacity(20000) })
+                //             .take(30)
+                //             .collect();
+                //
+                //         let mut old_vec = {
+                //             let mut write_guard = rqs.write();
+                //
+                //             std::mem::replace(&mut *write_guard, new_vec)
+                //         };
+                //
+                //         let mut print = String::new();
+                //
+                //         for bucket in old_vec {
+                //             for (key, _) in bucket.into_iter() {
+                //                 print = print + " , " + &*format!("{}", key);
+                //             }
+                //         }
+                //
+                //         println!("{}", print);
+                //
+                //         std::thread::sleep(Duration::from_secs(1));
+                //     }
+                // }).expect("Failed to start logging thread");
+                //
+                // Some(arc)
+            } else { None };
+
+        debug!("{:?} // Initializing node reference", id);
+
+        let node = Arc::new(TcpNode {
+            id,
+            first_cli: cfg.first_cli,
+            rng,
+            peer_connection: peer_connections,
+            client_pooling: peers,
+            currently_connecting: Mutex::new(Default::default()),
+        });
+
+        // success
+        Ok((node, rogue))
     }
 
     fn id(&self) -> NodeId {

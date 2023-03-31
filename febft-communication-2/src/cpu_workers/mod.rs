@@ -17,9 +17,8 @@ pub(crate) fn serialize_digest_message<M: Serializable>(message: NetworkMessageK
     let (tx, rx) = new_oneshot_channel();
 
     threadpool::execute(|| {
-
         // serialize
-        //TODO: Use a memory pool here
+        // TODO: Use a memory pool here
         let mut buf = Vec::with_capacity(512);
 
         let digest = match serialize::serialize_digest::<Vec<u8>, M>(&message, &mut buf) {
@@ -47,7 +46,6 @@ pub(crate) fn deserialize_message<M: Serializable>(header: Header, payload: Byte
     let (tx, rx) = new_oneshot_channel();
 
     threadpool::execute(|| {
-
         //TODO: Verify signatures
 
         // deserialize payload
@@ -56,7 +54,7 @@ pub(crate) fn deserialize_message<M: Serializable>(header: Header, payload: Byte
             Err(err) => {
                 // errors deserializing -> faulty connection;
                 // drop this socket
-                error!("{:?} // Failed to deserialize message {:?}", self.id(), err);
+                error!("{:?} // Failed to deserialize message {:?}", header.to(), err);
 
                 tx.send(Err(Error::wrapped(ErrorKind::CommunicationSerialize, err))).unwrap();
 

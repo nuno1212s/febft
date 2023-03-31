@@ -9,7 +9,8 @@ use febft_common::channel;
 use febft_common::channel::{ChannelMultRx, ChannelMultTx, ChannelSyncRx, ChannelSyncTx, TryRecvError};
 use febft_common::error::*;
 
-use crate::{NODE_CHAN_BOUND, NodeId};
+use crate::{NodeId};
+use crate::config::ClientPoolConfig;
 
 fn channel_init<T>(capacity: usize) -> (ChannelMultTx<T>, ChannelMultRx<T>) {
     channel::new_bounded_mult(capacity)
@@ -39,6 +40,7 @@ pub struct PeerIncomingRqHandling<T: Send + 'static> {
     client_rx: Option<ChannelSyncRx<Vec<T>>>,
 }
 
+const NODE_CHAN_BOUND: usize = 1024;
 const DEFAULT_CLIENT_QUEUE: usize = 16384;
 const DEFAULT_REPLICA_QUEUE: usize = 1024;
 
@@ -50,12 +52,15 @@ unsafe impl<T> Sync for PeerIncomingRqHandling<T> where T: Send {}
 unsafe impl<T> Send for PeerIncomingRqHandling<T> where T: Send {}
 
 impl<T> PeerIncomingRqHandling<T> where T: Send {
-    pub fn new(id: NodeId, first_cli: NodeId, batch_size: usize, clients_per_pool: usize,
-               batch_timeout_micros: u64, batch_sleep_micros: u64) -> PeerIncomingRqHandling<T> {
+    pub fn new(id: NodeId, first_cli: NodeId, config: ClientPoolConfig) -> PeerIncomingRqHandling<T> {
         //We only want to setup client handling if we are a replica
         let client_handling;
 
         let client_channel;
+
+        let ClientPoolConfig {
+            batch_size, clients_per_pool, batch_timeout_micros, batch_sleep_micros
+        } = config;
 
         if id < first_cli {
             let (client_tx, client_rx) = channel::new_bounded_sync(NODE_CHAN_BOUND);

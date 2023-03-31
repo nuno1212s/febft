@@ -19,12 +19,14 @@ use crate::tcpip::{PeerAddr, TlsNodeAcceptor, TlsNodeConnector};
 
 pub type Callback = Option<Box<dyn FnOnce(bool) + Send>>;
 
-pub(super) fn setup_conn_acceptor_task<M: Serializable + 'static>(tcp_listener: AsyncListener, conn_handler: Arc<ConnectionHandler<M>>) {
+pub(super) fn setup_conn_acceptor_task<M: Serializable + 'static>(tcp_listener: AsyncListener,
+                                                                  conn_handler: Arc<ConnectionHandler>,
+                                                                  peer_connections: Arc<PeerConnections<M>>) {
     rt::spawn(async move {
         loop {
             match tcp_listener.accept().await {
                 Ok(connection) => {
-                    conn_handler.accept_conn(Either::Left(connection))
+                    conn_handler.accept_conn::<M>(&peer_connections, Either::Left(connection))
                 }
                 Err(err) => {
                     error!("Failed to accept connection. {:?}", err);
@@ -34,20 +36,20 @@ pub(super) fn setup_conn_acceptor_task<M: Serializable + 'static>(tcp_listener: 
     });
 }
 
-pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc<ConnectionHandler<M>>,
+pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc<ConnectionHandler>,
                                                                connections: Arc<PeerConnections<M>>,
                                                                peer_id: NodeId, addr: PeerAddr) {
     rt::spawn(async move {
         if !conn_handler.register_connecting_to_node(peer_id) {
             warn!("{:?} // Tried to connect to node that I'm already connecting to {:?}",
-                self.id, peer_id);
+                conn_handler.id(), peer_id);
 
             return;
         }
 
         //TODO: Are we currently connected?
 
-        debug!("{:?} // Connecting to the node {:?}", self.id, peer_id);
+        debug!("{:?} // Connecting to the node {:?}", conn_handler.id(), peer_id);
 
         let mut rng = prng::State::new();
 
@@ -57,19 +59,19 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
         //If I'm a client I will always use the client facing addr
         //While if I'm a replica I'll connect to the replica addr (clients only have this addr)
         let addr = if conn_handler.id() >= conn_handler.first_cli() {
-            addr.client_facing_socket.clone()
+            addr.replica_socket.clone()
         } else {
             //We are a replica, but we are connecting to a client, so
             //We need the client addr.
             if peer_id >= conn_handler.first_cli() {
-                addr.client_facing_socket.clone()
+                addr.replica_socket.clone()
             } else {
-                match addr.replica_facing_socket.as_ref() {
+                match addr.client_socket.as_ref() {
                     Some(addr) => addr,
                     None => {
                         error!(
                             "{:?} // Failed to find IP address for peer {:?}",
-                            self.id, peer_id
+                            conn_handler.id(), peer_id
                         );
 
                         return;
@@ -80,7 +82,7 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
 
         debug!(
             "{:?} // Starting connection to node {:?} with address {:?}",
-            self.id(),
+            conn_handler.id(),
             peer_id,
             addr.0
         );
@@ -92,6 +94,8 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
 
         const SECS: u64 = 1;
         const RETRY: usize = 3 * 60;
+
+        let my_id = conn_handler.id();
 
         // NOTE:
         // ========
@@ -125,14 +129,14 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
                     if let Err(err) = sock.write_all(&buf[..]).await {
                         // errors writing -> faulty connection;
                         // drop this socket
-                        error!("{:?} // Failed to connect to the node {:?} {:?} ", self.id, peer_id, err);
+                        error!("{:?} // Failed to connect to the node {:?} {:?} ", conn_handler.id(), peer_id, err);
                         break;
                     }
 
                     if let Err(err) = sock.flush().await {
                         // errors flushing -> faulty connection;
                         // drop this socket
-                        error!("{:?} // Failed to connect to the node {:?} {:?} ", self.id, peer_id, err);
+                        error!("{:?} // Failed to connect to the node {:?} {:?} ", conn_handler.id(), peer_id, err);
                         break;
                     }
 
@@ -149,7 +153,7 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
                         match connector.connect(addr.1, sock).await {
                             Ok(s) => SecureSocketAsync::new_tls_client(s),
                             Err(err) => {
-                                error!("{:?} // Failed to connect to the node {:?} {:?} ", self.id, peer_id, err);
+                                error!("{:?} // Failed to connect to the node {:?} {:?} ", conn_handler.id(), peer_id, err);
                                 break;
                             }
                         }
@@ -173,7 +177,7 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
                 Err(err) => {
                     error!(
                         "{:?} // Error on connecting to {:?} addr {:?}: {:?}",
-                        self.id, peer_id, addr, err
+                        conn_handler.id(), peer_id, addr, err
                     );
                 }
             }
@@ -190,11 +194,11 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
 
         // announce we have failed to connect to the peer node
         //if we fail to connect, then just ignore
-        error!("{:?} // Failed to connect to the node {:?} ", self.id, peer_id);
+        error!("{:?} // Failed to connect to the node {:?} ", conn_handler.id(), peer_id);
     });
 }
 
-pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_handler: Arc<ConnectionHandler<M>>,
+pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_handler: Arc<ConnectionHandler>,
                                                                         connections: Arc<PeerConnections<M>>,
                                                                         mut sock: AsyncSocket) {
     rt::spawn(async move {
@@ -236,7 +240,7 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
 
             if !conn_handler.register_connecting_to_node(peer_id) {
                 warn!("{:?} // Tried to connect to node that I'm already connecting to {:?}",
-                self.id, peer_id);
+                my_id, peer_id);
                 //Drop the connection since we are already establishing connection
 
                 return;
@@ -272,6 +276,5 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
 
             return;
         }
-
     });
 }

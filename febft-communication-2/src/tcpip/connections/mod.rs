@@ -1,21 +1,19 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use bytes::Bytes;
 use dashmap::DashMap;
-use dashmap::mapref::one::Ref;
-use either::Either;
 
-use febft_common::channel::{ChannelMixedRx, ChannelMixedTx, new_bounded_mixed, SendError};
+use febft_common::channel::{ChannelMixedRx, ChannelMixedTx, new_bounded_mixed};
 use febft_common::error::*;
-use febft_common::socket::{AsyncSocket, SecureReadHalf, SecureReadHalfSync, SecureWriteHalf, SecureWriteHalfSync, SyncSocket};
+use febft_common::socket::SecureReadHalf;
+use febft_common::socket::SecureWriteHalf;
 
 use crate::client_pooling::{ConnectedPeer, PeerIncomingRqHandling};
-use crate::message::{NetworkMessage, NetworkMessageKind, WireMessage};
+use crate::message::{NetworkMessage, WireMessage};
 use crate::NodeId;
 use crate::serialize::Serializable;
+use crate::tcpip::{NodeConnectionAcceptor, TlsNodeAcceptor, TlsNodeConnector};
 use crate::tcpip::connections::conn_establish::ConnectionHandler;
-use crate::tcpip::{TlsNodeAcceptor, TlsNodeConnector};
 
 mod incoming;
 mod outgoing;
@@ -81,7 +79,7 @@ impl<M> PeerConnection<M> where M: Serializable {
 pub struct PeerConnections<M: Serializable + 'static> {
     connection_map: Arc<DashMap<NodeId, PeerConnection<M>>>,
     client_pooling: Arc<PeerIncomingRqHandling<NetworkMessage<M>>>,
-    connection_establisher: Arc<ConnectionHandler>
+    connection_establisher: Arc<ConnectionHandler>,
 }
 
 
@@ -89,12 +87,22 @@ impl<M: Serializable + 'static> PeerConnections<M> {
     pub fn new(peer_id: NodeId, first_cli: NodeId,
                node_connector: TlsNodeConnector,
                node_acceptor: TlsNodeAcceptor,
-               client_pooling: Arc<PeerIncomingRqHandling<NetworkMessage<M>>>) -> Self {
-        Self {
+               client_pooling: Arc<PeerIncomingRqHandling<NetworkMessage<M>>>) -> Arc<Self> {
+        let connection_establish = ConnectionHandler::new(peer_id, first_cli, node_connector, node_acceptor);
+
+        Arc::new(Self {
             connection_map: Arc::new(DashMap::new()),
             client_pooling,
-            connection_establisher: ConnectionHandler::new(peer_id, first_cli, node_connector, node_acceptor),
-        }
+            connection_establisher: connection_establish,
+        })
+    }
+
+    pub fn connection_count(&self) -> usize {
+        self.connection_map.len()
+    }
+
+    pub(super) fn setup_tcp_listener(self: Arc<Self>, node_acceptor: NodeConnectionAcceptor) {
+        self.connection_establisher.clone().setup_conn_worker(node_acceptor, self)
     }
 
     pub fn is_connected_to(&self, node: &NodeId) -> bool {
@@ -104,7 +112,7 @@ impl<M: Serializable + 'static> PeerConnections<M> {
     pub fn get_connection(&self, node: &NodeId) -> Option<PeerConnection<M>> {
         let option = self.connection_map.get(node);
 
-        option.map(|conn| conn.clone())
+        option.map(|conn| conn.value()).cloned()
     }
 
     pub(crate) fn handle_connection_established(&self, node: NodeId, socket: (SecureWriteHalf, SecureReadHalf)) {
@@ -115,6 +123,4 @@ impl<M: Serializable + 'static> PeerConnections<M> {
 
         peer_conn.insert_new_connection(socket);
     }
-    
-    
 }

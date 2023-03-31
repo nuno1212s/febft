@@ -5,10 +5,10 @@ use std::time::Duration;
 use bytes::Bytes;
 use either::Either;
 use log::{debug, error, warn};
-use rustls::{ClientConnection, Error, ServerConfig, ServerConnection, ServerName};
+use rustls::{ClientConnection, ServerConnection, ServerName};
 
 use febft_common::{prng, socket, threadpool};
-use febft_common::socket::{AsyncSocket, SecureReadHalf, SecureSocketSync, SecureWriteHalf, SyncListener, SyncSocket};
+use febft_common::socket::{SecureReadHalf, SecureSocketSync, SecureWriteHalf, SyncListener, SyncSocket};
 
 use crate::message::{Header, WireMessage};
 use crate::NodeId;
@@ -17,14 +17,16 @@ use crate::tcpip::{PeerAddr, TlsNodeAcceptor, TlsNodeConnector};
 use crate::tcpip::connections::conn_establish::ConnectionHandler;
 use crate::tcpip::connections::PeerConnections;
 
-pub(super) fn setup_conn_acceptor_thread<M: Serializable + 'static>(tcp_listener: SyncListener, conn_handler: Arc<ConnectionHandler<M>>) {
+pub(super) fn setup_conn_acceptor_thread<M: Serializable + 'static>(tcp_listener: SyncListener,
+                                                                    conn_handler: Arc<ConnectionHandler>,
+                                                                    peer_connection: Arc<PeerConnections<M>>) {
     std::thread::Builder::new()
         .name(format!("Connection acceptor thread"))
         .spawn(|| {
             loop {
                 match tcp_listener.accept() {
                     Ok(connection) => {
-                        conn_handler.accept_conn(Either::Right(connection))
+                        conn_handler.accept_conn::<M>(&peer_connection, Either::Right(connection))
                     }
                     Err(err) => {
                         error!("Failed to accept connection. {:?}", err);
@@ -34,19 +36,21 @@ pub(super) fn setup_conn_acceptor_thread<M: Serializable + 'static>(tcp_listener
         }).unwrap();
 }
 
-pub(super) fn connect_to_node_sync<M: Serializable + 'static>(conn_handler: Arc<ConnectionHandler<M>>,
+pub(super) fn connect_to_node_sync<M: Serializable + 'static>(conn_handler: Arc<ConnectionHandler>,
                                                               connections: Arc<PeerConnections<M>>,
                                                               peer_id: NodeId, addr: PeerAddr) {
     std::thread::Builder::new()
         .spawn(move || {
+            let my_id = conn_handler.id();
+
             if !conn_handler.register_connecting_to_node(peer_id) {
                 warn!("{:?} // Tried to connect to node that I'm already connecting to {:?}",
-                self.id, peer_id);
+                my_id, peer_id);
 
                 return;
             }
 
-            debug!("{:?} // Connecting to the node {:?}", self.id, peer_id);
+            debug!("{:?} // Connecting to the node {:?}", my_id, peer_id);
 
             let mut rng = prng::State::new();
 
@@ -56,19 +60,19 @@ pub(super) fn connect_to_node_sync<M: Serializable + 'static>(conn_handler: Arc<
             //If I'm a client I will always use the client facing addr
             //While if I'm a replica I'll connect to the replica addr (clients only have this addr)
             let addr = if conn_handler.id() >= conn_handler.first_cli() {
-                addr.client_facing_socket.clone()
+                addr.replica_socket.clone()
             } else {
                 //We are a replica, but we are connecting to a client, so
                 //We need the client addr.
                 if peer_id >= conn_handler.first_cli() {
-                    addr.client_facing_socket.clone()
+                    addr.replica_socket.clone()
                 } else {
-                    match addr.replica_facing_socket.as_ref() {
+                    match addr.client_socket.as_ref() {
                         Some(addr) => addr,
                         None => {
                             error!(
                             "{:?} // Failed to find IP address for peer {:?}",
-                            self.id, peer_id
+                            my_id, peer_id
                         );
 
                             return;
@@ -78,7 +82,7 @@ pub(super) fn connect_to_node_sync<M: Serializable + 'static>(conn_handler: Arc<
             };
 
             debug!("{:?} // Starting connection to node {:?} with address {:?}",
-            self.id(),
+            my_id,
             peer_id,
             addr.0);
 
@@ -122,14 +126,14 @@ pub(super) fn connect_to_node_sync<M: Serializable + 'static>(conn_handler: Arc<
                         if let Err(err) = sock.write_all(&buf[..]) {
                             // errors writing -> faulty connection;
                             // drop this socket
-                            error!("{:?} // Failed to connect to the node {:?} {:?} ", self.id, peer_id, err);
+                            error!("{:?} // Failed to connect to the node {:?} {:?} ", my_id, peer_id, err);
                             break;
                         }
 
                         if let Err(err) = sock.flush() {
                             // errors flushing -> faulty connection;
                             // drop this socket
-                            error!("{:?} // Failed to connect to the node {:?} {:?} ", self.id, peer_id, err);
+                            error!("{:?} // Failed to connect to the node {:?} {:?} ", my_id, peer_id, err);
                             break;
                         }
 
@@ -153,7 +157,7 @@ pub(super) fn connect_to_node_sync<M: Serializable + 'static>(conn_handler: Arc<
                             };
 
                             if let Ok(session) = ClientConnection::new(connector.clone(), dns_ref) {
-                                SecureSocketSendSync::new_tls(session, sock)
+                                SecureSocketSync::new_tls_client(session, sock)
                             } else {
                                 error!("Failed to establish tls connection.");
 
@@ -180,7 +184,7 @@ pub(super) fn connect_to_node_sync<M: Serializable + 'static>(conn_handler: Arc<
                     Err(err) => {
                         error!(
                         "{:?} // Error on connecting to {:?} addr {:?}: {:?}",
-                        self.id, peer_id, addr, err
+                        my_id, peer_id, addr, err
                     );
                     }
                 }
@@ -197,11 +201,11 @@ pub(super) fn connect_to_node_sync<M: Serializable + 'static>(conn_handler: Arc<
 
             // announce we have failed to connect to the peer node
             //if we fail to connect, then just ignore
-            error!("{:?} // Failed to connect to the node {:?} ", self.id, peer_id);
+            error!("{:?} // Failed to connect to the node {:?} ", my_id, peer_id);
         }).unwrap();
 }
 
-pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_handler: Arc<ConnectionHandler<M>>,
+pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_handler: Arc<ConnectionHandler>,
                                                                         connections: Arc<PeerConnections<M>>,
                                                                         mut sock: SyncSocket) {
     threadpool::execute(move || {
@@ -243,7 +247,7 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
 
             if !conn_handler.register_connecting_to_node(peer_id) {
                 warn!("{:?} // Tried to connect to node that I'm already connecting to {:?}",
-                self.id, peer_id);
+                my_id, peer_id);
                 //Drop the connection since we are already establishing connection
 
                 return;
@@ -253,7 +257,7 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
             let sock = if peer_id >= first_cli || my_id >= first_cli {
                 SecureSocketSync::new_plain(sock)
             } else {
-                let server_conn = match ServerConnection::new(acceptor) {
+                match ServerConnection::new(acceptor) {
                     Ok(s) => {
                         SecureSocketSync::new_tls_server(s, sock)
                     }
@@ -265,7 +269,7 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
 
                         break;
                     }
-                };
+                }
             };
 
             debug!("{:?} // Received new connection from id {:?}", my_id, peer_id);

@@ -5,7 +5,7 @@ use febft_common::socket::{AsyncSocket, SyncSocket};
 use febft_common::error::*;
 use crate::NodeId;
 use crate::serialize::Serializable;
-use crate::tcpip::{PeerAddr, TlsNodeAcceptor, TlsNodeConnector};
+use crate::tcpip::{NodeConnectionAcceptor, PeerAddr, TlsNodeAcceptor, TlsNodeConnector};
 use crate::tcpip::connections::{PeerConnection, PeerConnections};
 
 mod synchronous;
@@ -32,6 +32,19 @@ impl ConnectionHandler {
                 currently_connecting: Mutex::new(BTreeSet::new()),
             }
         )
+    }
+
+    pub(super) fn setup_conn_worker<M: Serializable + 'static>(self: Arc<Self>,
+                                                               listener: NodeConnectionAcceptor,
+                                                               peer_connections: Arc<PeerConnections<M>>) {
+        match listener {
+            NodeConnectionAcceptor::Async(async_listener) => {
+                asynchronous::setup_conn_acceptor_task(async_listener, self, peer_connections)
+            }
+            NodeConnectionAcceptor::Sync(sync_listener) => {
+                synchronous::setup_conn_acceptor_thread(sync_listener, self, peer_connections)
+            }
+        }
     }
 
     pub fn id(&self) -> NodeId {
@@ -63,20 +76,24 @@ impl ConnectionHandler {
                                                     peer_id, peer_addr)
             }
             TlsNodeConnector::Sync(_) => {
-                todo!()
+                synchronous::connect_to_node_sync(Arc::clone(self),
+                                                  Arc::clone(&peer_connections),
+                                                  peer_id, peer_addr)
             }
         }
     }
 
-    pub fn accept_conn<M: Serializable + 'static>(self: &Arc<Self>, peer_connections: &Arc<PeerConnections<M>>, socket: Either<(AsyncSocket), (SyncSocket)>) {
+    pub fn accept_conn<M: Serializable + 'static>(self: &Arc<Self>, peer_connections: &Arc<PeerConnections<M>>, socket: Either<AsyncSocket, SyncSocket>) {
         match socket {
             Either::Left(asynchronous) => {
                 asynchronous::handle_server_conn_established(Arc::clone(self),
                                                              peer_connections.clone(),
                                                              asynchronous, );
             }
-            Either::Right(_) => {
-                todo!()
+            Either::Right(synchronous) => {
+                synchronous::handle_server_conn_established(Arc::clone(self),
+                                                            peer_connections.clone(),
+                                                            synchronous);
             }
         }
     }
