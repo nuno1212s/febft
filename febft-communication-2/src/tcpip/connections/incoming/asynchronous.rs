@@ -11,11 +11,18 @@ use crate::client_pooling::ConnectedPeer;
 use crate::cpu_workers;
 use crate::message::{Header, NetworkMessage};
 use crate::serialize::Serializable;
+use crate::tcpip::connections::{ConnHandle, PeerConnection};
 
-pub(super) fn spawn_incoming_task<M: Serializable + 'static>(peer: Arc<ConnectedPeer<NetworkMessage<M>>>,
-                                                             mut socket: SecureReadHalfAsync) {
+pub(super) fn spawn_incoming_task<M: Serializable + 'static>(
+    conn_handle: ConnHandle,
+    peer: Arc<PeerConnection<M>>,
+    mut socket: SecureReadHalfAsync) {
+
     rt::spawn(async move {
+
+        let client_pool_buffer = Arc::clone(peer.client_pool_peer());
         let mut read_buffer = BytesMut::with_capacity(Header::LENGTH);
+        let peer_id = peer.client_pool_peer().client_id().clone();
 
         loop {
             read_buffer.resize(Header::LENGTH, 0);
@@ -23,12 +30,12 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(peer: Arc<Connected
             if let Err(err) = socket.read_exact(&mut read_buffer[..Header::LENGTH]).await {
                 // errors reading -> faulty connection;
                 // drop this socket
-                error!("{:?} // Failed to read header from socket, faulty connection {:?}", self.id, err);
+                error!("Failed to read header from socket, faulty connection {:?}", err);
                 break;
             }
 
             // we are passing the correct length, safe to use unwrap()
-            let header = Header::deserialize_from(&buf[..Header::LENGTH]).unwrap();
+            let header = Header::deserialize_from(&read_buffer[..Header::LENGTH]).unwrap();
 
             // reserve space for message
             //
@@ -44,7 +51,7 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(peer: Arc<Connected
             if let Err(err) = socket.read_exact(&mut read_buffer[..header.payload_length()]).await {
                 // errors reading -> faulty connection;
                 // drop this socket
-                error!("{:?} // Failed to read payload from socket, faulty connection {:?}", self.id, err);
+                error!("Failed to read payload from socket, faulty connection {:?}", err);
                 break;
             }
 
@@ -61,17 +68,15 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(peer: Arc<Connected
                 Err(err) => {
                     // errors deserializing -> faulty connection;
                     // drop this socket
-                    error!("{:?} // Failed to deserialize message {:?}", self.id(), err);
+                    error!("Failed to deserialize message {:?}",err);
                     break;
                 }
             };
 
             let msg = NetworkMessage::new(header, message);
 
-            if let Err(inner) = peer.push_request(msg) {
-                error!(
-                    "{:?} // Channel closed, closing tcp connection as well to peer {:?}. {:?}",
-                    self.id(),
+            if let Err(inner) = client_pool_buffer.push_request(msg) {
+                error!("Channel closed, closing tcp connection as well to peer {:?}. {:?}",
                     peer_id,
                     inner
                 );
@@ -81,5 +86,7 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(peer: Arc<Connected
 
             //TODO: Statistics
         }
+
+        peer.delete_connection(conn_handle.id());
     });
 }

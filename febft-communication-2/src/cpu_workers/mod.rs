@@ -16,26 +16,33 @@ use crate::serialize::Serializable;
 pub(crate) fn serialize_digest_message<M: Serializable>(message: NetworkMessageKind<M>) -> OneShotRx<Result<(Bytes, Digest)>> {
     let (tx, rx) = new_oneshot_channel();
 
-    threadpool::execute(|| {
+    threadpool::execute(move || {
         // serialize
-        // TODO: Use a memory pool here
-        let mut buf = Vec::with_capacity(512);
-
-        let digest = match serialize::serialize_digest::<Vec<u8>, M>(&message, &mut buf) {
-            Ok(dig) => dig,
-            Err(err) => {
-                error!("Failed to serialize message {:?}. Message is {:?}", err, message);
-
-                panic!("Failed to serialize message {:?}", err);
-            }
-        };
-
-        let buf = Bytes::from(buf);
-
-        tx.send(Ok((buf, digest))).unwrap();
+        tx.send(serialize_digest_no_threadpool(message)).unwrap();
     });
 
     rx
+}
+
+/// Serialize and digest a given message, but without sending the job to the threadpool
+/// Useful if we want to re-utilize this for other things
+pub(crate) fn serialize_digest_no_threadpool<M: Serializable>(message: NetworkMessageKind<M>) -> Result<(Bytes, Digest)> {
+
+    // TODO: Use a memory pool here
+    let mut buf = Vec::with_capacity(512);
+
+    let digest = match serialize::serialize_digest::<Vec<u8>, M>(&message, &mut buf) {
+        Ok(dig) => dig,
+        Err(err) => {
+            error!("Failed to serialize message {:?}. Message is {:?}", err, message);
+
+            panic!("Failed to serialize message {:?}", err);
+        }
+    };
+
+    let buf = Bytes::from(buf);
+
+    Ok((buf, digest))
 }
 
 /// Deserialize the message that is contained in the given payload.
@@ -45,7 +52,7 @@ pub(crate) fn serialize_digest_message<M: Serializable>(message: NetworkMessageK
 pub(crate) fn deserialize_message<M: Serializable>(header: Header, payload: BytesMut) -> OneShotRx<Result<(NetworkMessageKind<M>, BytesMut)>> {
     let (tx, rx) = new_oneshot_channel();
 
-    threadpool::execute(|| {
+    threadpool::execute(move || {
         //TODO: Verify signatures
 
         // deserialize payload

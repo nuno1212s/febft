@@ -21,6 +21,7 @@ pub mod tcpip;
 pub mod cpu_workers;
 pub mod client_pooling;
 pub mod config;
+pub mod message_signing;
 
 /// A `NodeId` represents the id of a process in the BFT system.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
@@ -95,7 +96,7 @@ impl From<NodeId> for u32 {
 pub trait Node<M: Serializable + 'static> {
 
     /// Bootstrap the node
-    async fn bootstrap(node_config: NodeConfig) -> Result<(Arc<Self>, Vec<NetworkMessage<M>>)>;
+    async fn bootstrap(node_config: NodeConfig) -> Result<Arc<Self>>;
 
     /// Reports the id of this `Node`.
     fn id(&self) -> NodeId;

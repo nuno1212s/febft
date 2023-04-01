@@ -12,14 +12,12 @@ pub struct NodeConfig {
     /// Every peer with id < first_cli is a replica and every peer with id > first_cli is
     /// a client
     pub first_cli: NodeId,
-    /// The list of public keys of all nodes in the system.
-    pub pk: IntMap<PublicKey>,
-    /// The secret key of this particular `Node`.
-    pub sk: KeyPair,
     /// TCP specific configuration
     pub tcp_config: TcpConfig,
     ///The configurations of the client pool config
     pub client_pool_config: ClientPoolConfig,
+    ///The configurations from the crypto part of the system
+    pub pk_crypto_config: PKConfig
 }
 
 pub struct TcpConfig {
@@ -31,6 +29,13 @@ pub struct TcpConfig {
     pub addrs: IntMap<PeerAddr>,
     /// Configurations specific to the networking
     pub network_config: TlsConfig,
+}
+
+pub struct PKConfig {
+    /// Our secret key pair.
+    pub sk: KeyPair,
+    /// The list of public keys of all nodes in the system.
+    pub pk: IntMap<PublicKey>,
 }
 
 pub struct TlsConfig {

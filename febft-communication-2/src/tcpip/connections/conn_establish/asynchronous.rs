@@ -59,14 +59,14 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
         //If I'm a client I will always use the client facing addr
         //While if I'm a replica I'll connect to the replica addr (clients only have this addr)
         let addr = if conn_handler.id() >= conn_handler.first_cli() {
-            addr.replica_socket.clone()
+            addr.client_socket.clone()
         } else {
             //We are a replica, but we are connecting to a client, so
             //We need the client addr.
             if peer_id >= conn_handler.first_cli() {
-                addr.replica_socket.clone()
+                addr.client_socket.clone()
             } else {
-                match addr.client_socket.as_ref() {
+                match addr.replica_socket.as_ref() {
                     Some(addr) => addr,
                     None => {
                         error!(
@@ -167,11 +167,6 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
                     connections.handle_connection_established(peer_id, (write, read));
 
                     conn_handler.done_connecting_to_node(&peer_id);
-
-                    if let Some(callback) = callback {
-                        callback(true);
-                    }
-
                     return;
                 }
                 Err(err) => {
@@ -187,10 +182,6 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
         }
 
         conn_handler.done_connecting_to_node(&peer_id);
-
-        if let Some(callback) = callback {
-            callback(false);
-        }
 
         // announce we have failed to connect to the peer node
         //if we fail to connect, then just ignore
@@ -217,7 +208,7 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
         // the `break` instructions act as a `goto` statement
         loop {
             // read the peer's header
-            if let Err(_) = sock.read_exact(&mut buf_header[..]) {
+            if let Err(_) = sock.read_exact(&mut buf_header[..]).await {
                 // errors reading -> faulty connection;
                 // drop this socket
                 break;

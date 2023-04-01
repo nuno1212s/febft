@@ -18,8 +18,9 @@ use crate::{Node, NodeId};
 use crate::client_pooling::{ConnectedPeer, PeerIncomingRqHandling};
 use crate::config::{NodeConfig, TlsConfig};
 use crate::message::{NetworkMessage, NetworkMessageKind, StoredSerializedNetworkMessage};
+use crate::message_signing::NodePKShared;
 use crate::serialize::Serializable;
-use crate::tcpip::connections::PeerConnections;
+use crate::tcpip::connections::{PeerConnection, PeerConnections};
 
 pub mod connections;
 
@@ -79,12 +80,10 @@ pub struct TcpNode<M: Serializable + 'static> {
     // The thread safe pseudo random number generator
     rng: ThreadSafePrng,
     // The connections that are currently being maintained by us to other peers
-    peer_connection: Arc<PeerConnections<M>>,
+    peer_connections: Arc<PeerConnections<M>>,
     //Handles the incoming connections' buffering and request collection
     //This is polled by the proposer for client requests and by the
     client_pooling: Arc<PeerIncomingRqHandling<NetworkMessage<M>>>,
-    //A set of the nodes we are currently attempting to connect to
-    currently_connecting: Mutex<BTreeSet<NodeId>>,
 }
 
 
@@ -155,11 +154,11 @@ pub struct SyncConn;
 pub struct AsyncConn;
 
 impl ConnectionType for SyncConn {
-    fn setup_connector(sync_connector: Arc<ClientConfig>, async_connector: TlsConnector) -> TlsNodeConnector {
+    fn setup_connector(sync_connector: Arc<ClientConfig>, _: TlsConnector) -> TlsNodeConnector {
         TlsNodeConnector::Sync(sync_connector)
     }
 
-    fn setup_acceptor(sync_acceptor: Arc<ServerConfig>, async_acceptor: TlsAcceptor) -> TlsNodeAcceptor {
+    fn setup_acceptor(sync_acceptor: Arc<ServerConfig>, _: TlsAcceptor) -> TlsNodeAcceptor {
         TlsNodeAcceptor::Sync(sync_acceptor)
     }
 
@@ -169,11 +168,11 @@ impl ConnectionType for SyncConn {
 }
 
 impl ConnectionType for AsyncConn {
-    fn setup_connector(sync_connector: Arc<ClientConfig>, async_connector: TlsConnector) -> TlsNodeConnector {
+    fn setup_connector(_: Arc<ClientConfig>, async_connector: TlsConnector) -> TlsNodeConnector {
         TlsNodeConnector::Async(async_connector)
     }
 
-    fn setup_acceptor(sync_acceptor: Arc<ServerConfig>, async_acceptor: TlsAcceptor) -> TlsNodeAcceptor {
+    fn setup_acceptor(_: Arc<ServerConfig>, async_acceptor: TlsAcceptor) -> TlsNodeAcceptor {
         TlsNodeAcceptor::Async(async_acceptor)
     }
 
@@ -183,7 +182,7 @@ impl ConnectionType for AsyncConn {
 }
 
 impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
-    async fn bootstrap(cfg: NodeConfig) -> Result<(Arc<Self>, Vec<NetworkMessage<M>>)> {
+    async fn bootstrap(cfg: NodeConfig) -> Result<Arc<Self>> {
         let id = cfg.id;
 
         debug!("Initializing sockets.");
@@ -216,71 +215,9 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
             peer_connections.clone().setup_tcp_listener(replica);
         }
 
-        let shared = Arc::new(NodeShared {
-            my_key: cfg.sk,
-            peer_keys: cfg.pk,
-        });
-
-        debug!("Initializing node peer handling.");
-
-        let ping_handler = PingHandler::new();
+        let shared = NodePKShared::from_config(cfg.pk_crypto_config);
 
         let rng = ThreadSafePrng::new();
-
-        //TESTING
-        let sent_rqs = if id > cfg.first_cli {
-            None
-
-            /*Some(Arc::new(
-                std::iter::repeat_with(|| DashMap::with_capacity(20000))
-                    .take(30)
-                    .collect(),
-            ))*/
-        } else {
-            None
-        };
-
-        let rcv_rqs =
-            if id < cfg.first_cli {
-                None
-
-                //
-                // //We want the replicas to log recved requests
-                // let arc = Arc::new(RwLock::new(
-                //     std::iter::repeat_with(|| { DashMap::with_capacity(20000) })
-                //         .take(30)
-                //         .collect()));
-                //
-                // let rqs = arc.clone();
-                //
-                // std::thread::Builder::new().name(String::from("Logging thread")).spawn(move || {
-                //     loop {
-                //         let new_vec: Vec<DashMap<u64, ()>> = std::iter::repeat_with(|| { DashMap::with_capacity(20000) })
-                //             .take(30)
-                //             .collect();
-                //
-                //         let mut old_vec = {
-                //             let mut write_guard = rqs.write();
-                //
-                //             std::mem::replace(&mut *write_guard, new_vec)
-                //         };
-                //
-                //         let mut print = String::new();
-                //
-                //         for bucket in old_vec {
-                //             for (key, _) in bucket.into_iter() {
-                //                 print = print + " , " + &*format!("{}", key);
-                //             }
-                //         }
-                //
-                //         println!("{}", print);
-                //
-                //         std::thread::sleep(Duration::from_secs(1));
-                //     }
-                // }).expect("Failed to start logging thread");
-                //
-                // Some(arc)
-            } else { None };
 
         debug!("{:?} // Initializing node reference", id);
 
@@ -288,13 +225,12 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
             id,
             first_cli: cfg.first_cli,
             rng,
-            peer_connection: peer_connections,
+            peer_connections: peer_connections,
             client_pooling: peers,
-            currently_connecting: Mutex::new(Default::default()),
         });
 
         // success
-        Ok((node, rogue))
+        Ok(node)
     }
 
     fn id(&self) -> NodeId {
@@ -306,7 +242,12 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
     }
 
     fn send(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool) {
-        todo!()
+        match self.peer_connections.get_connection(&target) {
+            None => {}
+            Some(connection) => {
+                
+            }
+        }
     }
 
     fn send_signed(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool) {
