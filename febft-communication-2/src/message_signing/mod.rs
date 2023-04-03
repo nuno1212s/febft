@@ -4,6 +4,7 @@ use febft_common::crypto::hash::{Context, Digest};
 use febft_common::crypto::signature::{KeyPair, PublicKey, Signature};
 use febft_common::error::*;
 use crate::config::PKConfig;
+use crate::message::{WireMessage};
 
 pub struct NodePKShared {
     my_key: KeyPair,
@@ -29,12 +30,16 @@ impl NodePKShared {
         })
     }
 
+    pub fn my_key(&self) -> &KeyPair {
+        &self.my_key
+    }
+    
 }
 
 fn digest_parts(from: u32, to: u32, nonce: u64, payload: &[u8]) -> Digest {
     let mut ctx = Context::new();
 
-    let buf = Self::CURRENT_VERSION.to_le_bytes();
+    let buf = WireMessage::CURRENT_VERSION.to_le_bytes();
     ctx.update(&buf[..]);
 
     let buf = from.to_le_bytes();

@@ -16,7 +16,7 @@ pub(super) fn spawn_incoming_thread<M: Serializable + 'static>(
     mut socket: SecureReadHalfSync) {
 
     std::thread::Builder::new()
-        .spawn(|| {
+        .spawn(move || {
             let mut read_buffer = BytesMut::with_capacity(Header::LENGTH);
             let client_pool_rq = Arc::clone(peer.client_pool_peer());
             let peer_id = peer.client_pool_peer().client_id().clone();

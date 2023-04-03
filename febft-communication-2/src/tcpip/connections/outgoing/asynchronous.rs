@@ -2,8 +2,6 @@ use std::sync::Arc;
 use log::error;
 
 use febft_common::async_runtime as rt;
-use febft_common::channel::ChannelMixedRx;
-use febft_common::error::*;
 use febft_common::socket::SecureWriteHalfAsync;
 use crate::serialize::Serializable;
 
@@ -33,7 +31,9 @@ pub (super) fn spawn_outgoing_task<M: Serializable + 'static>(
             if conn_handle.is_cancelled() {
 
                 // Put the taken request back into the send queue
-                peer.tx.send_async((to_send, callback)).await.unwrap();
+                if let Err(err) = peer.peer_msg_return_async(to_send, callback).await {
+                    error!("Failed to return message because {:?}", err);
+                }
 
                 // Return as we don't want to call delete connection again
                 return
@@ -51,7 +51,9 @@ pub (super) fn spawn_outgoing_task<M: Serializable + 'static>(
                     error!("Failed to write message to socket. {:?}", error_kind);
 
                     // Put the taken request back into the send queue
-                    peer.tx.send_async((to_send, callback)).await.unwrap();
+                    if let Err(err) = peer.peer_msg_return_async(to_send, callback).await {
+                        error!("Failed to return message because {:?}", err);
+                    }
 
                     break
                 }

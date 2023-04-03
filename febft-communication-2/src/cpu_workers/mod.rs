@@ -13,12 +13,12 @@ use crate::serialize::Serializable;
 /// Serialize and digest a given message.
 /// Returns a OneShotRx that can be recv() or awaited depending on whether it's being used
 /// in synchronous or asynchronous workloads.
-pub(crate) fn serialize_digest_message<M: Serializable>(message: NetworkMessageKind<M>) -> OneShotRx<Result<(Bytes, Digest)>> {
+pub(crate) fn serialize_digest_message<M: Serializable + 'static>(message: NetworkMessageKind<M>) -> OneShotRx<Result<(Bytes, Digest)>> {
     let (tx, rx) = new_oneshot_channel();
 
     threadpool::execute(move || {
         // serialize
-        tx.send(serialize_digest_no_threadpool(message)).unwrap();
+        tx.send(serialize_digest_no_threadpool(&message)).unwrap();
     });
 
     rx
@@ -26,12 +26,12 @@ pub(crate) fn serialize_digest_message<M: Serializable>(message: NetworkMessageK
 
 /// Serialize and digest a given message, but without sending the job to the threadpool
 /// Useful if we want to re-utilize this for other things
-pub(crate) fn serialize_digest_no_threadpool<M: Serializable>(message: NetworkMessageKind<M>) -> Result<(Bytes, Digest)> {
+pub(crate) fn serialize_digest_no_threadpool<M: Serializable>(message: &NetworkMessageKind<M>) -> Result<(Bytes, Digest)> {
 
     // TODO: Use a memory pool here
     let mut buf = Vec::with_capacity(512);
 
-    let digest = match serialize::serialize_digest::<Vec<u8>, M>(&message, &mut buf) {
+    let digest = match serialize::serialize_digest::<Vec<u8>, M>(message, &mut buf) {
         Ok(dig) => dig,
         Err(err) => {
             error!("Failed to serialize message {:?}. Message is {:?}", err, message);
@@ -49,7 +49,7 @@ pub(crate) fn serialize_digest_no_threadpool<M: Serializable>(message: NetworkMe
 /// Returns a OneShotRx that can be recv() or awaited depending on whether it's being used
 /// in synchronous or asynchronous workloads.
 /// Also returns the bytes so we can re utilize them for our next operation.
-pub(crate) fn deserialize_message<M: Serializable>(header: Header, payload: BytesMut) -> OneShotRx<Result<(NetworkMessageKind<M>, BytesMut)>> {
+pub(crate) fn deserialize_message<M: Serializable + 'static>(header: Header, payload: BytesMut) -> OneShotRx<Result<(NetworkMessageKind<M>, BytesMut)>> {
     let (tx, rx) = new_oneshot_channel();
 
     threadpool::execute(move || {

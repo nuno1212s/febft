@@ -1,5 +1,6 @@
 #![feature(async_fn_in_trait)]
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -104,20 +105,35 @@ pub trait Node<M: Serializable + 'static> {
     /// Reports the first Id
     fn first_cli(&self) -> NodeId;
 
-    /// Sends a message to a given target
-    fn send(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool);
+    /// Sends a message to a given target.
+    /// Does not block on the message sent. Returns a result that is
+    /// Ok if there is a current connection to the target or err if not. No other checks are made
+    /// on the success of the message dispatch
+    fn send(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool) -> Result<()>;
 
     /// Sends a signed message to a given target
-    fn send_signed(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool);
+    /// Does not block on the message sent. Returns a result that is
+    /// Ok if there is a current connection to the target or err if not. No other checks are made
+    /// on the success of the message dispatch
+    fn send_signed(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool) -> Result<()>;
 
     /// Broadcast a message to all of the given targets
-    fn broadcast(&self, message: NetworkMessageKind<M>, targets: impl Iterator<Item=NodeId>);
+    /// Does not block on the message sent. Returns a result that is
+    /// Ok if there is a current connection to the targets or err if not. No other checks are made
+    /// on the success of the message dispatch
+    fn broadcast(&self, message: NetworkMessageKind<M>, targets: impl Iterator<Item=NodeId>) -> std::result::Result<(), Vec<NodeId>>;
 
     /// Broadcast a signed message for all of the given targets
-    fn broadcast_signed(&self, message: NetworkMessageKind<M>, target: impl Iterator<Item = NodeId>);
+    /// Does not block on the message sent. Returns a result that is
+    /// Ok if there is a current connection to the targets or err if not. No other checks are made
+    /// on the success of the message dispatch
+    fn broadcast_signed(&self, message: NetworkMessageKind<M>, target: impl Iterator<Item = NodeId>) -> std::result::Result<(), Vec<NodeId>>;
 
-    /// Broadcast the serialized messages provided
-    fn broadcast_serialized(&self, messages: IntMap<StoredSerializedNetworkMessage<M>>);
+    /// Broadcast the serialized messages provided.
+    /// Does not block on the message sent. Returns a result that is
+    /// Ok if there is a current connection to the targets or err if not. No other checks are made
+    /// on the success of the message dispatch
+    fn broadcast_serialized(&self, messages: BTreeMap<NodeId, StoredSerializedNetworkMessage<M>>) -> std::result::Result<(), Vec<NodeId>>;
 
     /// Get a reference to our loopback channel
     fn loopback_channel(&self) -> &Arc<ConnectedPeer<NetworkMessage<M>>>;

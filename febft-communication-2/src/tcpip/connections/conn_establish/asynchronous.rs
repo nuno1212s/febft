@@ -1,13 +1,10 @@
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
-use async_tls::TlsAcceptor;
 use bytes::Bytes;
 use either::Either;
 use futures::{AsyncReadExt, AsyncWriteExt};
 use futures_timer::Delay;
 use log::{debug, error, warn};
-use rustls::ServerConnection;
 use febft_common::socket::{AsyncListener, AsyncSocket, SecureReadHalf, SecureSocketAsync, SecureWriteHalf};
 use febft_common::{async_runtime as rt, prng, socket};
 use crate::message::{Header, WireMessage};

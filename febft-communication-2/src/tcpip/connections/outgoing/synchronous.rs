@@ -27,7 +27,7 @@ pub(super) fn spawn_outgoing_thread<M: Serializable>(
                 };
 
                 if conn_handle.is_cancelled() {
-                    peer.tx.send((to_send, callback)).unwrap();
+                    peer.peer_message(to_send, callback).unwrap();
 
                     return;
                 }
@@ -44,7 +44,7 @@ pub(super) fn spawn_outgoing_thread<M: Serializable>(
                     Err(error_kind) => {
                         error!("Failed to write message to socket. {:?}", error_kind);
 
-                        peer.tx.send((to_send, callback)).unwrap();
+                        peer.peer_message(to_send, callback).unwrap();
 
                         break;
                     }

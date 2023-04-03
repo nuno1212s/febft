@@ -29,6 +29,7 @@ pub enum ErrorKind {
     Error,
     Timeouts,
     Communication,
+    CommunicationPeerNotFound,
     CommunicationChannel,
     CommunicationChannelCustomDump,
     CommunicationChannelAsyncChannelMpmc,

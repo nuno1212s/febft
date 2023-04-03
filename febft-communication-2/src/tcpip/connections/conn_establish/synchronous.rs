@@ -22,7 +22,7 @@ pub(super) fn setup_conn_acceptor_thread<M: Serializable + 'static>(tcp_listener
                                                                     peer_connection: Arc<PeerConnections<M>>) {
     std::thread::Builder::new()
         .name(format!("Connection acceptor thread"))
-        .spawn(|| {
+        .spawn(move || {
             loop {
                 match tcp_listener.accept() {
                     Ok(connection) => {
