@@ -29,6 +29,11 @@ pub struct TcpConfig {
     pub addrs: IntMap<PeerAddr>,
     /// Configurations specific to the networking
     pub network_config: TlsConfig,
+
+    /// How many concurrent connections should be established between replica nodes of the system
+    pub replica_concurrent_connections: usize,
+    /// How many client concurrent connections should be established between replica <-> client connections
+    pub client_concurrent_connections: usize
 }
 
 pub struct PKConfig {

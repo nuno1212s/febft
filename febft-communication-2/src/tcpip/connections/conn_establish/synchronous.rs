@@ -8,6 +8,8 @@ use log::{debug, error, warn};
 use rustls::{ClientConnection, ServerConnection, ServerName};
 
 use febft_common::{prng, socket, threadpool};
+use febft_common::error::*;
+use febft_common::channel::{new_oneshot_channel, OneShotRx};
 use febft_common::socket::{SecureReadHalf, SecureSocketSync, SecureWriteHalf, SyncListener, SyncSocket};
 
 use crate::message::{Header, WireMessage};
@@ -38,7 +40,9 @@ pub(super) fn setup_conn_acceptor_thread<M: Serializable + 'static>(tcp_listener
 
 pub(super) fn connect_to_node_sync<M: Serializable + 'static>(conn_handler: Arc<ConnectionHandler>,
                                                               connections: Arc<PeerConnections<M>>,
-                                                              peer_id: NodeId, addr: PeerAddr) {
+                                                              peer_id: NodeId, addr: PeerAddr) -> OneShotRx<Result<()>> {
+    let (tx, rx) = new_oneshot_channel();
+
     std::thread::Builder::new()
         .spawn(move || {
             let my_id = conn_handler.id();
@@ -60,14 +64,14 @@ pub(super) fn connect_to_node_sync<M: Serializable + 'static>(conn_handler: Arc<
             //If I'm a client I will always use the client facing addr
             //While if I'm a replica I'll connect to the replica addr (clients only have this addr)
             let addr = if conn_handler.id() >= conn_handler.first_cli() {
-                addr.client_socket.clone()
+                addr.replica_facing_socket.clone()
             } else {
                 //We are a replica, but we are connecting to a client, so
                 //We need the client addr.
                 if peer_id >= conn_handler.first_cli() {
-                    addr.client_socket.clone()
+                    addr.replica_facing_socket.clone()
                 } else {
-                    match addr.replica_socket.as_ref() {
+                    match addr.client_facing_socket.as_ref() {
                         Some(addr) => addr,
                         None => {
                             error!("{:?} // Failed to find IP address for peer {:?}",
@@ -172,14 +176,19 @@ pub(super) fn connect_to_node_sync<M: Serializable + 'static>(conn_handler: Arc<
 
                         conn_handler.done_connecting_to_node(&peer_id);
 
+                        if let Err(err) = tx.send(Ok(())) {
+                            error!("Failed to deliver connection result {:?}",err);
+                        }
+
                         return;
                     }
 
                     Err(err) => {
-                        error!(
-                        "{:?} // Error on connecting to {:?} addr {:?}: {:?}",
-                        my_id, peer_id, addr, err
-                    );
+                        error!("{:?} // Error on connecting to {:?} addr {:?}: {:?}", my_id, peer_id, addr, err);
+
+                        if let Err(err) = tx.send(Err(Error::wrapped(ErrorKind::Communication, err))) {
+                            error!("Failed to deliver connection result {:?}", err);
+                        }
                     }
                 }
 
@@ -192,7 +201,14 @@ pub(super) fn connect_to_node_sync<M: Serializable + 'static>(conn_handler: Arc<
             // announce we have failed to connect to the peer node
             //if we fail to connect, then just ignore
             error!("{:?} // Failed to connect to the node {:?} ", my_id, peer_id);
+
+            if let Err(err) =
+                tx.send(Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to connect to node"))) {
+                error!("Failed to deliver connection result {:?}", err);
+            }
         }).unwrap();
+
+    rx
 }
 
 pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_handler: Arc<ConnectionHandler>,

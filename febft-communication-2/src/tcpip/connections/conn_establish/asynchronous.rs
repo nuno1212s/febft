@@ -5,8 +5,10 @@ use either::Either;
 use futures::{AsyncReadExt, AsyncWriteExt};
 use futures_timer::Delay;
 use log::{debug, error, warn};
+use febft_common::error::*;
 use febft_common::socket::{AsyncListener, AsyncSocket, SecureReadHalf, SecureSocketAsync, SecureWriteHalf};
 use febft_common::{async_runtime as rt, prng, socket};
+use febft_common::channel::{new_oneshot_channel, OneShotRx};
 use crate::message::{Header, WireMessage};
 use crate::NodeId;
 use crate::serialize::Serializable;
@@ -35,7 +37,10 @@ pub(super) fn setup_conn_acceptor_task<M: Serializable + 'static>(tcp_listener: 
 
 pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc<ConnectionHandler>,
                                                                connections: Arc<PeerConnections<M>>,
-                                                               peer_id: NodeId, addr: PeerAddr) {
+                                                               peer_id: NodeId, addr: PeerAddr) -> OneShotRx<Result<()>> {
+
+    let (tx, rx) = new_oneshot_channel();
+
     rt::spawn(async move {
         if !conn_handler.register_connecting_to_node(peer_id) {
             warn!("{:?} // Tried to connect to node that I'm already connecting to {:?}",
@@ -56,14 +61,14 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
         //If I'm a client I will always use the client facing addr
         //While if I'm a replica I'll connect to the replica addr (clients only have this addr)
         let addr = if conn_handler.id() >= conn_handler.first_cli() {
-            addr.client_socket.clone()
+            addr.replica_facing_socket.clone()
         } else {
             //We are a replica, but we are connecting to a client, so
             //We need the client addr.
             if peer_id >= conn_handler.first_cli() {
-                addr.client_socket.clone()
+                addr.replica_facing_socket.clone()
             } else {
-                match addr.replica_socket.as_ref() {
+                match addr.client_facing_socket.as_ref() {
                     Some(addr) => addr,
                     None => {
                         error!(
@@ -164,6 +169,8 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
                     connections.handle_connection_established(peer_id, (write, read));
 
                     conn_handler.done_connecting_to_node(&peer_id);
+
+                    tx.send(Ok(())).unwrap();
                     return;
                 }
                 Err(err) => {
@@ -171,6 +178,8 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
                         "{:?} // Error on connecting to {:?} addr {:?}: {:?}",
                         conn_handler.id(), peer_id, addr, err
                     );
+
+                    tx.send(Err(Error::wrapped(ErrorKind::Communication, err))).unwrap();
                 }
             }
 
@@ -183,7 +192,11 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
         // announce we have failed to connect to the peer node
         //if we fail to connect, then just ignore
         error!("{:?} // Failed to connect to the node {:?} ", conn_handler.id(), peer_id);
+
+        tx.send(Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to establish connection"))).unwrap();
     });
+
+    rx
 }
 
 pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_handler: Arc<ConnectionHandler>,

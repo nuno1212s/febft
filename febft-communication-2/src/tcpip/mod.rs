@@ -5,10 +5,8 @@ use std::sync::{Arc};
 use std::time::Duration;
 
 use async_tls::{TlsAcceptor, TlsConnector};
-use capnp::message::ReaderSegments;
 use either::Either;
 
-use intmap::IntMap;
 use log::{debug, error};
 use rustls::{ClientConfig, ServerConfig};
 use smallvec::SmallVec;
@@ -34,15 +32,17 @@ pub mod connections;
 /// 1 for facing replicas)
 #[derive(Clone)]
 pub struct PeerAddr {
-    client_socket: (SocketAddr, String),
-    replica_socket: Option<(SocketAddr, String)>,
+    // All nodes have a replica facing socket
+    replica_facing_socket: (SocketAddr, String),
+    // Only replicas have a client facing socket
+    client_facing_socket: Option<(SocketAddr, String)>,
 }
 
 impl PeerAddr {
     pub fn new(client_addr: (SocketAddr, String)) -> Self {
         Self {
-            client_socket: client_addr,
-            replica_socket: None,
+            replica_facing_socket: client_addr,
+            client_facing_socket: None,
         }
     }
 
@@ -51,10 +51,11 @@ impl PeerAddr {
         replica_addr: (SocketAddr, String),
     ) -> Self {
         Self {
-            client_socket: client_addr,
-            replica_socket: Some(replica_addr),
+            replica_facing_socket: client_addr,
+            client_facing_socket: Some(replica_addr),
         }
     }
+
 }
 
 /// The connection type used for connections
@@ -149,7 +150,7 @@ impl<M: Serializable + 'static> TcpNode<M> {
         addr: PeerAddr,
     ) -> Result<NodeConnectionAcceptor> where T: ConnectionType {
         debug!("{:?} // Attempt to setup client facing socket.", id);
-        let server_addr = &addr.client_socket;
+        let server_addr = &addr.replica_facing_socket;
 
         T::setup_socket(&id, &server_addr.0).await
     }
@@ -159,7 +160,7 @@ impl<M: Serializable + 'static> TcpNode<M> {
         peer_addr: PeerAddr,
     ) -> Result<Option<NodeConnectionAcceptor>>
         where T: ConnectionType {
-        if let Some((socket, _)) = peer_addr.replica_socket {
+        if let Some((socket, _)) = peer_addr.client_facing_socket {
             Ok(Some(T::setup_socket(&id, &socket).await?))
         } else {
             Ok(None)
@@ -282,6 +283,8 @@ impl<M: Serializable + 'static> TcpNode<M> {
 }
 
 impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
+    type ConnectionManager = PeerConnections<M>;
+
     async fn bootstrap(cfg: NodeConfig) -> Result<Arc<Self>> {
         let id = cfg.id;
 
@@ -289,7 +292,7 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
 
         let tcp_config = cfg.tcp_config;
 
-        let addr = tcp_config.addrs.get(id.0 as u64).expect("Failed to get my own IP address").clone();
+        let addr = tcp_config.addrs.get(id.0 as u64).expect(format!("Failed to get my own IP address ({})", id.0).as_str()).clone();
 
         let network = tcp_config.network_config;
 
@@ -340,6 +343,10 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
 
     fn first_cli(&self) -> NodeId {
         self.first_cli
+    }
+
+    fn node_connections(&self) -> &Self::ConnectionManager {
+        &*self.peer_connections
     }
 
     fn send(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool) -> Result<()> {

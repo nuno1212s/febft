@@ -13,6 +13,7 @@ use febft_common::error::*;
 use crate::client_pooling::ConnectedPeer;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+use febft_common::channel::OneShotRx;
 use crate::config::NodeConfig;
 use crate::tcpip::{ConnectionType, NodeConnectionAcceptor, TlsNodeAcceptor, TlsNodeConnector};
 
@@ -92,9 +93,26 @@ impl From<NodeId> for u32 {
     }
 }
 
+pub trait NodeConnections {
+
+    /// Are we currently connected to a given node?
+    fn is_connected_to_node(&self, node: &NodeId) -> bool;
+
+    /// How many nodes are we currently connected to in this node
+    fn connected_nodes(&self) -> usize;
+
+    /// Connect this node to another node
+    fn connect_to_node(self: &Arc<Self>, node: NodeId) -> OneShotRx<Result<()>>;
+
+    /// Disconnect this node from another node
+    async fn disconnect_from_node(&self, node: &NodeId) -> Result<()>;
+
+}
 
 /// A network node. Handles all the connections between nodes.
 pub trait Node<M: Serializable + 'static> {
+
+    type ConnectionManager : NodeConnections;
 
     /// Bootstrap the node
     async fn bootstrap(node_config: NodeConfig) -> Result<Arc<Self>>;
@@ -104,6 +122,9 @@ pub trait Node<M: Serializable + 'static> {
 
     /// Reports the first Id
     fn first_cli(&self) -> NodeId;
+
+    /// Get a handle to the connection manager of the operation
+    fn node_connections(&self) -> &Self::ConnectionManager;
 
     /// Sends a message to a given target.
     /// Does not block on the message sent. Returns a result that is

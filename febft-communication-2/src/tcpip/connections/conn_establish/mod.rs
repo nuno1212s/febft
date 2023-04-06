@@ -1,6 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use either::Either;
+use febft_common::channel::OneShotRx;
 use febft_common::socket::{AsyncSocket, SyncSocket};
 use febft_common::error::*;
 use crate::NodeId;
@@ -11,13 +12,15 @@ use crate::tcpip::connections::{PeerConnection, PeerConnections};
 mod synchronous;
 mod asynchronous;
 
+
+
 /// Connection handler
 pub struct ConnectionHandler {
     peer_id: NodeId,
     first_cli: NodeId,
     connector: TlsNodeConnector,
     tls_acceptor: TlsNodeAcceptor,
-    currently_connecting: Mutex<BTreeSet<NodeId>>,
+    currently_connecting: Mutex<BTreeMap<NodeId, usize>>,
 }
 
 impl ConnectionHandler {
@@ -29,7 +32,7 @@ impl ConnectionHandler {
                 first_cli,
                 connector: node_connector,
                 tls_acceptor: node_acceptor,
-                currently_connecting: Mutex::new(BTreeSet::new()),
+                currently_connecting: Mutex::new(Default::default()),
             }
         )
     }
@@ -58,17 +61,19 @@ impl ConnectionHandler {
     fn register_connecting_to_node(&self, peer_id: NodeId) -> bool {
         let mut connecting_guard = self.currently_connecting.lock().unwrap();
 
-        connecting_guard.insert(peer_id)
+        let value = connecting_guard.entry(peer_id).or_insert(1);
+
+        if value >
     }
 
     fn done_connecting_to_node(&self, peer_id: &NodeId) {
         let mut connection_guard = self.currently_connecting.lock().unwrap();
 
-        connection_guard.remove(peer_id);
+        connection_guard.entry(peer_id.clone());
     }
 
     pub fn connect_to_node<M: Serializable + 'static>(self: &Arc<Self>, peer_connections: &Arc<PeerConnections<M>>,
-                                                      peer_id: NodeId, peer_addr: PeerAddr) {
+                                                      peer_id: NodeId, peer_addr: PeerAddr) -> OneShotRx<Result<()>> {
         match &self.connector {
             TlsNodeConnector::Async(_) => {
                 asynchronous::connect_to_node_async(Arc::clone(self),

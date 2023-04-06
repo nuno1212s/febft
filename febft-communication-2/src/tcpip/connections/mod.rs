@@ -3,17 +3,18 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use dashmap::DashMap;
+use intmap::IntMap;
 
-use febft_common::channel::{ChannelMixedRx, ChannelMixedTx, new_bounded_mixed};
+use febft_common::channel::{ChannelMixedRx, ChannelMixedTx, new_bounded_mixed, new_oneshot_channel, OneShotRx};
 use febft_common::error::*;
 use febft_common::socket::SecureReadHalf;
 use febft_common::socket::SecureWriteHalf;
 
 use crate::client_pooling::{ConnectedPeer, PeerIncomingRqHandling};
 use crate::message::{NetworkMessage, WireMessage};
-use crate::NodeId;
+use crate::{NodeConnections, NodeId};
 use crate::serialize::Serializable;
-use crate::tcpip::{NodeConnectionAcceptor, TlsNodeAcceptor, TlsNodeConnector};
+use crate::tcpip::{NodeConnectionAcceptor, PeerAddr, TlsNodeAcceptor, TlsNodeConnector};
 use crate::tcpip::connections::conn_establish::ConnectionHandler;
 
 mod incoming;
@@ -27,9 +28,28 @@ pub type SerializedMessage = (WireMessage, Callback);
 /// How many slots the outgoing queue has for messages.
 const TX_CONNECTION_QUEUE: usize = 1024;
 
+/// The amount of parallel TCP connections we should try to maintain for
+/// each connection
+struct ConnCounts {
+    replica_connections: usize,
+    client_connections: usize,
+}
+
+impl ConnCounts {
+    fn get_connections_to_node(&self, my_id: NodeId, other_id: NodeId, first_cli: NodeId) -> usize {
+        if my_id < first_cli && other_id < first_cli {
+            self.replica_connections
+        } else {
+            self.client_connections
+        }
+    }
+}
+
 /// Represents a connection between two peers
 /// We can have multiple underlying tcp connections for a given connection between two peers
 pub struct PeerConnection<M: Serializable + 'static> {
+    node_connections: Arc<PeerConnections<M>>,
+
     //A handle to the request buffer of the peer we are connected to in the client pooling module
     client: Arc<ConnectedPeer<NetworkMessage<M>>>,
     //The channel used to send serialized messages to the tasks that are meant to handle them
@@ -64,10 +84,11 @@ impl ConnHandle {
 }
 
 impl<M> PeerConnection<M> where M: Serializable {
-    pub fn new_peer(client: Arc<ConnectedPeer<NetworkMessage<M>>>) -> Arc<Self> {
+    pub fn new_peer(node_conns: Arc<PeerConnections<M>>, client: Arc<ConnectedPeer<NetworkMessage<M>>>) -> Arc<Self> {
         let (tx, rx) = new_bounded_mixed(TX_CONNECTION_QUEUE);
 
         Arc::new(Self {
+            node_connections: node_conns,
             client,
             tx,
             rx,
@@ -112,7 +133,7 @@ impl<M> PeerConnection<M> where M: Serializable {
     }
 
     /// Accept a TCP Stream and insert it into this connection
-    pub(crate) fn insert_new_connection(self: &Arc<Self>, socket: (SecureWriteHalf, SecureReadHalf)) {
+    pub(crate) fn insert_new_connection(self: &Arc<Self>, socket: (SecureWriteHalf, SecureReadHalf), conn_limit: usize) {
         let conn_handle = self.init_conn_handle();
 
         let previous = {
@@ -123,7 +144,13 @@ impl<M> PeerConnection<M> where M: Serializable {
         };
 
         if let None = previous {
-            self.active_connection_count.fetch_add(1, Ordering::Relaxed);
+            let current_connections = self.active_connection_count.fetch_add(1, Ordering::Relaxed);
+
+            if current_connections > conn_limit {
+                self.active_connection_count.fetch_sub(1, Ordering::Relaxed);
+
+                return;
+            }
         } else {
             todo!("How do we handle this really?
                         This probably means it went all the way around u32 connections, really weird")
@@ -135,7 +162,7 @@ impl<M> PeerConnection<M> where M: Serializable {
     }
 
     /// Delete a given tcp stream from this connection
-    pub(crate) fn delete_connection(&self, conn_id: u32) {
+    pub(crate) fn delete_connection(&self, conn_id: u32) -> usize {
         // Remove the corresponding connection from the map
         let conn_handle = {
             // Do it inside a tiny scope to minimize the time the mutex is accessed
@@ -145,11 +172,15 @@ impl<M> PeerConnection<M> where M: Serializable {
         };
 
         if let Some(conn_handle) = conn_handle {
-            self.active_connection_count.fetch_sub(1, Ordering::Relaxed);
+            let conn_count = self.active_connection_count.fetch_sub(1, Ordering::Relaxed);
 
             //Setting the cancelled variable to true causes all associated threads to be
             //killed (as soon as they see the warning)
             conn_handle.cancelled.store(true, Ordering::Relaxed);
+
+            conn_count
+        } else {
+            self.active_connection_count.load(Ordering::Relaxed)
         }
     }
 
@@ -168,13 +199,54 @@ impl<M> PeerConnection<M> where M: Serializable {
 #[derive(Clone)]
 pub struct PeerConnections<M: Serializable + 'static> {
     id: NodeId,
+    first_cli: NodeId,
+    concurrent_conn: ConnCounts,
+    address_management: IntMap<PeerAddr>,
     connection_map: Arc<DashMap<NodeId, Arc<PeerConnection<M>>>>,
     client_pooling: Arc<PeerIncomingRqHandling<NetworkMessage<M>>>,
     connection_establisher: Arc<ConnectionHandler>,
 }
 
+impl<M: Serializable + 'static> NodeConnections for PeerConnections<M> {
+    fn is_connected_to_node(&self, node: &NodeId) -> bool {
+        self.connection_map.contains_key(node)
+    }
+
+    fn connected_nodes(&self) -> usize {
+        self.connection_map.len()
+    }
+
+    fn connect_to_node(self: &Arc<Self>, node: NodeId) -> OneShotRx<Result<()>> {
+        let option = self.address_management.get(node.0 as u64);
+
+        match option {
+            None => {
+                let (tx, rx) = new_oneshot_channel();
+
+                tx.send(Err(Error::simple(ErrorKind::CommunicationPeerNotFound))).unwrap();
+
+                rx
+            }
+            Some(addr) => {
+                self.connection_establisher.connect_to_node(self, node, addr.clone())
+            }
+        }
+    }
+
+    async fn disconnect_from_node(&self, node: &NodeId) -> Result<()> {
+        if let Some((id, conn)) = self.connection_map.remove(node) {
+            todo!();
+
+            Ok(())
+        } else {
+            Err(Error::simple(ErrorKind::CommunicationPeerNotFound))
+        }
+    }
+}
+
 impl<M: Serializable + 'static> PeerConnections<M> {
     pub fn new(peer_id: NodeId, first_cli: NodeId,
+               addrs: IntMap<PeerAddr>,
                node_connector: TlsNodeConnector,
                node_acceptor: TlsNodeAcceptor,
                client_pooling: Arc<PeerIncomingRqHandling<NetworkMessage<M>>>) -> Arc<Self> {
@@ -182,25 +254,17 @@ impl<M: Serializable + 'static> PeerConnections<M> {
 
         Arc::new(Self {
             id: peer_id,
+            first_cli,
+            address_management: addrs,
             connection_map: Arc::new(DashMap::new()),
             client_pooling,
             connection_establisher: connection_establish,
         })
     }
 
-    /// Get the amount of connected nodes at this time
-    pub fn connected_nodes(&self) -> usize {
-        self.connection_map.len()
-    }
-
     /// Setup a tcp listener inside this peer connections object.
     pub(super) fn setup_tcp_listener(self: Arc<Self>, node_acceptor: NodeConnectionAcceptor) {
         self.connection_establisher.clone().setup_conn_worker(node_acceptor, self)
-    }
-
-    /// Are we currently connected to a given client?
-    pub fn is_connected_to(&self, node: &NodeId) -> bool {
-        self.connection_map.contains_key(node)
     }
 
     /// Get the current amount of concurrent TCP connections between nodes
@@ -220,12 +284,37 @@ impl<M: Serializable + 'static> PeerConnections<M> {
     /// Handle a new connection being established (either through a "client" or a "server" connection)
     /// This will either create the corresponding peer connection or add the connection to the already existing
     /// connection
-    pub(crate) fn handle_connection_established(&self, node: NodeId, socket: (SecureWriteHalf, SecureReadHalf)) {
+    pub(crate) fn handle_connection_established(self: &Arc<Self>, node: NodeId, socket: (SecureWriteHalf, SecureReadHalf)) {
         let option = self.connection_map.entry(node);
 
         let peer_conn = option.or_insert_with(||
-            { PeerConnection::new_peer(self.client_pooling.init_peer_conn(node)) });
+            { PeerConnection::new_peer(Arc::clone(self), self.client_pooling.init_peer_conn(node)) });
 
-        peer_conn.insert_new_connection(socket);
+        let concurrency_level = self.concurrent_conn.get_connections_to_node(self.id, node, self.first_cli);
+
+        peer_conn.insert_new_connection(socket, concurrency_level);
+    }
+
+    /// Handle us losing a TCP connection to a given node.
+    /// Also accepts the current amount of connections available in that node
+    fn handle_conn_lost(self: &Arc<Self>, node: &NodeId, remaining_conns: usize) {
+        let concurrency_level = self.concurrent_conn.get_connections_to_node(self.id, node.clone(), self.first_cli);
+
+        if remaining_conns > 0 {
+            //The node is no longer accessible. We will remove it until a new TCP connection
+            // Has been established
+            let option = self.connection_map.remove(node);
+
+
+
+        }
+
+        if remaining_conns < concurrency_level {
+            let addr = self.address_management.get(node.0 as u64).unwrap();
+
+            for i in 0..concurrency_level - remaining_conns {
+                self.connection_establisher.connect_to_node(self, node.clone(), addr.clone())
+            }
+        }
     }
 }
