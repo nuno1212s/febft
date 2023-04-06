@@ -7,7 +7,7 @@ use std::time::Duration;
 use async_tls::{TlsAcceptor, TlsConnector};
 use either::Either;
 
-use log::{debug, error};
+use log::{debug, error, info};
 use rustls::{ClientConfig, ServerConfig};
 use smallvec::SmallVec;
 
@@ -227,7 +227,17 @@ impl<M: Serializable + 'static> TcpNode<M> {
                                 peer_cnn: SendToPeer::Peer(conn),
                             })
                         } else {
-                            send_tos = Some(SmallVec::new())
+                            let mut send = SmallVec::new();
+
+                            send.push(SendTo {
+                                my_id,
+                                peer_id: id.clone(),
+                                shared: shared.cloned(),
+                                nonce,
+                                peer_cnn: SendToPeer::Peer(conn),
+                            });
+
+                            send_tos = Some(send)
                         }
                     }
                 }
@@ -240,6 +250,7 @@ impl<M: Serializable + 'static> TcpNode<M> {
     fn serialize_send_impl(send_to_me: Option<SendTo<M>>, send_to_others: Option<SendTos<M>>,
                            message: NetworkMessageKind<M>) {
         threadpool::execute(move || {
+
             match crate::cpu_workers::serialize_digest_no_threadpool(&message) {
                 Ok((buffer, digest)) => {
                     Self::send_impl(send_to_me, send_to_others, message, buffer, digest);
@@ -253,6 +264,7 @@ impl<M: Serializable + 'static> TcpNode<M> {
 
     fn send_impl(send_to_me: Option<SendTo<M>>, send_to_others: Option<SendTos<M>>,
                  msg: NetworkMessageKind<M>, buffer: Buf, digest: Digest, ) {
+
         if let Some(send_to) = send_to_me {
             send_to.value(Either::Left((msg, buffer.clone(), digest.clone())));
         }
@@ -359,7 +371,7 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
         let (send_to_me, send_to_others, failed) =
             self.send_tos(None, iter::once(target));
 
-        if failed.is_empty() {
+        if !failed.is_empty() {
             return Err(Error::simple(ErrorKind::CommunicationPeerNotFound));
         }
 

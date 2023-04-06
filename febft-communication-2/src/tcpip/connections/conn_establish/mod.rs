@@ -12,8 +12,6 @@ use crate::tcpip::connections::{ConnCounts, PeerConnection, PeerConnections};
 mod synchronous;
 mod asynchronous;
 
-
-
 /// Connection handler
 pub struct ConnectionHandler {
     peer_id: NodeId,
@@ -70,7 +68,7 @@ impl ConnectionHandler {
 
         if *value > self.concurrent_conn.get_connections_to_node(self.id(), peer_id, self.first_cli) {
             *value -= 1;
-            
+
             false
         } else {
             true

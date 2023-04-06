@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use log::error;
+use log::{error, info};
 
 use febft_common::async_runtime as rt;
 use febft_common::socket::SecureWriteHalfAsync;
