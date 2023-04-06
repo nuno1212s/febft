@@ -178,8 +178,6 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
                         "{:?} // Error on connecting to {:?} addr {:?}: {:?}",
                         conn_handler.id(), peer_id, addr, err
                     );
-
-                    tx.send(Err(Error::wrapped(ErrorKind::Communication, err))).unwrap();
                 }
             }
 

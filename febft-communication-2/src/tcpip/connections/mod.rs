@@ -13,6 +13,7 @@ use febft_common::socket::SecureWriteHalf;
 use crate::client_pooling::{ConnectedPeer, PeerIncomingRqHandling};
 use crate::message::{NetworkMessage, WireMessage};
 use crate::{NodeConnections, NodeId};
+use crate::config::TcpConfig;
 use crate::serialize::Serializable;
 use crate::tcpip::{NodeConnectionAcceptor, PeerAddr, TlsNodeAcceptor, TlsNodeConnector};
 use crate::tcpip::connections::conn_establish::ConnectionHandler;
@@ -30,12 +31,20 @@ const TX_CONNECTION_QUEUE: usize = 1024;
 
 /// The amount of parallel TCP connections we should try to maintain for
 /// each connection
-struct ConnCounts {
+#[derive(Clone)]
+pub struct ConnCounts {
     replica_connections: usize,
     client_connections: usize,
 }
 
 impl ConnCounts {
+    pub(crate) fn from_tcp_config(tcp: &TcpConfig) -> Self {
+        Self {
+            replica_connections: tcp.replica_concurrent_connections,
+            client_connections: tcp.client_concurrent_connections,
+        }
+    }
+
     fn get_connections_to_node(&self, my_id: NodeId, other_id: NodeId, first_cli: NodeId) -> usize {
         if my_id < first_cli && other_id < first_cli {
             self.replica_connections
@@ -48,8 +57,10 @@ impl ConnCounts {
 /// Represents a connection between two peers
 /// We can have multiple underlying tcp connections for a given connection between two peers
 pub struct PeerConnection<M: Serializable + 'static> {
+    // The ID of the connected node
+    node_id: NodeId,
+    // Node connections
     node_connections: Arc<PeerConnections<M>>,
-
     //A handle to the request buffer of the peer we are connected to in the client pooling module
     client: Arc<ConnectedPeer<NetworkMessage<M>>>,
     //The channel used to send serialized messages to the tasks that are meant to handle them
@@ -88,6 +99,7 @@ impl<M> PeerConnection<M> where M: Serializable {
         let (tx, rx) = new_bounded_mixed(TX_CONNECTION_QUEUE);
 
         Arc::new(Self {
+            node_id: client.client_id().clone(),
             node_connections: node_conns,
             client,
             tx,
@@ -171,7 +183,7 @@ impl<M> PeerConnection<M> where M: Serializable {
             guard.remove(&conn_id)
         };
 
-        if let Some(conn_handle) = conn_handle {
+        let remaining_conns = if let Some(conn_handle) = conn_handle {
             let conn_count = self.active_connection_count.fetch_sub(1, Ordering::Relaxed);
 
             //Setting the cancelled variable to true causes all associated threads to be
@@ -181,7 +193,12 @@ impl<M> PeerConnection<M> where M: Serializable {
             conn_count
         } else {
             self.active_connection_count.load(Ordering::Relaxed)
-        }
+        };
+
+        // Retry to establish the connections if possible
+        self.node_connections.handle_conn_lost(&self.node_id, remaining_conns);
+
+        remaining_conns
     }
 
     /// Get the handle to the client pool buffer
@@ -216,7 +233,7 @@ impl<M: Serializable + 'static> NodeConnections for PeerConnections<M> {
         self.connection_map.len()
     }
 
-    fn connect_to_node(self: &Arc<Self>, node: NodeId) -> OneShotRx<Result<()>> {
+    fn connect_to_node(self: &Arc<Self>, node: NodeId) -> Vec<OneShotRx<Result<()>>> {
         let option = self.address_management.get(node.0 as u64);
 
         match option {
@@ -225,10 +242,19 @@ impl<M: Serializable + 'static> NodeConnections for PeerConnections<M> {
 
                 tx.send(Err(Error::simple(ErrorKind::CommunicationPeerNotFound))).unwrap();
 
-                rx
+                vec![rx]
             }
             Some(addr) => {
-                self.connection_establisher.connect_to_node(self, node, addr.clone())
+                let conns_to_have = self.concurrent_conn.get_connections_to_node(self.id, node, self.first_cli);
+                let connections = self.current_connection_count_of(&node).unwrap_or(0);
+
+                let mut oneshots = Vec::with_capacity(conns_to_have);
+
+                for _ in connections..conns_to_have {
+                    oneshots.push(self.connection_establisher.connect_to_node(self, node, addr.clone()));
+                }
+
+                oneshots
             }
         }
     }
@@ -246,15 +272,18 @@ impl<M: Serializable + 'static> NodeConnections for PeerConnections<M> {
 
 impl<M: Serializable + 'static> PeerConnections<M> {
     pub fn new(peer_id: NodeId, first_cli: NodeId,
+               conn_counts: ConnCounts,
                addrs: IntMap<PeerAddr>,
                node_connector: TlsNodeConnector,
                node_acceptor: TlsNodeAcceptor,
                client_pooling: Arc<PeerIncomingRqHandling<NetworkMessage<M>>>) -> Arc<Self> {
-        let connection_establish = ConnectionHandler::new(peer_id, first_cli, node_connector, node_acceptor);
+        let connection_establish = ConnectionHandler::new(peer_id, first_cli, conn_counts.clone(),
+                                                          node_connector, node_acceptor);
 
         Arc::new(Self {
             id: peer_id,
             first_cli,
+            concurrent_conn: conn_counts,
             address_management: addrs,
             connection_map: Arc::new(DashMap::new()),
             client_pooling,
@@ -303,17 +332,15 @@ impl<M: Serializable + 'static> PeerConnections<M> {
         if remaining_conns > 0 {
             //The node is no longer accessible. We will remove it until a new TCP connection
             // Has been established
-            let option = self.connection_map.remove(node);
-
-
-
+            let _ = self.connection_map.remove(node);
         }
 
+        // Attempt to re-establish all of the missing connections
         if remaining_conns < concurrency_level {
             let addr = self.address_management.get(node.0 as u64).unwrap();
 
-            for i in 0..concurrency_level - remaining_conns {
-                self.connection_establisher.connect_to_node(self, node.clone(), addr.clone())
+            for _ in 0..concurrency_level - remaining_conns {
+                self.connection_establisher.connect_to_node(self, node.clone(), addr.clone());
             }
         }
     }

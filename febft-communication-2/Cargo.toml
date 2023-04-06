@@ -42,3 +42,4 @@ chrono = "0.4.23"
 
 [dev-dependencies]
 rustls-pemfile = "1.0.2"
+env_logger = "0.10.0"

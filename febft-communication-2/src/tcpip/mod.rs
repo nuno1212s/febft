@@ -23,7 +23,7 @@ use crate::config::{NodeConfig, TlsConfig};
 use crate::message::{NetworkMessage, NetworkMessageKind, StoredSerializedNetworkMessage, WireMessage};
 use crate::message_signing::NodePKShared;
 use crate::serialize::{Buf, Serializable};
-use crate::tcpip::connections::{PeerConnection, PeerConnections};
+use crate::tcpip::connections::{ConnCounts, PeerConnection, PeerConnections};
 
 pub mod connections;
 
@@ -292,6 +292,8 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
 
         let tcp_config = cfg.tcp_config;
 
+        let conn_counts = ConnCounts::from_tcp_config(&tcp_config);
+
         let addr = tcp_config.addrs.get(id.0 as u64).expect(format!("Failed to get my own IP address ({})", id.0).as_str()).clone();
 
         let network = tcp_config.network_config;
@@ -307,7 +309,10 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
             cfg.client_pool_config,
         ));
 
+
         let peer_connections = PeerConnections::new(id, cfg.first_cli,
+                                                    conn_counts,
+                                                    tcp_config.addrs,
                                                     connector, acceptor, peers.clone());
 
 
@@ -345,8 +350,8 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
         self.first_cli
     }
 
-    fn node_connections(&self) -> &Self::ConnectionManager {
-        &*self.peer_connections
+    fn node_connections(&self) -> &Arc<Self::ConnectionManager> {
+        &self.peer_connections
     }
 
     fn send(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool) -> Result<()> {

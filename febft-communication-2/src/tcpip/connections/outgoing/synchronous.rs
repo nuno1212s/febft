@@ -51,6 +51,6 @@ pub(super) fn spawn_outgoing_thread<M: Serializable>(
                 }
             }
 
-            peer.delete_connection(conn_handle.id())
+            peer.delete_connection(conn_handle.id());
         }).unwrap();
 }

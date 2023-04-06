@@ -7,12 +7,13 @@ mod communication_test {
     use std::process::id;
     use std::sync::Arc;
     use intmap::IntMap;
+    use log::{error, info, warn};
     use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig};
     use rustls::server::AllowAnyAuthenticatedClient;
     use rustls_pemfile::Item;
     use serde::{Deserialize, Serialize};
     use febft_communication_2::config::{ClientPoolConfig, NodeConfig, PKConfig, TcpConfig, TlsConfig};
-    use febft_communication_2::{Node, NodeId};
+    use febft_communication_2::{Node, NodeConnections, NodeId};
     use febft_communication_2::tcpip::{PeerAddr, TcpNode};
     use febft_common::async_runtime as rt;
     use febft_common::crypto::signature::{KeyPair, PublicKey};
@@ -270,6 +271,8 @@ mod communication_test {
 
     #[test]
     fn test_connection() {
+        env_logger::init();
+
         unsafe { rt::init(4).unwrap(); }
 
         let addrs = setup_addrs(2, 0);
@@ -277,7 +280,18 @@ mod communication_test {
         let node_1 = NodeId(0u32);
         let node_2 = NodeId(1u32);
 
-        let node = gen_node::<TestMessage>(node_1, addrs.clone(), 2, "srv1", 1000).unwrap();
-        let node_2 = gen_node::<TestMessage>(node_2, addrs, 2, "srv2", 1001).unwrap();
+        let node = gen_node::<TestMessage>(node_1, addrs.clone(), 2, "srv0", 1000).unwrap();
+        let node_2_ = gen_node::<TestMessage>(node_2, addrs, 2, "srv1", 1001).unwrap();
+
+        let rx = node.node_connections().connect_to_node(node_2);
+
+        info!("Having {} connections", rx.len());
+
+        for x in rx {
+            warn!("Established one connection");
+            let res = x.recv();
+
+            res.unwrap().unwrap();
+        }
     }
 }

@@ -185,10 +185,6 @@ pub(super) fn connect_to_node_sync<M: Serializable + 'static>(conn_handler: Arc<
 
                     Err(err) => {
                         error!("{:?} // Error on connecting to {:?} addr {:?}: {:?}", my_id, peer_id, addr, err);
-
-                        if let Err(err) = tx.send(Err(Error::wrapped(ErrorKind::Communication, err))) {
-                            error!("Failed to deliver connection result {:?}", err);
-                        }
                     }
                 }
 

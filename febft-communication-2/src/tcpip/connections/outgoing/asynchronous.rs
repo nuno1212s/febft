@@ -60,7 +60,7 @@ pub (super) fn spawn_outgoing_task<M: Serializable + 'static>(
             }
         }
 
-        peer.delete_connection(conn_handle.id())
+        peer.delete_connection(conn_handle.id());
     });
 }
 

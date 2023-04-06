@@ -7,7 +7,7 @@ use febft_common::error::*;
 use crate::NodeId;
 use crate::serialize::Serializable;
 use crate::tcpip::{NodeConnectionAcceptor, PeerAddr, TlsNodeAcceptor, TlsNodeConnector};
-use crate::tcpip::connections::{PeerConnection, PeerConnections};
+use crate::tcpip::connections::{ConnCounts, PeerConnection, PeerConnections};
 
 mod synchronous;
 mod asynchronous;
@@ -20,11 +20,13 @@ pub struct ConnectionHandler {
     first_cli: NodeId,
     connector: TlsNodeConnector,
     tls_acceptor: TlsNodeAcceptor,
+    concurrent_conn: ConnCounts,
     currently_connecting: Mutex<BTreeMap<NodeId, usize>>,
 }
 
 impl ConnectionHandler {
     pub fn new(peer_id: NodeId, first_cli: NodeId,
+               conn_counts: ConnCounts,
                node_connector: TlsNodeConnector, node_acceptor: TlsNodeAcceptor) -> Arc<Self> {
         Arc::new(
             ConnectionHandler {
@@ -32,6 +34,7 @@ impl ConnectionHandler {
                 first_cli,
                 connector: node_connector,
                 tls_acceptor: node_acceptor,
+                concurrent_conn: conn_counts,
                 currently_connecting: Mutex::new(Default::default()),
             }
         )
@@ -61,9 +64,17 @@ impl ConnectionHandler {
     fn register_connecting_to_node(&self, peer_id: NodeId) -> bool {
         let mut connecting_guard = self.currently_connecting.lock().unwrap();
 
-        let value = connecting_guard.entry(peer_id).or_insert(1);
+        let value = connecting_guard.entry(peer_id).or_insert(0);
 
-        if value >
+        *value += 1;
+
+        if *value > self.concurrent_conn.get_connections_to_node(self.id(), peer_id, self.first_cli) {
+            *value -= 1;
+            
+            false
+        } else {
+            true
+        }
     }
 
     fn done_connecting_to_node(&self, peer_id: &NodeId) {

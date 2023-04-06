@@ -101,8 +101,9 @@ pub trait NodeConnections {
     /// How many nodes are we currently connected to in this node
     fn connected_nodes(&self) -> usize;
 
-    /// Connect this node to another node
-    fn connect_to_node(self: &Arc<Self>, node: NodeId) -> OneShotRx<Result<()>>;
+    /// Connect this node to another node.
+    /// Returns a vec with the results of each of the attempted connections
+    fn connect_to_node(self: &Arc<Self>, node: NodeId) -> Vec<OneShotRx<Result<()>>>;
 
     /// Disconnect this node from another node
     async fn disconnect_from_node(&self, node: &NodeId) -> Result<()>;
@@ -124,7 +125,7 @@ pub trait Node<M: Serializable + 'static> {
     fn first_cli(&self) -> NodeId;
 
     /// Get a handle to the connection manager of the operation
-    fn node_connections(&self) -> &Self::ConnectionManager;
+    fn node_connections(&self) -> &Arc<Self::ConnectionManager>;
 
     /// Sends a message to a given target.
     /// Does not block on the message sent. Returns a result that is
