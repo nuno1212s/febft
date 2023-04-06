@@ -7,6 +7,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use futures::StreamExt;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_common::threadpool;
 use febft_communication::message::{NetworkMessage, NetworkMessageKind, StoredMessage};
@@ -171,13 +172,12 @@ impl<S: Service + 'static> Proposer<S> {
                     };
 
                     let discovered_requests = opt_msgs.is_some();
-
-
-                    //TODO: Handle timing out requests
-
+                    
                     if let Some(messages) = opt_msgs {
                         debug_stats.collected_per_batch_total += messages.len() as u64;
                         debug_stats.collections += 1;
+                        
+                        let mut messages_to_timeout = Vec::with_capacity(messages.len());
 
                         for message in messages {
                             let NetworkMessage { header, message } = message;
@@ -203,7 +203,9 @@ impl<S: Service + 'static> Proposer<S> {
                                                                              our_slice.as_ref().unwrap()) {
                                         ordered_propose.currently_accumulated.push(StoredMessage::new(header, req));
                                     } else {
-                                        //TODO: The synchronizer must be notified of this
+                                        
+                                        messages_to_timeout.push(StoredMessage::new(header, req));
+                                        
                                     }
                                 }
                                 SystemMessage::UnorderedRequest(req) => {
@@ -230,6 +232,19 @@ impl<S: Service + 'static> Proposer<S> {
                                 }
                                 _ => {}
                             }
+                        }
+
+                        if !messages_to_timeout.is_empty() {
+                            let mut digests = Vec::with_capacity(messages_to_timeout.len());
+                            
+                            messages_to_timeout.iter().for_each(|msg| {
+                                digests.push(msg.header().unique_digest())
+                            });
+
+                            self.pending_decision_log.insert_batch(messages_to_timeout);
+                            
+                            //TODO: Handle configurable timeout durations
+                            self.timeouts.timeout_client_requests(Duration::from_secs(3), digests);
                         }
                     }
 

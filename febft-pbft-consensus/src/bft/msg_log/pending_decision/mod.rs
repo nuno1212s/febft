@@ -34,19 +34,6 @@ impl<S> PendingRequestLog<S> where S: Service {
 
     /// Insert a client message into the log
     pub fn insert(&self, header: Header, message: RequestMessage<Request<S>>) {
-        let key = operation_key::<Request<S>>(&header, &message);
-
-        let seq_no = {
-            let latest_op_guard = self.latest_op.lock().unwrap();
-
-            latest_op_guard.get(key).copied().unwrap_or(SeqNo::ZERO)
-        };
-
-        // avoid executing earlier requests twice
-        if message.sequence_number() < seq_no {
-            return;
-        }
-
         let digest = header.unique_digest();
         let stored = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
 
@@ -54,8 +41,10 @@ impl<S> PendingRequestLog<S> where S: Service {
     }
 
     /// Insert a batch of requests
-    pub fn insert_batch(&self, messages: Vec<(Header, RequestMessage<Request<S>>)>) {
-        for (header, message) in messages {
+    pub fn insert_batch(&self, messages: Vec<StoredMessage<RequestMessage<Request<S>>>>) {
+        for msg in messages {
+            let (header, message) = msg.into_inner();
+
             self.insert(header, message);
         }
     }
@@ -109,5 +98,10 @@ impl<S> PendingRequestLog<S> where S: Service {
         for digest in messages {
             self.pending_requests.remove(digest);
         }
+    }
+
+    /// Reset all of the pending requests
+    pub fn reset_pending_requests(&self) {
+        self.pending_requests.clear();
     }
 }

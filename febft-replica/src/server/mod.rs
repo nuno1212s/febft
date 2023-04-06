@@ -10,7 +10,7 @@ use chrono::DateTime;
 use log::{debug, warn};
 use febft_pbft_consensus::bft::consensus::{Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
 use febft_pbft_consensus::bft::cst::{CollabStateTransfer, CstProgress, CstStatus, install_recovery_state};
-use febft_pbft_consensus::bft::message::{ConsensusMessage, CstMessage, Message, ObserveEventKind, PBFTMessage, ViewChangeMessage};
+use febft_pbft_consensus::bft::message::{ConsensusMessage, ConsensusMessageKind, CstMessage, Message, ObserveEventKind, PBFTMessage, ViewChangeMessage};
 use febft_pbft_consensus::bft::msg_log::decided_log::DecidedLog;
 use febft_pbft_consensus::bft::msg_log::pending_decision::PendingRequestLog;
 use febft_pbft_consensus::bft::msg_log::persistent::PersistentLogModeTrait;
@@ -30,6 +30,7 @@ use febft_communication::{Node, NodeConfig, NodeId};
 use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, StoredMessage, System};
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::ExecutorHandle;
+use febft_execution::serialize::SharedData;
 use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
 use crate::executable::{Executor, ReplicaReplier};
 use crate::server::client_replier::Replier;
@@ -619,6 +620,23 @@ impl<S> Replica<S>
             // attributed by the consensus layer to each op,
             // to execute in order
             ConsensusStatus::Decided(batch_digest) => {
+
+                // Clean up the received requests
+                let mut digests = Vec::with_capacity(batch_digest.request_count());
+
+                for pre_prepare in batch_digest.pre_prepare_messages() {
+                    match pre_prepare.message().kind() {
+                        ConsensusMessageKind::PrePrepare(msgs) => {
+                            for msg in msgs {
+                                digests.push(msg.header().unique_digest());
+                            }
+                        }
+                        _ => { unreachable!() }
+                    }
+                }
+
+                self.pending_request_log.delete_pending_requests(&digests[..]);
+
                 if let Some(exec_info) =
                     //Should the execution be scheduled here or will it be scheduled by the persistent log?
                     self.decided_log.finalize_batch(seq, batch_digest)? {

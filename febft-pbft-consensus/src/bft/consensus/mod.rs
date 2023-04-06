@@ -21,6 +21,7 @@ use febft_communication::message::{Header, StoredMessage};
 use febft_communication::{Node, NodeId};
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::ExecutorHandle;
+use febft_execution::serialize::SharedData;
 use febft_messages::messages::{RequestMessage, SystemMessage};
 
 use self::replica_consensus::ReplicaConsensus;
@@ -530,7 +531,23 @@ impl<S: Service + 'static> Consensus<S> {
     pub fn catch_up_to_quorum(&mut self,
                               seq: SeqNo,
                               proof: Proof<Request<S>>,
-                              dec_log: &mut DecidedLog<S>) -> Result<()> {
+                              dec_log: &mut DecidedLog<S>,
+                              pending_rq_log: Arc<PendingRequestLog<S>>) -> Result<()> {
+        let mut to_cleanup = Vec::new();
+
+        for pre_prepare in proof.pre_prepares() {
+            match pre_prepare.message().kind() {
+                ConsensusMessageKind::PrePrepare(rqs) => {
+                    for rq in rqs {
+                        to_cleanup.push(rq.header().unique_digest());
+                    }
+                }
+                _ => { unreachable!()}
+            }
+
+        }
+
+        pending_rq_log.delete_pending_requests(&to_cleanup[..]);
 
         // If this is successful, it means that we are all caught up and can now start executing the
         // batch
@@ -977,7 +994,7 @@ impl<S: Service + 'static> Consensus<S> {
                     }
 
                     let processed_batch = self.deciding_log.finish_processing_batch().unwrap();
-                    
+
                     debug!("{:?} // Decided consensus phase with all commits Seq {:?}", node.id(), self.sequence_number());
 
                     ConsensusStatus::Decided(processed_batch)
