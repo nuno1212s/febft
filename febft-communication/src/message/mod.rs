@@ -473,7 +473,7 @@ impl WireMessage {
 
         let signature = sk
             .map(|sk| {
-                let signature = Self::sign_parts(
+                let signature = crate::message_signing::sign_parts(
                     sk,
                     from.into(),
                     to.into(),
@@ -499,68 +499,6 @@ impl WireMessage {
         };
 
         Self { header, payload }
-    }
-
-    fn digest_parts(from: u32, to: u32, nonce: u64, payload: &[u8]) -> Digest {
-        let mut ctx = Context::new();
-
-        let buf = Self::CURRENT_VERSION.to_le_bytes();
-        ctx.update(&buf[..]);
-
-        let buf = from.to_le_bytes();
-        ctx.update(&buf[..]);
-
-        let buf = to.to_le_bytes();
-        ctx.update(&buf[..]);
-
-        let buf = nonce.to_le_bytes();
-        ctx.update(&buf[..]);
-
-        let buf = (payload.len() as u64).to_le_bytes();
-        ctx.update(&buf[..]);
-
-        ctx.update(payload);
-        ctx.finish()
-    }
-
-    ///Sign a given message, with the following passed parameters
-    /// From is the node that sent the message
-    /// to is the destination node
-    /// nonce is the none
-    /// and the payload is what we actually want to sign (in this case we will
-    /// sign the digest of the message, instead of the actual entire payload
-    /// since that would be quite slow)
-    fn sign_parts(
-        sk: &KeyPair,
-        from: u32,
-        to: u32,
-        nonce: u64,
-        payload: &[u8],
-    ) -> Signature {
-        let digest = Self::digest_parts(from, to, nonce, payload);
-        // NOTE: unwrap() should always work, much like heap allocs
-        // should always work
-        sk.sign(digest.as_ref()).unwrap()
-    }
-
-    ///Verify the signature of a given message, which contains
-    /// the following parameters
-    /// From is the node that sent the message
-    /// to is the destination node
-    /// nonce is the none
-    /// and the payload is what we actually want to sign (in this case we will
-    /// sign the digest of the message, instead of the actual entire payload
-    /// since that would be quite slow)
-    fn verify_parts(
-        pk: &PublicKey,
-        sig: &Signature,
-        from: u32,
-        to: u32,
-        nonce: u64,
-        payload: &[u8],
-    ) -> Result<()> {
-        let digest = Self::digest_parts(from, to, nonce, payload);
-        pk.verify(digest.as_ref(), sig)
     }
 
     /// Retrieve the inner `Header` and payload byte buffer stored
@@ -592,7 +530,7 @@ impl WireMessage {
 
         public_key
             .map(|pk| {
-                Self::verify_parts(
+                crate::message_signing::verify_parts(
                     pk,
                     self.header.signature(),
                     self.header.from,
@@ -627,7 +565,6 @@ impl WireMessage {
         let mut buf = [0; Header::LENGTH];
         self.header.serialize_into(&mut buf[..]).unwrap();
 
-        // FIXME: switch to vectored writes?
         w.write_all(&buf[..]);
 
         if self.payload.len() > 0 {

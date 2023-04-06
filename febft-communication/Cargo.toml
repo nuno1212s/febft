@@ -37,3 +37,7 @@ rustls = "0.20.8"
 smallvec = "1.10.0"
 fastrand = "1.9.0"
 chrono = "0.4.23"
+
+[dev-dependencies]
+rustls-pemfile = "1.0.2"
+env_logger = "0.10.0"

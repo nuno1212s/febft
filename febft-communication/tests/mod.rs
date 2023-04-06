@@ -342,4 +342,59 @@ mod communication_test {
 
         assert_eq!(str, x1.hello);
     }
+
+    /// Test whether the messages are being passed along correctly
+    /// And whether all concurrent connections are being utilized
+    #[test]
+    fn test_sending_multi_packets() {
+        env_logger::init();
+
+        unsafe {
+            rt::init(4).unwrap();
+            threadpool::init(4).unwrap();
+        }
+
+        let addrs = setup_addrs(2, 0);
+
+        let node_1 = NodeId(0u32);
+        let node_2 = NodeId(1u32);
+
+        let node = gen_node::<TestMessage>(node_1, addrs.clone(), 2, "srv0", 1000).unwrap();
+        let node_2_ = gen_node::<TestMessage>(node_2, addrs, 2, "srv1", 1001).unwrap();
+
+        let rx = node.node_connections().connect_to_node(node_2);
+
+        info!("Having {} connections", rx.len());
+
+        for x in rx {
+            warn!("Established one connection");
+            let res = x.recv();
+
+            res.unwrap().unwrap();
+        }
+
+        let str = String::from("Test");
+
+        let msgs = 100;
+
+        for i in 0..msgs {
+            let network = NetworkMessageKind::from(TestMessage { hello: str.clone() });
+
+            node.send(network, node_2, true).unwrap();
+
+            warn!("Sent message.");
+        }
+
+        for i in 0..msgs {
+            let message = node_2_.receive_from_replicas().unwrap();
+
+            let (header, network_msg) = message.into_inner();
+
+            let x1: TestMessage = network_msg.into_system();
+
+            warn!("Received message.");
+
+            assert_eq!(str, x1.hello);
+        }
+    }
 }
