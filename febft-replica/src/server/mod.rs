@@ -466,6 +466,7 @@ impl<S> Replica<S>
                     &self.timeouts,
                     &mut self.consensus,
                     &self.node,
+                    self.pending_request_log.clone(),
                 );
 
                 self.switch_phase(ReplicaPhase::NormalPhase);
@@ -552,7 +553,7 @@ impl<S> Replica<S>
                             view_change,
                             &self.timeouts,
                             &mut self.decided_log,
-                            &self.pending_request_log,
+                            self.pending_request_log.clone(),
                             &mut self.consensus,
                             &self.node,
                         );
@@ -635,7 +636,9 @@ impl<S> Replica<S>
                     }
                 }
 
+
                 self.pending_request_log.delete_pending_requests(&digests[..]);
+                self.timeouts.cancel_client_rq_timeouts(Some(digests));
 
                 if let Some(exec_info) =
                     //Should the execution be scheduled here or will it be scheduled by the persistent log?
@@ -682,7 +685,7 @@ impl<S> Replica<S>
             message,
             &self.timeouts,
             &mut self.decided_log,
-            &self.pending_request_log,
+            self.pending_request_log.clone(),
             &mut self.consensus,
             &mut self.node,
         );
@@ -852,6 +855,7 @@ impl<S> Replica<S>
     }
 
     fn timeout_received(&mut self, timeouts: Timeout) {
+
         let mut client_rq_timeouts = Vec::with_capacity(timeouts.len());
 
         for timeout_kind in timeouts {
@@ -871,6 +875,7 @@ impl<S> Replica<S>
         }
 
         if client_rq_timeouts.len() > 0 {
+
             let status = self.synchronizer
                 .client_requests_timed_out(&client_rq_timeouts);
 
@@ -887,6 +892,7 @@ impl<S> Replica<S>
                     }
 
                     if stopped.len() > 0 {
+
                         let stopped = self.pending_request_log.clone_pending_requests(&stopped);
 
                         self.synchronizer.begin_view_change(Some(stopped),

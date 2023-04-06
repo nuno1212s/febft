@@ -7,7 +7,7 @@ use log::{debug, error};
 use std::sync::Arc;
 use std::time::Instant;
 use febft_common::socket::{SocketSendAsync, SocketSendSync};
-use crate::message::WireMessage;
+use crate::WireMessage;
 use crate::{message_peer_sending_thread_sent, Node, NodeId, start_measurement};
 use crate::benchmarks::CommStats;
 use crate::serialize::Serializable;

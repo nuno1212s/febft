@@ -27,6 +27,7 @@ use febft_messages::messages::{RequestMessage, SystemMessage};
 use self::replica_consensus::ReplicaConsensus;
 use crate::bft::consensus::replica_consensus::ReplicaPreparingPollStatus;
 use super::sync::{AbstractSynchronizer, Synchronizer};
+use super::timeouts;
 use crate::bft::cst::RecoveryState;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::msg_log::decided_log::{DecidedLog};
@@ -531,6 +532,7 @@ impl<S: Service + 'static> Consensus<S> {
     pub fn catch_up_to_quorum(&mut self,
                               seq: SeqNo,
                               proof: Proof<Request<S>>,
+                              timeouts: &Timeouts,
                               dec_log: &mut DecidedLog<S>,
                               pending_rq_log: Arc<PendingRequestLog<S>>) -> Result<()> {
         let mut to_cleanup = Vec::new();
@@ -548,7 +550,7 @@ impl<S: Service + 'static> Consensus<S> {
         }
 
         pending_rq_log.delete_pending_requests(&to_cleanup[..]);
-
+        timeouts.cancel_client_rq_timeouts(Some(to_cleanup));
         // If this is successful, it means that we are all caught up and can now start executing the
         // batch
         let should_execute = dec_log.install_proof(seq, proof)?;

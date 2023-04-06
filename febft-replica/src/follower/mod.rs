@@ -283,6 +283,7 @@ impl<S: Service + 'static> Follower<S> {
                     &self.timeouts,
                     &mut self.consensus,
                     &self.node,
+                    self.pending_rq_log.clone(),
                 );
 
                 self.switch_phase(FollowerPhase::NormalPhase);
@@ -367,7 +368,7 @@ impl<S: Service + 'static> Follower<S> {
                             message,
                             &self.timeouts,
                             &mut self.decided_log,
-                            &self.pending_rq_log,
+                            self.pending_rq_log.clone(),
                             &mut self.consensus,
                             &self.node,
                         );
@@ -480,7 +481,7 @@ impl<S: Service + 'static> Follower<S> {
             message,
             &self.timeouts,
             &mut self.decided_log,
-            &self.pending_rq_log,
+            self.pending_rq_log.clone(),
             &mut self.consensus,
             &mut self.node,
         );

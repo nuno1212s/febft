@@ -37,7 +37,7 @@ impl Orderable for ViewInfo {
     }
 }
 
-const LEADER_COUNT: usize = 3;
+const LEADER_COUNT: usize = 1;
 
 impl ViewInfo {
     /// Creates a new instance of `ViewInfo`.

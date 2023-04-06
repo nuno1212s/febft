@@ -119,6 +119,7 @@ impl Timeouts {
             notifications_needed: 1,
             timeout_info: requests,
         })).expect("Failed to contact timeout thread")
+
     }
 
     /// Notify that a pre prepare with the following requests has been received and we must therefore
