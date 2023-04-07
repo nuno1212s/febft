@@ -13,7 +13,7 @@ pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
 
 
 ///TODO:
-pub struct FollowerProposer<S: Service + 'static> {
+pub struct FollowerProposer<S: Service + 'static, NT: Node<PBFT<S::Data>>> {
     batch_channel: (ChannelSyncTx<BatchType<S>>, ChannelSyncRx<BatchType<S>>),
 
     log: Arc<PendingRequestLog<S>>,
@@ -22,7 +22,7 @@ pub struct FollowerProposer<S: Service + 'static> {
     cancelled: AtomicBool,
 
     //Reference to the network node
-    node_ref: Arc<Node<PBFT<S::Data>>>,
+    node_ref: Arc<NT>,
 
     //The target
     target_global_batch_size: usize,
@@ -35,9 +35,9 @@ pub struct FollowerProposer<S: Service + 'static> {
 const BATCH_CHANNEL_SIZE: usize = 1024;
 
 
-impl<S: Service + 'static> FollowerProposer<S> {
+impl<S: Service + 'static, NT: Node<PBFT<S::Data>>> FollowerProposer<S, NT> {
     pub fn new(
-        node: Arc<Node<PBFT<S::Data>>>,
+        node: Arc<NT>,
         log: Arc<PendingRequestLog<S>>,
         executor: ExecutorHandle<S>,
         target_global_batch_size: usize,

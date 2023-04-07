@@ -13,15 +13,17 @@ use smallvec::SmallVec;
 
 use febft_common::{async_runtime as rt, socket, threadpool};
 use febft_common::crypto::hash::Digest;
+use febft_common::crypto::signature::PublicKey;
 use febft_common::error::*;
+use febft_common::node_id::NodeId;
 use febft_common::prng::ThreadSafePrng;
 use febft_common::socket::{AsyncListener, SyncListener};
 
-use crate::{Node, NodeId};
+use crate::{Node, NodePK};
 use crate::client_pooling::{ConnectedPeer, PeerIncomingRqHandling};
 use crate::config::{NodeConfig, TlsConfig};
 use crate::message::{NetworkMessage, NetworkMessageKind, StoredSerializedNetworkMessage, WireMessage};
-use crate::message_signing::NodePKShared;
+use crate::message_signing::{NodePKCrypto, NodePKShared, SignDetached};
 use crate::serialize::{Buf, Serializable};
 use crate::tcpip::connections::{ConnCounts, PeerConnection, PeerConnections};
 
@@ -90,7 +92,7 @@ pub struct TcpNode<M: Serializable + 'static> {
     // The thread safe pseudo random number generator
     rng: Arc<ThreadSafePrng>,
     //
-    keys: Arc<NodePKShared>,
+    keys: NodePKCrypto,
     // The connections that are currently being maintained by us to other peers
     peer_connections: Arc<PeerConnections<M>>,
     //Handles the incoming connections' buffering and request collection
@@ -192,7 +194,7 @@ impl<M: Serializable + 'static> TcpNode<M> {
     }
 
     /// Create the send tos for a given target
-    fn send_tos(&self, shared: Option<&Arc<NodePKShared>>, targets: impl Iterator<Item=NodeId>)
+    fn send_tos(&self, shared: Option<&NodePKCrypto>, targets: impl Iterator<Item=NodeId>)
                 -> (Option<SendTo<M>>, Option<SendTos<M>>, Vec<NodeId>) {
         let mut send_to_me = None;
         let mut send_tos: Option<SendTos<M>> = None;
@@ -296,6 +298,7 @@ impl<M: Serializable + 'static> TcpNode<M> {
 
 impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
     type ConnectionManager = PeerConnections<M>;
+    type Crypto = NodePKCrypto;
 
     async fn bootstrap(cfg: NodeConfig) -> Result<Arc<Self>> {
         let id = cfg.id;
@@ -335,7 +338,7 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
             peer_connections.clone().setup_tcp_listener(replica);
         }
 
-        let shared = NodePKShared::from_config(cfg.pk_crypto_config);
+        let shared = NodePKCrypto::new(NodePKShared::from_config(cfg.pk_crypto_config));
 
         let rng = Arc::new(ThreadSafePrng::new());
 
@@ -364,6 +367,10 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
 
     fn node_connections(&self) -> &Arc<Self::ConnectionManager> {
         &self.peer_connections
+    }
+
+    fn pk_crypto(&self) -> &Self::Crypto {
+        &self.keys
     }
 
     fn send(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool) -> Result<()> {
@@ -459,7 +466,7 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
 struct SendTo<M: Serializable + 'static> {
     my_id: NodeId,
     peer_id: NodeId,
-    shared: Option<Arc<NodePKShared>>,
+    shared: Option<NodePKCrypto>,
     nonce: u64,
     peer_cnn: SendToPeer<M>,
 }

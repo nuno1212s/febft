@@ -1,6 +1,6 @@
 use febft_common::channel::ChannelSyncTx;
 use febft_common::error::*;
-use febft_communication::NodeId;
+use febft_common::node_id::NodeId;
 use crate::app::{Reply, Request, Service, State, UnorderedBatch, UpdateBatch};
 
 pub mod serialize;

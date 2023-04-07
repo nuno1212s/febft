@@ -1,7 +1,7 @@
 use febft_common::error::*;
+use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
-use febft_communication::benchmarks::BatchMeta;
-use febft_communication::NodeId;
+use febft_metrics::benchmarks::BatchMeta;
 use crate::serialize::SharedData;
 
 

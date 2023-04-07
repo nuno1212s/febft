@@ -17,8 +17,10 @@ use febft_common::channel;
 use febft_common::channel::ChannelSyncRx;
 
 use febft_common::error::*;
+use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
-use febft_communication::{Node, NodeConfig, NodeId};
+use febft_communication::{Node};
+use febft_communication::config::NodeConfig;
 use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, System};
 use febft_execution::app::{Request, Service, State};
 use febft_execution::ExecutorHandle;
@@ -51,7 +53,7 @@ pub enum FollowerPhase {
 ///
 /// They might also be used to loosen the load on the quorum replicas when we need a
 /// State transfer as they can request the last checkpoint from these replicas.
-pub struct Follower<S: Service + 'static> {
+pub struct Follower<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> {
     //The current phase of the follower
     phase: FollowerPhase,
     phase_stack: Option<FollowerPhase>,
@@ -68,7 +70,7 @@ pub struct Follower<S: Service + 'static> {
     //Other replicas
     timeouts: Timeouts,
     //The proposer, which in this case wil
-    proposer: Arc<FollowerProposer<S>>,
+    proposer: Arc<FollowerProposer<S, NT>>,
     //Synchronizer observer
     synchronizer: Arc<Synchronizer<S>>,
 
@@ -79,12 +81,16 @@ pub struct Follower<S: Service + 'static> {
 
     execution_rx: ChannelSyncRx<Message<S::Data>>,
 
-    node: Arc<Node<PBFT<S::Data>>>,
+    node: Arc<NT>,
 }
 
 pub struct FollowerConfig<S: Service, T: PersistentLogModeTrait> {
     pub service: S,
 
+    pub n: usize,
+    pub f: usize,
+
+    pub db_path: String,
     pub log_mode: T,
 
     pub global_batch_size: usize,
@@ -92,25 +98,21 @@ pub struct FollowerConfig<S: Service, T: PersistentLogModeTrait> {
     pub node: NodeConfig,
 }
 
-impl<S: Service + 'static> Follower<S> {
+impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> Follower<S, NT> {
     pub async fn new<T>(cfg: FollowerConfig<S, T>) -> Result<Self> where T: PersistentLogModeTrait {
         let FollowerConfig {
             service,
-            log_mode: _,
+            n, f, db_path, log_mode: _,
             global_batch_size,
             batch_timeout,
             node: node_config,
         } = cfg;
 
         let log_node_id = node_config.id.clone();
-        let n = node_config.n;
-        let f = node_config.f;
 
-        let db_path = node_config.db_path.clone();
+        let node = NT::bootstrap(node_config).await?;
 
-        let (node, _rogue) = Node::bootstrap(node_config).await?;
-
-        let (executor, handle) = Executor::<S, FollowerReplier>::init_handle();
+        let (executor, handle) = Executor::<S, FollowerReplier, NT>::init_handle();
 
         debug!("Initializing log");
         let persistent_log = msg_log::initialize_persistent_log::<S, String, T>(executor.clone(), db_path)?;
@@ -151,19 +153,19 @@ impl<S: Service + 'static> Follower<S> {
         };
 
         //TODO: Rethink this
-        let reply_handle = Replier::new(node.id(), node.send_node());
+        let reply_handle = Replier::new(node.id(), node.clone());
 
         let (ex_tx, ex_rx) = channel::new_bounded_sync(1024);
 
         //TODO: Listen to this rx
 
         // start executor
-        Executor::<S, FollowerReplier>::new(
+        Executor::<S, FollowerReplier, NT>::new(
             reply_handle,
             handle,
             service,
             state,
-            node.send_node(),
+            node.clone(),
             ex_tx.clone(),
             None,
         )?;
@@ -282,7 +284,7 @@ impl<S: Service + 'static> Follower<S> {
                     &mut self.decided_log,
                     &self.timeouts,
                     &mut self.consensus,
-                    &self.node,
+                    &*self.node,
                 );
 
                 self.switch_phase(FollowerPhase::NormalPhase);
@@ -369,7 +371,7 @@ impl<S: Service + 'static> Follower<S> {
                             &mut self.decided_log,
                             &self.pending_rq_log,
                             &mut self.consensus,
-                            &self.node,
+                            &*self.node,
                         );
 
                         self.synchronizer.signal();
@@ -423,7 +425,7 @@ impl<S: Service + 'static> Follower<S> {
             &self.synchronizer,
             &self.timeouts,
             &mut self.decided_log,
-            &self.node,
+            &*self.node,
         );
 
         match status {
@@ -482,7 +484,7 @@ impl<S: Service + 'static> Follower<S> {
             &mut self.decided_log,
             &self.pending_rq_log,
             &mut self.consensus,
-            &mut self.node,
+            &* self.node,
         );
 
         self.synchronizer.signal();
@@ -525,7 +527,7 @@ impl<S: Service + 'static> Follower<S> {
             &self.synchronizer,
             &self.consensus,
             &self.decided_log,
-            &self.node,
+            &*self.node,
         );
 
         match status {
@@ -560,7 +562,7 @@ impl<S: Service + 'static> Follower<S> {
                     self.cst.request_latest_state(
                         &self.synchronizer,
                         &self.timeouts,
-                        &self.node,
+                        &*self.node,
                     );
                 } else {
                     self.switch_phase(FollowerPhase::NormalPhase);
@@ -570,14 +572,14 @@ impl<S: Service + 'static> Follower<S> {
                 self.cst.request_latest_consensus_seq_no(
                     &self.synchronizer,
                     &self.timeouts,
-                    &self.node,
+                    &*self.node,
                 );
             }
             CstStatus::RequestState => {
                 self.cst.request_latest_state(
                     &self.synchronizer,
                     &self.timeouts,
-                    &mut self.node,
+                    &* self.node,
                 );
             }
             // should not happen...
@@ -597,7 +599,7 @@ impl<S: Service + 'static> Follower<S> {
             &self.synchronizer,
             &self.consensus,
             &self.decided_log,
-            &mut self.node,
+            &* self.node,
         );
 
         match status {
@@ -624,7 +626,7 @@ impl<S: Service + 'static> Follower<S> {
                 &self.synchronizer,
                 &self.consensus,
                 &self.decided_log,
-                &mut self.node,
+                &* self.node,
             );
         }
 
@@ -638,7 +640,7 @@ impl<S: Service + 'static> Follower<S> {
                     if self.cst.cst_request_timed_out(cst_seq,
                                                       &self.synchronizer,
                                                       &self.timeouts,
-                                                      &self.node) {
+                                                      &*self.node) {
                         self.switch_phase(FollowerPhase::RetrievingStatePhase);
                     }
                 }

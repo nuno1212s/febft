@@ -16,8 +16,8 @@ use febft_common::error::*;
 
 use febft_common::crypto::hash::{Context, Digest};
 use febft_common::crypto::signature::{KeyPair, PublicKey, Signature};
+use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
-use crate::NodeId;
 
 use crate::serialize::{Buf, Serializable};
 

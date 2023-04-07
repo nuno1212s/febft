@@ -2,6 +2,7 @@
 
 use log::error;
 use std::marker::PhantomData;
+use std::sync::Arc;
 use febft_pbft_consensus::bft::message::{Message, ObserveEventKind};
 use febft_pbft_consensus::bft::observer::{MessageType, ObserverHandle};
 use febft_pbft_consensus::bft::PBFT;
@@ -10,7 +11,7 @@ use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 
 use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
-use febft_communication::{NodeId, SendNode};
+use febft_communication::{Node};
 use febft_communication::message::{NetworkMessageKind};
 use febft_execution::app::{BatchReplies, Reply, Request, Service, State, UnorderedBatch, UpdateBatch};
 use febft_execution::{ExecutionRequest, ExecutorHandle};
@@ -20,8 +21,8 @@ use crate::server::client_replier::ReplyHandle;
 const EXECUTING_BUFFER: usize = 8096;
 
 pub trait ExecutorReplier: Send {
-    fn execution_finished<S: Service>(
-        node: SendNode<PBFT<S::Data>>,
+    fn execution_finished<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static>(
+        node: Arc<NT>,
         seq: Option<SeqNo>,
         batch: BatchReplies<Reply<S>>,
     );
@@ -30,8 +31,8 @@ pub trait ExecutorReplier: Send {
 pub struct FollowerReplier;
 
 impl ExecutorReplier for FollowerReplier {
-    fn execution_finished<S: Service>(
-        node: SendNode<PBFT<S::Data>>,
+    fn execution_finished<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static>(
+        node: Arc<NT>,
         seq: Option<SeqNo>,
         batch: BatchReplies<Reply<S>>,
     ) {
@@ -39,7 +40,7 @@ impl ExecutorReplier for FollowerReplier {
             //Followers only deliver replies to the unordered requests, since it's not part of the quorum
             // And the requests it executes are only forwarded to it
 
-            ReplicaReplier::execution_finished::<S>(node, seq, batch);
+            ReplicaReplier::execution_finished::<S, NT>(node, seq, batch);
         }
     }
 }
@@ -47,8 +48,8 @@ impl ExecutorReplier for FollowerReplier {
 pub struct ReplicaReplier;
 
 impl ExecutorReplier for ReplicaReplier {
-    fn execution_finished<S: Service>(
-        mut send_node: SendNode<PBFT<S::Data>>,
+    fn execution_finished<S: Service+ 'static, NT: Node<PBFT<S::Data>> + 'static>(
+        mut send_node: Arc<NT>,
         _seq: Option<SeqNo>,
         batch: BatchReplies<Reply<S>>,
     ) {
@@ -102,12 +103,12 @@ impl ExecutorReplier for ReplicaReplier {
 
 /// Stateful data of the task responsible for executing
 /// client requests.
-pub struct Executor<S: Service + 'static, T: ExecutorReplier> {
+pub struct Executor<S: Service + 'static, T: ExecutorReplier, NT: Node<PBFT<S::Data>>> {
     service: S,
     state: State<S>,
     e_rx: ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>,
     reply_worker: ReplyHandle<S>,
-    send_node: SendNode<PBFT<S::Data>>,
+    send_node: Arc<NT>,
     loopback_channel: ChannelSyncTx<Message<S::Data>>,
     observer_handle: Option<ObserverHandle>,
 
@@ -115,13 +116,14 @@ pub struct Executor<S: Service + 'static, T: ExecutorReplier> {
 }
 
 
-impl<S, T> Executor<S, T>
+impl<S, T, NT> Executor<S, T, NT>
     where
         S: Service + Send + 'static,
         State<S>: Send + Clone + 'static,
         Request<S>: Send + 'static,
         Reply<S>: Send + 'static,
         T: ExecutorReplier + 'static,
+        NT: Node<PBFT<S::Data>> + 'static
 {
     pub fn init_handle() -> (ExecutorHandle<S>, ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>) {
         let (tx, rx) = channel::new_bounded_sync(EXECUTING_BUFFER);
@@ -134,7 +136,7 @@ impl<S, T> Executor<S, T>
         handle: ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>,
         mut service: S,
         current_state: Option<(State<S>, Vec<Request<S>>)>,
-        send_node: SendNode<PBFT<S::Data>>,
+        send_node: Arc<NT>,
         loopback_channel: ChannelSyncTx<Message<S::Data>>,
         observer: Option<ObserverHandle>,
     ) -> Result<()> {
@@ -144,7 +146,7 @@ impl<S, T> Executor<S, T>
 
         let id = send_node.id();
 
-        let mut exec: Executor<S, T> = Executor {
+        let mut exec: Executor<S, T, NT> = Executor {
             e_rx: handle,
             service,
             state,
@@ -224,7 +226,6 @@ impl<S, T> Executor<S, T>
         let m = Message::ExecutionFinishedWithAppstate((seq, cloned_state));
 
         if let Err(_err) = self.loopback_channel.send(m) {
-
             error!(
                 "{:?} // FAILED TO DELIVER CHECKPOINT STATE",
                 self.send_node.id()
@@ -248,6 +249,6 @@ impl<S, T> Executor<S, T>
             }
         }
 
-        T::execution_finished::<S>(send_node, seq, batch);
+        T::execution_finished::<S, NT>(send_node, seq, batch);
     }
 }

@@ -19,9 +19,11 @@ serialize_serde = ["serde", "bincode", "serde_bytes"]
 serialize_capnp = ["febft-capnp", "capnp"]
 
 [dependencies]
-capnp = { version = "0.16.0", optional = true }
 febft-common = {path = "../febft-common"}
 febft-capnp = {path = "../febft-capnp", optional = true}
+febft-metrics = {path = "../febft-metrics"}
+
+capnp = { version = "0.16.0", optional = true }
 bytes = "1.4.0"
 serde = {version = "*", features = ["rc"], optional = true}
 serde_bytes = {version = "*", optional = true}

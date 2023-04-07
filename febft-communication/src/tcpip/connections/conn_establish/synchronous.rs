@@ -10,10 +10,10 @@ use rustls::{ClientConnection, ServerConnection, ServerName};
 use febft_common::{prng, socket, threadpool};
 use febft_common::error::*;
 use febft_common::channel::{new_oneshot_channel, OneShotRx};
+use febft_common::node_id::NodeId;
 use febft_common::socket::{SecureReadHalf, SecureSocketSync, SecureWriteHalf, SyncListener, SyncSocket};
 
 use crate::message::{Header, WireMessage};
-use crate::NodeId;
 use crate::serialize::Serializable;
 use crate::tcpip::{PeerAddr, TlsNodeAcceptor, TlsNodeConnector};
 use crate::tcpip::connections::conn_establish::ConnectionHandler;

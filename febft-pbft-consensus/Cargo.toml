@@ -40,6 +40,7 @@ febft-communication = { path = "../febft-communication" }
 febft-execution = { path = "../febft-execution" }
 febft-messages = { path = "../febft-messages" }
 febft-capnp = { path = "../febft-capnp", optional = true }
+febft-metrics = {path = "../febft-metrics"}
 
 capnp = { version = "0.16" }
 fastrand = "1.7.0"

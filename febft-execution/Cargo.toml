@@ -18,4 +18,5 @@ serialize_serde = ["serde"]
 [dependencies]
 febft-common = { path = "../febft-common" }
 febft-communication = { path = "../febft-communication" }
+febft-metrics = {path = "../febft-metrics"}
 serde = { version = "*", optional = true }

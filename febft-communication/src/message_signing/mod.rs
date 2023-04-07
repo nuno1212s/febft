@@ -3,8 +3,10 @@ use intmap::IntMap;
 use febft_common::crypto::hash::{Context, Digest};
 use febft_common::crypto::signature::{KeyPair, PublicKey, Signature};
 use febft_common::error::*;
+use febft_common::node_id::NodeId;
 use crate::config::PKConfig;
 use crate::message::{WireMessage};
+use crate::NodePK;
 
 pub struct NodePKShared {
     my_key: KeyPair,
@@ -16,6 +18,13 @@ pub struct SignDetached {
 }
 
 impl SignDetached {
+
+    pub fn from(shared: &Arc<NodePKShared>) -> Self {
+        Self {
+            shared: Arc::clone(shared),
+        }
+    }
+
     pub fn key_pair(&self) -> &KeyPair {
         &self.shared.my_key
     }
@@ -30,10 +39,36 @@ impl NodePKShared {
         })
     }
 
-    pub fn my_key(&self) -> &KeyPair {
-        &self.my_key
-    }
     
+}
+
+#[derive(Clone)]
+pub struct NodePKCrypto {
+    pk_shared: Arc<NodePKShared>
+}
+
+impl NodePKCrypto {
+    pub fn new(pk_shared: Arc<NodePKShared>) -> Self {
+        Self { pk_shared }
+    }
+
+    pub fn my_key(&self) -> &KeyPair {
+        &self.pk_shared.my_key
+    }
+}
+
+impl NodePK for NodePKCrypto {
+    fn sign_detached(&self) -> SignDetached {
+        SignDetached::from(&self.pk_shared)
+    }
+
+    fn get_public_key(&self, node: &NodeId) -> Option<PublicKey> {
+        self.pk_shared.peer_keys.get(node.0 as u64).cloned()
+    }
+
+    fn get_key_pair(&self) -> &KeyPair {
+        &self.pk_shared.my_key
+    }
 }
 
 fn digest_parts(from: u32, to: u32, nonce: u64, payload: &[u8]) -> Digest {

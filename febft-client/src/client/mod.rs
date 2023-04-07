@@ -108,7 +108,7 @@ pub struct ClientData<D>
     stats: Option<Arc<ClientPerf>>,
 }
 
-pub trait ClientType<D: SharedData + 'static> {
+pub trait ClientType<D: SharedData + 'static, NT: Node<PBFT<D>>> {
     ///Initialize request in accordance with the type of clients
     fn init_request(
         session_id: SeqNo,
@@ -122,23 +122,23 @@ pub trait ClientType<D: SharedData + 'static> {
     ///Initialize the targets for the requests according with the type of request made
     ///
     /// Returns the iterator along with the amount of items contained within it
-    fn init_targets(client: &Client<D>) -> (Self::Iter, usize);
+    fn init_targets(client: &Client<D, NT>) -> (Self::Iter, usize);
 
     ///How many responses does that client need to get the
-    fn needed_responses(client: &Client<D>) -> usize;
+    fn needed_responses(client: &Client<D, NT>) -> usize;
 }
 
 /// Represents a client node in `febft`.
 // TODO: maybe make the clone impl more efficient
-pub struct Client<D: SharedData + 'static> {
+pub struct Client<D: SharedData + 'static, NT: Node<PBFT<D>>> {
     session_id: SeqNo,
     operation_counter: SeqNo,
     data: Arc<ClientData<D>>,
     params: SystemParams,
-    node: Arc<Node<PBFT<D>>>,
+    node: Arc<NT>,
 }
 
-impl<D: SharedData> Clone for Client<D> {
+impl<D: SharedData, NT: Node<PBFT<D>>> Clone for Client<D, NT> {
     fn clone(&self) -> Self {
         let session_id = self
             .data
@@ -234,12 +234,13 @@ pub struct ReplicaVotes {
     digests: BTreeMap<Digest, usize>,
 }
 
-impl<D> Client<D>
+impl<D, NT> Client<D, NT>
     where
         D: SharedData + 'static,
         D::State: Send + Clone + 'static,
         D::Request: Send + 'static,
         D::Reply: Send + 'static,
+        NT: Node<PBFT<D>>
 {
     /// Bootstrap a client in `febft`.
     pub async fn bootstrap(cfg: ClientConfig) -> Result<Self> {
@@ -334,7 +335,7 @@ impl<D> Client<D>
     //
     pub async fn update<T>(&mut self, operation: D::Request) -> Result<D::Reply>
         where
-            T: ClientType<D>,
+            T: ClientType<D, NT>,
     {
         let session_id = self.session_id;
         let operation_id = self.next_operation_id();
@@ -394,7 +395,7 @@ impl<D> Client<D>
         operation: D::Request,
         callback: Box<dyn FnOnce(Result<D::Reply>) + Send>,
     ) where
-        T: ClientType<D>,
+        T: ClientType<D, NT>,
     {
         let session_id = self.session_id;
 
@@ -476,7 +477,7 @@ impl<D> Client<D>
     ///Start performing a timeout for a given request.
     /// TODO: Repeat the request/do something else to fix this
     fn start_timeout(
-        node: Arc<Node<PBFT<D>>>,
+        node: Arc<NT>,
         session_id: SeqNo,
         rq_id: SeqNo,
         client_data: Arc<ClientData<D>>,
@@ -697,7 +698,7 @@ impl<D> Client<D>
     ///This task might become a large bottleneck with the scenario of few clients with high concurrent rqs,
     /// As the replicas will make very large batches and respond to all the sent requests in one go.
     /// This leaves this thread with a very large task to do in a very short time and it just can't keep up
-    fn message_recv_task(params: SystemParams, data: Arc<ClientData<D>>, node: Arc<Node<PBFT<D>>>) {
+    fn message_recv_task(params: SystemParams, data: Arc<ClientData<D>>, node: Arc<NT>) {
         // use session id as key
         let mut last_operation_ids: IntMap<SeqNo> = IntMap::new();
         let mut replica_votes: IntMap<ReplicaVotes> = IntMap::new();

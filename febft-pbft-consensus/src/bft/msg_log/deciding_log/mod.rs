@@ -6,10 +6,10 @@ use febft_common::crypto::hash::{Context, Digest};
 
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
-use febft_communication::benchmarks::BatchMeta;
+use febft_common::node_id::NodeId;
 use febft_communication::message::StoredMessage;
-use febft_communication::NodeId;
 use febft_execution::app::{Request, Service};
+use febft_metrics::benchmarks::BatchMeta;
 
 use crate::bft::message::ConsensusMessage;
 use crate::bft::msg_log::decisions::StoredConsensusMessage;

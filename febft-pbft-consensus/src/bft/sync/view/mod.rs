@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use febft_common::crypto::hash::Digest;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_common::error::*;
-use febft_communication::NodeId;
+use febft_common::node_id::NodeId;
 use febft_execution::system_params::SystemParams;
 
 /// This struct contains information related with an

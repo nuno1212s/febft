@@ -30,7 +30,9 @@ use febft_communication::serialize::Serializable;
 use febft_messages::serialize::System;
 use crate::bft::message::serialize::PBFTConsensus;
 
+// The types responsible for this protocol
 pub type PBFT<D> = System<D, PBFTConsensus<D>>;
+// The message type for this consensus protocol
 pub type SysMsg<D> = <PBFT<D> as Serializable>::Message;
 
 static INITIALIZED: Flag = Flag::new();

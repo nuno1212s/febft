@@ -1,5 +1,5 @@
 use febft_common::channel::ChannelMixedTx;
-use febft_communication::NodeId;
+use febft_common::node_id::NodeId;
 use crate::bft::message::ObserveEventKind;
 
 pub type ObserverType = NodeId;

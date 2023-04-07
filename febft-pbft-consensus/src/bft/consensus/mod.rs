@@ -16,9 +16,10 @@ use febft_common::crypto::hash::Digest;
 
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
+use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_queue_message, tbo_pop_message};
 use febft_communication::message::{Header, StoredMessage};
-use febft_communication::{Node, NodeId};
+use febft_communication::{Node};
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_messages::messages::{RequestMessage, SystemMessage};
@@ -555,14 +556,14 @@ impl<S: Service + 'static> Consensus<S> {
         Ok(())
     }
 
-    pub fn finalize_view_change(
+    pub fn finalize_view_change<NT>(
         &mut self,
         (header, message): (Header, ConsensusMessage<Request<S>>),
         synchronizer: &Synchronizer<S>,
         timeouts: &Timeouts,
         log: &mut DecidedLog<S>,
-        node: &Node<PBFT<S::Data>>,
-    ) {
+        node: &NT,
+    ) where NT: Node<PBFT<S::Data>> {
         match &mut self.accessory {
             ConsensusAccessory::Follower => {}
             ConsensusAccessory::Replica(rep) => {
@@ -584,15 +585,16 @@ impl<S: Service + 'static> Consensus<S> {
     }
 
     /// Process a message for a particular consensus instance.
-    pub fn process_message<'a>(
+    pub fn process_message<'a, NT>(
         &'a mut self,
         header: Header,
         message: ConsensusMessage<Request<S>>,
         synchronizer: &Synchronizer<S>,
         timeouts: &Timeouts,
         log: &mut DecidedLog<S>,
-        node: &Node<PBFT<S::Data>>,
-    ) -> ConsensusStatus<S> {
+        node: &NT,
+    ) -> ConsensusStatus<S>
+        where NT: Node<PBFT<S::Data>> {
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just
         // the amount of votes received
@@ -977,7 +979,7 @@ impl<S: Service + 'static> Consensus<S> {
                     }
 
                     let processed_batch = self.deciding_log.finish_processing_batch().unwrap();
-                    
+
                     debug!("{:?} // Decided consensus phase with all commits Seq {:?}", node.id(), self.sequence_number());
 
                     ConsensusStatus::Decided(processed_batch)

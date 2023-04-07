@@ -1,7 +1,7 @@
 use intmap::IntMap;
 use rustls::{ClientConfig, ServerConfig};
 use febft_common::crypto::signature::{KeyPair, PublicKey};
-use crate::NodeId;
+use febft_common::node_id::NodeId;
 use crate::tcpip::PeerAddr;
 
 /// The configuration of the network node

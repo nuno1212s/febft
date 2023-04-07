@@ -1,8 +1,10 @@
 use std::ops::Deref;
+use std::sync::Arc;
 use febft_pbft_consensus::bft::PBFT;
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
-use febft_communication::{NodeId, SendNode};
+use febft_common::node_id::NodeId;
+use febft_communication::{Node};
 use febft_communication::message::{NetworkMessageKind, System};
 use febft_execution::app::{BatchReplies, Reply, Service};
 use febft_messages::messages::{ReplyMessage, SystemMessage};
@@ -11,10 +13,10 @@ type RepliesType<S> = BatchReplies<S>;
 
 ///Dedicated thread to reply to clients
 /// This is currently not being used (we are currently using the thread pool)
-pub struct Replier<S> where S: Service + 'static {
+pub struct Replier<S, NT> where S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static {
     node_id: NodeId,
     channel: ChannelSyncRx<RepliesType<Reply<S>>>,
-    send_node: SendNode<PBFT<S::Data>>,
+    send_node: Arc<NT>,
 }
 
 pub struct ReplyHandle<S> where S: Service {
@@ -47,8 +49,8 @@ impl<S> Clone for ReplyHandle<S> where S: Service {
     }
 }
 
-impl<S> Replier<S> where S: Service + 'static {
-    pub fn new(node_id: NodeId, send_node: SendNode<PBFT<S::Data>>) -> ReplyHandle<S> {
+impl<S, NT> Replier<S, NT> where S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static {
+    pub fn new(node_id: NodeId, send_node: Arc<NT>) -> ReplyHandle<S> {
         let (ch_tx, ch_rx) = channel::new_bounded_sync(REPLY_CHANNEL_SIZE);
 
         let reply_task = Self {

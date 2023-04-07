@@ -7,8 +7,9 @@ use febft_pbft_consensus::bft::sync::view::ViewInfo;
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 use febft_common::globals::ReadOnly;
+use febft_common::node_id::NodeId;
 use febft_communication::message::{NetworkMessageKind, StoredMessage, System};
-use febft_communication::{Node, NodeId, SendNode};
+use febft_communication::{Node};
 use febft_execution::app::{Request, Service};
 use febft_messages::messages::SystemMessage;
 
@@ -19,23 +20,23 @@ use febft_messages::messages::SystemMessage;
 /// This routing is only relevant to the Preprepare requests, all other requests
 /// Can be broadcast from each replica as they are very small and therefore
 /// don't have any effects on performance
-struct FollowersFollowing<S: Service + 'static> {
+struct FollowersFollowing<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> {
     own_id: NodeId,
     followers: Vec<NodeId>,
-    send_node: SendNode<PBFT<S::Data>>,
+    send_node: Arc<NT>,
     rx: ChannelSyncRx<FollowerChannelMsg<S>>,
 }
 
-impl<S: Service + 'static> FollowersFollowing<S> {
+impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> FollowersFollowing<S, NT> {
     /// Starts the follower handling thread and returns a cloneable handle that
     /// can be used to deliver messages to it.
-    pub fn init_follower_handling(id: NodeId, node: &Arc<Node<PBFT<S::Data>>>) -> FollowerHandle<S> {
+    pub fn init_follower_handling(id: NodeId, node: &Arc<NT>) -> FollowerHandle<S> {
         let (tx, rx) = channel::new_bounded_sync(1024);
 
         let follower_handling = Self {
             own_id: id,
             followers: Vec::new(),
-            send_node: node.send_node(),
+            send_node: Arc::clone(node),
             rx,
         };
 

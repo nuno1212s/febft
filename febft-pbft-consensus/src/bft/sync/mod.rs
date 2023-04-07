@@ -17,8 +17,9 @@ use serde::{Deserialize, Serialize};
 use febft_common::crypto::hash::Digest;
 use febft_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_queue_message, tbo_pop_message};
 use febft_common::{collections, prng};
+use febft_common::node_id::NodeId;
 use febft_communication::message::{Header, NetworkMessageKind, StoredMessage, System, WireMessage};
-use febft_communication::{Node, NodeId, serialize};
+use febft_communication::{Node, NodePK, serialize};
 use febft_communication::serialize::Buf;
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
@@ -478,7 +479,7 @@ impl<S> Synchronizer<S>
     /// Advances the state of the view change state machine.
     //
     // TODO: retransmit STOP msgs
-    pub fn process_message(
+    pub fn process_message<NT: Node<PBFT<S::Data>>>(
         &self,
         header: Header,
         message: ViewChangeMessage<Request<S>>,
@@ -486,7 +487,7 @@ impl<S> Synchronizer<S>
         log: &mut DecidedLog<S>,
         pending_rq_log: &PendingRequestLog<S>,
         consensus: &mut Consensus<S>,
-        node: &Node<PBFT<S::Data>>,
+        node: &NT,
     ) -> SynchronizerStatus
     {
         match *self.phase.borrow() {
@@ -735,7 +736,7 @@ impl<S> Synchronizer<S>
 
                             let p = pending_rq_log.view_change_propose();
 
-                            let node_sign = node.sign_detached();
+                            let node_sign = node.pk_crypto().sign_detached();
 
                             //We create the pre-prepare here as we are the new leader,
                             //And we sign it right now
@@ -864,9 +865,9 @@ impl<S> Synchronizer<S>
 
                 // leader has already performed this computation in the
                 // STOP-DATA phase of Mod-SMaRt
-                let signed: Vec<_> = signed_collects::<S>(node, collects);
+                let signed: Vec<_> = signed_collects::<S, _>(node, collects);
 
-                let proof = highest_proof::<S, _>(&current_view, node, signed.iter());
+                let proof = highest_proof::<S, _, _>(&current_view, node, signed.iter());
 
                 let curr_cid = proof
                     .map(|p| p.sequence_number())
@@ -912,12 +913,12 @@ impl<S> Synchronizer<S>
     }
 
     /// Resume the view change protocol after running the CST protocol.
-    pub fn resume_view_change(
+    pub fn resume_view_change<NT: Node<PBFT<S::Data>>>(
         &self,
         log: &mut DecidedLog<S>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<S>,
-        node: &Node<PBFT<S::Data>>,
+        node: &NT,
     ) -> Option<()>
     {
         let state = self.finalize_state.borrow_mut().take()?;
@@ -945,10 +946,10 @@ impl<S> Synchronizer<S>
     /// that have timed out on the current replica.
     /// If the timed out requests are None, that means that the view change
     /// originated in the other replicas.
-    pub fn begin_view_change(
+    pub fn begin_view_change<NT: Node<PBFT<S::Data>>>(
         &self,
         timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
-        node: &Node<PBFT<S::Data>>,
+        node: &NT,
         timeouts: &Timeouts,
         _log: &DecidedLog<S>,
     )
@@ -1022,13 +1023,13 @@ impl<S> Synchronizer<S>
 
     /// Finalize a view change and install the new view in the other
     /// state machines (Consensus)
-    fn finalize(
+    fn finalize<NT: Node<PBFT<S::Data>>>(
         &self,
         state: FinalizeState<Request<S>>,
         log: &mut DecidedLog<S>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<S>,
-        node: &Node<PBFT<S::Data>>,
+        node: &NT,
     ) -> SynchronizerStatus
     {
         let FinalizeState {
@@ -1131,10 +1132,10 @@ impl<S> Synchronizer<S>
     /// Forward the requests that have timed out to the whole network
     /// So that everyone knows about (including a leader that could still be correct, but
     /// Has not received the requests from the client)
-    pub fn forward_requests(&self,
-                            timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
-                            node: &Node<PBFT<S::Data>>,
-                            log: &PendingRequestLog<S>) {
+    pub fn forward_requests<NT: Node<PBFT<S::Data>>>(&self,
+                                                     timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+                                                     node: &NT,
+                                                     log: &PendingRequestLog<S>) {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {}
             SynchronizerAccessory::Replica(rep) => {
@@ -1177,12 +1178,12 @@ impl<S> Synchronizer<S>
 
     // TODO: quorum sizes may differ when we implement reconfiguration
     #[inline]
-    fn highest_proof<'a>(
+    fn highest_proof<'a, NT: Node<PBFT<S::Data>>>(
         guard: &'a IntMap<StoredMessage<ViewChangeMessage<Request<S>>>>,
         view: &ViewInfo,
-        node: &Node<PBFT<S::Data>>,
+        node: &NT,
     ) -> Option<&'a Proof<Request<S>>> {
-        highest_proof::<S, _>(&view, node, guard.values())
+        highest_proof::<S, _, _>(&view, node, guard.values())
     }
 }
 
@@ -1384,8 +1385,8 @@ fn normalized_collects<'a, O: 'a>(
     })
 }
 
-fn signed_collects<S>(
-    node: &Node<PBFT<S::Data>>,
+fn signed_collects<S, NT>(
+    node: &NT,
     collects: Vec<StoredMessage<ViewChangeMessage<Request<S>>>>,
 ) -> Vec<StoredMessage<ViewChangeMessage<Request<S>>>>
     where
@@ -1393,19 +1394,21 @@ fn signed_collects<S>(
         State<S>: Send + Clone + 'static,
         Request<S>: Send + Clone + 'static,
         Reply<S>: Send + 'static,
+        NT: Node<PBFT<S::Data>>
 {
     collects
         .into_iter()
-        .filter(|stored| validate_signature::<S, _>(node, stored))
+        .filter(|stored| validate_signature::<S, _, _>(node, stored))
         .collect()
 }
 
-fn validate_signature<'a, S, M>(node: &'a Node<PBFT<S::Data>>, stored: &'a StoredMessage<M>) -> bool
+fn validate_signature<'a, S, M, NT>(node: &'a NT, stored: &'a StoredMessage<M>) -> bool
     where
         S: Service + Send + 'static,
         State<S>: Send + Clone + 'static,
         Request<S>: Send + Clone + 'static,
         Reply<S>: Send + 'static,
+        NT: Node<PBFT<S::Data>>
 {
 
     //TODO: Fix this as I believe it will always be false
@@ -1416,17 +1419,17 @@ fn validate_signature<'a, S, M>(node: &'a Node<PBFT<S::Data>>, stored: &'a Store
 
     // check if we even have the public key of the node that claims
     // to have sent this particular message
-    let key = match node.get_public_key(stored.header().from()) {
+    let key = match node.pk_crypto().get_public_key(&stored.header().from()) {
         Some(k) => k,
         None => return false,
     };
 
-    wm.is_valid(Some(key))
+    wm.is_valid(Some(&key))
 }
 
-fn highest_proof<'a, S, I>(
+fn highest_proof<'a, S, I, NT>(
     view: &ViewInfo,
-    node: &Node<PBFT<S::Data>>,
+    node: &NT,
     collects: I,
 ) -> Option<&'a Proof<Request<S>>>
     where
@@ -1435,6 +1438,7 @@ fn highest_proof<'a, S, I>(
         State<S>: Send + Clone + 'static,
         Request<S>: Send + Clone + 'static,
         Reply<S>: Send + 'static,
+        NT: Node<PBFT<S::Data>>
 {
     collect_data(collects)
         // fetch proofs
@@ -1455,7 +1459,7 @@ fn highest_proof<'a, S, I>(
                         .unwrap_or(false)
                 })
                 .filter(move |&stored|
-                    { validate_signature::<S, _>(node, stored) })
+                    { validate_signature::<S, _, _>(node, stored) })
                 .count() >= view.params().quorum();
 
             let prepares_valid = proof
@@ -1469,7 +1473,7 @@ fn highest_proof<'a, S, I>(
                         .unwrap_or(false)
                 })
                 .filter(move |&stored|
-                    { validate_signature::<S, _>(node, stored) })
+                    { validate_signature::<S, _, _>(node, stored) })
                 .count() >= view.params().quorum();
 
             commits_valid && prepares_valid

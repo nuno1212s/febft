@@ -18,9 +18,10 @@ use serde::{Deserialize, Serialize};
 use febft_common::collections;
 use febft_common::collections::HashMap;
 use febft_common::crypto::hash::Digest;
+use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, NetworkMessageKind, System};
-use febft_communication::{Node, NodeId};
+use febft_communication::{Node};
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_messages::messages::SystemMessage;
@@ -241,15 +242,16 @@ impl<S> CollabStateTransfer<S>
         matches!(self.phase, ProtoPhase::WaitingCheckpoint(_, _))
     }
 
-    fn process_reply_state<T>(
+    fn process_reply_state<T, NT>(
         &mut self,
         header: Header,
         message: CstMessage<State<S>, Request<S>>,
         synchronizer: &Arc<T>,
         log: &DecidedLog<S>,
-        node: &Node<PBFT<S::Data>>,
+        node: &NT,
     ) where
         T: AbstractSynchronizer<S>,
+        NT: Node<PBFT<S::Data>>
     {
         let snapshot = match log.snapshot(synchronizer.view()) {
             Ok(snapshot) => snapshot,
@@ -263,21 +265,22 @@ impl<S> CollabStateTransfer<S>
             CstMessageKind::ReplyState(snapshot),
         ));
 
-        node.send(NetworkMessageKind::from( SystemMessage::from_protocol_message(reply)), header.from(), true);
+        node.send(NetworkMessageKind::from(SystemMessage::from_protocol_message(reply)), header.from(), true);
     }
 
     /// Advances the state of the CST state machine.
-    pub fn process_message<T, K>(
+    pub fn process_message<T, K, NT>(
         &mut self,
         progress: CstProgress<State<S>, Request<S>>,
         synchronizer: &Arc<T>,
         consensus: &K,
         log: &DecidedLog<S>,
-        node: &Node<PBFT<S::Data>>,
+        node: &NT,
     ) -> CstStatus<State<S>, Request<S>>
         where
             T: AbstractSynchronizer<S>,
             K: AbstractConsensus<S>,
+            NT: Node<PBFT<S::Data>>
     {
         match self.phase {
             ProtoPhase::WaitingCheckpoint(_, _) => {
@@ -436,8 +439,9 @@ impl<S> CollabStateTransfer<S>
     /// Handle a timeout received from the timeouts layer.
     /// Returns a bool to signify if we must move to the Retrieving state
     /// If the timeout is no longer relevant, returns false (Can remain in current phase)
-    pub fn cst_request_timed_out(&mut self, seq: SeqNo, synchronizer: &Arc<Synchronizer<S>>,
-                                 timeouts: &Timeouts, node: &Node<PBFT<S::Data>>) -> bool {
+    pub fn cst_request_timed_out<NT>(&mut self, seq: SeqNo, synchronizer: &Arc<Synchronizer<S>>,
+                                     timeouts: &Timeouts, node: &NT) -> bool
+        where NT: Node<PBFT<S::Data>> {
         let status = self.timed_out(seq);
 
         match status {
@@ -494,13 +498,14 @@ impl<S> CollabStateTransfer<S>
 
     /// Used by a recovering node to retrieve the latest sequence number
     /// attributed to a client request by the consensus layer.
-    pub fn request_latest_consensus_seq_no<T>(
+    pub fn request_latest_consensus_seq_no<T, NT>(
         &mut self,
         synchronizer: &Arc<T>,
         timeouts: &Timeouts,
-        node: &Node<PBFT<S::Data>>,
+        node: &NT,
     ) where
-        T: AbstractSynchronizer<S>
+        T: AbstractSynchronizer<S>,
+        NT: Node<PBFT<S::Data>>
     {
         // reset state of latest seq no. request
         self.latest_cid = SeqNo::ZERO;
@@ -526,13 +531,14 @@ impl<S> CollabStateTransfer<S>
     }
 
     /// Used by a recovering node to retrieve the latest state.
-    pub fn request_latest_state<T>(
+    pub fn request_latest_state<T, NT>(
         &mut self,
         synchronizer: &Arc<T>,
         timeouts: &Timeouts,
-        node: &Node<PBFT<S::Data>>,
+        node: &NT,
     ) where
-        T: AbstractSynchronizer<S>
+        T: AbstractSynchronizer<S>,
+        NT: Node<PBFT<S::Data>>
     {
         // reset hashmap of received states
         self.received_states.clear();

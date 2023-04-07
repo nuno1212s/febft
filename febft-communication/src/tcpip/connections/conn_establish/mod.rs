@@ -4,7 +4,7 @@ use either::Either;
 use febft_common::channel::OneShotRx;
 use febft_common::socket::{AsyncSocket, SyncSocket};
 use febft_common::error::*;
-use crate::NodeId;
+use febft_common::node_id::NodeId;
 use crate::serialize::Serializable;
 use crate::tcpip::{NodeConnectionAcceptor, PeerAddr, TlsNodeAcceptor, TlsNodeConnector};
 use crate::tcpip::connections::{ConnCounts, PeerConnection, PeerConnections};

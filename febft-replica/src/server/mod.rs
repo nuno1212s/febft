@@ -25,8 +25,10 @@ use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx};
 
 use febft_common::error::*;
+use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
-use febft_communication::{Node, NodeConfig, NodeId};
+use febft_communication::{Node};
+use febft_communication::config::NodeConfig;
 use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, StoredMessage, System};
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::ExecutorHandle;
@@ -54,7 +56,7 @@ pub(crate) enum ReplicaPhase {
 }
 
 /// Represents a replica in `febft`.
-pub struct Replica<S: Service + 'static> {
+pub struct Replica<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> {
     // What phase of the algorithm is this replica currently in
     phase: ReplicaPhase,
     // this value is primarily used to switch from
@@ -86,9 +88,9 @@ pub struct Replica<S: Service + 'static> {
     // Require any synchronization
     decided_log: DecidedLog<S>,
     // The proposer of this replica
-    proposer: Arc<Proposer<S>>,
+    proposer: Arc<Proposer<S, NT>>,
     // The networking layer for a Node in the network (either Client or Replica)
-    node: Arc<Node<PBFT<S::Data>>>,
+    node: Arc<NT>,
     // THe handle to the execution and timeouts handler
     execution_rx: ChannelSyncRx<Message<S::Data>>,
     //A handle to the observer worker thread
@@ -100,6 +102,9 @@ pub struct Replica<S: Service + 'static> {
 pub struct ReplicaConfig<S: Service, T: PersistentLogModeTrait> {
     /// The application logic.
     pub service: S,
+
+    pub n: usize,
+    pub f: usize,
 
     //TODO: These two values should be loaded from storage
     /// The sequence number for the current view.
@@ -113,53 +118,53 @@ pub struct ReplicaConfig<S: Service, T: PersistentLogModeTrait> {
     pub batch_timeout: u128,
     pub max_batch_size: usize,
 
+    pub db_path: String,
+
     ///The logging mode
     pub log_mode: PhantomData<T>,
     /// Check out the docs on `NodeConfig`.
     pub node: NodeConfig,
 }
 
-impl<S> Replica<S>
+impl<S, NT> Replica<S, NT>
     where
         S: Service + Send + 'static,
         State<S>: Send + Clone + 'static,
         Request<S>: Send + Clone + 'static,
         Reply<S>: Send + 'static,
+        NT: Node<PBFT<S::Data>> + 'static
 {
     /// Bootstrap a replica in `febft`.
     pub async fn bootstrap<T>(cfg: ReplicaConfig<S, T>) -> Result<Self> where T: PersistentLogModeTrait {
         let ReplicaConfig {
-            next_consensus_seq,
+            n, f, next_consensus_seq,
             global_batch_size,
             batch_timeout,
             max_batch_size,
+            db_path,
             node: node_config,
             service,
             view: _,
             log_mode: _,
         } = cfg;
 
-        let per_pool_batch_timeout = node_config.batch_timeout_micros;
-        let per_pool_batch_sleep = node_config.batch_sleep_micros;
-        let per_pool_batch_size = node_config.batch_size;
+        let per_pool_batch_timeout = node_config.client_pool_config.batch_timeout_micros;
+        let per_pool_batch_sleep = node_config.client_pool_config.batch_sleep_micros;
+        let per_pool_batch_size = node_config.client_pool_config.batch_size;
 
         let log_node_id = node_config.id.clone();
-        let n = node_config.n;
-        let f = node_config.f;
-
-        let db_path = node_config.db_path.clone();
 
         debug!("Bootstrapping replica, starting with networking");
 
-        let (node, rogue) = Node::bootstrap(node_config).await?;
+        let node = NT::bootstrap(node_config).await?;
 
         // connect to peer nodes
-        let observer_handle = observer::start_observers(node.send_node());
+        let observer_handle = observer::start_observers(node.clone());
 
         //CURRENTLY DISABLED, USING THREADPOOL INSTEAD
-        let reply_handle = Replier::new(node.id(), node.send_node());
+        let reply_handle = Replier::new(node.id(), node.clone());
 
-        let (executor, handle) = Executor::<S, ReplicaReplier>::init_handle();
+        let (executor, handle) = Executor::<S, ReplicaReplier, NT>::init_handle();
 
         debug!("Initializing log");
         let persistent_log = msg_log::initialize_persistent_log::<S, String, T>(executor.clone(), db_path)?;
@@ -205,12 +210,12 @@ impl<S> Replica<S>
         let (exec_tx, exec_rx) = channel::new_bounded_sync(1024);
 
         // start executor
-        Executor::<S, ReplicaReplier>::new(
+        Executor::<S, ReplicaReplier, NT>::new(
             reply_handle,
             handle,
             service,
             state,
-            node.send_node(),
+            node.clone(),
             exec_tx.clone(),
             Some(observer_handle.clone()),
         )?;
@@ -278,13 +283,13 @@ impl<S> Replica<S>
         replica.proposer.clone().start();
 
         // handle rogue messages
-        for message in rogue {
-            let NetworkMessage { header, message } = message;
-
-            let sys_msg = message.into();
-
-            //TODO: Handle rogue messages
-        }
+        // for message in rogue {
+        //     let NetworkMessage { header, message } = message;
+        //
+        //     let sys_msg = message.into();
+        //
+        //     //TODO: Handle rogue messages
+        // }
 
         debug!("{:?} // Started replica.", replica.id());
 
@@ -464,7 +469,7 @@ impl<S> Replica<S>
                     &mut self.decided_log,
                     &self.timeouts,
                     &mut self.consensus,
-                    &self.node,
+                    &*self.node,
                 );
 
                 self.switch_phase(ReplicaPhase::NormalPhase);
@@ -553,7 +558,7 @@ impl<S> Replica<S>
                             &mut self.decided_log,
                             &self.pending_request_log,
                             &mut self.consensus,
-                            &self.node,
+                            &*self.node,
                         );
 
                         self.synchronizer.signal();
@@ -605,7 +610,7 @@ impl<S> Replica<S>
             &self.synchronizer,
             &self.timeouts,
             &mut self.decided_log,
-            &self.node,
+            &*self.node,
         );
 
         match status {
@@ -666,7 +671,7 @@ impl<S> Replica<S>
             &mut self.decided_log,
             &self.pending_request_log,
             &mut self.consensus,
-            &mut self.node,
+            &*self.node,
         );
 
         self.synchronizer.signal();
@@ -709,7 +714,7 @@ impl<S> Replica<S>
             &self.synchronizer,
             &self.consensus,
             &self.decided_log,
-            &self.node,
+            &*self.node,
         );
 
         match status {
@@ -744,7 +749,7 @@ impl<S> Replica<S>
                     self.cst.request_latest_state(
                         &self.synchronizer,
                         &self.timeouts,
-                        &self.node,
+                        &*self.node,
                     );
                 } else {
                     self.switch_phase(ReplicaPhase::NormalPhase);
@@ -754,14 +759,14 @@ impl<S> Replica<S>
                 self.cst.request_latest_consensus_seq_no(
                     &self.synchronizer,
                     &self.timeouts,
-                    &self.node,
+                    &*self.node,
                 );
             }
             CstStatus::RequestState => {
                 self.cst.request_latest_state(
                     &self.synchronizer,
                     &self.timeouts,
-                    &mut self.node,
+                    &*self.node,
                 );
             }
             // should not happen...
@@ -781,7 +786,7 @@ impl<S> Replica<S>
             &self.synchronizer,
             &self.consensus,
             &self.decided_log,
-            &mut self.node,
+            &*self.node,
         );
 
         match status {
@@ -806,7 +811,7 @@ impl<S> Replica<S>
                 &self.synchronizer,
                 &self.consensus,
                 &self.decided_log,
-                &mut self.node,
+                &*self.node,
             );
         }
 
@@ -842,7 +847,7 @@ impl<S> Replica<S>
                     if self.cst.cst_request_timed_out(cst_seq,
                                                       &self.synchronizer,
                                                       &self.timeouts,
-                                                      &self.node) {
+                                                      &*self.node) {
                         self.switch_phase(ReplicaPhase::RetrievingState);
                     }
                 }
@@ -863,7 +868,7 @@ impl<S> Replica<S>
 
                         self.synchronizer.forward_requests(
                             requests,
-                            &mut self.node,
+                            &*self.node,
                             &self.pending_request_log,
                         );
                     }
@@ -872,7 +877,7 @@ impl<S> Replica<S>
                         let stopped = self.pending_request_log.clone_pending_requests(&stopped);
 
                         self.synchronizer.begin_view_change(Some(stopped),
-                                                            &mut self.node,
+                                                            &* self.node,
                                                             &self.timeouts,
                                                             &self.decided_log);
 

@@ -29,8 +29,8 @@ pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
 ///Handles taking requests from the client pools and storing the requests in the log,
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
-pub struct Proposer<S: Service + 'static> {
-    node_ref: Arc<Node<PBFT<S::Data>>>,
+pub struct Proposer<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> {
+    node_ref: Arc<NT>,
 
     synchronizer: Arc<Synchronizer<S>>,
     timeouts: Timeouts,
@@ -39,7 +39,9 @@ pub struct Proposer<S: Service + 'static> {
     pending_decision_log: Arc<PendingRequestLog<S>>,
 
     consensus_guard: ConsensusGuard,
+    // Should we shut down?
     cancelled: AtomicBool,
+
     //The target
     target_global_batch_size: usize,
     //Time limit for generating a batch with target_global_batch_size size
@@ -66,12 +68,18 @@ struct ProposeStats<S> where S: Service {
     last_proposal: Instant,
 }
 
+impl<S> ProposeStats<S> where S: Service {
+    pub fn new(target_size: usize) -> Self {
+        Self { currently_accumulated: Vec::with_capacity(target_size), last_proposal:Instant::now() }
+    }
+}
+
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
 
-impl<S: Service + 'static> Proposer<S> {
+impl<S: Service + 'static,NT: Node<PBFT<S::Data>>> Proposer<S, NT> {
     pub fn new(
-        node: Arc<Node<PBFT<S::Data>>>,
+        node: Arc<NT>,
         sync: Arc<Synchronizer<S>>,
         pending_decision_log: Arc<PendingRequestLog<S>>,
         timeouts: Timeouts,
@@ -113,17 +121,11 @@ impl<S: Service + 'static> Proposer<S> {
                 //END DEBUGGING
 
                 //The currently accumulated requests, accumulated while we wait for the next batch to propose
-                let mut ordered_propose = ProposeStats {
-                    currently_accumulated: Vec::with_capacity(self.target_global_batch_size),
-                    last_proposal: Instant::now(),
-                };
+                let mut ordered_propose = ProposeStats::new(self.target_global_batch_size);
 
+                let mut unordered_propose = ProposeStats::new(self.target_global_batch_size);
+                
                 let mut last_seq = None;
-
-                let mut unordered_propose = ProposeStats {
-                    currently_accumulated: Vec::with_capacity(self.target_global_batch_size),
-                    last_proposal: Instant::now(),
-                };
 
                 loop {
                     if self.cancelled.load(Ordering::Relaxed) {
@@ -378,7 +380,7 @@ impl<S: Service + 'static> Proposer<S> {
                     };
 
                     let current_batch = std::mem::replace(&mut propose.currently_accumulated,
-                                                          next_batch.unwrap_or(Vec::with_capacity(self.node_ref.batch_size() * 2)));
+                                                          next_batch.unwrap_or(Vec::with_capacity(self.max_batch_size * 2)));
 
 
                     self.propose(*seq, view, current_batch);
@@ -418,7 +420,8 @@ impl<S: Service + 'static> Proposer<S> {
 
         let targets = view.quorum_members().iter().copied();
 
-        self.node_ref.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
+        self.node_ref.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets)
+            .unwrap();
     }
 
     pub fn cancel(&self) {

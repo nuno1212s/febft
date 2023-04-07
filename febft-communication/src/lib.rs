@@ -14,7 +14,10 @@ use crate::client_pooling::ConnectedPeer;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use febft_common::channel::OneShotRx;
+use febft_common::crypto::signature::{KeyPair, PublicKey};
+use febft_common::node_id::NodeId;
 use crate::config::NodeConfig;
+use crate::message_signing::SignDetached;
 use crate::tcpip::{ConnectionType, NodeConnectionAcceptor, TlsNodeAcceptor, TlsNodeConnector};
 
 pub mod serialize;
@@ -25,74 +28,9 @@ pub mod client_pooling;
 pub mod config;
 pub mod message_signing;
 
-/// A `NodeId` represents the id of a process in the BFT system.
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[repr(transparent)]
-pub struct NodeId(pub u32);
-
-impl NodeId {
-    pub fn targets_u32<I>(into_iterator: I) -> impl Iterator<Item=Self>
-        where
-            I: IntoIterator<Item=u32>,
-    {
-        into_iterator.into_iter().map(Self)
-    }
-
-    pub fn targets<I>(into_iterator: I) -> impl Iterator<Item=Self>
-        where
-            I: IntoIterator<Item=usize>,
-    {
-        into_iterator.into_iter().map(NodeId::from)
-    }
-
-    pub fn id(&self) -> u32 {
-        self.0
-    }
-}
-
-impl From<u32> for NodeId {
-    #[inline]
-    fn from(id: u32) -> NodeId {
-        NodeId(id)
-    }
-}
-
-impl From<u64> for NodeId {
-    #[inline]
-    fn from(id: u64) -> NodeId {
-        NodeId(id as u32)
-    }
-}
-
-impl From<usize> for NodeId {
-    #[inline]
-    fn from(id: usize) -> NodeId {
-        NodeId(id as u32)
-    }
-}
-
-impl From<NodeId> for usize {
-    #[inline]
-    fn from(id: NodeId) -> usize {
-        id.0 as usize
-    }
-}
-
-impl From<NodeId> for u64 {
-    #[inline]
-    fn from(id: NodeId) -> u64 {
-        id.0 as u64
-    }
-}
-
-impl From<NodeId> for u32 {
-    #[inline]
-    fn from(id: NodeId) -> u32 {
-        id.0 as u32
-    }
-}
-
+/// A trait defined that indicates how the connections are managed
+/// Allows us to verify various things about our current connections as well
+/// as establishing new ones.
 pub trait NodeConnections {
 
     /// Are we currently connected to a given node?
@@ -110,10 +48,25 @@ pub trait NodeConnections {
 
 }
 
+pub trait NodePK {
+
+    /// Detached info for signatures
+    fn sign_detached(&self) -> SignDetached;
+
+    /// Get the public key for a given node
+    fn get_public_key(&self, node: &NodeId) -> Option<PublicKey>;
+
+    /// Get our own key pair
+    fn get_key_pair(&self) -> &KeyPair;
+
+}
+
 /// A network node. Handles all the connections between nodes.
-pub trait Node<M: Serializable + 'static> {
+pub trait Node<M: Serializable + 'static> : Send + Sync {
 
     type ConnectionManager : NodeConnections;
+
+    type Crypto: NodePK;
 
     /// Bootstrap the node
     async fn bootstrap(node_config: NodeConfig) -> Result<Arc<Self>>;
@@ -124,8 +77,11 @@ pub trait Node<M: Serializable + 'static> {
     /// Reports the first Id
     fn first_cli(&self) -> NodeId;
 
-    /// Get a handle to the connection manager of the operation
+    /// Get a handle to the connection manager of this node.
     fn node_connections(&self) -> &Arc<Self::ConnectionManager>;
+
+    /// Crypto
+    fn pk_crypto(&self) -> &Self::Crypto;
 
     /// Sends a message to a given target.
     /// Does not block on the message sent. Returns a result that is

@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
+use febft_common::node_id::NodeId;
 use febft_communication::message::{Header, StoredMessage};
-use febft_communication::NodeId;
 use febft_execution::app::Service;
 use febft_execution::ExecutorHandle;
 use febft_messages::messages::RequestMessage;

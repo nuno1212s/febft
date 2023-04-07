@@ -1,20 +1,23 @@
 use std::collections::BTreeSet;
+use std::marker::PhantomData;
+use std::sync::Arc;
 use log::{debug, info, warn};
 use febft_pbft_consensus::bft::message::{ObserveEventKind, ObserverMessage, PBFTMessage};
 use febft_pbft_consensus::bft::{PBFT, SysMsg};
 use febft_pbft_consensus::bft::observer::{ConnState, MessageType, ObserverHandle, ObserverType};
 use febft_common::channel;
 use febft_common::channel::{ChannelMixedRx, ChannelMixedTx};
+use febft_common::node_id::NodeId;
 use febft_common::ordering::SeqNo;
-use febft_communication::{NodeId, SendNode};
 use febft_communication::message::{NetworkMessageKind, System};
+use febft_communication::Node;
 use febft_communication::serialize::Serializable;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::SystemMessage;
 
 use super::ViewInfo;
 
-pub fn start_observers<D>(send_node: SendNode<PBFT<D>>) -> ObserverHandle where D: SharedData + 'static {
+pub fn start_observers<D, NT>(send_node: Arc<NT>) -> ObserverHandle where D: SharedData + 'static, NT: Node<PBFT<D>> + 'static   {
     let (tx, rx) = channel::new_bounded_mixed(16834);
 
     let observer_handle = ObserverHandle::new(tx);
@@ -25,6 +28,7 @@ pub fn start_observers<D>(send_node: SendNode<PBFT<D>>) -> ObserverHandle where 
         last_normal_event: None,
         last_event: None,
         rx,
+        ph: Default::default(),
     };
 
     observer.start();
@@ -32,15 +36,16 @@ pub fn start_observers<D>(send_node: SendNode<PBFT<D>>) -> ObserverHandle where 
     observer_handle
 }
 
-struct Observers<D> where D: SharedData + 'static {
+struct Observers<D, NT> where D: SharedData + 'static, NT: Node<PBFT<D>> +'static {
     registered_observers: BTreeSet<ObserverType>,
-    send_node: SendNode<PBFT<D>>,
+    send_node: Arc<NT>,
     rx: ChannelMixedRx<MessageType<ObserverType>>,
     last_normal_event: Option<(ViewInfo, SeqNo)>,
     last_event: Option<ObserveEventKind>,
+    ph: PhantomData<D>
 }
 
-impl<D> Observers<D> where D: SharedData + 'static {
+impl<D, NT> Observers<D, NT> where D: SharedData + 'static, NT: Node<PBFT<D>> + 'static {
     fn register_observer(&mut self, observer: ObserverType) -> bool {
         self.registered_observers.insert(observer)
     }

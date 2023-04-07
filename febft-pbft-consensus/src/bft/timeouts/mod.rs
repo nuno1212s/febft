@@ -7,9 +7,8 @@ use log::info;
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, TryRecvError};
 use febft_common::crypto::hash::Digest;
+use febft_common::node_id::NodeId;
 use febft_common::ordering::SeqNo;
-use febft_communication::incoming_peer_handling::ConnectedPeer;
-use febft_communication::NodeId;
 use febft_execution::app::Service;
 use crate::bft::message::Message;
 
