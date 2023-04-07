@@ -662,8 +662,7 @@ impl WireMessage {
 mod tests {
     use febft_common::crypto::hash::Digest;
     use febft_common::crypto::signature::Signature;
-    use crate::bft::communication::message::{WireMessage, Header};
-    use crate::message::{Header, WireMessage};
+    use crate::message::{WireMessage, Header};
 
     #[test]
     fn test_header_serialize() {

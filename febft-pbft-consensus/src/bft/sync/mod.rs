@@ -81,7 +81,9 @@ macro_rules! finalize_view_change {
         $log:expr,
         $timeouts:expr,
         $consensus:expr,
-        $node:expr $(,)?
+        $node:expr $(,)?,
+        $pendingrq: expr,
+
     ) => {{
         match $self.pre_finalize($state, $proof, $normalized_collects, $log) {
             // wait for next timeout
@@ -94,7 +96,7 @@ macro_rules! finalize_view_change {
             }
             // we may finish the view change proto
             FinalizeStatus::Commit(state) => {
-                $self.finalize(state, $log, $timeouts, $consensus, $node)
+                $self.finalize(state, $log, $timeouts, $consensus, $node,$pendingrq)
             }
         }
     }};
@@ -484,7 +486,7 @@ impl<S> Synchronizer<S>
         message: ViewChangeMessage<Request<S>>,
         timeouts: &Timeouts,
         log: &mut DecidedLog<S>,
-        pending_rq_log: &PendingRequestLog<S>,
+        pending_rq_log: Arc<PendingRequestLog<S>>,
         consensus: &mut Consensus<S>,
         node: &Node<PBFT<S::Data>>,
     ) -> SynchronizerStatus
@@ -598,7 +600,7 @@ impl<S> Synchronizer<S>
                     match &self.accessory {
                         SynchronizerAccessory::Replica(rep) => {
                             rep.handle_stopping_quorum(self, previous_view, log,
-                                                       pending_rq_log, timeouts, node)
+                                                       &pending_rq_log, timeouts, node)
                         }
                         SynchronizerAccessory::Follower(_) => {}
                     }
@@ -807,6 +809,7 @@ impl<S> Synchronizer<S>
                             timeouts,
                             consensus,
                             node,
+                            pending_rq_log,
                             )
                         }
                     }
@@ -903,6 +906,7 @@ impl<S> Synchronizer<S>
                     timeouts,
                     consensus,
                     node,
+                    pending_rq_log,
                 )
             }
 
@@ -918,6 +922,7 @@ impl<S> Synchronizer<S>
         timeouts: &Timeouts,
         consensus: &mut Consensus<S>,
         node: &Node<PBFT<S::Data>>,
+        pending_rq_log: Arc<PendingRequestLog<S>>,
     ) -> Option<()>
     {
         let state = self.finalize_state.borrow_mut().take()?;
@@ -934,6 +939,7 @@ impl<S> Synchronizer<S>
             timeouts,
             consensus,
             node,
+            pending_rq_log,
         );
 
         Some(())
@@ -1029,6 +1035,7 @@ impl<S> Synchronizer<S>
         timeouts: &Timeouts,
         consensus: &mut Consensus<S>,
         node: &Node<PBFT<S::Data>>,
+        pending_rq_log: Arc<PendingRequestLog<S>>,
     ) -> SynchronizerStatus
     {
         let FinalizeState {
@@ -1050,7 +1057,7 @@ impl<S> Synchronizer<S>
             // We are missing the last decision, which should be included in the collect data
             // sent by the leader in the SYNC message
             if let Some(last_proof) = last_proof {
-                consensus.catch_up_to_quorum(last_proof.seq_no(), last_proof, log)
+                consensus.catch_up_to_quorum(last_proof.seq_no(), last_proof,timeouts, log, pending_rq_log)
                     .expect("Failed to catch up to quorum");
 
 
