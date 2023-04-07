@@ -1,11 +1,13 @@
 use std::collections::BTreeSet;
 
 use std::sync::{Mutex};
-use febft_pbft_consensus::bft::SysMsg;
+use febft_pbft_consensus::bft::{PBFT, SysMsg};
 
 use febft_common::error::*;
+use febft_common::node_id::NodeId;
 use febft_common::ordering::SeqNo;
-use febft_communication::{NodeId, TlsNodeConnector};
+use febft_communication::{Node, NodeConnections};
+use febft_communication::tcpip::TlsNodeConnector;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{RequestMessage, SystemMessage};
 
@@ -44,9 +46,10 @@ impl FollowerData {
     }
 }
 
-impl<D> Client<D>
-where
-    D: SharedData,
+impl<D, NT> Client<D, NT>
+    where
+        D: SharedData,
+        NT: Node<PBFT<D>> + 'static
 {
     ///Connect to a follower with a given node id
     ///
@@ -70,15 +73,6 @@ where
                     .wrapped(ErrorKind::CoreClientUnorderedClient);
             }
         }
-
-        let _connector = match self.node.connector() {
-            //NodeConnector::Async(_) => todo!(),
-            TlsNodeConnector::Sync(connector) => connector,
-
-            _ => {
-                unreachable!()
-            }
-        };
 
         let client_data = self.data.clone();
 
@@ -104,7 +98,7 @@ where
 
         self.node
             .clone()
-            .tx_connect_node_sync(node_id, Some(callback));
+            .node_connections().connect_to_node(node_id);
 
         Ok(())
     }
@@ -112,9 +106,10 @@ where
 
 pub struct Unordered;
 
-impl<D> ClientType<D> for Unordered
-where
-    D: SharedData + 'static,
+impl<D, NT> ClientType<D, NT> for Unordered
+    where
+        D: SharedData + 'static,
+        NT: Node<PBFT<D>> + 'static
 {
     fn init_request(
         session_id: SeqNo,
@@ -125,9 +120,9 @@ where
         SystemMessage::UnorderedRequest(RequestMessage::new(session_id, operation_id, operation))
     }
 
-    type Iter = impl Iterator<Item = NodeId>;
+    type Iter = impl Iterator<Item=NodeId>;
 
-    fn init_targets(client: &Client<D>) -> (Self::Iter, usize) {
+    fn init_targets(client: &Client<D, NT>) -> (Self::Iter, usize) {
         //TODO: Atm we are using all followers, we should choose a small number of them and
         // Send it to those. (Maybe the ones that are closes? TBD)
         let connected_followers: Vec<NodeId> = client
@@ -145,13 +140,13 @@ where
         if count > 0 {
             return (connected_followers.into_iter(), count);
         } else {
-            let connected :Vec<NodeId> = NodeId::targets(0..client.params.n()).collect();
-            
+            let connected: Vec<NodeId> = NodeId::targets(0..client.params.n()).collect();
+
             return (connected.into_iter(), client.params.n());
         };
     }
 
-    fn needed_responses(client: &Client<D>) -> usize {
+    fn needed_responses(client: &Client<D, NT>) -> usize {
         let f = client.params.f();
 
         match client.data.follower_data.unordered_request_mode {

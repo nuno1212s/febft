@@ -5,12 +5,14 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
+use febft_common::node_id::NodeId;
 use febft_pbft_consensus::bft::message::{Message, ObserveEventKind, ObserverMessage, PBFTMessage};
 use febft_common::ordering::Orderable;
 use febft_communication::message::{NetworkMessage, NetworkMessageKind};
-use febft_communication::NodeId;
+use febft_communication::{Node};
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::SystemMessage;
+use febft_pbft_consensus::bft::PBFT;
 use crate::client::{Client, ClientData};
 
 ///Callback to when the replicas send their notifications
@@ -34,9 +36,10 @@ pub struct ObserverClient {
 }
 
 impl ObserverClient {
-    pub async fn bootstrap_client<D>(client: &mut Client<D>) -> ObserverClient
-    where
-        D: SharedData + 'static,
+    pub async fn bootstrap_client<D, NT>(client: &mut Client<D, NT>) -> ObserverClient
+        where
+            D: SharedData + 'static,
+            NT: Node<PBFT<D>> + 'static
     {
         let targets = NodeId::targets(0..client.params.n());
 
@@ -50,7 +53,7 @@ impl ObserverClient {
             responses_needed: 0,
             ready: &client.data.observer_ready,
         }
-        .await;
+            .await;
 
         ObserverClient {
             registered_callbacks: Vec::new(),
@@ -76,7 +79,7 @@ impl ObserverClient {
     {
         match observed_msg {
             Message::System(network_msg) => {
-                let NetworkMessage {header, message} = network_msg;
+                let NetworkMessage { header, message } = network_msg;
 
                 let sys_msg = message.into();
 
@@ -210,7 +213,8 @@ impl ObserverClient {
                                     }
                                 }
                             }
-                        }}
+                        }
+                    }
                     _ => {}
                 }
             }

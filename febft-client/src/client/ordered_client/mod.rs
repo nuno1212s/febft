@@ -1,13 +1,14 @@
-use febft_pbft_consensus::bft::SysMsg;
+use febft_common::node_id::NodeId;
+use febft_pbft_consensus::bft::{PBFT, SysMsg};
 use febft_common::ordering::SeqNo;
-use febft_communication::NodeId;
+use febft_communication::{Node};
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{RequestMessage, SystemMessage};
 use super::{ClientType, Client};
 
 pub struct Ordered;
 
-impl<D> ClientType<D> for Ordered where D: SharedData + 'static {
+impl<D, NT> ClientType<D, NT> for Ordered where D: SharedData + 'static, NT: Node<PBFT<D>> + 'static {
     fn init_request(
         session_id: SeqNo,
         operation_id: SeqNo,
@@ -18,11 +19,11 @@ impl<D> ClientType<D> for Ordered where D: SharedData + 'static {
 
     type Iter = impl Iterator<Item=NodeId>;
 
-    fn init_targets(client: &Client<D>) -> (Self::Iter, usize) {
+    fn init_targets(client: &Client<D, NT>) -> (Self::Iter, usize) {
         (NodeId::targets(0..client.params.n()), client.params.n())
     }
 
-    fn needed_responses(client: &Client<D>) -> usize {
+    fn needed_responses(client: &Client<D, NT>) -> usize {
         client.params.f() + 1
     }
 }

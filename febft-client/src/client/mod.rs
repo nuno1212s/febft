@@ -19,13 +19,16 @@ use febft_common::async_runtime;
 use febft_common::crypto::hash::Digest;
 
 use febft_common::error::*;
+use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
-use febft_communication::{measure_ready_rq_time, measure_response_deliver_time, measure_response_rcv_time, measure_sent_rq_info, measure_target_init_time, measure_time_rq_init, Node, NodeConfig, NodeId, start_measurement};
-use febft_communication::benchmarks::ClientPerf;
+use febft_communication::config::NodeConfig;
 use febft_communication::message::{NetworkMessage, NetworkMessageKind, System};
+use febft_communication::Node;
 use febft_execution::serialize::SharedData;
 use febft_execution::system_params::SystemParams;
 use febft_messages::messages::{ReplyMessage, SystemMessage};
+use febft_metrics::benchmarks::ClientPerf;
+use febft_metrics::{measure_ready_rq_time, measure_response_deliver_time, measure_response_rcv_time, measure_sent_rq_info, measure_target_init_time, measure_time_rq_init, start_measurement};
 use crate::client::observing_client::ObserverClient;
 
 use self::unordered_client::{FollowerData, UnorderedClientMode};
@@ -130,7 +133,7 @@ pub trait ClientType<D: SharedData + 'static, NT: Node<PBFT<D>>> {
 
 /// Represents a client node in `febft`.
 // TODO: maybe make the clone impl more efficient
-pub struct Client<D: SharedData + 'static, NT: Node<PBFT<D>>> {
+pub struct Client<D: SharedData + 'static, NT: Node<PBFT<D>> +'static> {
     session_id: SeqNo,
     operation_counter: SeqNo,
     data: Arc<ClientData<D>>,
@@ -216,6 +219,9 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
 
 /// Represents a configuration used to bootstrap a `Client`.
 pub struct ClientConfig {
+    n: usize,
+    f: usize,
+
     pub unordered_rq_mode: UnorderedClientMode,
 
     /// Check out the docs on `NodeConfig`.
@@ -240,18 +246,16 @@ impl<D, NT> Client<D, NT>
         D::State: Send + Clone + 'static,
         D::Request: Send + 'static,
         D::Reply: Send + 'static,
-        NT: Node<PBFT<D>>
+        NT: Node<PBFT<D>> + 'static
 {
     /// Bootstrap a client in `febft`.
     pub async fn bootstrap(cfg: ClientConfig) -> Result<Self> {
         let ClientConfig {
-            node: node_config,
+            n, f, node: node_config,
             unordered_rq_mode,
         } = cfg;
 
         // system params
-        let n = node_config.n;
-        let f = node_config.f;
         let params = SystemParams::new(n, f)?;
 
         // connect to peer nodes
@@ -259,7 +263,7 @@ impl<D, NT> Client<D, NT>
         // FIXME: can the client receive rogue reply messages?
         // perhaps when it reconnects to a replica after experiencing
         // network problems? for now ignore rogue messages...
-        let (node, _rogue) = Node::bootstrap(node_config).await?;
+        let node = NT::bootstrap(node_config).await?;
 
         let stats = {
             None
@@ -314,7 +318,7 @@ impl<D, NT> Client<D, NT>
             if let None = &*guard {
                 drop(guard);
 
-                let observer = ObserverClient::bootstrap_client::<D>(self).await;
+                let observer = ObserverClient::bootstrap_client::<D, NT>(self).await;
 
                 let mut guard = self.data.observer.lock().unwrap();
 
@@ -511,7 +515,7 @@ impl<D, NT> Client<D, NT>
                         }
                     }
 
-                    if let Some(sent_rqs) = &node.sent_rqs {
+                    /*if let Some(sent_rqs) = &node.sent_rqs {
                         let bucket = &sent_rqs[req_key as usize % sent_rqs.len()];
 
                         if bucket.contains_key(&req_key) {
@@ -521,14 +525,14 @@ impl<D, NT> Client<D, NT>
                     } else {
                         error!("{:?} // Request {:?} of session {:?} was NOT SENT and timed OUT! Request key {}", node_id,
                     rq_id, session_id, get_request_key(session_id, rq_id));
-                    }
+                    }*/
                 } else {
-                    if let Some(sent_rqs) = &node.sent_rqs {
+                    /*if let Some(sent_rqs) = &node.sent_rqs {
                         //Cleanup
                         let bucket = &sent_rqs[req_key as usize % sent_rqs.len()];
 
                         bucket.remove(&req_key);
-                    }
+                    }*/
                 }
             }
         });

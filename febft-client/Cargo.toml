@@ -23,3 +23,4 @@ febft-execution = { path = "../febft-execution" }
 febft-common = { path = "../febft-common" }
 febft-messages = { path = "../febft-messages" }
 febft-pbft-consensus = { path = "../febft-pbft-consensus" }
+febft-metrics = {path = "../febft-metrics"}
