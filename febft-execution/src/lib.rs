@@ -2,6 +2,7 @@ use febft_common::channel::ChannelSyncTx;
 use febft_common::error::*;
 use febft_common::node_id::NodeId;
 use crate::app::{Reply, Request, Service, State, UnorderedBatch, UpdateBatch};
+use crate::serialize::SharedData;
 
 pub mod serialize;
 pub mod app;
@@ -24,30 +25,26 @@ pub enum ExecutionRequest<S, O> {
 }
 
 /// Represents a handle to the client request executor.
-pub struct ExecutorHandle<S: Service> {
-    e_tx: ChannelSyncTx<ExecutionRequest<State<S>, Request<S>>>,
+pub struct ExecutorHandle<D: SharedData> {
+    e_tx: ChannelSyncTx<ExecutionRequest<D::State, D::Request>>,
 }
 
-impl<S: Service> ExecutorHandle<S>
-    where
-        S: Service + Send + 'static,
-        Request<S>: Send + 'static,
-        Reply<S>: Send + 'static,
+impl<D: SharedData> ExecutorHandle<D>
 {
 
-    pub fn new(tx: ChannelSyncTx<ExecutionRequest<State<S>, Request<S>>>) -> Self {
+    pub fn new(tx: ChannelSyncTx<ExecutionRequest<D::State, D::Request>>) -> Self {
         ExecutorHandle { e_tx: tx }
     }
 
     /// Sets the current state of the execution layer to the given value.
-    pub fn install_state(&self, state: State<S>, after: Vec<Request<S>>) -> Result<()> {
+    pub fn install_state(&self, state: D::State, after: Vec<D::Request>) -> Result<()> {
         self.e_tx
             .send(ExecutionRequest::InstallState(state, after))
             .simple(ErrorKind::Executable)
     }
 
     /// Queues a batch of requests `batch` for execution.
-    pub fn queue_update(&self, batch: UpdateBatch<Request<S>>)
+    pub fn queue_update(&self, batch: UpdateBatch<D::Request>)
                         -> Result<()> {
         self.e_tx
             .send(ExecutionRequest::Update(batch))
@@ -55,7 +52,7 @@ impl<S: Service> ExecutorHandle<S>
     }
 
     /// Queues a batch of unordered requests for execution
-    pub fn queue_update_unordered(&self, requests: UnorderedBatch<Request<S>>)
+    pub fn queue_update_unordered(&self, requests: UnorderedBatch<D::Request>)
                                   -> Result<()> {
         self.e_tx
             .send(ExecutionRequest::ExecuteUnordered(requests))
@@ -68,7 +65,7 @@ impl<S: Service> ExecutorHandle<S>
     /// This is useful during local checkpoints.
     pub fn queue_update_and_get_appstate(
         &self,
-        batch: UpdateBatch<Request<S>>,
+        batch: UpdateBatch<D::Request>,
     ) -> Result<()> {
         self.e_tx
             .send(ExecutionRequest::UpdateAndGetAppstate(batch))
@@ -76,7 +73,7 @@ impl<S: Service> ExecutorHandle<S>
     }
 }
 
-impl<S: Service> Clone for ExecutorHandle<S> {
+impl<D: SharedData> Clone for ExecutorHandle<D> {
     fn clone(&self) -> Self {
         let e_tx = self.e_tx.clone();
         Self { e_tx }

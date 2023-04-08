@@ -13,6 +13,7 @@ use febft_communication::message::{NetworkMessage, NetworkMessageKind, StoredMes
 use febft_communication::Node;
 use febft_execution::app::{Request, Service, UnorderedBatch};
 use febft_execution::ExecutorHandle;
+use febft_execution::serialize::SharedData;
 use febft_messages::messages::{RequestMessage, SystemMessage};
 use crate::bft::consensus::ConsensusGuard;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, PBFTMessage};
@@ -24,19 +25,19 @@ use crate::bft::timeouts::{Timeouts};
 
 use super::sync::{Synchronizer, AbstractSynchronizer};
 
-pub type BatchType<S> = Vec<StoredMessage<RequestMessage<S>>>;
+pub type BatchType<R> = Vec<StoredMessage<RequestMessage<R>>>;
 
 ///Handles taking requests from the client pools and storing the requests in the log,
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
-pub struct Proposer<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> {
+pub struct Proposer<D: SharedData + 'static, NT: Node<PBFT<D>> + 'static> {
     node_ref: Arc<NT>,
 
-    synchronizer: Arc<Synchronizer<S>>,
+    synchronizer: Arc<Synchronizer<D>>,
     timeouts: Timeouts,
 
     /// The log of pending requests
-    pending_decision_log: Arc<PendingRequestLog<S>>,
+    pending_decision_log: Arc<PendingRequestLog<D>>,
 
     consensus_guard: ConsensusGuard,
     // Should we shut down?
@@ -49,7 +50,7 @@ pub struct Proposer<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> {
     max_batch_size: usize,
 
     //For unordered request execution
-    executor_handle: ExecutorHandle<S>,
+    executor_handle: ExecutorHandle<D>,
 
     //Observer related stuff
     observer_handle: ObserverHandle,
@@ -63,12 +64,12 @@ struct DebugStats {
     batches_made: u32,
 }
 
-struct ProposeStats<S> where S: Service {
-    currently_accumulated: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+struct ProposeStats<D> where D: SharedData {
+    currently_accumulated: Vec<StoredMessage<RequestMessage<D::Request>>>,
     last_proposal: Instant,
 }
 
-impl<S> ProposeStats<S> where S: Service {
+impl<D> ProposeStats<D> where D: SharedData {
     pub fn new(target_size: usize) -> Self {
         Self { currently_accumulated: Vec::with_capacity(target_size), last_proposal:Instant::now() }
     }
@@ -77,13 +78,13 @@ impl<S> ProposeStats<S> where S: Service {
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
 
-impl<S: Service + 'static,NT: Node<PBFT<S::Data>>> Proposer<S, NT> {
+impl<D: SharedData + 'static,NT: Node<PBFT<D>>> Proposer<D, NT> {
     pub fn new(
         node: Arc<NT>,
-        sync: Arc<Synchronizer<S>>,
-        pending_decision_log: Arc<PendingRequestLog<S>>,
+        sync: Arc<Synchronizer<D>>,
+        pending_decision_log: Arc<PendingRequestLog<D>>,
         timeouts: Timeouts,
-        executor_handle: ExecutorHandle<S>,
+        executor_handle: ExecutorHandle<D>,
         consensus_guard: ConsensusGuard,
         target_global_batch_size: usize,
         global_batch_time_limit: u128,
@@ -258,7 +259,7 @@ impl<S: Service + 'static,NT: Node<PBFT<S::Data>>> Proposer<S, NT> {
     /// Has not yet occurred
     fn propose_unordered(
         &self,
-        propose: &mut ProposeStats<S>,
+        propose: &mut ProposeStats<D>,
     ) {
         if !propose.currently_accumulated.is_empty() {
             let current_batch_size = propose.currently_accumulated.len();
@@ -323,7 +324,7 @@ impl<S: Service + 'static,NT: Node<PBFT<S::Data>>> Proposer<S, NT> {
     /// attempt to propose the ordered requests that we have collected
     fn propose_ordered(&self,
                        is_leader: bool,
-                       propose: &mut ProposeStats<S>,
+                       propose: &mut ProposeStats<D>,
                        last_seq: &mut Option<SeqNo>,
                        debug: &mut DebugStats) {
 
@@ -410,7 +411,7 @@ impl<S: Service + 'static,NT: Node<PBFT<S::Data>>> Proposer<S, NT> {
         &self,
         seq: SeqNo,
         view: &ViewInfo,
-        currently_accumulated: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+        currently_accumulated: Vec<StoredMessage<RequestMessage<D::Request>>>,
     ) {
         let message = PBFTMessage::Consensus(ConsensusMessage::new(
             seq,
@@ -431,6 +432,6 @@ impl<S: Service + 'static,NT: Node<PBFT<S::Data>>> Proposer<S, NT> {
     fn requests_received(
         &self,
         _t: DateTime<Utc>,
-        reqs: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+        reqs: Vec<StoredMessage<RequestMessage<D::Request>>>,
     ) {}
 }

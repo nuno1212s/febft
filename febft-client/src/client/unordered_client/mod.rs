@@ -78,27 +78,19 @@ impl<D, NT> Client<D, NT>
 
         let callback = Box::new(move |res| {
             let mut connecting_followers = client_data
-                .follower_data
-                .connecting_followers
-                .lock()
-                .unwrap();
+                .follower_data.connecting_followers.lock().unwrap();
 
             connecting_followers.remove(&node_id);
 
             if res {
                 let mut connected_followers = client_data
-                    .follower_data
-                    .connected_followers
-                    .lock()
-                    .unwrap();
+                    .follower_data.connected_followers.lock().unwrap();
 
                 connected_followers.insert(node_id);
             }
         });
 
-        self.node
-            .clone()
-            .node_connections().connect_to_node(node_id);
+        self.node.node_connections().connect_to_node(node_id);
 
         Ok(())
     }

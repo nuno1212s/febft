@@ -10,6 +10,7 @@ use febft_common::node_id::NodeId;
 use febft_communication::message::{Header, StoredMessage};
 use febft_execution::app::Service;
 use febft_execution::ExecutorHandle;
+use febft_execution::serialize::SharedData;
 use febft_messages::messages::RequestMessage;
 use crate::bft::message::ConsensusMessage;
 use crate::bft::msg_log::decided_log::DecidedLog;
@@ -48,24 +49,24 @@ pub enum Info {
 
 pub type ReadableConsensusMessage<O> = Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>;
 
-pub fn initialize_persistent_log<S, K, T>(executor: ExecutorHandle<S>, db_path: K)
-                                          -> Result<PersistentLog<S>>
-    where S: Service + 'static, K: AsRef<Path>, T: PersistentLogModeTrait {
+pub fn initialize_persistent_log<D, K, T>(executor: ExecutorHandle<D>, db_path: K)
+                                          -> Result<PersistentLog<D>>
+    where D: SharedData + 'static, K: AsRef<Path>, T: PersistentLogModeTrait {
     PersistentLog::init_log::<K, T>(executor, db_path)
 }
 
-pub fn initialize_decided_log<S: Service + 'static>(persistent_log: PersistentLog<S>) -> Result<DecidedLog<S>> {
+pub fn initialize_decided_log<D: SharedData + 'static>(persistent_log: PersistentLog<D>) -> Result<DecidedLog<D>> {
 
     Ok(DecidedLog::init_decided_log(persistent_log))
 
 }
 
-pub fn initialize_pending_request_log<S: Service + 'static>() -> Result<PendingRequestLog<S>> {
+pub fn initialize_pending_request_log<D: SharedData + 'static>() -> Result<PendingRequestLog<D>> {
     Ok(PendingRequestLog::new())
 }
 
 
-pub(crate) fn initialize_deciding_log<S: Service + 'static>(node_id: NodeId) -> Result<DecidingLog<S>> {
+pub(crate) fn initialize_deciding_log<D: SharedData + 'static>(node_id: NodeId) -> Result<DecidingLog<D>> {
     Ok(DecidingLog::new(node_id))
 
 }

@@ -125,7 +125,7 @@ impl<S, T, NT> Executor<S, T, NT>
         T: ExecutorReplier + 'static,
         NT: Node<PBFT<S::Data>> + 'static
 {
-    pub fn init_handle() -> (ExecutorHandle<S>, ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>) {
+    pub fn init_handle() -> (ExecutorHandle<S::Data>, ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>) {
         let (tx, rx) = channel::new_bounded_sync(EXECUTING_BUFFER);
 
         (ExecutorHandle::new(tx), rx)

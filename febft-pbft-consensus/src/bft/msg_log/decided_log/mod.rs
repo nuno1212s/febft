@@ -7,6 +7,7 @@ use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::StoredMessage;
 use febft_execution::app::{Request, Service, State, UpdateBatch};
+use febft_execution::serialize::SharedData;
 
 use crate::bft::cst::RecoveryState;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
@@ -16,7 +17,7 @@ use crate::bft::msg_log::deciding_log::CompletedBatch;
 use crate::bft::msg_log::persistent::{PersistentLog, WriteMode};
 use crate::bft::sync::view::ViewInfo;
 
-pub(crate) enum CheckpointState<S> {
+pub(crate) enum CheckpointState<D> {
     // no checkpoint has been performed yet
     None,
     // we are calling this a partial checkpoint because we are
@@ -29,15 +30,15 @@ pub(crate) enum CheckpointState<S> {
         // sequence number of the last executed request
         seq: SeqNo,
         // save the earlier checkpoint, in case corruption takes place
-        earlier: Arc<ReadOnly<Checkpoint<S>>>,
+        earlier: Arc<ReadOnly<Checkpoint<D>>>,
     },
     // application state received, the checkpoint state is finalized
-    Complete(Arc<ReadOnly<Checkpoint<S>>>),
+    Complete(Arc<ReadOnly<Checkpoint<D>>>),
 }
 
 /// The log of decisions that have already been processed by the consensus
 /// algorithm
-pub struct DecidedLog<S> where S: Service + 'static {
+pub struct DecidedLog<D> where D: SharedData + 'static {
     //This item will only be accessed by the replica request thread
     //The current stored SeqNo in the checkpoint state.
     //NOTE: THIS IS NOT THE CURR_SEQ NUMBER IN THE CONSENSUS
@@ -45,15 +46,15 @@ pub struct DecidedLog<S> where S: Service + 'static {
 
     //This will only be accessed by the replica processing thread since requests will only be
     //Decided by the consensus protocol, which operates completely in the replica thread
-    dec_log: DecisionLog<Request<S>>,
+    dec_log: DecisionLog<D::Request>,
 
     //The most recent checkpoint that we have.
     //Contains the app state and the last executed seq no on
     //That app state
-    checkpoint: CheckpointState<State<S>>,
+    checkpoint: CheckpointState<D::State>,
 
     // A handle to the persistent log
-    persistent_log: PersistentLog<S>,
+    persistent_log: PersistentLog<D>,
 }
 
 /// Execution data for the given batch
@@ -61,15 +62,15 @@ pub struct DecidedLog<S> where S: Service + 'static {
 /// Update Batch: All of the requests that should be executed, in the correct order
 /// Completed Batch: The information collected by the [DecidingLog], if applicable. (We can receive a batch
 /// via a complete proof which means this will be [None] or we can process a batch normally, which means
-/// this will be [Some(CompletedBatch<S>)])
-pub struct BatchExecutionInfo<S> where S: Service {
+/// this will be [Some(CompletedBatch<D>)])
+pub struct BatchExecutionInfo<D> where D: SharedData {
     info: Info,
-    update_batch: UpdateBatch<Request<S>>,
-    completed_batch: Option<CompletedBatch<S>>,
+    update_batch: UpdateBatch<D::Request>,
+    completed_batch: Option<CompletedBatch<D>>,
 }
 
-impl<S> DecidedLog<S> where S: Service + 'static {
-    pub(crate) fn init_decided_log(persistent_log: PersistentLog<S>) -> Self {
+impl<D> DecidedLog<D> where D: SharedData + 'static {
+    pub(crate) fn init_decided_log(persistent_log: PersistentLog<D>) -> Self {
 
         //TODO: Maybe read state from local storage?
 
@@ -84,18 +85,18 @@ impl<S> DecidedLog<S> where S: Service + 'static {
 
     /// Returns a reference to a subset of this log, containing only
     /// consensus messages.
-    pub fn decision_log(&self) -> &DecisionLog<Request<S>> {
+    pub fn decision_log(&self) -> &DecisionLog<D::Request> {
         &self.dec_log
     }
 
-    pub fn mut_decision_log(&mut self) -> &mut DecisionLog<Request<S>> {
+    pub fn mut_decision_log(&mut self) -> &mut DecisionLog<D::Request> {
         &mut self.dec_log
     }
 
     /// Read the current state, if existent, from the persistent storage
     ///
     /// FIXME: The view initialization might have to be changed if we want to introduce reconfiguration
-    pub fn read_current_state(&self, n: usize, f: usize) -> Result<Option<RecoveryState<State<S>, Request<S>>>> {
+    pub fn read_current_state(&self, n: usize, f: usize) -> Result<Option<RecoveryState<D::State, D::Request>>> {
         let option = self.persistent_log.read_state()?;
 
         if let Some(state) = option {
@@ -138,7 +139,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
     /// This method may fail if we are waiting for the latest application
     /// state to be returned by the execution layer.
     ///
-    pub fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<State<S>, Request<S>>> {
+    pub fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<D::State, D::Request>> {
         match &self.checkpoint {
             CheckpointState::Complete(checkpoint) => Ok(RecoveryState::new(
                 view,
@@ -157,7 +158,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
     /// This is mostly used for pre prepares as they contain all the requests and are therefore very expensive to send
     pub fn insert_consensus(
         &mut self,
-        consensus_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+        consensus_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
     ) {
         //These messages can only be sent by replicas, so the dec_log
         //Is only accessed by one thread.
@@ -184,7 +185,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
     /// This is done when we receive the final SYNC message from the leader
     /// which contains all of the collects
     /// If we are missing the request determined by the
-    pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<Request<S>>) -> Result<Option<BatchExecutionInfo<S>>> {
+    pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<D::Request>) -> Result<Option<BatchExecutionInfo<D>>> {
         let batch_execution_info = BatchExecutionInfo::from(&proof);
 
         if let Some(decision) = self.decision_log().last_decision() {
@@ -218,7 +219,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
     }
 
     /// Update the log state, received from the CST protocol.
-    pub fn install_state(&mut self, last_seq: SeqNo, rs: RecoveryState<State<S>, Request<S>>) {
+    pub fn install_state(&mut self, last_seq: SeqNo, rs: RecoveryState<D::State, D::Request>) {
 
         //Replace the log
         self.dec_log = rs.declog.clone();
@@ -256,7 +257,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
     /// This method should only be called when `finalize_request()` reports
     /// `Info::BeginCheckpoint`, and the requested application state is received
     /// on the core server task's master channel.
-    pub fn finalize_checkpoint(&mut self, final_seq: SeqNo, appstate: State<S>) -> Result<()> {
+    pub fn finalize_checkpoint(&mut self, final_seq: SeqNo, appstate: D::State) -> Result<()> {
         match &self.checkpoint {
             CheckpointState::None => {
                 Err("No checkpoint has been initiated yet").wrapped(ErrorKind::MsgLog)
@@ -358,7 +359,6 @@ impl<S> DecidedLog<S> where S: Service + 'static {
 
         self.persistent_log.write_proof_metadata(WriteMode::NonBlockingSync(None),
                                                  metadata).unwrap();
-
     }
 
     /// Finalize a batch of client requests decided on the consensus instance
@@ -374,8 +374,8 @@ impl<S> DecidedLog<S> where S: Service + 'static {
     pub fn finalize_batch(
         &mut self,
         seq: SeqNo,
-        completed_batch: CompletedBatch<S>,
-    ) -> Result<Option<BatchExecutionInfo<S>>> {
+        completed_batch: CompletedBatch<D>,
+    ) -> Result<Option<BatchExecutionInfo<D>>> {
         //println!("Finalized batch of OPS seq {:?} on Node {:?}", seq, self.node_id);
 
         let batch = {
@@ -390,7 +390,7 @@ impl<S> DecidedLog<S> where S: Service + 'static {
 
                 for (header, message) in reqs.into_iter()
                     .map(|x| x.into_inner()) {
-                    let _key = operation_key::<Request<S>>(&header, &message);
+                    let _key = operation_key::<D::Request>(&header, &message);
 
                     //TODO: Maybe make this run on separate thread?
                     // let seq_no = latest_op_guard
@@ -443,26 +443,26 @@ impl<S> DecidedLog<S> where S: Service + 'static {
     }
 }
 
-impl<S> BatchExecutionInfo<S> where S: Service {
+impl<D> BatchExecutionInfo<D> where D: SharedData {
     pub fn info(&self) -> &Info {
         &self.info
     }
-    pub fn update_batch(&self) -> &UpdateBatch<Request<S>> {
+    pub fn update_batch(&self) -> &UpdateBatch<D::Request> {
         &self.update_batch
     }
-    pub fn completed_batch(&self) -> &Option<CompletedBatch<S>> {
+    pub fn completed_batch(&self) -> &Option<CompletedBatch<D>> {
         &self.completed_batch
     }
 }
 
-impl<S> Into<(Info, UpdateBatch<Request<S>>, Option<CompletedBatch<S>>)> for BatchExecutionInfo<S> where S: Service {
-    fn into(self) -> (Info, UpdateBatch<Request<S>>, Option<CompletedBatch<S>>) {
+impl<D> Into<(Info, UpdateBatch<D::Request>, Option<CompletedBatch<D>>)> for BatchExecutionInfo<D> where D: SharedData {
+    fn into(self) -> (Info, UpdateBatch<D::Request>, Option<CompletedBatch<D>>) {
         (self.info, self.update_batch, self.completed_batch)
     }
 }
 
-impl<S> From<&Proof<Request<S>>> for BatchExecutionInfo<S> where S: Service {
-    fn from(value: &Proof<Request<S>>) -> Self {
+impl<D> From<&Proof<D::Request>> for BatchExecutionInfo<D> where D: SharedData {
+    fn from(value: &Proof<D::Request>) -> Self {
         let mut update_batch = UpdateBatch::new(value.seq_no());
 
         if !value.are_pre_prepares_ordered().unwrap() {

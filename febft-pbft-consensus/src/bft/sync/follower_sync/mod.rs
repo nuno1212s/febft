@@ -2,15 +2,16 @@ use std::{marker::PhantomData, sync::Arc};
 use febft_common::crypto::hash::Digest;
 use febft_communication::message::StoredMessage;
 use febft_execution::app::{Request, Service};
+use febft_execution::serialize::SharedData;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 
-pub struct FollowerSynchronizer<S: Service> {
-    _phantom: PhantomData<S>
+pub struct FollowerSynchronizer<D: SharedData> {
+    _phantom: PhantomData<D>
 }
 
-impl<S: Service + 'static> FollowerSynchronizer<S> {
+impl<D: SharedData + 'static> FollowerSynchronizer<D> {
 
     pub fn new() -> Self {
         Self { _phantom: Default::default() }
@@ -21,7 +22,7 @@ impl<S: Service + 'static> FollowerSynchronizer<S> {
     /// proposed, they won't timeout
     pub fn watch_request_batch(
         &self,
-        pre_prepare: &StoredMessage<ConsensusMessage<Request<S>>>,
+        pre_prepare: &StoredMessage<ConsensusMessage<D::Request>>,
     ) -> Vec<Digest> {
 
         let requests = match pre_prepare.message().kind() {

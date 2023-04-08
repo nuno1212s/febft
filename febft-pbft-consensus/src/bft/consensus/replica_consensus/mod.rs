@@ -22,6 +22,7 @@ use febft_communication::message::{NetworkMessageKind, SerializedMessage, Stored
 use febft_communication::{Node, NodePK, serialize};
 use febft_communication::serialize::Buf;
 use febft_execution::app::{Reply, Request, Service, State};
+use febft_execution::serialize::SharedData;
 use febft_messages::messages::{SystemMessage};
 use crate::bft::follower::{FollowerEvent, FollowerHandle};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage};
@@ -58,13 +59,13 @@ macro_rules! extract_msg {
 /// Contains the state of an active consensus instance, as well
 /// as future instances.
 /// Consists off consensus information that is only relevant if we are a replica, not a follower
-pub struct ReplicaConsensus<S: Service + 'static> {
+pub struct ReplicaConsensus<D: SharedData + 'static> {
     missing_requests: VecDeque<Digest>,
     missing_swapbuf: Vec<usize>,
-    speculative_commits: Arc<Mutex<BTreeMap<NodeId, StoredSerializedNetworkMessage<PBFT<S::Data>>>>>,
+    speculative_commits: Arc<Mutex<BTreeMap<NodeId, StoredSerializedNetworkMessage<PBFT<D>>>>>,
     consensus_guard: ConsensusGuard,
     observer_handle: ObserverHandle,
-    follower_handle: Option<FollowerHandle<S>>,
+    follower_handle: Option<FollowerHandle<D>>,
 }
 
 /// Preparing requests phase (This is no longer used, maybe remove it?)
@@ -73,15 +74,15 @@ pub(super) enum ReplicaPreparingPollStatus {
     MoveToPreparing,
 }
 
-impl<S: Service + 'static> ReplicaConsensus<S> {
+impl<D: SharedData + 'static> ReplicaConsensus<D> {
     pub(super) fn handle_pre_prepare_successful<NT>(
         &mut self,
         seq: SeqNo,
         current_digest: Digest,
         view: ViewInfo,
-        msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+        msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
         node: &NT,
-    ) where NT: Node<PBFT<S::Data>> {
+    ) where NT: Node<PBFT<D>> {
         let my_id = node.id();
         let view_seq = view.sequence_number();
         let _quorum = view.quorum_members().clone();
@@ -108,7 +109,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
             let mut buf = Vec::new();
 
             let digest = serialize::serialize_digest::<Vec<u8>,
-                PBFT<S::Data>>(&message, &mut buf).unwrap();
+                PBFT<D>>(&message, &mut buf).unwrap();
 
             let buf = Buf::from(buf);
 
@@ -179,10 +180,10 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
     pub(super) fn handle_preparing_no_quorum<NT>(
         &mut self,
         curr_view: ViewInfo,
-        preparing_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+        preparing_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
         _node: &NT,
     )
-        where NT: Node<PBFT<S::Data>>
+        where NT: Node<PBFT<D>>
     {
         if let Some(follower_handle) = &self.follower_handle {
             if let Err(err) = follower_handle.send(FollowerEvent::ReceivedConsensusMsg(
@@ -200,15 +201,15 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         seq: SeqNo,
         current_digest: Digest,
         curr_view: ViewInfo,
-        preparing_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-        log: &DecidingLog<S>,
+        preparing_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
+        log: &DecidingLog<D>,
         node: &NT,
-    ) where NT: Node<PBFT<S::Data>> {
+    ) where NT: Node<PBFT<D>> {
         let node_id = node.id();
 
         let speculative_commits = self.take_speculative_commits();
 
-        if valid_spec_commits::<S>(&speculative_commits, node_id, seq, &curr_view) {
+        if valid_spec_commits::<D>(&speculative_commits, node_id, seq, &curr_view) {
             for (_, msg) in speculative_commits.iter() {
                 debug!("{:?} // Broadcasting speculative commit message {:?} (total of {} messages) to {} targets",
                      node_id, msg.message().original(), speculative_commits.len(), curr_view.params().n());
@@ -256,7 +257,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
     pub(super) fn handle_committing_no_quorum(
         &mut self,
         curr_view: ViewInfo,
-        commit_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+        commit_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
     ) {
         //Notify followers of the received message
         if let Some(follower_handle) = &self.follower_handle {
@@ -272,7 +273,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         &mut self,
         current_seq: SeqNo,
         view_info: ViewInfo,
-        commit_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+        commit_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
     ) {
         //Notify follower of the received message
         if let Some(follower_handle) = &self.follower_handle {
@@ -321,7 +322,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
 
     pub(super) fn handle_finalize_view_change<T>(&mut self, synchronizer: &T)
         where
-            T: AbstractSynchronizer<S>,
+            T: AbstractSynchronizer<D>,
     {
         //Update the current view and seq numbers
 
@@ -337,7 +338,7 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
 
     pub(super) fn handle_poll_preparing_requests(
         &mut self,
-        log: &PendingRequestLog<S>,
+        log: &PendingRequestLog<D>,
     ) -> ReplicaPreparingPollStatus
     {
         let iterator = self
@@ -362,12 +363,12 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
     }
 }
 
-impl<S: Service + 'static> ReplicaConsensus<S> {
+impl<D: SharedData + 'static> ReplicaConsensus<D> {
     pub(super) fn new(
         view: ViewInfo,
         next_seq: SeqNo,
         observer_handle: ObserverHandle,
-        follower_handle: Option<FollowerHandle<S>>,
+        follower_handle: Option<FollowerHandle<D>>,
     ) -> Self {
         Self {
             missing_requests: VecDeque::new(),
@@ -386,24 +387,21 @@ impl<S: Service + 'static> ReplicaConsensus<S> {
         &self.consensus_guard
     }
 
-    fn take_speculative_commits(&self) -> BTreeMap<NodeId, StoredSerializedNetworkMessage<PBFT<S::Data>>> {
+    fn take_speculative_commits(&self) -> BTreeMap<NodeId, StoredSerializedNetworkMessage<PBFT<D>>> {
         let mut map = self.speculative_commits.lock().unwrap();
         std::mem::replace(&mut *map, BTreeMap::new())
     }
 }
 
 #[inline]
-fn valid_spec_commits<S>(
-    speculative_commits: &BTreeMap<NodeId, StoredSerializedNetworkMessage<PBFT<S::Data>>>,
+fn valid_spec_commits<D>(
+    speculative_commits: &BTreeMap<NodeId, StoredSerializedNetworkMessage<PBFT<D>>>,
     node_id: NodeId,
     seq_no: SeqNo,
     view: &ViewInfo,
 ) -> bool
     where
-        S: Service + Send + 'static,
-        State<S>: Send + Clone + 'static,
-        Request<S>: Send + Clone + 'static,
-        Reply<S>: Send + 'static,
+        D: SharedData + 'static
 {
     let len = speculative_commits.len();
 

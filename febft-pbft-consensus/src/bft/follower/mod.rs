@@ -4,18 +4,19 @@ use febft_common::channel::ChannelSyncTx;
 use febft_common::globals::ReadOnly;
 use febft_communication::message::StoredMessage;
 use febft_execution::app::{Request, Service};
+use febft_execution::serialize::SharedData;
 use crate::bft::message::{ConsensusMessage, ViewChangeMessage};
 use crate::bft::sync::view::ViewInfo;
 
 /// The message type of the channel
-pub type FollowerChannelMsg<S> = FollowerEvent<S>;
+pub type FollowerChannelMsg<D> = FollowerEvent<D>;
 
-pub enum FollowerEvent<S: Service> {
+pub enum FollowerEvent<D: SharedData> {
     ReceivedConsensusMsg(
         ViewInfo,
-        Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+        Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
     ),
-    ReceivedViewChangeMsg(Arc<ReadOnly<StoredMessage<ViewChangeMessage<Request<S>>>>>),
+    ReceivedViewChangeMsg(Arc<ReadOnly<StoredMessage<ViewChangeMessage<D::Request>>>>),
 }
 
 /// A handle to the follower handling thread
@@ -23,18 +24,18 @@ pub enum FollowerEvent<S: Service> {
 /// Allows us to pass the thread notifications on what is happening so it
 /// can handle the events properly
 #[derive(Clone)]
-pub struct FollowerHandle<S: Service> {
-    tx: ChannelSyncTx<FollowerChannelMsg<S>>,
+pub struct FollowerHandle<D: SharedData> {
+    tx: ChannelSyncTx<FollowerChannelMsg<D>>,
 }
 
-impl<S: Service> FollowerHandle<S> {
-    pub fn new(tx: ChannelSyncTx<FollowerChannelMsg<S>>) -> Self {
+impl<D: SharedData> FollowerHandle<D> {
+    pub fn new(tx: ChannelSyncTx<FollowerChannelMsg<D>>) -> Self {
         FollowerHandle { tx }
     }
 }
 
-impl<S: Service> Deref for FollowerHandle<S> {
-    type Target = ChannelSyncTx<FollowerChannelMsg<S>>;
+impl<D: SharedData> Deref for FollowerHandle<D> {
+    type Target = ChannelSyncTx<FollowerChannelMsg<D>>;
 
     fn deref(&self) -> &Self::Target {
         &self.tx

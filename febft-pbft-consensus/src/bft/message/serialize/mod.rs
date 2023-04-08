@@ -16,10 +16,13 @@ use crate::bft::msg_log::persistent::ProofInfo;
 #[cfg(feature = "serialize_serde")]
 use ::serde::{Deserialize, Serialize};
 use febft_common::crypto::hash::{Context, Digest};
+use febft_communication::Node;
 use febft_communication::serialize::Serializable;
+use febft_execution::app::Service;
 use febft_execution::serialize::SharedData;
-use febft_messages::serialize::OrderingProtocol;
+use febft_messages::serialize::OrderingProtocolMessage;
 use crate::bft::message::{ConsensusMessage, PBFTMessage};
+use crate::bft::{PBFT};
 
 #[cfg(feature = "serialize_capnp")]
 pub mod capnp;
@@ -61,8 +64,7 @@ pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
 /// The serializable type, to be used to appease the compiler and it's requirements
 pub struct PBFTConsensus<D: SharedData>(PhantomData<D>);
 
-impl<D> OrderingProtocol for PBFTConsensus<D> where D: SharedData {
-
+impl<D> OrderingProtocolMessage for PBFTConsensus<D> where D: SharedData {
     type ProtocolMessage = PBFTMessage<D::State, D::Request>;
 
     #[cfg(feature = "serialize_capnp")]

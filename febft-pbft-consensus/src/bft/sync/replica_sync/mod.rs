@@ -19,6 +19,7 @@ use febft_common::ordering::Orderable;
 use febft_communication::message::{NetworkMessageKind, StoredMessage, System};
 use febft_communication::{Node};
 use febft_execution::app::{Request, Service};
+use febft_execution::serialize::SharedData;
 use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
 
 use crate::bft::message::serialize::PBFTConsensus;
@@ -37,13 +38,13 @@ use super::{AbstractSynchronizer, Synchronizer, SynchronizerStatus, TimeoutPhase
 // - TboQueue for sync phase messages
 // This synchronizer will only move forward on replica messages
 
-pub struct ReplicaSynchronizer<S: Service> {
+pub struct ReplicaSynchronizer<D: SharedData> {
     timeout_dur: Cell<Duration>,
     watching: ConcurrentHashMap<Digest, TimeoutPhase>,
-    _phantom: PhantomData<S>,
+    _phantom: PhantomData<D>,
 }
 
-impl<S: Service + 'static> ReplicaSynchronizer<S> {
+impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     pub fn new(timeout_dur: Duration) -> Self {
         Self {
             timeout_dur: Cell::new(timeout_dur),
@@ -59,12 +60,12 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     ///
     /// Therefore, we start by clearing our stopped requests and treating them as
     /// newly proposed requests (by resetting their timer)
-    pub(super) fn handle_stopping_quorum<NT: Node<PBFT<S::Data>>>(
+    pub(super) fn handle_stopping_quorum<NT: Node<PBFT<D>>>(
         &self,
-        base_sync: &Synchronizer<S>,
+        base_sync: &Synchronizer<D>,
         previous_view: ViewInfo,
-        log: &DecidedLog<S>,
-        pending_rq_log: &PendingRequestLog<S>,
+        log: &DecidedLog<D>,
+        pending_rq_log: &PendingRequestLog<D>,
         timeouts: &Timeouts,
         node: &NT,
     ) {
@@ -97,12 +98,12 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     /// Start a new view change
     /// Receives the requests that it should send to the other
     /// nodes in its STOP message
-    pub(super) fn handle_begin_view_change<NT: Node<PBFT<S::Data>>>(
+    pub(super) fn handle_begin_view_change<NT: Node<PBFT<D>>>(
         &self,
-        base_sync: &Synchronizer<S>,
+        base_sync: &Synchronizer<D>,
         timeouts: &Timeouts,
         node: &NT,
-        timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
+        timed_out: Option<Vec<StoredMessage<RequestMessage<D::Request>>>>,
     ) {
         // stop all timers
         self.unwatch_all_requests(timeouts);
@@ -132,9 +133,9 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     ///
     pub fn watch_forwarded_requests(
         &self,
-        requests: ForwardedRequestsMessage<Request<S>>,
+        requests: ForwardedRequestsMessage<D::Request>,
         timeouts: &Timeouts,
-        log: &PendingRequestLog<S>,
+        log: &PendingRequestLog<D>,
     ) {
 
         let phase = TimeoutPhase::TimedOutOnce(Instant::now());
@@ -186,7 +187,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     /// proposed, they won't timeout
     pub fn received_request_batch(
         &self,
-        pre_prepare: &StoredMessage<ConsensusMessage<Request<S>>>,
+        pre_prepare: &StoredMessage<ConsensusMessage<D::Request>>,
         timeouts: &Timeouts,
     ) -> Vec<Digest> {
         let requests = match pre_prepare.message().kind() {
@@ -238,7 +239,7 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     }
 
     /// Register all of the requests that are missing from the view change
-    fn add_stopped_requests(&self, base_sync: &Synchronizer<S>, log: &PendingRequestLog<S>) {
+    fn add_stopped_requests(&self, base_sync: &Synchronizer<D>, log: &PendingRequestLog<D>) {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
 
@@ -376,12 +377,12 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
 
     /// Forward the requests that timed out, `timed_out`, to all the nodes in the
     /// current view.
-    pub fn forward_requests<NT: Node<PBFT<S::Data>>>(
+    pub fn forward_requests<NT: Node<PBFT<D>>>(
         &self,
-        base_sync: &Synchronizer<S>,
-        timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
+        base_sync: &Synchronizer<D>,
+        timed_out: Vec<StoredMessage<RequestMessage<D::Request>>>,
         node: &NT,
-        _log: &PendingRequestLog<S>,
+        _log: &PendingRequestLog<D>,
     ) {
         let message = SystemMessage::ForwardedRequestMessage(ForwardedRequestsMessage::new(timed_out));
         let targets = NodeId::targets(0..base_sync.view().params().n());
@@ -391,9 +392,9 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     /// Obtain the requests that we know have timed out
     fn stopped_requests(
         &self,
-        base_sync: &Synchronizer<S>,
-        requests: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
-    ) -> Vec<StoredMessage<RequestMessage<Request<S>>>> {
+        base_sync: &Synchronizer<D>,
+        requests: Option<Vec<StoredMessage<RequestMessage<D::Request>>>>,
+    ) -> Vec<StoredMessage<RequestMessage<D::Request>>> {
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
         let mut all_reqs = collections::hash_map();
 
@@ -418,8 +419,8 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
     }
 
     /// Drain our current received stopped messages
-    fn drain_stopped_request(&self, base_sync: &Synchronizer<S>) ->
-    Vec<StoredMessage<RequestMessage<Request<S>>>> {
+    fn drain_stopped_request(&self, base_sync: &Synchronizer<D>) ->
+    Vec<StoredMessage<RequestMessage<D::Request>>> {
 
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
         let mut all_reqs = collections::hash_map();
@@ -445,4 +446,4 @@ impl<S: Service + 'static> ReplicaSynchronizer<S> {
 /// So we protect collects, watching and tbo as those are the fields that are going to be
 /// accessed by both those threads.
 /// Since the other fields are going to be accessed by just 1 thread, we just need them to be Send, which they are
-unsafe impl<S: Service> Sync for ReplicaSynchronizer<S> {}
+unsafe impl<D: SharedData> Sync for ReplicaSynchronizer<D> {}

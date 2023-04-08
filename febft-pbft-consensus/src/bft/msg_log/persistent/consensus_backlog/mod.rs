@@ -9,6 +9,7 @@ use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_execution::app::Service;
 use febft_execution::ExecutorHandle;
+use febft_execution::serialize::SharedData;
 use crate::bft::msg_log::decided_log::BatchExecutionInfo;
 use crate::bft::msg_log::Info;
 use crate::bft::msg_log::persistent::{ResponseMessage, ResponseMsg};
@@ -16,34 +17,34 @@ use crate::bft::msg_log::persistent::{ResponseMessage, ResponseMsg};
 ///This is made to handle the backlog when the consensus is working faster than the persistent storage layer.
 /// It holds update batches that are yet to be executed since they are still waiting for the confirmation of the persistent log
 /// This is only needed (and only instantiated) when the persistency mode is strict
-pub struct ConsensusBacklog<S: Service> {
-    rx: ChannelSyncRx<BacklogMessage<S>>,
+pub struct ConsensusBacklog<D: SharedData> {
+    rx: ChannelSyncRx<BacklogMessage<D>>,
 
     //Receives messages from the persistent log
     logger_rx: ChannelSyncRx<ResponseMsg>,
 
     //The handle to the executor
-    executor_handle: ExecutorHandle<S>,
+    executor_handle: ExecutorHandle<D>,
 
     //This is the batch that is currently waiting for it's messages to be persisted
     //Even if we already persisted the consensus instance that came after it (for some reason)
     // We can only deliver it when all the previous ones have been delivered,
     // As it must be ordered
-    currently_waiting_for: Option<AwaitingPersistence<S>>,
+    currently_waiting_for: Option<AwaitingPersistence<D>>,
 
     //Message confirmations that we have already received but pertain to a further ahead consensus instance
     messages_received_ahead: BTreeMap<SeqNo, Vec<ResponseMessage>>,
 }
 
-type BacklogMessage<S> = BacklogMsg<S>;
+type BacklogMessage<D> = BacklogMsg<D>;
 
-enum BacklogMsg<S: Service> {
-    Batch(BatchExecutionInfo<S>),
-    Proof(BatchExecutionInfo<S>),
+enum BacklogMsg<D: SharedData> {
+    Batch(BatchExecutionInfo<D>),
+    Proof(BatchExecutionInfo<D>),
 }
 
-struct AwaitingPersistence<S: Service> {
-    info: BatchExecutionInfo<S>,
+struct AwaitingPersistence<D: SharedData> {
+    info: BatchExecutionInfo<D>,
     pending_rq: PendingRq,
 }
 
@@ -58,19 +59,19 @@ enum PendingRq {
 
 ///A detachable handle so we deliver work to the
 /// consensus back log thread
-pub struct ConsensusBackLogHandle<S: Service> {
-    rq_tx: ChannelSyncTx<BacklogMessage<S>>,
+pub struct ConsensusBackLogHandle<D: SharedData> {
+    rq_tx: ChannelSyncTx<BacklogMessage<D>>,
     logger_tx: ChannelSyncTx<ResponseMsg>,
 }
 
-impl<S: Service> ConsensusBackLogHandle<S> {
+impl<D: SharedData> ConsensusBackLogHandle<D> {
     pub fn logger_tx(&self) -> ChannelSyncTx<ResponseMsg> {
         self.logger_tx.clone()
     }
 
     /// Queue a normal processed batch, where we received all messages individually and persisted
     /// them individually
-    pub fn queue_batch(&self, batch: BatchExecutionInfo<S>) -> Result<()> {
+    pub fn queue_batch(&self, batch: BatchExecutionInfo<D>) -> Result<()> {
         if let Err(err) = self.rq_tx.send(BacklogMsg::Batch(batch)) {
             Err(Error::simple_with_msg(ErrorKind::MsgLogPersistent, format!("{:?}", err).as_str()))
         } else {
@@ -80,7 +81,7 @@ impl<S: Service> ConsensusBackLogHandle<S> {
 
     /// Queue a batch that we received via a proof and therefore only need to wait for the persistence
     /// of the entire proof, instead of the individual messages
-    pub fn queue_batch_proof(&self, batch: BatchExecutionInfo<S>) -> Result<()> {
+    pub fn queue_batch_proof(&self, batch: BatchExecutionInfo<D>) -> Result<()> {
         if let Err(err) = self.rq_tx.send(BacklogMsg::Proof(batch)) {
             Err(Error::simple_with_msg(ErrorKind::MsgLogPersistent, format!("{:?}", err).as_str()))
         } else {
@@ -89,7 +90,7 @@ impl<S: Service> ConsensusBackLogHandle<S> {
     }
 }
 
-impl<S: Service> Clone for ConsensusBackLogHandle<S> {
+impl<D: SharedData> Clone for ConsensusBackLogHandle<D> {
     fn clone(&self) -> Self {
         Self {
             rq_tx: self.rq_tx.clone(),
@@ -102,9 +103,9 @@ impl<S: Service> Clone for ConsensusBackLogHandle<S> {
 ///That can be waiting for messages
 const CHANNEL_SIZE: usize = 1024;
 
-impl<S: Service + 'static> ConsensusBacklog<S> {
+impl<D: SharedData + 'static> ConsensusBacklog<D> {
     ///Initialize the consensus backlog
-    pub fn init_backlog(executor: ExecutorHandle<S>) -> ConsensusBackLogHandle<S> {
+    pub fn init_backlog(executor: ExecutorHandle<D>) -> ConsensusBackLogHandle<D> {
         let (logger_tx, logger_rx) = channel::new_bounded_sync(CHANNEL_SIZE);
 
         let (batch_tx, batch_rx) = channel::new_bounded_sync(CHANNEL_SIZE);
@@ -197,7 +198,7 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
         }
     }
 
-    fn process_pending_messages_for_current(&mut self, awaiting: &mut AwaitingPersistence<S>) {
+    fn process_pending_messages_for_current(&mut self, awaiting: &mut AwaitingPersistence<D>) {
         let seq_num = awaiting.info().update_batch().sequence_number();
 
         //Remove the messages that we have already received
@@ -210,7 +211,7 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
         }
     }
 
-    fn dispatch_batch(&self, batch: BatchExecutionInfo<S>) {
+    fn dispatch_batch(&self, batch: BatchExecutionInfo<D>) {
         let (info, requests, batch) = batch.into();
 
         let checkpoint = match info {
@@ -233,7 +234,7 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
         }
     }
 
-    fn process_incoming_message(awaiting: &mut AwaitingPersistence<S>, msg: ResponseMessage) {
+    fn process_incoming_message(awaiting: &mut AwaitingPersistence<D>, msg: ResponseMessage) {
         let result = awaiting.handle_incoming_message(msg);
 
         match result {
@@ -249,9 +250,9 @@ impl<S: Service + 'static> ConsensusBacklog<S> {
     }
 }
 
-impl<S> From<BacklogMessage<S>> for AwaitingPersistence<S> where S: Service
+impl<D> From<BacklogMessage<D>> for AwaitingPersistence<D> where D: SharedData
 {
-    fn from(value: BacklogMessage<S>) -> Self {
+    fn from(value: BacklogMessage<D>) -> Self {
         let pending_rq = match &value {
             BacklogMsg::Batch(info) => {
                 // We can unwrap the completed batch as this was received here
@@ -272,14 +273,14 @@ impl<S> From<BacklogMessage<S>> for AwaitingPersistence<S> where S: Service
     }
 }
 
-impl<S> Into<BatchExecutionInfo<S>> for AwaitingPersistence<S> where S: Service {
-    fn into(self) -> BatchExecutionInfo<S> {
+impl<D> Into<BatchExecutionInfo<D>> for AwaitingPersistence<D> where D: SharedData {
+    fn into(self) -> BatchExecutionInfo<D> {
         self.info
     }
 }
 
-impl<S> Into<BatchExecutionInfo<S>> for BacklogMsg<S> where S: Service {
-    fn into(self) -> BatchExecutionInfo<S> {
+impl<D> Into<BatchExecutionInfo<D>> for BacklogMsg<D> where D: SharedData {
+    fn into(self) -> BatchExecutionInfo<D> {
         match self {
             BacklogMsg::Batch(info) => {
                 info
@@ -291,8 +292,8 @@ impl<S> Into<BatchExecutionInfo<S>> for BacklogMsg<S> where S: Service {
     }
 }
 
-impl<S> AwaitingPersistence<S> where S: Service {
-    pub fn info(&self) -> &BatchExecutionInfo<S> {
+impl<D> AwaitingPersistence<D> where D: SharedData {
+    pub fn info(&self) -> &BatchExecutionInfo<D> {
         &self.info
     }
 

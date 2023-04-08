@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 febft-common = {path = "../febft-common"}
 chrono = "0.4.24"
+influxdb = "0.6.0"

@@ -9,6 +9,7 @@ use febft_common::globals::ReadOnly;
 use febft_common::node_id::NodeId;
 use febft_communication::message::StoredMessage;
 use febft_execution::app::{Request, Service};
+use febft_execution::serialize::SharedData;
 use febft_metrics::benchmarks::BatchMeta;
 
 use crate::bft::message::ConsensusMessage;
@@ -23,7 +24,7 @@ use crate::bft::sync::view::ViewInfo;
 /// persisted.
 /// Basically some utility information about the current batch.
 /// The actual consensus messages are handled by the decided log
-pub struct DecidingLog<S> where S: Service {
+pub struct DecidingLog<D> where D: SharedData {
     node_id: NodeId,
 
     // The set of leaders that is currently in vigour for this consensus decision
@@ -39,7 +40,7 @@ pub struct DecidingLog<S> where S: Service {
     //ones that are still missing
     pre_prepare_ordering: Vec<Option<Digest>>,
     //Pre prepare messages that will then compose the entire pre prepare
-    pre_prepare_messages: Vec<Option<StoredConsensusMessage<Request<S>>>>,
+    pre_prepare_messages: Vec<Option<StoredConsensusMessage<D::Request>>>,
 
     // Received messages from these leaders
     received_leader_messages: BTreeSet<NodeId>,
@@ -62,19 +63,19 @@ pub struct DecidingLog<S> where S: Service {
 ///The type that composes a processed batch
 /// Contains the pre-prepare message and the Vec of messages that contains all messages
 /// to be persisted pertaining to this consensus instance
-pub type ProcessedBatch<S> = CompletedBatch<S>;
+pub type ProcessedBatch<D> = CompletedBatch<D>;
 
 /// A batch that has been decided by the consensus instance and is now ready to be delivered to the
 /// Executor for execution.
 /// Contains all of the necessary information for when we are using the strict persistency mode
-pub struct CompletedBatch<S> where S: Service {
+pub struct CompletedBatch<D> where D: SharedData {
     //The digest of the batch
     batch_digest: Digest,
 
     // The ordering of the pre prepares
     pre_prepare_ordering: Vec<Digest>,
     // The prepare message of the batch
-    pre_prepare_messages: Vec<StoredConsensusMessage<Request<S>>>,
+    pre_prepare_messages: Vec<StoredConsensusMessage<D::Request>>,
 
     //The amount of requests contained in this batch
     request_count: usize,
@@ -90,20 +91,20 @@ pub struct CompletedBatch<S> where S: Service {
 /// The complete batch digest, the order of the batch messages,
 /// the prepare messages,
 /// messages to persist, the meta of the batch
-pub type CompletedConsensus<S> = (Digest, Vec<Digest>, Vec<StoredConsensusMessage<Request<S>>>,
+pub type CompletedConsensus<D: SharedData> = (Digest, Vec<Digest>, Vec<StoredConsensusMessage<D::Request>>,
                                   Vec<Digest>, BatchMeta);
 
 /// Information about a full batch
 pub type FullBatch = (Digest, Vec<Digest>);
 
-impl<S> Into<CompletedConsensus<S>> for CompletedBatch<S> where S: Service {
-    fn into(self) -> CompletedConsensus<S> {
+impl<D> Into<CompletedConsensus<D>> for CompletedBatch<D> where D: SharedData {
+    fn into(self) -> CompletedConsensus<D> {
         (self.batch_digest, self.pre_prepare_ordering, self.pre_prepare_messages,
          self.messages_to_persist, self.batch_meta)
     }
 }
 
-impl<S> DecidingLog<S> where S: Service {
+impl<D> DecidingLog<D> where D: SharedData {
     pub fn new(node_id: NodeId) -> Self {
         Self
         {
@@ -147,7 +148,7 @@ impl<S> DecidingLog<S> where S: Service {
 
     ///Inform the log that we are now processing a new batch of operations
     pub fn processing_batch_request(&mut self,
-                                    request_batch: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+                                    request_batch: Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
                                     digest: Digest,
                                     mut batch_rq_digests: Vec<Digest>) -> Result<Option<FullBatch>> {
         let sending_leader = request_batch.header().from();
@@ -235,7 +236,7 @@ impl<S> DecidingLog<S> where S: Service {
 
     /// Indicate that the batch is finished processing and
     /// return the relevant information for it
-    pub fn finish_processing_batch(&mut self) -> Option<ProcessedBatch<S>> {
+    pub fn finish_processing_batch(&mut self) -> Option<ProcessedBatch<D>> {
         let pre_prepare_ordering = std::mem::replace(&mut self.pre_prepare_ordering,
                                                      Vec::new())
             .into_iter().map(|x| x.unwrap()).collect();
@@ -316,7 +317,7 @@ impl<S> DecidingLog<S> where S: Service {
         &self.pre_prepare_ordering
     }
 
-    pub fn pre_prepare_messages(&self) -> &Vec<Option<StoredConsensusMessage<Request<S>>>> {
+    pub fn pre_prepare_messages(&self) -> &Vec<Option<StoredConsensusMessage<D::Request>>> {
         &self.pre_prepare_messages
     }
 
@@ -325,14 +326,14 @@ impl<S> DecidingLog<S> where S: Service {
     }
 }
 
-impl<S> CompletedBatch<S> where S: Service {
+impl<D> CompletedBatch<D> where D: SharedData {
     pub fn batch_digest(&self) -> Digest {
         self.batch_digest
     }
     pub fn pre_prepare_ordering(&self) -> &Vec<Digest> {
         &self.pre_prepare_ordering
     }
-    pub fn pre_prepare_messages(&self) -> &Vec<StoredConsensusMessage<Request<S>>> {
+    pub fn pre_prepare_messages(&self) -> &Vec<StoredConsensusMessage<D::Request>> {
         &self.pre_prepare_messages
     }
 

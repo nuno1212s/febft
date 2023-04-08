@@ -24,13 +24,13 @@ struct FollowersFollowing<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'stati
     own_id: NodeId,
     followers: Vec<NodeId>,
     send_node: Arc<NT>,
-    rx: ChannelSyncRx<FollowerChannelMsg<S>>,
+    rx: ChannelSyncRx<FollowerChannelMsg<S::Data>>,
 }
 
 impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> FollowersFollowing<S, NT> {
     /// Starts the follower handling thread and returns a cloneable handle that
     /// can be used to deliver messages to it.
-    pub fn init_follower_handling(id: NodeId, node: &Arc<NT>) -> FollowerHandle<S> {
+    pub fn init_follower_handling(id: NodeId, node: &Arc<NT>) -> FollowerHandle<S::Data> {
         let (tx, rx) = channel::new_bounded_sync(1024);
 
         let follower_handling = Self {

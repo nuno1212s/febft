@@ -6,15 +6,16 @@ use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, StoredMessage};
 use febft_execution::app::{Request, Service};
+use febft_execution::serialize::SharedData;
 use febft_messages::messages::RequestMessage;
 use crate::bft::msg_log::operation_key;
 
 /// The log for requests that have been received but not yet decided by the system
-pub struct PendingRequestLog<S> where S: Service {
+pub struct PendingRequestLog<D> where D: SharedData {
     //This item will be accessed from both the client request thread and the
     //Replica request thread
     //This stores client requests that have not yet been put into a batch
-    pending_requests: ConcurrentHashMap<Digest, Arc<ReadOnly<StoredMessage<RequestMessage<Request<S>>>>>>,
+    pending_requests: ConcurrentHashMap<Digest, Arc<ReadOnly<StoredMessage<RequestMessage<D::Request>>>>>,
 
     //This item will also be accessed from both the client request thread and the
     //replica request thread. However the client request thread will always only read
@@ -23,7 +24,7 @@ pub struct PendingRequestLog<S> where S: Service {
 }
 
 
-impl<S> PendingRequestLog<S> where S: Service {
+impl<D> PendingRequestLog<D> where D: SharedData {
 
     pub(super) fn new() -> Self {
         Self {
@@ -33,8 +34,8 @@ impl<S> PendingRequestLog<S> where S: Service {
     }
 
     /// Insert a client message into the log
-    pub fn insert(&self, header: Header, message: RequestMessage<Request<S>>) {
-        let key = operation_key::<Request<S>>(&header, &message);
+    pub fn insert(&self, header: Header, message: RequestMessage<D::Request>) {
+        let key = operation_key::<D::Request>(&header, &message);
 
         let seq_no = {
             let latest_op_guard = self.latest_op.lock().unwrap();
@@ -54,15 +55,15 @@ impl<S> PendingRequestLog<S> where S: Service {
     }
 
     /// Insert a batch of requests
-    pub fn insert_batch(&self, messages: Vec<(Header, RequestMessage<Request<S>>)>) {
+    pub fn insert_batch(&self, messages: Vec<(Header, RequestMessage<D::Request>)>) {
         for (header, message) in messages {
             self.insert(header, message);
         }
     }
 
-    pub fn has_received_more_recent(&self,header:& Header, message: &RequestMessage<Request<S>>) -> bool {
+    pub fn has_received_more_recent(&self,header:& Header, message: &RequestMessage<D::Request>) -> bool {
 
-        let key = operation_key::<Request<S>>(header, message);
+        let key = operation_key::<D::Request>(header, message);
 
         let seq_no = {
             let latest_op_guard = self.latest_op.lock().unwrap();
@@ -74,7 +75,7 @@ impl<S> PendingRequestLog<S> where S: Service {
     }
 
     /// Retrieves a batch of requests to be proposed during a view change.
-    pub fn view_change_propose(&self) -> Vec<StoredMessage<RequestMessage<Request<S>>>> {
+    pub fn view_change_propose(&self) -> Vec<StoredMessage<RequestMessage<D::Request>>> {
         let mut pending_messages = Vec::with_capacity(self.pending_requests.len());
 
         self.pending_requests.iter().for_each(|multi_ref| {
@@ -95,7 +96,7 @@ impl<S> PendingRequestLog<S> where S: Service {
     pub fn clone_pending_requests(
         &self,
         digests: &[Digest],
-    ) -> Vec<StoredMessage<RequestMessage<Request<S>>>> {
+    ) -> Vec<StoredMessage<RequestMessage<D::Request>>> {
         digests
             .iter()
             .flat_map(|d| self.pending_requests.get(d))

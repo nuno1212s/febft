@@ -65,13 +65,13 @@ pub struct Replica<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> {
     // The timeout layer, handles timing out requests
     timeouts: Timeouts,
     // The handle to the executor
-    executor: ExecutorHandle<S>,
+    executor: ExecutorHandle<S::Data>,
     // Consensus state transfer State machine
-    cst: CollabStateTransfer<S>,
+    cst: CollabStateTransfer<S::Data>,
     // Synchronizer state machine
-    synchronizer: Arc<Synchronizer<S>>,
+    synchronizer: Arc<Synchronizer<S::Data>>,
     //Consensus state machine
-    consensus: Consensus<S>,
+    consensus: Consensus<S::Data>,
     //The guard for the consensus.
     //Set to true when there is a consensus running, false when it's ready to receive
     //A new pre-prepare message
@@ -82,13 +82,13 @@ pub struct Replica<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> {
 
     // The pending request log. Handles requests received by this replica
     // Or forwarded by others that have not yet made it into a consensus instance
-    pending_request_log: Arc<PendingRequestLog<S>>,
+    pending_request_log: Arc<PendingRequestLog<S::Data>>,
     // The log of the decided consensus messages
     // This is completely owned by the server thread and therefore does not
     // Require any synchronization
-    decided_log: DecidedLog<S>,
+    decided_log: DecidedLog<S::Data>,
     // The proposer of this replica
-    proposer: Arc<Proposer<S, NT>>,
+    proposer: Arc<Proposer<S::Data, NT>>,
     // The networking layer for a Node in the network (either Client or Replica)
     node: Arc<NT>,
     // THe handle to the execution and timeouts handler
@@ -167,7 +167,7 @@ impl<S, NT> Replica<S, NT>
         let (executor, handle) = Executor::<S, ReplicaReplier, NT>::init_handle();
 
         debug!("Initializing log");
-        let persistent_log = msg_log::initialize_persistent_log::<S, String, T>(executor.clone(), db_path)?;
+        let persistent_log = msg_log::initialize_persistent_log::<S::Data, String, T>(executor.clone(), db_path)?;
 
         let mut decided_log = msg_log::initialize_decided_log(persistent_log.clone())?;
 

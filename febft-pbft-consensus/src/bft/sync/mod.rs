@@ -22,6 +22,7 @@ use febft_communication::message::{Header, NetworkMessageKind, StoredMessage, Sy
 use febft_communication::{Node, NodePK, serialize};
 use febft_communication::serialize::Buf;
 use febft_execution::app::{Reply, Request, Service, State};
+use febft_execution::serialize::SharedData;
 use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
 use crate::bft::consensus::Consensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
@@ -335,7 +336,7 @@ pub enum SynchronizerPollStatus<O> {
 }
 
 ///A trait describing some of the necessary methods for the synchronizer
-pub trait AbstractSynchronizer<S: Service + 'static> {
+pub trait AbstractSynchronizer<D: SharedData + 'static> {
     /// Returns information regarding the current view, such as
     /// the number of faulty replicas the system can tolerate.
     fn view(&self) -> ViewInfo;
@@ -344,26 +345,26 @@ pub trait AbstractSynchronizer<S: Service + 'static> {
     /// running the view change protocol.
     fn install_view(&self, view: ViewInfo);
 
-    fn queue(&self, header: Header, message: ViewChangeMessage<Request<S>>);
+    fn queue(&self, header: Header, message: ViewChangeMessage<D::Request>);
 }
 
-type CollectsType<S> = IntMap<StoredMessage<ViewChangeMessage<Request<S>>>>;
+type CollectsType<D: SharedData> = IntMap<StoredMessage<ViewChangeMessage<D::Request>>>;
 
 ///The synchronizer for the SMR protocol
 /// This part of the protocol is responsible for handling the changing of views and
 /// for keeping track of any timed out client requests
-pub struct Synchronizer<S: Service> {
+pub struct Synchronizer<D: SharedData> {
     phase: RefCell<ProtoPhase>,
     //Tbo queue, keeps track of the current view and keeps messages arriving in order
-    tbo: Mutex<TboQueue<Request<S>>>,
+    tbo: Mutex<TboQueue<D::Request>>,
     //Stores currently received requests from other nodes
-    stopped: RefCell<IntMap<Vec<StoredMessage<RequestMessage<Request<S>>>>>>,
+    stopped: RefCell<IntMap<Vec<StoredMessage<RequestMessage<D::Request>>>>>,
     //TODO: This does not require a Mutex I believe since it's only accessed when
     // Processing messages (which is always done in the replica thread)
-    collects: Mutex<CollectsType<S>>,
+    collects: Mutex<CollectsType<D>>,
     // Used to store the finalize state when we are forced to run the CST protocol
-    finalize_state: RefCell<Option<FinalizeState<Request<S>>>>,
-    accessory: SynchronizerAccessory<S>,
+    finalize_state: RefCell<Option<FinalizeState<D::Request>>>,
+    accessory: SynchronizerAccessory<D>,
 }
 
 ///Justification/Sort of correction proof:
@@ -372,9 +373,9 @@ pub struct Synchronizer<S: Service> {
 /// So we protect collects, watching and tbo as those are the fields that are going to be
 /// accessed by both those threads.
 /// Since the other fields are going to be accessed by just 1 thread, we just need them to be Send, which they are
-unsafe impl<S: Service> Sync for Synchronizer<S> {}
+unsafe impl<D: SharedData> Sync for Synchronizer<D> {}
 
-impl<S: Service + 'static> AbstractSynchronizer<S> for Synchronizer<S> {
+impl<D: SharedData + 'static> AbstractSynchronizer<D> for Synchronizer<D> {
     /// Returns some information regarding the current view, such as
     /// the number of faulty replicas the system can tolerate.
     fn view(&self) -> ViewInfo {
@@ -391,17 +392,14 @@ impl<S: Service + 'static> AbstractSynchronizer<S> for Synchronizer<S> {
         guard.install_view(view);
     }
 
-    fn queue(&self, header: Header, message: ViewChangeMessage<Request<S>>) {
+    fn queue(&self, header: Header, message: ViewChangeMessage<D::Request>) {
         self.tbo.lock().unwrap().queue(header, message)
     }
 }
 
-impl<S> Synchronizer<S>
+impl<D> Synchronizer<D>
     where
-        S: Service + Send + 'static,
-        State<S>: Send + Clone + 'static,
-        Request<S>: Send + Clone + 'static,
-        Reply<S>: Send + 'static,
+        D: SharedData + 'static
 {
     pub fn new_follower(view: ViewInfo) -> Arc<Self> {
         Arc::new(Self {
@@ -442,32 +440,32 @@ impl<S> Synchronizer<S>
     /// Check if we can process new view change messages.
     /// If there are pending messages that are now processable (but weren't when we received them)
     /// We return them. If there are no pending messages then we will wait for new messages from other replicas
-    pub fn poll(&self) -> SynchronizerPollStatus<Request<S>> {
+    pub fn poll(&self) -> SynchronizerPollStatus<D::Request> {
         let mut tbo_guard = self.tbo.lock().unwrap();
         match *self.phase.borrow() {
             _ if !tbo_guard.get_queue => SynchronizerPollStatus::Recv,
             ProtoPhase::Init => {
                 //If we are
-                extract_msg!(Request<S> =>
+                extract_msg!(D::Request =>
                     { self.phase.replace(ProtoPhase::Stopping(0)); },
                     &mut tbo_guard.get_queue,
                     &mut tbo_guard.stop
                 )
             }
             ProtoPhase::Stopping(_) | ProtoPhase::Stopping2(_) => {
-                extract_msg!(Request<S> =>
+                extract_msg!(D::Request =>
                     &mut tbo_guard.get_queue,
                     &mut tbo_guard.stop
                 )
             }
             ProtoPhase::StoppingData(_) => {
-                extract_msg!(Request<S> =>
+                extract_msg!(D::Request  =>
                     &mut tbo_guard.get_queue,
                     &mut tbo_guard.stop_data
                 )
             }
             ProtoPhase::Syncing => {
-                extract_msg!(Request<S> =>
+                extract_msg!(D::Request  =>
                     &mut tbo_guard.get_queue,
                     &mut tbo_guard.sync
                 )
@@ -479,14 +477,14 @@ impl<S> Synchronizer<S>
     /// Advances the state of the view change state machine.
     //
     // TODO: retransmit STOP msgs
-    pub fn process_message<NT: Node<PBFT<S::Data>>>(
+    pub fn process_message<NT: Node<PBFT<D>>>(
         &self,
         header: Header,
-        message: ViewChangeMessage<Request<S>>,
+        message: ViewChangeMessage<D::Request>,
         timeouts: &Timeouts,
-        log: &mut DecidedLog<S>,
-        pending_rq_log: &PendingRequestLog<S>,
-        consensus: &mut Consensus<S>,
+        log: &mut DecidedLog<D>,
+        pending_rq_log: &PendingRequestLog<D>,
+        consensus: &mut Consensus<D>,
         node: &NT,
     ) -> SynchronizerStatus
     {
@@ -718,7 +716,7 @@ impl<S> Synchronizer<S>
                             //Here we use the normalized_collects method, which uses data from self.collects
                             //Which is protected by a mutex. Therefore, we must carry the consensus guard along
                             //While we access the normalized collects to prevent any errors.
-                            let normalized_collects: Vec<Option<&CollectData<Request<S>>>> =
+                            let normalized_collects: Vec<Option<&CollectData<D::Request>>> =
                                 Self::normalized_collects(&*collects_guard, curr_cid).collect();
 
                             let sound = sound(&current_view, &normalized_collects);
@@ -745,7 +743,7 @@ impl<S> Synchronizer<S>
 
                                 let forged_pre_prepare = NetworkMessageKind::from(consensus.forge_propose(p.clone(), self));
 
-                                let digest = serialize::serialize_digest::<Vec<u8>, PBFT<S::Data>>(
+                                let digest = serialize::serialize_digest::<Vec<u8>, PBFT<D>>(
                                     &forged_pre_prepare,
                                     &mut buf,
                                 ).unwrap();
@@ -865,9 +863,9 @@ impl<S> Synchronizer<S>
 
                 // leader has already performed this computation in the
                 // STOP-DATA phase of Mod-SMaRt
-                let signed: Vec<_> = signed_collects::<S, _>(node, collects);
+                let signed: Vec<_> = signed_collects::<D, _>(node, collects);
 
-                let proof = highest_proof::<S, _, _>(&current_view, node, signed.iter());
+                let proof = highest_proof::<D, _, _>(&current_view, node, signed.iter());
 
                 let curr_cid = proof
                     .map(|p| p.sequence_number())
@@ -913,11 +911,11 @@ impl<S> Synchronizer<S>
     }
 
     /// Resume the view change protocol after running the CST protocol.
-    pub fn resume_view_change<NT: Node<PBFT<S::Data>>>(
+    pub fn resume_view_change<NT: Node<PBFT<D>>>(
         &self,
-        log: &mut DecidedLog<S>,
+        log: &mut DecidedLog<D>,
         timeouts: &Timeouts,
-        consensus: &mut Consensus<S>,
+        consensus: &mut Consensus<D>,
         node: &NT,
     ) -> Option<()>
     {
@@ -946,12 +944,12 @@ impl<S> Synchronizer<S>
     /// that have timed out on the current replica.
     /// If the timed out requests are None, that means that the view change
     /// originated in the other replicas.
-    pub fn begin_view_change<NT: Node<PBFT<S::Data>>>(
+    pub fn begin_view_change<NT: Node<PBFT<D>>>(
         &self,
-        timed_out: Option<Vec<StoredMessage<RequestMessage<Request<S>>>>>,
+        timed_out: Option<Vec<StoredMessage<RequestMessage<D::Request>>>>,
         node: &NT,
         timeouts: &Timeouts,
-        _log: &DecidedLog<S>,
+        _log: &DecidedLog<D>,
     )
     {
         match (&*self.phase.borrow(), &timed_out) {
@@ -995,11 +993,11 @@ impl<S> Synchronizer<S>
     // values with immutable references, to allow borrowing data mutably
     fn pre_finalize(
         &self,
-        state: FinalizeState<Request<S>>,
-        _proof: Option<&Proof<Request<S>>>,
-        _normalized_collects: Vec<Option<&CollectData<Request<S>>>>,
-        log: &DecidedLog<S>,
-    ) -> FinalizeStatus<Request<S>>
+        state: FinalizeState<D::Request>,
+        _proof: Option<&Proof<D::Request>>,
+        _normalized_collects: Vec<Option<&CollectData<D::Request>>>,
+        log: &DecidedLog<D>,
+    ) -> FinalizeStatus<D::Request>
     {
         //If we are more than one operation behind the most recent consensus id,
         //Then we must run a consensus state transfer
@@ -1023,12 +1021,12 @@ impl<S> Synchronizer<S>
 
     /// Finalize a view change and install the new view in the other
     /// state machines (Consensus)
-    fn finalize<NT: Node<PBFT<S::Data>>>(
+    fn finalize<NT: Node<PBFT<D>>>(
         &self,
-        state: FinalizeState<Request<S>>,
-        log: &mut DecidedLog<S>,
+        state: FinalizeState<D::Request>,
+        log: &mut DecidedLog<D>,
         timeouts: &Timeouts,
-        consensus: &mut Consensus<S>,
+        consensus: &mut Consensus<D>,
         node: &NT,
     ) -> SynchronizerStatus
     {
@@ -1081,7 +1079,7 @@ impl<S> Synchronizer<S>
     /// proposed, they won't timeout
     pub fn request_batch_received(
         &self,
-        pre_prepare: &StoredMessage<ConsensusMessage<Request<S>>>,
+        pre_prepare: &StoredMessage<ConsensusMessage<D::Request>>,
         timeouts: &Timeouts,
     ) -> Vec<Digest>
     {
@@ -1096,9 +1094,9 @@ impl<S> Synchronizer<S>
     /// Watch requests that have been forwarded to us
     pub fn watch_forwarded_requests(
         &self,
-        requests: ForwardedRequestsMessage<Request<S>>,
+        requests: ForwardedRequestsMessage<D::Request>,
         timeouts: &Timeouts,
-        log: &PendingRequestLog<S>,
+        log: &PendingRequestLog<D>,
     )
     {
         match &self.accessory {
@@ -1132,10 +1130,10 @@ impl<S> Synchronizer<S>
     /// Forward the requests that have timed out to the whole network
     /// So that everyone knows about (including a leader that could still be correct, but
     /// Has not received the requests from the client)
-    pub fn forward_requests<NT: Node<PBFT<S::Data>>>(&self,
-                                                     timed_out: Vec<StoredMessage<RequestMessage<Request<S>>>>,
-                                                     node: &NT,
-                                                     log: &PendingRequestLog<S>) {
+    pub fn forward_requests<NT: Node<PBFT<D>>>(&self,
+                                               timed_out: Vec<StoredMessage<RequestMessage<D::Request>>>,
+                                               node: &NT,
+                                               log: &PendingRequestLog<D>) {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {}
             SynchronizerAccessory::Replica(rep) => {
@@ -1166,9 +1164,9 @@ impl<S> Synchronizer<S>
     // may be executing the same CID when there is a leader change
     #[inline]
     fn normalized_collects<'a>(
-        collects: &'a IntMap<StoredMessage<ViewChangeMessage<Request<S>>>>,
+        collects: &'a IntMap<StoredMessage<ViewChangeMessage<D::Request>>>,
         in_exec: SeqNo,
-    ) -> impl Iterator<Item=Option<&'a CollectData<Request<S>>>> {
+    ) -> impl Iterator<Item=Option<&'a CollectData<D::Request>>> {
         let values = collects.values();
 
         let collects = normalized_collects(in_exec, collect_data(values));
@@ -1178,20 +1176,20 @@ impl<S> Synchronizer<S>
 
     // TODO: quorum sizes may differ when we implement reconfiguration
     #[inline]
-    fn highest_proof<'a, NT: Node<PBFT<S::Data>>>(
-        guard: &'a IntMap<StoredMessage<ViewChangeMessage<Request<S>>>>,
+    fn highest_proof<'a, NT: Node<PBFT<D>>>(
+        guard: &'a IntMap<StoredMessage<ViewChangeMessage<D::Request>>>,
         view: &ViewInfo,
         node: &NT,
-    ) -> Option<&'a Proof<Request<S>>> {
-        highest_proof::<S, _, _>(&view, node, guard.values())
+    ) -> Option<&'a Proof<D::Request>> {
+        highest_proof::<D, _, _>(&view, node, guard.values())
     }
 }
 
 ///The accessory services that complement the base follower state machine
 /// This allows us to maximize code re usage and therefore reduce the amount of failure places
-pub enum SynchronizerAccessory<S: Service> {
-    Follower(FollowerSynchronizer<S>),
-    Replica(ReplicaSynchronizer<S>),
+pub enum SynchronizerAccessory<D: SharedData> {
+    Follower(FollowerSynchronizer<D>),
+    Replica(ReplicaSynchronizer<D>),
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1385,30 +1383,24 @@ fn normalized_collects<'a, O: 'a>(
     })
 }
 
-fn signed_collects<S, NT>(
+fn signed_collects<D, NT>(
     node: &NT,
-    collects: Vec<StoredMessage<ViewChangeMessage<Request<S>>>>,
-) -> Vec<StoredMessage<ViewChangeMessage<Request<S>>>>
+    collects: Vec<StoredMessage<ViewChangeMessage<D::Request>>>,
+) -> Vec<StoredMessage<ViewChangeMessage<D::Request>>>
     where
-        S: Service + Send + 'static,
-        State<S>: Send + Clone + 'static,
-        Request<S>: Send + Clone + 'static,
-        Reply<S>: Send + 'static,
-        NT: Node<PBFT<S::Data>>
+        D: SharedData + 'static,
+        NT: Node<PBFT<D>>
 {
     collects
         .into_iter()
-        .filter(|stored| validate_signature::<S, _, _>(node, stored))
+        .filter(|stored| validate_signature::<D, _, _>(node, stored))
         .collect()
 }
 
-fn validate_signature<'a, S, M, NT>(node: &'a NT, stored: &'a StoredMessage<M>) -> bool
+fn validate_signature<'a, D, M, NT>(node: &'a NT, stored: &'a StoredMessage<M>) -> bool
     where
-        S: Service + Send + 'static,
-        State<S>: Send + Clone + 'static,
-        Request<S>: Send + Clone + 'static,
-        Reply<S>: Send + 'static,
-        NT: Node<PBFT<S::Data>>
+        D: SharedData + 'static,
+        NT: Node<PBFT<D>>
 {
 
     //TODO: Fix this as I believe it will always be false
@@ -1427,18 +1419,15 @@ fn validate_signature<'a, S, M, NT>(node: &'a NT, stored: &'a StoredMessage<M>) 
     wm.is_valid(Some(&key))
 }
 
-fn highest_proof<'a, S, I, NT>(
+fn highest_proof<'a, D, I, NT>(
     view: &ViewInfo,
     node: &NT,
     collects: I,
-) -> Option<&'a Proof<Request<S>>>
+) -> Option<&'a Proof<D::Request>>
     where
-        I: Iterator<Item=&'a StoredMessage<ViewChangeMessage<Request<S>>>>,
-        S: Service + Send + 'static,
-        State<S>: Send + Clone + 'static,
-        Request<S>: Send + Clone + 'static,
-        Reply<S>: Send + 'static,
-        NT: Node<PBFT<S::Data>>
+        D: SharedData + 'static,
+        I: Iterator<Item=&'a StoredMessage<ViewChangeMessage<D::Request>>>,
+        NT: Node<PBFT<D>>
 {
     collect_data(collects)
         // fetch proofs
@@ -1459,7 +1448,7 @@ fn highest_proof<'a, S, I, NT>(
                         .unwrap_or(false)
                 })
                 .filter(move |&stored|
-                    { validate_signature::<S, _, _>(node, stored) })
+                    { validate_signature::<D, _, _>(node, stored) })
                 .count() >= view.params().quorum();
 
             let prepares_valid = proof
@@ -1473,7 +1462,7 @@ fn highest_proof<'a, S, I, NT>(
                         .unwrap_or(false)
                 })
                 .filter(move |&stored|
-                    { validate_signature::<S, _, _>(node, stored) })
+                    { validate_signature::<D, _, _>(node, stored) })
                 .count() >= view.params().quorum();
 
             commits_valid && prepares_valid

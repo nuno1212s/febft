@@ -24,6 +24,7 @@ use febft_communication::message::{Header, NetworkMessageKind, System};
 use febft_communication::{Node};
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::ExecutorHandle;
+use febft_execution::serialize::SharedData;
 use febft_messages::messages::SystemMessage;
 
 use crate::bft::message::{CstMessage, CstMessageKind, PBFTMessage};
@@ -64,20 +65,17 @@ pub struct RecoveryState<S, O> {
 }
 
 /// Allow a replica to recover from the state received by peer nodes.
-pub fn install_recovery_state<S, T, K>(
-    recovery_state: RecoveryState<State<S>, Request<S>>,
+pub fn install_recovery_state<D, T, K>(
+    recovery_state: RecoveryState<D::State, D::Request>,
     synchronizer: &Arc<T>,
-    log: &mut DecidedLog<S>,
-    executor: &mut ExecutorHandle<S>,
+    log: &mut DecidedLog<D>,
+    executor: &mut ExecutorHandle<D>,
     consensus: &mut K,
 ) -> Result<()>
     where
-        S: Service + Send + 'static,
-        State<S>: Send + Clone + 'static,
-        Request<S>: Send + Clone + 'static,
-        Reply<S>: Send + 'static,
-        T: AbstractSynchronizer<S>,
-        K: AbstractConsensus<S>
+    D: SharedData + 'static,
+        T: AbstractSynchronizer<D>,
+        K: AbstractConsensus<D>
 {
     // TODO: maybe try to optimize this, to avoid clone(),
     // which may be quite expensive depending on the size
@@ -150,7 +148,7 @@ struct ReceivedState<S, O> {
 
 /// Represents the state of an on-going colloborative
 /// state transfer protocol execution.
-pub struct CollabStateTransfer<S: Service> {
+pub struct CollabStateTransfer<D: SharedData> {
     latest_cid: SeqNo,
     cst_seq: SeqNo,
     latest_cid_count: usize,
@@ -159,8 +157,8 @@ pub struct CollabStateTransfer<S: Service> {
     // NOTE: remembers whose replies we have
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
-    received_states: HashMap<Digest, ReceivedState<State<S>, Request<S>>>,
-    phase: ProtoPhase<State<S>, Request<S>>,
+    received_states: HashMap<Digest, ReceivedState<D::State, D::Request>>,
+    phase: ProtoPhase<D::State, D::Request>,
 }
 
 /// Status returned from processing a state transfer message.
@@ -214,12 +212,9 @@ macro_rules! getmessage {
 }
 
 // TODO: request timeouts
-impl<S> CollabStateTransfer<S>
+impl<D> CollabStateTransfer<D>
     where
-        S: Service + Send + 'static,
-        State<S>: Send + Clone + 'static,
-        Request<S>: Send + Clone + 'static,
-        Reply<S>: Send + 'static,
+D: SharedData + 'static
 {
     /// Craete a new instance of `CollabStateTransfer`.
     pub fn new(base_timeout: Duration) -> Self {
@@ -245,13 +240,13 @@ impl<S> CollabStateTransfer<S>
     fn process_reply_state<T, NT>(
         &mut self,
         header: Header,
-        message: CstMessage<State<S>, Request<S>>,
+        message: CstMessage<D::State, D::Request>,
         synchronizer: &Arc<T>,
-        log: &DecidedLog<S>,
+        log: &DecidedLog<D>,
         node: &NT,
     ) where
-        T: AbstractSynchronizer<S>,
-        NT: Node<PBFT<S::Data>>
+        T: AbstractSynchronizer<D>,
+        NT: Node<PBFT<D>>
     {
         let snapshot = match log.snapshot(synchronizer.view()) {
             Ok(snapshot) => snapshot,
@@ -271,16 +266,16 @@ impl<S> CollabStateTransfer<S>
     /// Advances the state of the CST state machine.
     pub fn process_message<T, K, NT>(
         &mut self,
-        progress: CstProgress<State<S>, Request<S>>,
+        progress: CstProgress<D::State, D::Request>,
         synchronizer: &Arc<T>,
         consensus: &K,
-        log: &DecidedLog<S>,
+        log: &DecidedLog<D>,
         node: &NT,
-    ) -> CstStatus<State<S>, Request<S>>
+    ) -> CstStatus<D::State, D::Request>
         where
-            T: AbstractSynchronizer<S>,
-            K: AbstractConsensus<S>,
-            NT: Node<PBFT<S::Data>>
+            T: AbstractSynchronizer<D>,
+            K: AbstractConsensus<D>,
+            NT: Node<PBFT<D>>
     {
         match self.phase {
             ProtoPhase::WaitingCheckpoint(_, _) => {
@@ -439,9 +434,9 @@ impl<S> CollabStateTransfer<S>
     /// Handle a timeout received from the timeouts layer.
     /// Returns a bool to signify if we must move to the Retrieving state
     /// If the timeout is no longer relevant, returns false (Can remain in current phase)
-    pub fn cst_request_timed_out<NT>(&mut self, seq: SeqNo, synchronizer: &Arc<Synchronizer<S>>,
+    pub fn cst_request_timed_out<NT>(&mut self, seq: SeqNo, synchronizer: &Arc<Synchronizer<D>>,
                                      timeouts: &Timeouts, node: &NT) -> bool
-        where NT: Node<PBFT<S::Data>> {
+        where NT: Node<PBFT<D>> {
         let status = self.timed_out(seq);
 
         match status {
@@ -468,7 +463,7 @@ impl<S> CollabStateTransfer<S>
         }
     }
 
-    fn timed_out(&mut self, seq: SeqNo) -> CstStatus<State<S>, Request<S>> {
+    fn timed_out(&mut self, seq: SeqNo) -> CstStatus<D::State, D::Request> {
         if seq.next() != self.cst_seq {
             // the timeout we received is for a request
             // that has already completed, therefore we ignore it
@@ -504,8 +499,8 @@ impl<S> CollabStateTransfer<S>
         timeouts: &Timeouts,
         node: &NT,
     ) where
-        T: AbstractSynchronizer<S>,
-        NT: Node<PBFT<S::Data>>
+        T: AbstractSynchronizer<D>,
+        NT: Node<PBFT<D>>
     {
         // reset state of latest seq no. request
         self.latest_cid = SeqNo::ZERO;
@@ -537,8 +532,8 @@ impl<S> CollabStateTransfer<S>
         timeouts: &Timeouts,
         node: &NT,
     ) where
-        T: AbstractSynchronizer<S>,
-        NT: Node<PBFT<S::Data>>
+        T: AbstractSynchronizer<D>,
+        NT: Node<PBFT<D>>
     {
         // reset hashmap of received states
         self.received_states.clear();

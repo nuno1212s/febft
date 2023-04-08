@@ -11,7 +11,7 @@ pub mod capnp;
 
 //We do not need a serde module since serde serialization is just done on the network level.
 
-pub trait OrderingProtocol {
+pub trait OrderingProtocolMessage {
     #[cfg(feature = "serialize_capnp")]
     type ProtocolMessage: Send + Clone;
 
@@ -26,9 +26,9 @@ pub trait OrderingProtocol {
 }
 
 /// The type that encapsulates all the serializing, so we don't have to constantly use SystemMessage
-pub struct System<D: SharedData, P: OrderingProtocol>(PhantomData<D>, PhantomData<P>);
+pub struct System<D: SharedData, P: OrderingProtocolMessage>(PhantomData<D>, PhantomData<P>);
 
-impl<D: SharedData, P: OrderingProtocol> Serializable for System<D, P> {
+impl<D: SharedData, P: OrderingProtocolMessage> Serializable for System<D, P> {
 
     type Message = SystemMessage<D, P::ProtocolMessage>;
 

@@ -2,7 +2,7 @@ use std::ops::Deref;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::StoredMessage;
 use febft_execution::serialize::SharedData;
-use crate::serialize::OrderingProtocol;
+use crate::serialize::OrderingProtocolMessage;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};

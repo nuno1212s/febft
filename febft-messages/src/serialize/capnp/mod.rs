@@ -5,13 +5,13 @@ use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, StoredMessage};
 use febft_communication::serialize::{Buf, Serializable};
 use crate::messages::{ForwardedProtocolMessage, ForwardedRequestsMessage, Protocol, ReplyMessage, RequestMessage, SystemMessage};
-use crate::serialize::{OrderingProtocol, System};
+use crate::serialize::{OrderingProtocolMessage, System};
 
 const DEFAULT_SERIALIZE_BUFFER_SIZE: usize = 1024;
 
 pub type Message<D, P> = <System<D, P> as Serializable>::Message;
 
-pub(super) fn serialize_message<D, P>(builder: messages_capnp::system::Builder, msg: &Message<D, P>) -> Result<()> where D: SharedData, P: OrderingProtocol {
+pub(super) fn serialize_message<D, P>(builder: messages_capnp::system::Builder, msg: &Message<D, P>) -> Result<()> where D: SharedData, P: OrderingProtocolMessage {
     match msg {
         SystemMessage::OrderedRequest(req) => {
             let rq_builder = builder.init_request();
@@ -71,7 +71,7 @@ pub(super) fn serialize_message<D, P>(builder: messages_capnp::system::Builder, 
 }
 
 pub(super) fn deserialize_message<D, P>(reader: messages_capnp::system::Reader) -> Result<Message<D, P>>
-    where D: SharedData, P: OrderingProtocol {
+    where D: SharedData, P: OrderingProtocolMessage {
     let which = reader.which().wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to read which type of message for the system message")?;
 
     return match which {
@@ -186,7 +186,7 @@ pub fn deserialize_reply<D>(reader: service_messages_capnp::reply::Reader) -> Re
     Ok(ReplyMessage::new(session, seq_no, operation))
 }
 
-pub fn serialize_fwd_protocol_message<P>(mut builder: messages_capnp::forwarded_protocol::Builder, msg: &ForwardedProtocolMessage<P::ProtocolMessage>) -> Result<()> where P: OrderingProtocol {
+pub fn serialize_fwd_protocol_message<P>(mut builder: messages_capnp::forwarded_protocol::Builder, msg: &ForwardedProtocolMessage<P::ProtocolMessage>) -> Result<()> where P: OrderingProtocolMessage {
     let mut header = [0; Header::LENGTH];
 
     msg.header().serialize_into(&mut header[..])?;
@@ -200,7 +200,7 @@ pub fn serialize_fwd_protocol_message<P>(mut builder: messages_capnp::forwarded_
     Ok(())
 }
 
-pub fn deserialize_fwd_protocol_message<P>(reader: messages_capnp::forwarded_protocol::Reader) -> Result<ForwardedProtocolMessage<P::ProtocolMessage>> where P: OrderingProtocol {
+pub fn deserialize_fwd_protocol_message<P>(reader: messages_capnp::forwarded_protocol::Reader) -> Result<ForwardedProtocolMessage<P::ProtocolMessage>> where P: OrderingProtocolMessage {
     let header = Header::deserialize_from(reader.get_header().wrapped(ErrorKind::CommunicationSerialize)?)?;
 
     let protocol_msg = P::deserialize_capnp(reader.get_message().wrapped(ErrorKind::CommunicationSerialize)?)?;

@@ -57,7 +57,7 @@ const CF_COMMITS: &str = "commits";
 /// execute a function when the logger stops finishes the computation
 pub type CallbackType = Box<dyn FnOnce(Result<ResponseMsg>) + Send>;
 
-pub enum PersistentLogMode<S: Service> {
+pub enum PersistentLogMode<D: SharedData> {
     ///The strict log mode is meant to indicate that the consensus can only be finalized and the
     /// requests executed when the replica has all the information persistently stored.
     ///
@@ -67,7 +67,7 @@ pub enum PersistentLogMode<S: Service> {
     ///
     /// Performance will be dependent on the speed of the datastore as the consensus will only move to the
     /// executing phase once all requests have been successfully stored.
-    Strict(ConsensusBackLogHandle<S>),
+    Strict(ConsensusBackLogHandle<D>),
 
     ///Optimistic mode relies a lot more on the assumptions that are made by the BFT algorithm in order
     /// to maximize the performance.
@@ -90,18 +90,18 @@ pub enum PersistentLogMode<S: Service> {
 }
 
 pub trait PersistentLogModeTrait: Send {
-    fn init_persistent_log<S>(executor: ExecutorHandle<S>) -> PersistentLogMode<S>
+    fn init_persistent_log<D>(executor: ExecutorHandle<D>) -> PersistentLogMode<D>
         where
-            S: Service + 'static;
+            D: SharedData + 'static;
 }
 
 ///Strict log mode initializer
 pub struct StrictPersistentLog;
 
 impl PersistentLogModeTrait for StrictPersistentLog {
-    fn init_persistent_log<S>(executor: ExecutorHandle<S>) -> PersistentLogMode<S>
+    fn init_persistent_log<D>(executor: ExecutorHandle<D>) -> PersistentLogMode<D>
         where
-            S: Service + 'static,
+            D: SharedData + 'static,
     {
         let handle = ConsensusBacklog::init_backlog(executor);
 
@@ -113,7 +113,7 @@ impl PersistentLogModeTrait for StrictPersistentLog {
 pub struct OptimisticPersistentLog;
 
 impl PersistentLogModeTrait for OptimisticPersistentLog {
-    fn init_persistent_log<S: Service + 'static>(_: ExecutorHandle<S>) -> PersistentLogMode<S> {
+    fn init_persistent_log<D: SharedData + 'static>(_: ExecutorHandle<D>) -> PersistentLogMode<D> {
         PersistentLogMode::Optimistic
     }
 }
@@ -121,7 +121,7 @@ impl PersistentLogModeTrait for OptimisticPersistentLog {
 pub struct NoPersistentLog;
 
 impl PersistentLogModeTrait for NoPersistentLog {
-    fn init_persistent_log<S>(_: ExecutorHandle<S>) -> PersistentLogMode<S> where S: Service + 'static {
+    fn init_persistent_log<D>(_: ExecutorHandle<D>) -> PersistentLogMode<D> where D: SharedData + 'static {
         PersistentLogMode::None
     }
 }
@@ -141,12 +141,12 @@ pub enum WriteMode {
 
 ///TODO: Handle sequence numbers that loop the u32 range.
 /// This is the main reference to the persistent log, used to push data to it
-pub struct PersistentLog<S: Service>
+pub struct PersistentLog<D: SharedData>
 {
-    persistency_mode: PersistentLogMode<S>,
+    persistency_mode: PersistentLogMode<D>,
 
     // A handle for the persistent log workers (each with his own thread)
-    worker_handle: Arc<PersistentLogWorkerHandle<S>>,
+    worker_handle: Arc<PersistentLogWorkerHandle<D>>,
 
     ///The persistent KV-DB to be used
     db: KVDB,
@@ -155,20 +155,20 @@ pub struct PersistentLog<S: Service>
 /// A handle for all of the persistent workers.
 /// Handles task distribution and load balancing across the
 /// workers
-pub struct PersistentLogWorkerHandle<S: Service> {
+pub struct PersistentLogWorkerHandle<D: SharedData> {
     round_robin_counter: AtomicUsize,
-    tx: Vec<PersistentLogWriteStub<S>>,
+    tx: Vec<PersistentLogWriteStub<D>>,
 }
 
 ///A stub that is only useful for writing to the persistent log
 #[derive(Clone)]
-struct PersistentLogWriteStub<S: Service> {
-    tx: ChannelSyncTx<ChannelMsg<S>>,
+struct PersistentLogWriteStub<D: SharedData> {
+    tx: ChannelSyncTx<ChannelMsg<D>>,
 }
 
-impl<S: Service + 'static> PersistentLog<S>
+impl<D: SharedData + 'static> PersistentLog<D>
 {
-    pub fn init_log<K, T>(executor: ExecutorHandle<S>, db_path: K) -> Result<Self>
+    pub fn init_log<K, T>(executor: ExecutorHandle<D>, db_path: K) -> Result<Self>
         where
             K: AsRef<Path>,
             T: PersistentLogModeTrait
@@ -219,10 +219,10 @@ impl<S: Service + 'static> PersistentLog<S>
     }
 
     /// TODO: Maybe make this async? We need it to start execution anyways...
-    pub fn read_state(&self) -> Result<Option<InstallState<S>>> {
+    pub fn read_state(&self) -> Result<Option<InstallState<D>>> {
         match self.kind() {
             PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
-                read_latest_state::<S>(&self.db)
+                read_latest_state::<D>(&self.db)
             }
             PersistentLogMode::None => {
                 Ok(None)
@@ -230,7 +230,7 @@ impl<S: Service + 'static> PersistentLog<S>
         }
     }
 
-    pub fn kind(&self) -> &PersistentLogMode<S> {
+    pub fn kind(&self) -> &PersistentLogMode<D> {
         &self.persistency_mode
     }
 
@@ -289,7 +289,7 @@ impl<S: Service + 'static> PersistentLog<S>
     pub fn write_message(
         &self,
         write_mode: WriteMode,
-        msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+        msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
     ) -> Result<()> {
         match self.persistency_mode {
             PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
@@ -297,7 +297,7 @@ impl<S: Service + 'static> PersistentLog<S>
                     WriteMode::NonBlockingSync(callback) => {
                         self.worker_handle.queue_message(msg, callback)
                     }
-                    WriteMode::BlockingSync => write_message::<S>(&self.db, &msg),
+                    WriteMode::BlockingSync => write_message::<D>(&self.db, &msg),
                 }
             }
             PersistentLogMode::None => {
@@ -309,7 +309,7 @@ impl<S: Service + 'static> PersistentLog<S>
     pub fn write_checkpoint(
         &self,
         write_mode: WriteMode,
-        checkpoint: Arc<ReadOnly<Checkpoint<State<S>>>>,
+        checkpoint: Arc<ReadOnly<Checkpoint<D::State>>>,
     ) -> Result<()> {
         match self.persistency_mode {
             PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
@@ -322,7 +322,7 @@ impl<S: Service + 'static> PersistentLog<S>
 
                         let last_seq = checkpoint.last_seq();
 
-                        write_checkpoint::<S>(&self.db, state, last_seq.clone())
+                        write_checkpoint::<D>(&self.db, state, last_seq.clone())
                     }
                 }
             }
@@ -353,7 +353,7 @@ impl<S: Service + 'static> PersistentLog<S>
     }
 
     /// Attempt to install the state into persistent storage
-    pub fn write_install_state(&self, write_mode: WriteMode, state: InstallState<S>) -> Result<()> {
+    pub fn write_install_state(&self, write_mode: WriteMode, state: InstallState<D>) -> Result<()> {
         match self.persistency_mode {
             PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
                 match write_mode {
@@ -361,7 +361,7 @@ impl<S: Service + 'static> PersistentLog<S>
                         self.worker_handle.queue_install_state(state, callback)
                     }
                     WriteMode::BlockingSync => {
-                        write_state::<S>(&self.db, state)
+                        write_state::<D>(&self.db, state)
                     }
                 }
             }
@@ -372,7 +372,7 @@ impl<S: Service + 'static> PersistentLog<S>
     }
 
     /// Write a proof to the persistent log.
-    pub fn write_proof(&self, write_mode: WriteMode, proof: Proof<Request<S>>) -> Result<()> {
+    pub fn write_proof(&self, write_mode: WriteMode, proof: Proof<D::Request>) -> Result<()> {
         match self.persistency_mode {
             PersistentLogMode::Strict(_) | PersistentLogMode::Optimistic => {
                 match write_mode {
@@ -380,7 +380,7 @@ impl<S: Service + 'static> PersistentLog<S>
                         self.worker_handle.queue_proof(proof, callback)
                     }
                     WriteMode::BlockingSync => {
-                        write_proof::<S>(&self.db, proof)
+                        write_proof::<D>(&self.db, proof)
                     }
                 }
             }
@@ -393,7 +393,7 @@ impl<S: Service + 'static> PersistentLog<S>
     ///Attempt to queue a batch into waiting for persistent logging
     /// If the batch does not have to wait, it's returned to it can be instantly
     /// passed to the executor
-    pub fn wait_for_batch_persistency_and_execute(&self, batch: BatchExecutionInfo<S>) -> Result<Option<BatchExecutionInfo<S>>> {
+    pub fn wait_for_batch_persistency_and_execute(&self, batch: BatchExecutionInfo<D>) -> Result<Option<BatchExecutionInfo<D>>> {
         match &self.persistency_mode {
             PersistentLogMode::Strict(consensus_backlog) => {
                 consensus_backlog.queue_batch(batch)?;
@@ -411,7 +411,7 @@ impl<S: Service + 'static> PersistentLog<S>
     /// a view change)
     /// If the batch does not have to wait, it's returned to it can be instantly
     /// passed to the executor
-    pub fn wait_for_proof_persistency_and_execute(&self, batch: BatchExecutionInfo<S>) -> Result<Option<BatchExecutionInfo<S>>> {
+    pub fn wait_for_proof_persistency_and_execute(&self, batch: BatchExecutionInfo<D>) -> Result<Option<BatchExecutionInfo<D>>> {
         match &self.persistency_mode {
             PersistentLogMode::Strict(backlog) => {
                 backlog.queue_batch_proof(batch)?;
@@ -425,7 +425,7 @@ impl<S: Service + 'static> PersistentLog<S>
     }
 }
 
-impl<S: Service> Clone for PersistentLog<S> {
+impl<D: SharedData> Clone for PersistentLog<D> {
     fn clone(&self) -> Self {
         Self {
             persistency_mode: self.persistency_mode.clone(),
@@ -435,7 +435,7 @@ impl<S: Service> Clone for PersistentLog<S> {
     }
 }
 
-impl<S: Service> Clone for PersistentLogMode<S> {
+impl<D: SharedData> Clone for PersistentLogMode<D> {
     fn clone(&self) -> Self {
         match self {
             PersistentLogMode::Strict(handle) => {
@@ -451,17 +451,17 @@ impl<S: Service> Clone for PersistentLogMode<S> {
     }
 }
 
-impl<S: Service> Deref for PersistentLogWriteStub<S> {
-    type Target = ChannelSyncTx<ChannelMsg<S>>;
+impl<D: SharedData> Deref for PersistentLogWriteStub<D> {
+    type Target = ChannelSyncTx<ChannelMsg<D>>;
 
     fn deref(&self) -> &Self::Target {
         &self.tx
     }
 }
 
-impl<S: Service> PersistentLogWorkerHandle<S> {
+impl<D: SharedData> PersistentLogWorkerHandle<D> {
     /// Employ a simple round robin load distribution
-    fn next_worker(&self) -> &PersistentLogWriteStub<S> {
+    fn next_worker(&self) -> &PersistentLogWriteStub<D> {
         let counter = self.round_robin_counter.fetch_add(1, Ordering::Relaxed);
 
         self.tx.get(counter % self.tx.len()).unwrap()
@@ -502,34 +502,34 @@ impl<S: Service> PersistentLogWorkerHandle<S> {
         Self::translate_error(self.next_worker().send((PWMessage::View(view), callback)))
     }
 
-    fn queue_message(&self, message: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
+    fn queue_message(&self, message: Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
                      callback: Option<CallbackType>) -> Result<()> {
         Self::translate_error(self.next_worker().send((PWMessage::Message(message), callback)))
     }
 
-    fn queue_state(&self, state: Arc<ReadOnly<Checkpoint<State<S>>>>, callback: Option<CallbackType>) -> Result<()> {
+    fn queue_state(&self, state: Arc<ReadOnly<Checkpoint<D::State>>>, callback: Option<CallbackType>) -> Result<()> {
         Self::translate_error(self.next_worker().send((PWMessage::Checkpoint(state), callback)))
     }
 
-    fn queue_install_state(&self, install_state: InstallState<S>, callback: Option<CallbackType>) -> Result<()> {
+    fn queue_install_state(&self, install_state: InstallState<D>, callback: Option<CallbackType>) -> Result<()> {
         Self::translate_error(self.next_worker().send((PWMessage::InstallState(install_state), callback)))
     }
 
-    fn queue_proof(&self, proof: Proof<Request<S>>, callback: Option<CallbackType>) -> Result<()> {
+    fn queue_proof(&self, proof: Proof<D::Request>, callback: Option<CallbackType>) -> Result<()> {
         Self::translate_error(self.next_worker().send((PWMessage::Proof(proof), callback)))
     }
 }
 
 ///A worker for the persistent logging
-struct PersistentLogWorker<S: Service> {
-    request_rx: ChannelSyncRx<ChannelMsg<S>>,
+struct PersistentLogWorker<D: SharedData> {
+    request_rx: ChannelSyncRx<ChannelMsg<D>>,
 
     response_txs: Vec<ChannelSyncTx<ResponseMsg>>,
 
     db: KVDB,
 }
 
-impl<S: Service> PersistentLogWorker<S> {
+impl<D: SharedData> PersistentLogWorker<D> {
     fn work(mut self) {
         loop {
             let (request, callback) = match self.request_rx.recv() {
@@ -563,7 +563,7 @@ impl<S: Service> PersistentLogWorker<S> {
         }
     }
 
-    fn exec_req(&mut self, message: PWMessage<S>) -> Result<ResponseMsg> {
+    fn exec_req(&mut self, message: PWMessage<D>) -> Result<ResponseMsg> {
         Ok(match message {
             PWMessage::View(view) => {
                 write_latest_view_seq(&self.db, view.sequence_number())?;
@@ -576,14 +576,14 @@ impl<S: Service> PersistentLogWorker<S> {
                 ResponseMsg::CommittedPersisted(seq)
             }
             PWMessage::Message(msg) => {
-                write_message::<S>(&self.db, &msg)?;
+                write_message::<D>(&self.db, &msg)?;
 
                 let seq = msg.message().sequence_number();
 
                 ResponseMsg::WroteMessage(seq, msg.header().digest().clone())
             }
             PWMessage::Checkpoint(checkpoint) => {
-                write_checkpoint::<S>(&self.db, checkpoint.state(), checkpoint.sequence_number())?;
+                write_checkpoint::<D>(&self.db, checkpoint.state(), checkpoint.sequence_number())?;
 
                 ResponseMsg::Checkpointed(checkpoint.sequence_number())
             }
@@ -595,14 +595,14 @@ impl<S: Service> PersistentLogWorker<S> {
             PWMessage::InstallState(state) => {
                 let seq_no = state.2.last_execution().unwrap();
 
-                write_state::<S>(&self.db, state)?;
+                write_state::<D>(&self.db, state)?;
 
                 ResponseMsg::InstalledState(seq_no)
             }
             PWMessage::Proof(proof) => {
                 let seq_no = proof.seq_no();
 
-                write_proof::<S>(&self.db, proof)?;
+                write_proof::<D>(&self.db, proof)?;
 
                 ResponseMessage::Proof(seq_no)
             }
@@ -623,19 +623,19 @@ impl<S: Service> PersistentLogWorker<S> {
 }
 
 /// Messages that are sent to the logging thread to log specific requests
-pub(crate) type ChannelMsg<S> = (PWMessage<S>, Option<CallbackType>);
+pub(crate) type ChannelMsg<D: SharedData> = (PWMessage<D>, Option<CallbackType>);
 
 /// The type of the installed state information
-pub type InstallState<S> = (
+pub type InstallState<D: SharedData> = (
     //The view sequence number
     SeqNo,
     // The state that we want to persist
-    Arc<ReadOnly<Checkpoint<State<S>>>>,
+    Arc<ReadOnly<Checkpoint<D::State>>>,
     //The decision log that comes after that state
-    DecisionLog<Request<S>>,
+    DecisionLog<D::Request>,
 );
 
-pub(crate) enum PWMessage<S: Service> {
+pub(crate) enum PWMessage<D: SharedData> {
     //Persist a new view into the persistent storage
     View(ViewInfo),
 
@@ -646,19 +646,19 @@ pub(crate) enum PWMessage<S: Service> {
     ProofMetadata(ProofMetadata),
 
     //Persist a given message into storage
-    Message(Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>),
+    Message(Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>),
 
     //Persist a given state into storage.
-    Checkpoint(Arc<ReadOnly<Checkpoint<State<S>>>>),
+    Checkpoint(Arc<ReadOnly<Checkpoint<D::State>>>),
 
     //Remove all associated stored messages for this given seq number
     Invalidate(SeqNo),
 
     // Register a proof of the decision log
-    Proof(Proof<Request<S>>),
+    Proof(Proof<D::Request>),
 
     //Install a recovery state received from CST or produced by us
-    InstallState(InstallState<S>),
+    InstallState(InstallState<D>),
 
     RegisterCallbackReceiver(ChannelSyncTx<ResponseMsg>),
 }
@@ -717,25 +717,25 @@ impl From<(Digest, Vec<Digest>)> for ProofInfo {
 }
 
 ///Write a state provided by the CST protocol into the persistent DB
-fn write_state<S: Service>(db: &KVDB, (view, checkpoint, dec_log): InstallState<S>) -> Result<()> {
+fn write_state<D: SharedData>(db: &KVDB, (view, checkpoint, dec_log): InstallState<D>) -> Result<()> {
     //Update the view number to the current view number
     write_latest_view_seq(db, view)?;
 
     //Write the received checkpoint into persistent storage and delete all existing
     //Messages that were stored as they will be replaced by the new log
-    write_checkpoint::<S>(db, checkpoint.state(), checkpoint.sequence_number())?;
+    write_checkpoint::<D>(db, checkpoint.state(), checkpoint.sequence_number())?;
 
     for proof in dec_log.proofs() {
         for ele in proof.pre_prepares() {
-            write_message::<S>(db, ele)?;
+            write_message::<D>(db, ele)?;
         }
 
         for ele in proof.prepares() {
-            write_message::<S>(db, ele)?;
+            write_message::<D>(db, ele)?;
         }
 
         for ele in proof.commits() {
-            write_message::<S>(db, ele)?;
+            write_message::<D>(db, ele)?;
         }
     }
 
@@ -743,14 +743,14 @@ fn write_state<S: Service>(db: &KVDB, (view, checkpoint, dec_log): InstallState<
 }
 
 ///Read the latest state from the persistent DB
-fn read_latest_state<S: Service>(db: &KVDB) -> Result<Option<InstallState<S>>> {
+fn read_latest_state<D: SharedData>(db: &KVDB) -> Result<Option<InstallState<D>>> {
     let view = read_latest_view_seq(db)?;
 
-    let state = read_latest_checkpoint::<S>(db)?;
+    let state = read_latest_checkpoint::<D>(db)?;
 
     let first_seq = read_first_seq(db)?;
 
-    let dec_log = read_all_present_proofs::<S>(db)?;
+    let dec_log = read_all_present_proofs::<D>(db)?;
 
     let checkpoint = Checkpoint::new(first_seq.unwrap(), state.unwrap());
 
@@ -758,11 +758,11 @@ fn read_latest_state<S: Service>(db: &KVDB) -> Result<Option<InstallState<S>>> {
 }
 
 ///Read the latest checkpoint stored in persistent storage
-fn read_latest_checkpoint<S: Service>(db: &KVDB) -> Result<Option<State<S>>> {
+fn read_latest_checkpoint<D: SharedData>(db: &KVDB) -> Result<Option<D::State>> {
     let checkpoint = db.get(CF_OTHER, LATEST_STATE)?;
 
     if let Some(checkpoint) = checkpoint {
-        let state = <S::Data as SharedData>::deserialize_state(&checkpoint[..])?;
+        let state = D::deserialize_state(&checkpoint[..])?;
 
         Ok(Some(state))
     } else {
@@ -773,10 +773,10 @@ fn read_latest_checkpoint<S: Service>(db: &KVDB) -> Result<Option<State<S>>> {
 ///Write a checkpoint to persistent storage.
 /// Deletes all previous messages from the log as they no longer pertain to the current checkpoint.
 /// Sets the first seq to the seq number of the last message the state contains
-fn write_checkpoint<S: Service>(db: &KVDB, state: &State<S>, last_seq: SeqNo) -> Result<()> {
+fn write_checkpoint<D: SharedData>(db: &KVDB, state: &D::State, last_seq: SeqNo) -> Result<()> {
     let mut buf = Vec::new();
 
-    <S::Data as SharedData>::serialize_state(&mut buf, &state)?;
+    D::serialize_state(&mut buf, &state)?;
 
     db.set(CF_OTHER, LATEST_STATE, buf)?;
 
@@ -807,11 +807,11 @@ fn write_checkpoint<S: Service>(db: &KVDB, state: &State<S>, last_seq: SeqNo) ->
 
 ///Read all messages for the given range
 /// The end seq number is included in the messages
-fn read_message_for_range<S: Service>(
+fn read_message_for_range<D: SharedData>(
     db: &KVDB,
     msg_seq_start: SeqNo,
     msg_seq_end: SeqNo,
-) -> Result<Vec<StoredMessage<ConsensusMessage<Request<S>>>>> {
+) -> Result<Vec<StoredMessage<ConsensusMessage<D::Request>>>> {
     let mut start_key = serialization::make_message_key(msg_seq_start, None)?;
     let mut end_key = serialization::make_message_key(msg_seq_end.next(), None)?;
 
@@ -825,19 +825,19 @@ fn read_message_for_range<S: Service>(
 
     for res in preprepares {
         if let Ok((key, value)) = res {
-            messages.push(parse_message::<S, Box<[u8]>>(key, value)?);
+            messages.push(parse_message::<D, Box<[u8]>>(key, value)?);
         }
     }
 
     for res in prepares {
         if let Ok((key, value)) = res {
-            messages.push(parse_message::<S, Box<[u8]>>(key, value)?);
+            messages.push(parse_message::<D, Box<[u8]>>(key, value)?);
         }
     }
 
     for res in commits {
         if let Ok((key, value)) = res {
-            messages.push(parse_message::<S, Box<[u8]>>(key, value)?);
+            messages.push(parse_message::<D, Box<[u8]>>(key, value)?);
         }
     }
 
@@ -884,7 +884,7 @@ fn finalize_instance(db: &KVDB, metadata: ProofMetadata) -> Result<()> {
     Ok(())
 }
 
-fn write_proof<S: Service>(db: &KVDB, proof: Proof<Request<S>>) -> Result<()> {
+fn write_proof<D: SharedData>(db: &KVDB, proof: Proof<D::Request>) -> Result<()> {
     let pi = ProofInfo {
         batch_digest: proof.batch_digest(),
         pre_prepare_ordering: proof.pre_prepare_ordering().clone(),
@@ -897,25 +897,25 @@ fn write_proof<S: Service>(db: &KVDB, proof: Proof<Request<S>>) -> Result<()> {
     db.set(CF_PROOF_INFO, key, proof_info)?;
 
     for pre_prepare in proof.pre_prepares() {
-        write_message::<S>(db, pre_prepare)?;
+        write_message::<D>(db, pre_prepare)?;
     }
 
     for prepare in proof.prepares() {
-        write_message::<S>(db, prepare)?;
+        write_message::<D>(db, prepare)?;
     }
 
     for commits in proof.commits() {
-        write_message::<S>(db, commits)?;
+        write_message::<D>(db, commits)?;
     }
 
     Ok(())
 }
 
 ///Read all the messages for a given consensus instance
-fn read_messages_for_seq<S: Service>(
+fn read_messages_for_seq<D: SharedData>(
     db: &KVDB,
     msg_seq: SeqNo,
-) -> Result<Vec<StoredMessage<ConsensusMessage<Request<S>>>>> {
+) -> Result<Vec<StoredMessage<ConsensusMessage<D::Request>>>> {
     let mut start_key =
         serialization::make_message_key(msg_seq, None)?;
     let mut end_key =
@@ -932,26 +932,26 @@ fn read_messages_for_seq<S: Service>(
 
     for res in pre_prepares {
         if let Ok((key, value)) = res {
-            messages.push(parse_message::<S, Box<[u8]>>(key, value)?);
+            messages.push(parse_message::<D, Box<[u8]>>(key, value)?);
         }
     }
 
     for res in prepares {
         if let Ok((key, value)) = res {
-            messages.push(parse_message::<S, Box<[u8]>>(key, value)?);
+            messages.push(parse_message::<D, Box<[u8]>>(key, value)?);
         }
     }
 
     for res in commits {
         if let Ok((key, value)) = res {
-            messages.push(parse_message::<S, Box<[u8]>>(key, value)?);
+            messages.push(parse_message::<D, Box<[u8]>>(key, value)?);
         }
     }
 
     Ok(messages)
 }
 
-fn read_proof<S: Service>(db: &KVDB, seq_no: SeqNo) -> Result<Proof<Request<S>>> {
+fn read_proof<D: SharedData>(db: &KVDB, seq_no: SeqNo) -> Result<Proof<D::Request>> {
     let mut start_key = serialization::make_message_key(seq_no, None)?;
     let mut end_key = serialization::make_message_key(seq_no.next(), None)?;
 
@@ -960,7 +960,7 @@ fn read_proof<S: Service>(db: &KVDB, seq_no: SeqNo) -> Result<Proof<Request<S>>>
 }
 
 /// Read all proofs that are present in the log
-fn read_all_present_proofs<S: Service>(db: &KVDB) -> Result<DecisionLog<Request<S>>> {
+fn read_all_present_proofs<D: SharedData>(db: &KVDB) -> Result<DecisionLog<D::Request>> {
     // The last seq number to have been executed
     let last_seq = read_latest_seq(db)?;
 
@@ -973,7 +973,7 @@ fn read_all_present_proofs<S: Service>(db: &KVDB) -> Result<DecisionLog<Request<
         }
     };
 
-    let messages = read_message_for_range::<S>(db, first_seq, last_seq)?;
+    let messages = read_message_for_range::<D>(db, first_seq, last_seq)?;
 
     let proof_infos = read_proof_infos_for_range(db, first_seq, last_seq)?;
 
@@ -1010,7 +1010,7 @@ fn read_all_present_proofs<S: Service>(db: &KVDB) -> Result<DecisionLog<Request<
 
     // When we are done reading all of the messages, we must create the decision log
 
-    let mut proof_vec: Vec<Proof<Request<S>>> =
+    let mut proof_vec: Vec<Proof<D::Request>> =
         Vec::with_capacity(final_decisions.len());
 
     // Take out all of the proofs one by one and add them to the final vec
@@ -1036,27 +1036,27 @@ fn read_all_present_proofs<S: Service>(db: &KVDB) -> Result<DecisionLog<Request<
 }
 
 /// Parse a given message from its bytes representation
-fn parse_message<S: Service, T>(
+fn parse_message<D: SharedData, T>(
     _key: T,
     value: T,
-) -> Result<StoredMessage<ConsensusMessage<Request<S>>>> where T: AsRef<[u8]> {
+) -> Result<StoredMessage<ConsensusMessage<D::Request>>> where T: AsRef<[u8]> {
     let header = Header::deserialize_from(&value.as_ref()[..Header::LENGTH])?;
 
-    let message = serialization::deserialize_consensus_message::<&[u8], S::Data>(&value.as_ref()[Header::LENGTH..])?;
+    let message = serialization::deserialize_consensus_message::<&[u8], D>(&value.as_ref()[Header::LENGTH..])?;
 
     Ok(StoredMessage::new(header, message))
 }
 
 ///Write the given message into the keystore
-fn write_message<S: Service>(
+fn write_message<D: SharedData>(
     db: &KVDB,
-    message: &StoredMessage<ConsensusMessage<Request<S>>>,
+    message: &StoredMessage<ConsensusMessage<D::Request>>,
 ) -> Result<()> {
     let mut buf = Vec::with_capacity(Header::LENGTH + message.header().payload_length());
 
     message.header().serialize_into(buf.as_mut_slice()).unwrap();
 
-    serialization::serialize_consensus_message::<&mut [u8], S::Data>(message.message(), &mut &mut buf[Header::LENGTH..])?;
+    serialization::serialize_consensus_message::<&mut [u8], D>(message.message(), &mut &mut buf[Header::LENGTH..])?;
 
     let msg_seq = message.message().sequence_number();
 

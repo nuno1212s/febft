@@ -60,24 +60,24 @@ pub struct Follower<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> {
 
     //The handle to the current state and the executor of the service, so we
     //can keep up and respond to requests
-    executor: ExecutorHandle<S>,
+    executor: ExecutorHandle<S::Data>,
     //A consensus instance for the followers
-    consensus: Consensus<S>,
+    consensus: Consensus<S::Data>,
     //
-    cst: CollabStateTransfer<S>,
+    cst: CollabStateTransfer<S::Data>,
     //These timeouts are only used for the CST protocol,
     //As it's the only place where we are expected to send messages to
     //Other replicas
     timeouts: Timeouts,
     //The proposer, which in this case wil
-    proposer: Arc<FollowerProposer<S, NT>>,
+    proposer: Arc<FollowerProposer<S::Data, NT>>,
     //Synchronizer observer
-    synchronizer: Arc<Synchronizer<S>>,
+    synchronizer: Arc<Synchronizer<S::Data>>,
 
     //The log of messages
-    decided_log: DecidedLog<S>,
+    decided_log: DecidedLog<S::Data>,
 
-    pending_rq_log: Arc<PendingRequestLog<S>>,
+    pending_rq_log: Arc<PendingRequestLog<S::Data>>,
 
     execution_rx: ChannelSyncRx<Message<S::Data>>,
 
@@ -115,7 +115,7 @@ impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> Follower<S, NT> {
         let (executor, handle) = Executor::<S, FollowerReplier, NT>::init_handle();
 
         debug!("Initializing log");
-        let persistent_log = msg_log::initialize_persistent_log::<S, String, T>(executor.clone(), db_path)?;
+        let persistent_log = msg_log::initialize_persistent_log::<S::Data, String, T>(executor.clone(), db_path)?;
 
         let mut decided_log = msg_log::initialize_decided_log(persistent_log.clone())?;
 
