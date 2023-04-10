@@ -219,8 +219,8 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
 
 /// Represents a configuration used to bootstrap a `Client`.
 pub struct ClientConfig {
-    n: usize,
-    f: usize,
+    pub n: usize,
+    pub f: usize,
 
     pub unordered_rq_mode: UnorderedClientMode,
 
