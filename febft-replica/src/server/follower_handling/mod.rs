@@ -149,7 +149,7 @@ impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> FollowersFollowing
 
         let targets = self.targets(view);
 
-        self.send_node.broadcast(NetworkMessageKind::from(message), targets.into_iter());
+        self.send_node.broadcast(NetworkMessageKind::from(message), targets.into_iter()).unwrap();
     }
 
     /// Handle us having sent a prepare message (notice how pre prepare are handled on reception
@@ -171,7 +171,7 @@ impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> FollowersFollowing
         let message = SystemMessage::from_protocol_message(PBFTMessage::Consensus(prepare));
 
         self.send_node
-            .broadcast(NetworkMessageKind::from(message), self.followers.iter().copied());
+            .broadcast(NetworkMessageKind::from(message), self.followers.iter().copied()).unwrap();
     }
 
     /// Handle us having sent a commit message (notice how pre prepare are handled on reception
@@ -192,7 +192,7 @@ impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> FollowersFollowing
         let message = SystemMessage::from_protocol_message(PBFTMessage::Consensus(commit));
 
         self.send_node
-            .broadcast(NetworkMessageKind::from(message), self.followers.iter().copied());
+            .broadcast(NetworkMessageKind::from(message), self.followers.iter().copied()).unwrap();
     }
 
     ///
@@ -221,6 +221,6 @@ impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> FollowersFollowing
         let message = PBFTMessage::ViewChange(message.clone());
 
         self.send_node
-            .broadcast(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), self.followers.iter().copied());
+            .broadcast(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), self.followers.iter().copied()).unwrap();
     }
 }

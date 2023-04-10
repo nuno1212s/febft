@@ -14,7 +14,7 @@ use futures_timer::Delay;
 use intmap::IntMap;
 use log::{error, debug, info};
 use febft_pbft_consensus::bft::{PBFT, SysMsg};
-use febft_pbft_consensus::bft::message::{Message, PBFTMessage};
+use febft_pbft_consensus::bft::message::{PBFTMessage};
 use febft_common::async_runtime;
 use febft_common::crypto::hash::Digest;
 
@@ -833,12 +833,10 @@ impl<D, NT> Client<D, NT>
             match sys_msg {
                 SystemMessage::ProtocolMessage(message) => {
                     match message.payload() {
-                        PBFTMessage::ObserverMessage(obs) => {
-                            let msg =
-                                Message::System(NetworkMessage::new(header, NetworkMessageKind::from(SystemMessage::ProtocolMessage(message))));
+                        PBFTMessage::ObserverMessage(_) => {
 
                             //Pass this message off to the observing module
-                            ObserverClient::handle_observed_message(&data, msg);
+                            ObserverClient::handle_observed_message(&data, header, message);
                         }
                         _ => {}
                     }

@@ -26,6 +26,7 @@ use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::SystemMessage;
+use febft_messages::timeouts::Timeouts;
 
 use crate::bft::message::{CstMessage, CstMessageKind, PBFTMessage};
 
@@ -34,8 +35,6 @@ use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog};
 use crate::bft::PBFT;
 use crate::bft::sync::Synchronizer;
 use crate::bft::sync::view::ViewInfo;
-use crate::bft::timeouts::{TimeoutKind, Timeouts};
-
 use super::consensus::AbstractConsensus;
 use super::sync::AbstractSynchronizer;
 

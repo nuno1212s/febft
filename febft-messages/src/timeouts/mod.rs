@@ -10,7 +10,9 @@ use febft_common::crypto::hash::Digest;
 use febft_common::node_id::NodeId;
 use febft_common::ordering::SeqNo;
 use febft_execution::app::Service;
-use crate::bft::message::Message;
+use febft_execution::serialize::SharedData;
+use crate::messages::Message;
+use crate::serialize::OrderingProtocolMessage;
 
 const CHANNEL_SIZE: usize = 1024;
 
@@ -77,7 +79,7 @@ pub struct Timeouts {
 
 /// This structure is responsible for handling timeouts for the entire project
 /// This includes timing out messages exchanged between replicas and between clients
-struct TimeoutsThread<S: Service + 'static> {
+struct TimeoutsThread<D: SharedData + 'static> {
     //Stores the pending timeouts, grouped by the time at which they timeout.
     //Iterating a binary tree is pretty quick and it keeps the elements ordered
     //So we can use that to our advantage when timing out requests
@@ -88,7 +90,7 @@ struct TimeoutsThread<S: Service + 'static> {
     channel_rx: ChannelSyncRx<TimeoutMessage>,
     //Loopback so we can deliver the timeouts to the main consensus thread so they can be
     //processed
-    loopback_channel: ChannelSyncTx<Message<S::Data>>,
+    loopback_channel: ChannelSyncTx<Message<D>>,
     //How long between each timeout iteration
     iteration_delay: u64,
 }
@@ -97,9 +99,9 @@ struct TimeoutsThread<S: Service + 'static> {
 impl Timeouts {
     ///Initialize the timeouts thread and return a handle to it
     /// This handle can then be used everywhere timeouts are needed.
-    pub fn new<S: Service + 'static>(iteration_delay: u64,
-                                     loopback_channel: ChannelSyncTx<Message<S::Data>>) -> Self {
-        let tx = TimeoutsThread::<S>::new(iteration_delay, loopback_channel);
+    pub fn new<D: SharedData + 'static>(iteration_delay: u64,
+                                     loopback_channel: ChannelSyncTx<Message<D>>) -> Self {
+        let tx = TimeoutsThread::<D>::new(iteration_delay, loopback_channel);
 
         Self {
             handle: tx,
@@ -162,8 +164,8 @@ impl Timeouts {
     }
 }
 
-impl<S: Service + 'static> TimeoutsThread<S> {
-    fn new(iteration_delay: u64, loopback_channel: ChannelSyncTx<Message<S::Data>>) -> ChannelSyncTx<TimeoutMessage> {
+impl<D: SharedData + 'static> TimeoutsThread<D> {
+    fn new(iteration_delay: u64, loopback_channel: ChannelSyncTx<Message<D>>) -> ChannelSyncTx<TimeoutMessage> {
         let (tx, rx) = channel::new_bounded_sync(CHANNEL_SIZE);
 
         std::thread::Builder::new().name("Timeout Thread".to_string())

@@ -24,6 +24,7 @@ use febft_communication::serialize::Buf;
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
+use febft_messages::timeouts::{ClientRqInfo, Timeouts};
 use crate::bft::consensus::Consensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::msg_log::decided_log::DecidedLog;
@@ -32,7 +33,6 @@ use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::PBFT;
 
 use crate::bft::sync::view::ViewInfo;
-use crate::bft::timeouts::{ClientRqInfo, Timeouts};
 
 
 pub mod follower_sync;

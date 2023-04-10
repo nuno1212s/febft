@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use febft_pbft_consensus::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus};
 use febft_pbft_consensus::bft::cst::{CollabStateTransfer, CstProgress, CstStatus, install_recovery_state};
-use febft_pbft_consensus::bft::message::{ConsensusMessage, CstMessage, Message, PBFTMessage, ViewChangeMessage};
+use febft_pbft_consensus::bft::message::{ConsensusMessage, CstMessage, PBFTMessage, ViewChangeMessage};
 use febft_pbft_consensus::bft::msg_log::decided_log::DecidedLog;
 use febft_pbft_consensus::bft::msg_log::pending_decision::PendingRequestLog;
 use febft_pbft_consensus::bft::msg_log::persistent::PersistentLogModeTrait;
@@ -12,7 +12,6 @@ use febft_pbft_consensus::bft::msg_log::Info;
 use febft_pbft_consensus::bft::proposer::follower_proposer::FollowerProposer;
 use febft_pbft_consensus::bft::sync::{AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus};
 use febft_pbft_consensus::bft::sync::view::ViewInfo;
-use febft_pbft_consensus::bft::timeouts::{Timeout, TimeoutKind, Timeouts};
 use febft_common::channel;
 use febft_common::channel::ChannelSyncRx;
 
@@ -25,7 +24,8 @@ use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, S
 use febft_execution::app::{Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
-use febft_messages::messages::SystemMessage;
+use febft_messages::messages::{Message, SystemMessage};
+use febft_messages::timeouts::{Timeout, TimeoutKind, Timeouts};
 use crate::executable::{Executor, FollowerReplier};
 use crate::server::client_replier::Replier;
 
@@ -188,7 +188,7 @@ impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> Follower<S, NT> {
             batch_timeout,
         );
 
-        let timeouts = Timeouts::new::<S>(500, ex_tx);
+        let timeouts = Timeouts::new::<S::Data>(500, ex_tx);
 
         Ok(Self {
             phase: FollowerPhase::NormalPhase,

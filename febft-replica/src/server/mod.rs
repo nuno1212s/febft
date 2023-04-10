@@ -10,7 +10,7 @@ use chrono::DateTime;
 use log::{debug, warn};
 use febft_pbft_consensus::bft::consensus::{Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
 use febft_pbft_consensus::bft::cst::{CollabStateTransfer, CstProgress, CstStatus, install_recovery_state};
-use febft_pbft_consensus::bft::message::{ConsensusMessage, CstMessage, Message, ObserveEventKind, PBFTMessage, ViewChangeMessage};
+use febft_pbft_consensus::bft::message::{ConsensusMessage, CstMessage, ObserveEventKind, PBFTMessage, ViewChangeMessage};
 use febft_pbft_consensus::bft::msg_log::decided_log::DecidedLog;
 use febft_pbft_consensus::bft::msg_log::pending_decision::PendingRequestLog;
 use febft_pbft_consensus::bft::msg_log::persistent::PersistentLogModeTrait;
@@ -20,7 +20,6 @@ use febft_pbft_consensus::bft::observer::{MessageType, ObserverHandle};
 use febft_pbft_consensus::bft::proposer::Proposer;
 use febft_pbft_consensus::bft::sync::{AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus};
 use febft_pbft_consensus::bft::sync::view::ViewInfo;
-use febft_pbft_consensus::bft::timeouts::{Timeout, TimeoutKind, Timeouts};
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx};
 
@@ -32,7 +31,9 @@ use febft_communication::config::NodeConfig;
 use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, StoredMessage, System};
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::ExecutorHandle;
-use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
+use febft_messages::messages::{ForwardedRequestsMessage, Message, RequestMessage, SystemMessage};
+use febft_messages::timeouts::{Timeout, TimeoutKind, Timeouts};
+use febft_pbft_consensus::bft::message::serialize::PBFTConsensus;
 use crate::executable::{Executor, ReplicaReplier};
 use crate::server::client_replier::Replier;
 
@@ -224,7 +225,7 @@ impl<S, NT> Replica<S, NT>
 
         debug!("Initializing timeouts");
         // start timeouts handler
-        let timeouts = Timeouts::new::<S>(500, exec_tx.clone());
+        let timeouts = Timeouts::new::<S::Data>(500, exec_tx.clone());
 
         // TODO:
         // - client req timeout base dur configure param

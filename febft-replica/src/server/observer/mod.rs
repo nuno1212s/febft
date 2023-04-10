@@ -75,18 +75,18 @@ impl<D, NT> Observers<D, NT> where D: SharedData + 'static, NT: Node<PBFT<D>> + 
 
                                     let message = PBFTMessage::ObserverMessage(ObserverMessage::ObserverRegisterResponse(res));
 
-                                    self.send_node.send(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), connected_client, true);
+                                    self.send_node.send(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), connected_client, true).unwrap();
 
                                     if let Some((view, seq)) = &self.last_normal_event {
                                         let message: SysMsg<D> = SystemMessage::from_protocol_message(PBFTMessage::ObserverMessage(ObserverMessage::ObservedValue(ObserveEventKind::NormalPhase((view.clone(), seq.clone())))));
 
-                                        self.send_node.send(NetworkMessageKind::from(message), connected_client, true);
+                                        self.send_node.send(NetworkMessageKind::from(message), connected_client, true).unwrap();
                                     }
 
                                     if let Some(last_event) = &self.last_event {
                                         let message: SysMsg<D> = SystemMessage::from_protocol_message(PBFTMessage::ObserverMessage(ObserverMessage::ObservedValue(last_event.clone())));
 
-                                        self.send_node.send(NetworkMessageKind::from(message), connected_client, true);
+                                        self.send_node.send(NetworkMessageKind::from(message), connected_client, true).unwrap();
                                     }
                                 }
                                 ConnState::Disconnected(disconnected_client) => {
@@ -112,7 +112,7 @@ impl<D, NT> Observers<D, NT> where D: SharedData + 'static, NT: Node<PBFT<D>> + 
 
                             let targets = NodeId::targets(registered_obs);
 
-                            self.send_node.broadcast(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
+                            self.send_node.broadcast(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets).unwrap();
                         }
                     }
                 }

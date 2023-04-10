@@ -21,6 +21,7 @@ use febft_communication::{Node};
 use febft_execution::app::{Request, Service};
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
+use febft_messages::timeouts::{ClientRqInfo, Timeouts};
 
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
@@ -29,7 +30,6 @@ use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::PBFT;
 use crate::bft::sync::view::ViewInfo;
-use crate::bft::timeouts::{ClientRqInfo, TimeoutKind, Timeouts};
 
 use super::{AbstractSynchronizer, Synchronizer, SynchronizerStatus, TimeoutPhase};
 
@@ -257,9 +257,11 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     fn watch_request_impl(
         &self,
         _phase: TimeoutPhase,
-        _digest: Digest,
-        _timeouts: &Timeouts,
-    ) {}
+        digest: Digest,
+        timeouts: &Timeouts,
+    ) {
+        timeouts.timeout_client_requests(self.timeout_dur.get(), vec![digest]);
+    }
 
     /// Watch a client request with the digest `digest`.
     pub fn watch_request(&self, digest: Digest, timeouts: &Timeouts) {

@@ -89,7 +89,7 @@ impl<S, NT> Replier<S, NT> where S: Service + 'static, NT: Node<PBFT<S::Data>> +
                         // but for now this will do
                         if let Some((message, last_peer_id)) = curr_send.take() {
                             let flush = peer_id != last_peer_id;
-                            self.send_node.send(message, last_peer_id, flush);
+                            self.send_node.send(message, last_peer_id, flush).unwrap();
                         }
 
                         // store previous reply message and peer id,
@@ -107,7 +107,7 @@ impl<S, NT> Replier<S, NT> where S: Service + 'static, NT: Node<PBFT<S::Data>> +
 
                     // deliver last reply
                     if let Some((message, last_peer_id)) = curr_send {
-                        self.send_node.send(message, last_peer_id, true);
+                        self.send_node.send(message, last_peer_id, true).unwrap();
                     } else {
                         // slightly optimize code path;
                         // the previous if branch will always execute

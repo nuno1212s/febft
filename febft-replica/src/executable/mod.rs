@@ -3,7 +3,7 @@
 use log::error;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use febft_pbft_consensus::bft::message::{Message, ObserveEventKind};
+use febft_pbft_consensus::bft::message::{ObserveEventKind};
 use febft_pbft_consensus::bft::observer::{MessageType, ObserverHandle};
 use febft_pbft_consensus::bft::PBFT;
 use febft_common::{channel, threadpool};
@@ -15,7 +15,7 @@ use febft_communication::{Node};
 use febft_communication::message::{NetworkMessageKind};
 use febft_execution::app::{BatchReplies, Reply, Request, Service, State, UnorderedBatch, UpdateBatch};
 use febft_execution::{ExecutionRequest, ExecutorHandle};
-use febft_messages::messages::{ReplyMessage, SystemMessage};
+use febft_messages::messages::{Message, ReplyMessage, SystemMessage};
 use crate::server::client_replier::ReplyHandle;
 
 const EXECUTING_BUFFER: usize = 8096;

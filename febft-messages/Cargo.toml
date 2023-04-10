@@ -23,3 +23,6 @@ febft-communication = { path = "../febft-communication" }
 febft-execution = { path = "../febft-execution" }
 febft-capnp = { path = "../febft-capnp", optional = true }
 serde = { version = "*", optional = true }
+
+chrono = "0.4.24"
+log = "0.4.17"

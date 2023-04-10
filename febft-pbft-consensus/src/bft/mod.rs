@@ -7,7 +7,6 @@ pub mod consensus;
 pub mod cst;
 pub mod proposer;
 pub mod sync;
-pub mod timeouts;
 pub mod msg_log;
 pub mod config;
 pub mod message;
@@ -150,6 +149,7 @@ pub enum SyncPhaseRes {
     SyncProtocolFinished,
     RunCSTProtocol,
 }
+
 /*
 /// a PBFT based ordering protocol
 pub struct PBFTOrderProtocol<D: SharedData + 'static, NT: Node<PBFT<D>> + 'static> {

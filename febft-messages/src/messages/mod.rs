@@ -1,11 +1,57 @@
+use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use febft_common::ordering::{Orderable, SeqNo};
-use febft_communication::message::StoredMessage;
+use febft_common::error::*;
+use febft_communication::message::{Header, NetworkMessage, StoredMessage};
 use febft_execution::serialize::SharedData;
-use crate::serialize::OrderingProtocolMessage;
+use crate::serialize::{OrderingProtocolMessage, System};
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
+use crate::timeouts::Timeout;
+
+
+/// The `Message` type encompasses all the messages traded between different
+/// asynchronous tasks in the system.
+///
+pub enum Message<D> where D: SharedData {
+    /// Same as `Message::ExecutionFinished`, but includes a snapshot of
+    /// the application state.
+    ///
+    /// This is useful for local checkpoints.
+    ExecutionFinishedWithAppstate((SeqNo, D::State)),
+    /// We received a timeout from the timeouts layer.
+    Timeout(Timeout),
+}
+
+impl<D> Debug for Message<D> where D: SharedData {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Message::ExecutionFinishedWithAppstate(_) => {
+                write!(f, "Execution finished")
+            }
+            Message::Timeout(_) => {
+                write!(f, "timeout")
+            }
+        }
+    }
+}
+
+impl<D: SharedData> Message<D> {
+    /// Returns the `Header` of this message, if it is
+    /// a `SystemMessage`.
+    pub fn header(&self) -> Result<&Header> {
+        match self {
+            Message::ExecutionFinishedWithAppstate(_) =>
+                Err("Expected System found ExecutionFinishedWithAppstate")
+                    .wrapped(ErrorKind::CommunicationMessage),
+            Message::Timeout(_) =>
+                Err("Expected System found Timeout")
+                    .wrapped(ErrorKind::CommunicationMessage),
+        }
+    }
+}
+
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub enum SystemMessage<D: SharedData, P> {

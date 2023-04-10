@@ -15,14 +15,13 @@ use febft_execution::app::{Request, Service, UnorderedBatch};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{RequestMessage, SystemMessage};
+use febft_messages::timeouts::Timeouts;
 use crate::bft::consensus::ConsensusGuard;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, PBFTMessage};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::PBFT;
 use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
-use crate::bft::timeouts::{Timeouts};
-
 use super::sync::{Synchronizer, AbstractSynchronizer};
 
 pub type BatchType<R> = Vec<StoredMessage<RequestMessage<R>>>;

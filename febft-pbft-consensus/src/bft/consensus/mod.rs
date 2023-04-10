@@ -24,6 +24,7 @@ use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{RequestMessage, SystemMessage};
+use febft_messages::timeouts::Timeouts;
 
 use self::replica_consensus::ReplicaConsensus;
 use crate::bft::consensus::replica_consensus::ReplicaPreparingPollStatus;
@@ -41,7 +42,6 @@ use crate::bft::follower::FollowerHandle;
 use crate::bft::observer::ObserverHandle;
 
 use crate::bft::sync::view::ViewInfo;
-use crate::bft::timeouts::{Timeout, Timeouts};
 
 pub mod follower_consensus;
 pub mod replica_consensus;

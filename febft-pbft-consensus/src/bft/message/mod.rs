@@ -23,7 +23,6 @@ use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, P
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::RequestMessage;
 
-use crate::bft::timeouts::{Timeout, TimeoutKind};
 use crate::bft::sync::LeaderCollects;
 use crate::bft::cst::RecoveryState;
 use crate::bft::msg_log::decisions::CollectData;
@@ -31,55 +30,6 @@ use crate::bft::PBFT;
 use crate::bft::sync::view::ViewInfo;
 
 pub mod serialize;
-
-/*
-impl<S, O, P> StoredMessage<SystemMessage<S, O, P>> {
-    /// Convert the inner `SystemMessage` into a `ConsensusMessage`,
-    /// if possible, else return the original message.
-    pub fn into_consensus(self) -> Either<Self, StoredMessage<ConsensusMessage>> {
-        let (header, message) = self.into_inner();
-        match message {
-            SystemMessage::Consensus(message) => {
-                Right(StoredMessage::new(header, message))
-            },
-            message => {
-                Left(StoredMessage::new(header, message))
-            },
-        }
-    }
-}
-*/
-
-/// The `Message` type encompasses all the messages traded between different
-/// asynchronous tasks in the system.
-///
-pub enum Message<D> where D: SharedData {
-    /// Client requests and process sub-protocol messages.
-    System(NetworkMessage<PBFT<D>>),
-    /// Same as `Message::ExecutionFinished`, but includes a snapshot of
-    /// the application state.
-    ///
-    /// This is useful for local checkpoints.
-    ExecutionFinishedWithAppstate((SeqNo, D::State)),
-    /// We received a timeout from the timeouts layer.
-    Timeout(Timeout),
-}
-
-impl<D> Debug for Message<D> where D: SharedData {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Message::System(network) => {
-                write!(f, "System message {:?} ({:?})", network.header.digest(), network.message)
-            }
-            Message::ExecutionFinishedWithAppstate(_) => {
-                write!(f, "Execution finished")
-            }
-            Message::Timeout(_) => {
-                write!(f, "timeout")
-            }
-        }
-    }
-}
 
 /// PBFT protocol messages
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
@@ -448,25 +398,6 @@ impl Debug for ObserveEventKind {
             ObserveEventKind::Executed(seq) => {
                 write!(f, "Executed the consensus instance {:?}", seq)
             }
-        }
-    }
-}
-
-///}@
-
-impl<D: SharedData> Message<D> {
-    /// Returns the `Header` of this message, if it is
-    /// a `SystemMessage`.
-    pub fn header(&self) -> Result<&Header> {
-        match self {
-            Message::System(msg) =>
-                Ok(&msg.header),
-            Message::ExecutionFinishedWithAppstate(_) =>
-                Err("Expected System found ExecutionFinishedWithAppstate")
-                    .wrapped(ErrorKind::CommunicationMessage),
-            Message::Timeout(_) =>
-                Err("Expected System found Timeout")
-                    .wrapped(ErrorKind::CommunicationMessage),
         }
     }
 }
