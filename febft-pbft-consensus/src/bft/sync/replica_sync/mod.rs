@@ -70,7 +70,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         timeouts: &Timeouts,
         node: &NT,
     )
-        where ST: StateTransferMessage, NT: Node<PBFT<D, ST>> {
+        where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
         // - add requests from STOP into client requests
@@ -106,7 +106,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         timeouts: &Timeouts,
         node: &NT,
         timed_out: Option<Vec<StoredMessage<RequestMessage<D::Request>>>>,
-    ) where ST: StateTransferMessage, NT: Node<PBFT<D, ST>> {
+    ) where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
         // stop all timers
         self.unwatch_all_requests(timeouts);
 
@@ -385,7 +385,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         timed_out: Vec<StoredMessage<RequestMessage<D::Request>>>,
         node: &NT,
         _log: &PendingRequestLog<D>,
-    ) where ST: StateTransferMessage, NT: Node<PBFT<D, ST>> {
+    ) where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
         let message = SystemMessage::ForwardedRequestMessage(ForwardedRequestsMessage::new(timed_out));
         let targets = NodeId::targets(0..base_sync.view().params().n());
         node.broadcast(NetworkMessageKind::from(message), targets);

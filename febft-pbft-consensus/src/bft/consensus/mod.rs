@@ -289,12 +289,12 @@ pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static
 
 ///Accessory services for the base consensus instance
 /// This is structured like this to reuse as much code as possible so we can reduce fault locations
-pub enum ConsensusAccessory<D: SharedData + 'static, ST: SharedData + 'static> {
+pub enum ConsensusAccessory<D: SharedData + 'static, ST: StateTransferMessage + 'static> {
     Follower,
     Replica(ReplicaConsensus<D, ST>),
 }
 
-impl<D: SharedData + 'static> AbstractConsensus<D> for Consensus<D> {
+impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> AbstractConsensus<D> for Consensus<D, ST> {
     fn sequence_number(&self) -> SeqNo {
         self.tbo.curr_seq
     }
@@ -319,7 +319,7 @@ impl<D: SharedData + 'static> AbstractConsensus<D> for Consensus<D> {
         let mut reqs = Vec::with_capacity(dec_log.proofs().len());
 
         for proof in dec_log.proofs() {
-            if !proof.are_pre_prepares_ordered() {
+            if !proof.are_pre_prepares_ordered()? {
                 unreachable!()
             }
 
@@ -1039,9 +1039,10 @@ impl<D, ST> Deref for Consensus<D, ST>
     }
 }
 
-impl<D> DerefMut for Consensus<D>
+impl<D, ST> DerefMut for Consensus<D, ST>
     where
-        D: SharedData + 'static
+        D: SharedData + 'static,
+        ST: StateTransferMessage + 'static
 {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {

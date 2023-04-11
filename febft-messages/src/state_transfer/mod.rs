@@ -3,8 +3,14 @@ use febft_execution::serialize::SharedData;
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo};
-use crate::ordering_protocol::OrderingProtocolImpl;
-use crate::serialize::StateTransferMessage;
+use febft_communication::message::StoredMessage;
+use febft_communication::Node;
+use crate::messages::{Protocol, StateTransfer};
+use crate::ordering_protocol::OrderingProtocol;
+use crate::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
+use crate::timeouts::Timeouts;
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
 
 
 /// Represents a local checkpoint.
@@ -27,7 +33,7 @@ impl<S> Orderable for Checkpoint<S> {
 }
 
 impl<S> Checkpoint<S> {
-    pub(crate) fn new(seq: SeqNo, app_state: S) -> Arc<ReadOnly<Self>> {
+    pub fn new(seq: SeqNo, app_state: S) -> Arc<ReadOnly<Self>> {
         Arc::new(ReadOnly::new(Self {
             seq,
             app_state,
@@ -51,20 +57,51 @@ impl<S> Checkpoint<S> {
     }
 }
 
-/// A trait for the implementation of the state transfer protocol
-pub trait StateTransferProtocol<D: SharedData, SOP: StatefulOrderProtocol<D>> {
+/// The result of processing a message in the state transfer protocol
+pub enum STResult {
+    CstNotNeeded,
+    CstRunning,
+    CstFinished,
+}
 
-    type Serialization : StateTransferMessage;
+/// A trait for the implementation of the state transfer protocol
+pub trait StateTransferProtocol<D, NT> {
+    type Serialization: StateTransferMessage + 'static;
 
     type Config;
 
-    fn initialize(config: Self::Config) -> Result<Self> where Self: Sized;
+    /// Initialize the state transferring protocol with the given configuration, timeouts and communication layer
+    fn initialize(config: Self::Config, timeouts: Timeouts, node: Arc<NT>) -> Result<Self>
+        where Self: Sized;
 
+    /// Handle a state transfer protocol message that was received while executing the ordering protocol
+    fn handle_off_ctx_message<OP>(&mut self,
+                                     order_protocol: &mut OP,
+                                     message: StoredMessage<StateTransfer<<Self::Serialization as StateTransferMessage>::StateTransferMessage>>)
+                                     -> Result<STResult>
+        where D: SharedData + 'static,
+              OP: StatefulOrderProtocol<D, NT>;
+
+    /// Process a state transfer protocol message
+    fn process_message<OP>(&mut self,
+                              order_protocol: &mut OP,
+                              message: StoredMessage<StateTransfer<<Self::Serialization as StateTransferMessage>::StateTransferMessage>>)
+                              -> Result<STResult>
+        where D: SharedData + 'static,
+              OP: StatefulOrderProtocol<D, NT>;
 }
 
-/// An order protocol
-pub trait StatefulOrderProtocol<D: SharedData> {
+/// The basic methods needed for a view
+pub trait NetworkView {
+    fn quorum(&self) -> usize;
 
+    fn f(&self) -> usize;
+
+    fn n(&self) -> usize;
+}
+
+/// An order protocol that uses the state transfer protocol to manage its state.
+pub trait StatefulOrderProtocol<D: SharedData + 'static, NT>: OrderingProtocol<D, NT> {
     #[cfg(feature = "serialize_capnp")]
     type DecLog: Send + Clone;
 
@@ -72,17 +109,16 @@ pub trait StatefulOrderProtocol<D: SharedData> {
     type DecLog: for<'a> Deserialize<'a> + Serialize + Send + Clone;
 
     #[cfg(feature = "serialize_capnp")]
-    type ViewInfo: Send + Clone;
+    type ViewInfo: NetworkView + Send + Clone;
 
     #[cfg(feature = "serialize_serde")]
-    type ViewInfo: for<'a> Deserialize<'a> + Serialize + Send + Clone;
+    type ViewInfo: NetworkView + for<'a> Deserialize<'a> + Serialize + Send + Clone;
 
     fn view(&self) -> Self::ViewInfo;
 
-    fn install_state(&mut self, state: D::State, view_info: Self::ViewInfo, dec_log: Self::DecLog) -> Result<(D::State, Vec<D::Request>)>;
+    fn install_state(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>, view_info: Self::ViewInfo, dec_log: Self::DecLog) -> Result<(D::State, Vec<D::Request>)>;
 
-    fn snapshot_log(&mut self) -> Result<((D::State, SeqNo), Self::ViewInfo, Self::DecLog)>;
-
+    fn snapshot_log(&mut self) -> Result<(Arc<ReadOnly<Checkpoint<D::State>>>, Self::ViewInfo, Self::DecLog)>;
 
     #[cfg(feature = "serialize_capnp")]
     fn serialize_declog_capnp(builder: febft_capnp::cst_messages_capnp::dec_log::Builder, msg: &Self::DecLog) -> Result<()>;
@@ -95,13 +131,4 @@ pub trait StatefulOrderProtocol<D: SharedData> {
 
     #[cfg(feature = "serialize_capnp")]
     fn deserialize_view_capnp(reader: febft_capnp::cst_messages_capnp::view_info::Reader) -> Result<Self::ViewInfo>;
-
-
-}
-
-/// The result of processing a message in the state transfer protocol
-pub enum STResult {
-    CstNotNeeded,
-    CstRunning,
-    CstFinished,
 }

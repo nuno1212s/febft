@@ -26,7 +26,7 @@ default = [
     "febft-common/persistent_db_rocksdb"
 ]
 
-serialize_serde = ["febft-capnp", "serde", "serde_bytes", "bincode"]
+serialize_serde = ["febft-capnp", "serde", "serde_bytes", "bincode", "febft-common/serialize_serde"]
 serialize_capnp = ["febft-capnp"]
 
 [dev-dependencies]

@@ -4,6 +4,7 @@
 using Rust = import "rust.capnp";
 using SrvMsgs = import "service_messages.capnp";
 using Consensus = import "consensus_messages.capnp";
+using StateTransfer = import "cst_messages.capnp";
 
 struct System {
     union {
@@ -14,6 +15,7 @@ struct System {
         fwdRequests      @4 :List(SrvMsgs.ForwardedRequest);
         protocol         @5 :Consensus.ProtocolMessage;
         fwdProtocol      @6 :ForwardedProtocol;
+        stateTransfer    @7 :StateTransfer.CstMessage;
     }
 }
 

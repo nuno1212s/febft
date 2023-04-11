@@ -3,11 +3,11 @@
 using Rust = import "rust.capnp";
 using SrvMsgs = import "service_messages.capnp";
 
-struct CstMessage {}
+struct CstMessage {
+}
 
 struct DecLog {
-    union {
-    }
+
 }
 
 struct ViewInfo {

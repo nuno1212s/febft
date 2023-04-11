@@ -4,12 +4,12 @@ use febft_common::error::*;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, StoredMessage};
 use febft_communication::serialize::{Buf, Serializable};
-use crate::messages::{ForwardedProtocolMessage, ForwardedRequestsMessage, Protocol, ReplyMessage, RequestMessage, SystemMessage};
-use crate::serialize::{OrderingProtocolMessage, StateTransferMessage, System};
+use crate::messages::{ForwardedProtocolMessage, ForwardedRequestsMessage, Protocol, ReplyMessage, RequestMessage, StateTransfer, SystemMessage};
+use crate::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg};
 
 const DEFAULT_SERIALIZE_BUFFER_SIZE: usize = 1024;
 
-pub type Message<D, P, SP> = <System<D, P, SP> as Serializable>::Message;
+pub type Message<D, P, SP> = <ServiceMsg<D, P, SP> as Serializable>::Message;
 
 pub(super) fn serialize_message<D, P, SP>(builder: messages_capnp::system::Builder, msg: &Message<D, P, SP>) -> Result<()> where D: SharedData, P: OrderingProtocolMessage, SP: StateTransferMessage {
     match msg {
@@ -116,6 +116,12 @@ pub(super) fn deserialize_message<D, P, ST>(reader: messages_capnp::system::Read
             }
 
             Ok(SystemMessage::ForwardedRequestMessage(ForwardedRequestsMessage::new(rqs)))
+        }
+        messages_capnp::system::WhichReader::StateTransfer(Ok(st)) => {
+            Ok(SystemMessage::StateTransferMessage(StateTransfer::new(ST::deserialize_capnp(st)?)))
+        }
+        messages_capnp::system::WhichReader::StateTransfer(Err(err)) => {
+            Err(Error::wrapped(ErrorKind::CommunicationSerialize, err))
         }
         messages_capnp::system::WhichReader::Request(Err(err)) => {
             Err(Error::wrapped(ErrorKind::CommunicationSerialize, err))

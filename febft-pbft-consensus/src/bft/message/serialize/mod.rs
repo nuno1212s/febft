@@ -65,7 +65,7 @@ pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
 pub struct PBFTConsensus<D: SharedData>(PhantomData<D>);
 
 impl<D> OrderingProtocolMessage for PBFTConsensus<D> where D: SharedData {
-    type ProtocolMessage = PBFTMessage<D::State, D::Request>;
+    type ProtocolMessage = PBFTMessage<D::Request>;
 
     #[cfg(feature = "serialize_capnp")]
     fn serialize_capnp(builder: febft_capnp::consensus_messages_capnp::protocol_message::Builder, msg: &Self::ProtocolMessage) -> Result<()> {

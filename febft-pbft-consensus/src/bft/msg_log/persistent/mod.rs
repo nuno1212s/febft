@@ -23,6 +23,7 @@ use febft_communication::message::{Header, StoredMessage};
 use febft_execution::app::{Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
+use febft_messages::state_transfer::Checkpoint;
 
 use crate::bft::msg_log::persistent::serialization::{make_proof_info};
 

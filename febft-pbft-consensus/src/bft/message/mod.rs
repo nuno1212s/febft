@@ -33,7 +33,7 @@ pub mod serialize;
 /// PBFT protocol messages
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub enum PBFTMessage<S, R> {
+pub enum PBFTMessage<R> {
     /// Consensus message
     Consensus(ConsensusMessage<R>),
     FwdConsensus(FwdConsensusMessage<R>),
@@ -43,7 +43,7 @@ pub enum PBFTMessage<S, R> {
     ObserverMessage(ObserverMessage),
 }
 
-impl<S, R> Debug for PBFTMessage<S, R> {
+impl<R> Debug for PBFTMessage<R> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             PBFTMessage::Consensus(_) => {
@@ -51,9 +51,6 @@ impl<S, R> Debug for PBFTMessage<S, R> {
             }
             PBFTMessage::FwdConsensus(_) => {
                 write!(f, "Forwarded consensus msg")
-            }
-            PBFTMessage::Cst(_) => {
-                write!(f, "CST msg")
             }
             PBFTMessage::ViewChange(_) => {
                 write!(f, "View change msg")

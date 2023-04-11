@@ -75,7 +75,7 @@ pub(super) enum ReplicaPreparingPollStatus {
     MoveToPreparing,
 }
 
-impl<D: SharedData + 'static, ST: StateTransferMessage> ReplicaConsensus<D, ST> {
+impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ReplicaConsensus<D, ST> {
     pub(super) fn handle_pre_prepare_successful<NT>(
         &mut self,
         seq: SeqNo,

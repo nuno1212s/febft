@@ -13,7 +13,7 @@ pub mod capnp;
 //We do not need a serde module since serde serialization is just done on the network level.
 
 /// The abstraction for ordering protocol messages.
-pub trait OrderingProtocolMessage {
+pub trait OrderingProtocolMessage: Send {
     #[cfg(feature = "serialize_capnp")]
     type ProtocolMessage: Send + Clone;
 
@@ -29,7 +29,7 @@ pub trait OrderingProtocolMessage {
 
 /// The abstraction for state transfer protocol messages.
 /// This allows us to have any state transfer protocol work with the same backbone
-pub trait StateTransferMessage {
+pub trait StateTransferMessage: Send {
     #[cfg(feature = "serialize_capnp")]
     type StateTransferMessage: Send + Clone;
 
@@ -44,9 +44,9 @@ pub trait StateTransferMessage {
 }
 
 /// The type that encapsulates all the serializing, so we don't have to constantly use SystemMessage
-pub struct System<D: SharedData, P: OrderingProtocolMessage, S: StateTransferMessage>(PhantomData<D>, PhantomData<P>, PhantomData<S>);
+pub struct ServiceMsg<D: SharedData, P: OrderingProtocolMessage, S: StateTransferMessage>(PhantomData<D>, PhantomData<P>, PhantomData<S>);
 
-impl<D: SharedData, P: OrderingProtocolMessage, S: StateTransferMessage> Serializable for System<D, P, S> {
+impl<D: SharedData, P: OrderingProtocolMessage, S: StateTransferMessage> Serializable for ServiceMsg<D, P, S> {
     type Message = SystemMessage<D, P::ProtocolMessage, S::StateTransferMessage>;
 
     #[cfg(feature = "serialize_capnp")]

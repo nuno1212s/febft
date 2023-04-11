@@ -865,9 +865,9 @@ impl<D> Synchronizer<D>
 
                 // leader has already performed this computation in the
                 // STOP-DATA phase of Mod-SMaRt
-                let signed: Vec<_> = signed_collects::<D, _>(node, collects);
+                let signed: Vec<_> = signed_collects::<D, _, _>(node, collects);
 
-                let proof = highest_proof::<D, _, _>(&current_view, node, signed.iter());
+                let proof = highest_proof::<D, _, _, _>(&current_view, node, signed.iter());
 
                 let curr_cid = proof
                     .map(|p| p.sequence_number())
@@ -954,7 +954,7 @@ impl<D> Synchronizer<D>
         timeouts: &Timeouts,
         _log: &DecidedLog<D>,
     )
-        where ST: StateTransferMessage, NT: Node<PBFT<D, ST>>
+        where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>>
     {
         match (&*self.phase.borrow(), &timed_out) {
             // we have received STOP messages from peer nodes,
@@ -1139,7 +1139,7 @@ impl<D> Synchronizer<D>
                                     timed_out: Vec<StoredMessage<RequestMessage<D::Request>>>,
                                     node: &NT,
                                     log: &PendingRequestLog<D>)
-        where ST: StateTransferMessage, NT: Node<PBFT<D, ST>> {
+        where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {}
             SynchronizerAccessory::Replica(rep) => {
@@ -1187,9 +1187,9 @@ impl<D> Synchronizer<D>
         view: &ViewInfo,
         node: &NT,
     ) -> Option<&'a Proof<D::Request>>
-        where ST: StateTransferMessage, NT: Node<PBFT<D, ST>>
+        where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>>
     {
-        highest_proof::<D, _, _>(&view, node, guard.values())
+        highest_proof::<D, _, _, _>(&view, node, guard.values())
     }
 }
 
@@ -1397,7 +1397,7 @@ fn signed_collects<D, ST, NT>(
 ) -> Vec<StoredMessage<ViewChangeMessage<D::Request>>>
     where
         D: SharedData + 'static,
-        ST: StateTransferMessage,
+        ST: StateTransferMessage + 'static,
         NT: Node<PBFT<D, ST>>
 {
     collects
@@ -1409,7 +1409,7 @@ fn signed_collects<D, ST, NT>(
 fn validate_signature<'a, D, M, ST, NT>(node: &'a NT, stored: &'a StoredMessage<M>) -> bool
     where
         D: SharedData + 'static,
-        ST: StateTransferMessage,
+        ST: StateTransferMessage + 'static,
         NT: Node<PBFT<D, ST>>
 {
     //TODO: Fix this as I believe it will always be false
@@ -1436,7 +1436,7 @@ fn highest_proof<'a, D, I, ST, NT>(
     where
         D: SharedData + 'static,
         I: Iterator<Item=&'a StoredMessage<ViewChangeMessage<D::Request>>>,
-        ST: StateTransferMessage,
+        ST: StateTransferMessage + 'static,
         NT: Node<PBFT<D, ST>>
 {
     collect_data(collects)
@@ -1458,7 +1458,7 @@ fn highest_proof<'a, D, I, ST, NT>(
                         .unwrap_or(false)
                 })
                 .filter(move |&stored|
-                    { validate_signature::<D, _, _>(node, stored) })
+                    { validate_signature::<D, _, _, _>(node, stored) })
                 .count() >= view.params().quorum();
 
             let prepares_valid = proof
@@ -1472,7 +1472,7 @@ fn highest_proof<'a, D, I, ST, NT>(
                         .unwrap_or(false)
                 })
                 .filter(move |&stored|
-                    { validate_signature::<D, _, _>(node, stored) })
+                    { validate_signature::<D, _, _, _>(node, stored) })
                 .count() >= view.params().quorum();
 
             commits_valid && prepares_valid

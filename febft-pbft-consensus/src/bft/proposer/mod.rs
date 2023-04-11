@@ -1,6 +1,7 @@
 pub mod follower_proposer;
 
 use std::cmp::max;
+use std::marker::PhantomData;
 use log::{error, warn, debug, info, trace};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -32,11 +33,8 @@ pub type BatchType<R> = Vec<StoredMessage<RequestMessage<R>>>;
 ///Handles taking requests from the client pools and storing the requests in the log,
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
-pub struct Proposer<D, ST, NT>
-    where D: SharedData + 'static,
-          ST: StateTransferMessage,
-          NT: Node<PBFT<D, ST>> {
-
+pub struct Proposer<D, NT>
+    where D: SharedData + 'static {
     node_ref: Arc<NT>,
     synchronizer: Arc<Synchronizer<D>>,
     timeouts: Timeouts,
@@ -81,9 +79,7 @@ impl<D> ProposeStats<D> where D: SharedData {
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
 
-impl<D, ST, NT> Proposer<D, ST, NT> where D: SharedData + 'static,
-                                          ST: StateTransferMessage + 'static,
-                                          NT: Node<PBFT<D, ST>> {
+impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
     pub fn new(
         node: Arc<NT>,
         sync: Arc<Synchronizer<D>>,
@@ -114,7 +110,9 @@ impl<D, ST, NT> Proposer<D, ST, NT> where D: SharedData + 'static,
     }
 
     ///Start this work
-    pub fn start(self: Arc<Self>) -> JoinHandle<()> {
+    pub fn start<ST>(self: Arc<Self>) -> JoinHandle<()>
+        where ST: StateTransferMessage + 'static,
+              NT: Node<PBFT<D, ST>> {
         std::thread::Builder::new()
             .spawn(move || {
 
@@ -264,10 +262,11 @@ impl<D, ST, NT> Proposer<D, ST, NT> where D: SharedData + 'static,
     /// Attempt to propose an unordered request batch
     /// Fails if the batch is not large enough or the timeout
     /// Has not yet occurred
-    fn propose_unordered(
+    fn propose_unordered<ST>(
         &self,
         propose: &mut ProposeStats<D>,
-    ) {
+    ) where ST: StateTransferMessage + 'static,
+            NT: Node<PBFT<D, ST>> {
         if !propose.currently_accumulated.is_empty() {
             let current_batch_size = propose.currently_accumulated.len();
 
@@ -329,11 +328,13 @@ impl<D, ST, NT> Proposer<D, ST, NT> where D: SharedData + 'static,
     }
 
     /// attempt to propose the ordered requests that we have collected
-    fn propose_ordered(&self,
-                       is_leader: bool,
-                       propose: &mut ProposeStats<D>,
-                       last_seq: &mut Option<SeqNo>,
-                       debug: &mut DebugStats) {
+    fn propose_ordered<ST>(&self,
+                           is_leader: bool,
+                           propose: &mut ProposeStats<D>,
+                           last_seq: &mut Option<SeqNo>,
+                           debug: &mut DebugStats)
+        where ST: StateTransferMessage + 'static,
+              NT: Node<PBFT<D, ST>> {
 
         //Now let's deal with ordered requests
         if is_leader {
@@ -414,12 +415,12 @@ impl<D, ST, NT> Proposer<D, ST, NT> where D: SharedData + 'static,
 
     /// Proposes a new batch.
     /// (Basically broadcasts it to all of the members)
-    fn propose(
+    fn propose<ST>(
         &self,
         seq: SeqNo,
         view: &ViewInfo,
         currently_accumulated: Vec<StoredMessage<RequestMessage<D::Request>>>,
-    ) {
+    ) where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
         let message = PBFTMessage::Consensus(ConsensusMessage::new(
             seq,
             view.sequence_number(),

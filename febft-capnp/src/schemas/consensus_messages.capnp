@@ -8,8 +8,7 @@ struct ProtocolMessage {
     union {
         consensusMessage     @0 :Consensus;
         viewChangeMessage    @1 :ViewChange;
-        stateTransferMessage @2 :StateTransfer;
-        observerMessage      @3 :ObserverMessage;
+        observerMessage      @2 :ObserverMessage;
     }
 
 }
@@ -25,10 +24,6 @@ struct Consensus {
 }
 
 struct ViewChange {
-
-}
-
-struct StateTransfer {
 
 }
 

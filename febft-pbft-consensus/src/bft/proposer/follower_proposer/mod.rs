@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::sync::{atomic::AtomicBool, Arc};
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
@@ -32,6 +33,7 @@ pub struct FollowerProposer<D, ST, NT>
     target_global_batch_size: usize,
     //Time limit for generating a batch with target_global_batch_size size
     global_batch_time_limit: u128,
+    _phantom: PhantomData<ST>
 }
 
 
@@ -61,6 +63,7 @@ impl<D, ST, NT> FollowerProposer<D, ST, NT>
             node_ref: node,
             target_global_batch_size,
             global_batch_time_limit,
+            _phantom: Default::default(),
         })
     }
 }

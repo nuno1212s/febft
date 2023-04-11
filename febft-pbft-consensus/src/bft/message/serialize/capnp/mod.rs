@@ -24,7 +24,7 @@ use super::{Buf, SharedData};
 const DEFAULT_SERIALIZE_BUFFER_SIZE: usize = 1024;
 
 pub fn serialize_message<D>(mut pbft_message: consensus_messages_capnp::protocol_message::Builder,
-                            m: &PBFTMessage<D::State, D::Request>) -> Result<()> where D: SharedData {
+                            m: &PBFTMessage<D::Request>) -> Result<()> where D: SharedData {
     match m {
         PBFTMessage::Consensus(consensus_msg) => {
             let mut consensus_builder = pbft_message.init_consensus_message();
@@ -47,7 +47,7 @@ pub fn serialize_message<D>(mut pbft_message: consensus_messages_capnp::protocol
     Ok(())
 }
 
-pub fn deserialize_message<D>(pbft_reader: consensus_messages_capnp::protocol_message::Reader) -> Result<PBFTMessage<D::State, D::Request>> where
+pub fn deserialize_message<D>(pbft_reader: consensus_messages_capnp::protocol_message::Reader) -> Result<PBFTMessage<D::Request>> where
     D: SharedData {
     let which = pbft_reader.which().wrapped(ErrorKind::CommunicationSerialize)?;
 

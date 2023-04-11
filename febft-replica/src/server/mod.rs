@@ -28,10 +28,13 @@ use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::{Node};
 use febft_communication::config::NodeConfig;
-use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, StoredMessage, System};
+use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, StoredMessage};
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_messages::messages::{ForwardedRequestsMessage, Message, RequestMessage, SystemMessage};
+use febft_messages::ordering_protocol::OrderingProtocol;
+use febft_messages::serialize::{StateTransferMessage, ServiceMsg};
+use febft_messages::state_transfer::{StatefulOrderProtocol, StateTransferProtocol};
 use febft_messages::timeouts::{Timeout, TimeoutKind, Timeouts};
 use febft_pbft_consensus::bft::message::serialize::PBFTConsensus;
 use crate::executable::{Executor, ReplicaReplier};
@@ -43,64 +46,31 @@ pub mod client_replier;
 pub mod follower_handling;
 // pub mod rq_finalizer;
 
+
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub(crate) enum ReplicaPhase {
-    // the replica is retrieving state from
-    // its peer replicas
-    RetrievingState,
-    // the replica has entered the
-    // synchronization phase of mod-smart
-    SyncPhase,
-    // the replica is on the normal phase
-    // of mod-smart
-    NormalPhase,
+pub(crate) enum ReplicaPhase2 {
+    // The replica is currently executing the ordering protocol
+    OrderingProtocol,
+    // The replica is currently executing the state transfer protocol
+    StateTransferProtocol,
 }
 
-/// Represents a replica in `febft`.
-pub struct Replica<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> {
-    // What phase of the algorithm is this replica currently in
-    phase: ReplicaPhase,
-    // this value is primarily used to switch from
-    // state transfer back to a view change
-    phase_stack: Option<ReplicaPhase>,
-    // The timeout layer, handles timing out requests
+pub struct Replica2<S, OP, ST, NT> {
+    replica_phase: ReplicaPhase2,
+    // The ordering protocol
+    ordering_protocol: OP,
+    state_transfer_protocol: ST,
     timeouts: Timeouts,
-    // The handle to the executor
-    executor: ExecutorHandle<S::Data>,
-    // Consensus state transfer State machine
-    cst: CollabStateTransfer<S::Data>,
-    // Synchronizer state machine
-    synchronizer: Arc<Synchronizer<S::Data>>,
-    //Consensus state machine
-    consensus: Consensus<S::Data>,
-    //The guard for the consensus.
-    //Set to true when there is a consensus running, false when it's ready to receive
-    //A new pre-prepare message
-    consensus_guard: ConsensusGuard,
-    // Check if unordered requests can be proposed.
-    // This can only occur when we are in the normal phase of the state machine
-    unordered_rq_guard: Arc<AtomicBool>,
-
-    // The pending request log. Handles requests received by this replica
-    // Or forwarded by others that have not yet made it into a consensus instance
-    pending_request_log: Arc<PendingRequestLog<S::Data>>,
-    // The log of the decided consensus messages
-    // This is completely owned by the server thread and therefore does not
-    // Require any synchronization
-    decided_log: DecidedLog<S::Data>,
-    // The proposer of this replica
-    proposer: Arc<Proposer<S::Data, NT>>,
+    executor_handle: ExecutorHandle<S::Data>,
     // The networking layer for a Node in the network (either Client or Replica)
     node: Arc<NT>,
     // THe handle to the execution and timeouts handler
     execution_rx: ChannelSyncRx<Message<S::Data>>,
-    //A handle to the observer worker thread
-    observer_handle: ObserverHandle,
 }
 
 /// Represents a configuration used to bootstrap a `Replica`.
 // TODO: load files from persistent storage
-pub struct ReplicaConfig<S: Service, T: PersistentLogModeTrait> {
+pub struct ReplicaConfig<S: Service, OP: OrderingProtocol<S::Data, _>, ST: StateTransferProtocol<S::Data, _>> {
     /// The application logic.
     pub service: S,
 
@@ -113,26 +83,86 @@ pub struct ReplicaConfig<S: Service, T: PersistentLogModeTrait> {
     /// Next sequence number attributed to a request by
     /// the consensus layer.
     pub next_consensus_seq: SeqNo,
-    ///The targetted global batch size
-    pub global_batch_size: usize,
-    ///The time limit for creating that batch, in micro seconds
-    pub batch_timeout: u128,
-    pub max_batch_size: usize,
 
+    /// The configuration for the ordering protocol
+    pub op_config: OP::Config,
+    /// The configuration for the State transfer protocol
+    pub st_config: ST::Config,
+
+    /// The path to the persistent database
     pub db_path: String,
-
-    ///The logging mode
-    pub log_mode: PhantomData<T>,
     /// Check out the docs on `NodeConfig`.
     pub node: NodeConfig,
+}
+
+impl<S, OP, ST, NT> Replica2<S, OP, ST, NT> where S: Service + 'static,
+                                                  OP: OrderingProtocol<S::Data, NT> + 'static,
+                                                  ST: StateTransferProtocol<S::Data, NT> + 'static,
+                                                  NT: Node<ServiceMsg<S::Data, OP::Serialization, ST::Serialization>> {
+
+    pub async fn bootstrap<T>(cfg: ReplicaConfig<S, OP, ST>) -> Result<Self> {
+        let ReplicaConfig  {
+            service,
+            n,
+            f,
+            view,
+            next_consensus_seq,
+            op_config,
+            st_config,
+            db_path,
+            node
+        } = cfg;
+
+        let per_pool_batch_timeout = node_config.client_pool_config.batch_timeout_micros;
+        let per_pool_batch_sleep = node_config.client_pool_config.batch_sleep_micros;
+        let per_pool_batch_size = node_config.client_pool_config.batch_size;
+
+        let log_node_id = node_config.id.clone();
+
+        debug!("Bootstrapping replica, starting with networking");
+
+        let node = NT::bootstrap(node_config).await?;
+
+        let (executor, handle) = Executor::<S, ReplicaReplier, NT>::init_handle();
+        let (exec_tx, exec_rx) = channel::new_bounded_sync(1024);
+
+        // start executor
+        Executor::<S, ReplicaReplier, NT>::new(
+            reply_handle,
+            handle,
+            service,
+            state,
+            node.clone(),
+            exec_tx.clone(),
+            None,
+        )?;
+
+        debug!("Initializing timeouts");
+        // start timeouts handler
+        let timeouts = Timeouts::new::<S::Data>(500, exec_tx.clone());
+
+        // Initialize the ordering protocol
+        let ordering_protocol = OP::initialize(op_config, executor.clone(), timeouts.clone(), node.clone())?;
+
+        let state_transfer_protocol = ST::initialize(st_config, timeouts.clone(), node.clone())?;
+
+        Ok(Self {
+            replica_phase: ReplicaPhase2::StateTransferProtocol,
+            ordering_protocol,
+            state_transfer_protocol,
+            timeouts,
+            executor_handle: executor,
+            node,
+            execution_rx: exec_rx,
+        })
+
+    }
+
 }
 
 impl<S, NT> Replica<S, NT>
     where
         S: Service + Send + 'static,
-        State<S>: Send + Clone + 'static,
-        Request<S>: Send + Clone + 'static,
-        Reply<S>: Send + 'static,
         NT: Node<PBFT<S::Data>> + 'static
 {
     /// Bootstrap a replica in `febft`.
@@ -878,7 +908,7 @@ impl<S, NT> Replica<S, NT>
                         let stopped = self.pending_request_log.clone_pending_requests(&stopped);
 
                         self.synchronizer.begin_view_change(Some(stopped),
-                                                            &* self.node,
+                                                            &*self.node,
                                                             &self.timeouts,
                                                             &self.decided_log);
 

@@ -12,9 +12,9 @@ use febft_messages::state_transfer::Checkpoint;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::msg_log::{Info, operation_key, PERIOD};
-use crate::bft::msg_log::decisions::{ DecisionLog, Proof};
+use crate::bft::msg_log::decisions::{DecisionLog, Proof};
 use crate::bft::msg_log::deciding_log::CompletedBatch;
-use crate::bft::msg_log::persistent::{PersistentLog, WriteMode};
+use crate::bft::msg_log::persistent::{InstallState, PersistentLog, WriteMode};
 use crate::bft::sync::view::ViewInfo;
 
 pub(crate) enum CheckpointState<D> {
@@ -96,39 +96,16 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
     /// Read the current state, if existent, from the persistent storage
     ///
     /// FIXME: The view initialization might have to be changed if we want to introduce reconfiguration
-    pub fn read_current_state(&self, n: usize, f: usize) -> Result<Option<RecoveryState<D::State, D::Request>>> {
+    pub fn read_current_state(&self, n: usize, f: usize) -> Result<Option<(Arc<ReadOnly<Checkpoint<D::State>>>, ViewInfo, DecisionLog<D::Request>)>> {
         let option = self.persistent_log.read_state()?;
 
         if let Some(state) = option {
-            let view_seq = ViewInfo::new(state.0, n, f)?;
 
-            let mut requests = Vec::new();
+            let (view_seq, checkpoint, dec_log) = state;
 
-            for proof in state.2.proofs() {
-                if !proof.are_pre_prepares_ordered()? {
-                    todo!()
-                }
+            let view_seq = ViewInfo::new(view_seq, n, f)?;
 
-                for request in proof.pre_prepares() {
-                    let pre_prepare_rqs = match request.message().kind() {
-                        ConsensusMessageKind::PrePrepare(requests) => {
-                            requests.clone()
-                        }
-                        _ => { unreachable!() }
-                    };
-
-                    for request in pre_prepare_rqs {
-                        requests.push(request.into_inner().1.into_inner_operation());
-                    }
-                }
-            }
-
-            Ok(Some(RecoveryState {
-                view: view_seq,
-                checkpoint: state.1,
-                requests,
-                declog: state.2,
-            }))
+            Ok(Some((checkpoint.clone(), view_seq, dec_log)))
         } else {
             Ok(None)
         }
@@ -139,15 +116,10 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
     /// This method may fail if we are waiting for the latest application
     /// state to be returned by the execution layer.
     ///
-    pub fn snapshot(&self, view: ViewInfo) -> Result<RecoveryState<D::State, D::Request>> {
+    pub fn snapshot(&self, view: ViewInfo) -> Result<(Arc<ReadOnly<Checkpoint<D::State>>>, ViewInfo, DecisionLog<D::Request>)> {
         match &self.checkpoint {
-            CheckpointState::Complete(checkpoint) => Ok(RecoveryState::new(
-                view,
-                checkpoint.clone(),
-                //TODO:
-                vec![],
-                self.dec_log.clone(),
-            )),
+            CheckpointState::Complete(checkpoint) =>
+                Ok((checkpoint.clone(), view, self.dec_log.clone())),
             _ => Err("Checkpoint to be finalized").wrapped(ErrorKind::MsgLogPersistent),
         }
     }
@@ -219,18 +191,20 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
     }
 
     /// Update the log state, received from the CST protocol.
-    pub fn install_state(&mut self, last_seq: SeqNo, rs: RecoveryState<D::State, D::Request>) {
+    pub fn install_state(&mut self, checkpoint: Arc<ReadOnly<Checkpoint<D::State>>>, dec_log: DecisionLog<D::Request>) {
 
         //Replace the log
-        self.dec_log = rs.declog.clone();
+        self.dec_log = dec_log.clone();
+
+        let last_seq = self.dec_log.last_execution().unwrap_or(SeqNo::ZERO);
 
         // self.decided = rs.requests;
-        self.checkpoint = CheckpointState::Complete(rs.checkpoint.clone());
+        self.checkpoint = CheckpointState::Complete(checkpoint.clone());
         self.curr_seq = last_seq.clone();
 
         if let Err(err) = self.persistent_log
             .write_install_state(WriteMode::NonBlockingSync(None),
-                                 (last_seq, rs.checkpoint, rs.declog)) {
+                                 (last_seq, checkpoint, dec_log)) {
             error!("Failed to persist message {:?}", err);
         }
     }

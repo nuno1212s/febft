@@ -1,3 +1,5 @@
+#[cfg(feature = "serialize_serde")]
+use serde::{Serialize, Deserialize};
 
 /// A `NodeId` represents the id of a process in the BFT system.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]

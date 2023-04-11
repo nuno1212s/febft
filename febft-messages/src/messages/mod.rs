@@ -1,11 +1,10 @@
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
-use std::os::macos::raw::stat;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_common::error::*;
 use febft_communication::message::{Header, NetworkMessage, StoredMessage};
 use febft_execution::serialize::SharedData;
-use crate::serialize::{OrderingProtocolMessage, System};
+use crate::serialize::{OrderingProtocolMessage, ServiceMsg};
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
