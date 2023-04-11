@@ -15,7 +15,7 @@ use febft_messages::messages::RequestMessage;
 use crate::bft::message::ConsensusMessage;
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::deciding_log::{DecidingLog};
-use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog};
+use crate::bft::msg_log::decisions::{ DecisionLog};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 
 use self::persistent::{PersistentLog};

@@ -7,13 +7,17 @@ use febft_execution::app::Service;
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::RequestMessage;
+use febft_messages::serialize::StateTransferMessage;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::PBFT;
 
 pub type BatchType<D: SharedData> = Vec<StoredMessage<RequestMessage<D::Request>>>;
 
 ///TODO:
-pub struct FollowerProposer<D: SharedData + 'static, NT: Node<PBFT<D>>> {
+pub struct FollowerProposer<D, ST, NT>
+    where D: SharedData + 'static,
+          ST: StateTransferMessage + 'static,
+          NT: Node<PBFT<D, ST>> {
     batch_channel: (ChannelSyncTx<BatchType<D>>, ChannelSyncRx<BatchType<D>>),
 
     log: Arc<PendingRequestLog<D>>,
@@ -35,7 +39,10 @@ pub struct FollowerProposer<D: SharedData + 'static, NT: Node<PBFT<D>>> {
 const BATCH_CHANNEL_SIZE: usize = 1024;
 
 
-impl<D: SharedData + 'static, NT: Node<PBFT<D>>> FollowerProposer<D, NT> {
+impl<D, ST, NT> FollowerProposer<D, ST, NT>
+    where D: SharedData + 'static,
+          ST: StateTransferMessage + 'static,
+          NT: Node<PBFT<D, ST>> {
     pub fn new(
         node: Arc<NT>,
         log: Arc<PendingRequestLog<D>>,

@@ -24,16 +24,17 @@ use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{RequestMessage, SystemMessage};
+use febft_messages::serialize::StateTransferMessage;
+use febft_messages::state_transfer::Checkpoint;
 use febft_messages::timeouts::Timeouts;
 
 use self::replica_consensus::ReplicaConsensus;
 use crate::bft::consensus::replica_consensus::ReplicaPreparingPollStatus;
 use super::sync::{AbstractSynchronizer, Synchronizer};
-use crate::bft::cst::RecoveryState;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::msg_log::decided_log::{DecidedLog};
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
-use crate::bft::msg_log::decisions::Proof;
+use crate::bft::msg_log::decisions::{DecisionLog, Proof};
 use crate::bft::msg_log::Info;
 
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
@@ -211,7 +212,7 @@ pub struct ConsensusGuard {
 }
 
 impl ConsensusGuard {
-    fn new(seq_no: SeqNo, view: ViewInfo) -> Self {
+    pub(crate) fn new(seq_no: SeqNo, view: ViewInfo) -> Self {
         Self {
             consensus_information: Arc::new(Mutex::new((seq_no, view))),
             consensus_guard: Arc::new(AtomicBool::new(true)),
@@ -262,8 +263,9 @@ pub enum ConsensusStatus<D> where D: SharedData {
 pub trait AbstractConsensus<D: SharedData> {
     fn sequence_number(&self) -> SeqNo;
 
-    fn install_state(&mut self, phase: &RecoveryState<D::State, D::Request>);
+    fn install_state(&mut self, state: D::State, view_info: ViewInfo, dec_log: DecisionLog<D::Request>) -> Result<(D::State, Vec<D::Request>)>;
 
+    fn snapshot_log(&mut self) -> Result<((D::State, SeqNo), ViewInfo, DecisionLog<D::Request>)>;
     /*fn handle_message(&mut self, header: Header, message: ConsensusMessage<Request<S>>,
                       timeouts: &Timeouts,
                       synchronizer: impl AbstractSynchronizer<S>,
@@ -271,7 +273,7 @@ pub trait AbstractConsensus<D: SharedData> {
 }
 
 ///Base consensus state machine implementation
-pub struct Consensus<D: SharedData + 'static> {
+pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static> {
     node_id: NodeId,
     phase: ProtoPhase,
     tbo: TboQueue<D::Request>,
@@ -281,15 +283,15 @@ pub struct Consensus<D: SharedData + 'static> {
 
     // The handle for the executor
     executor_handle: ExecutorHandle<D>,
-
-    accessory: ConsensusAccessory<D>,
+    // Accessory information to the consensus
+    accessory: ConsensusAccessory<D, ST>,
 }
 
 ///Accessory services for the base consensus instance
 /// This is structured like this to reuse as much code as possible so we can reduce fault locations
-pub enum ConsensusAccessory<D: SharedData + 'static> {
+pub enum ConsensusAccessory<D: SharedData + 'static, ST: SharedData + 'static> {
     Follower,
-    Replica(ReplicaConsensus<D>),
+    Replica(ReplicaConsensus<D, ST>),
 }
 
 impl<D: SharedData + 'static> AbstractConsensus<D> for Consensus<D> {
@@ -297,10 +299,10 @@ impl<D: SharedData + 'static> AbstractConsensus<D> for Consensus<D> {
         self.tbo.curr_seq
     }
 
-    fn install_state(&mut self, recovery_state: &RecoveryState<D::State, D::Request>) {
+    fn install_state(&mut self, state: D::State, view_info: ViewInfo, dec_log: DecisionLog<D::Request>) -> Result<(D::State, Vec<D::Request>)> {
         // get the latest seq no
         let seq_no = {
-            let last_exec = recovery_state.decision_log().last_execution();
+            let last_exec = dec_log.last_execution();
             if last_exec.is_none() {
                 self.sequence_number()
             } else {
@@ -313,16 +315,39 @@ impl<D: SharedData + 'static> AbstractConsensus<D> for Consensus<D> {
 
         // try to fetch msgs from tbo queue
         self.signal();
+
+        let mut reqs = Vec::with_capacity(dec_log.proofs().len());
+
+        for proof in dec_log.proofs() {
+            if !proof.are_pre_prepares_ordered() {
+                unreachable!()
+            }
+
+            for pre_prepare in proof.pre_prepares() {
+                let x: &ConsensusMessage<D::Request> = pre_prepare.message();
+
+                match x.kind() {
+                    ConsensusMessageKind::PrePrepare(pre_prepare_reqs) => {
+                        for req in pre_prepare_reqs {
+                            let rq_msg: &RequestMessage<D::Request> = req.message();
+
+                            reqs.push(rq_msg.operation().clone());
+                        }
+                    }
+                    _ => { unreachable!() }
+                }
+            }
+        }
+
+        Ok((state, reqs))
     }
 
-    /*fn handle_message(&mut self, header: Header, message: ConsensusMessage<Request<S>>,
-                      timeouts: &Timeouts, synchronizer: impl AbstractSynchronizer<S>,
-                      decided_log: &mut DecidedLog<S>) {
+    fn snapshot_log(&mut self) -> Result<((D::State, SeqNo), ViewInfo, DecisionLog<D::Request>)> {
         todo!()
-    }*/
+    }
 }
 
-impl<D: SharedData + 'static> Consensus<D> {
+impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, ST> {
     pub fn new_replica(
         node_id: NodeId,
         view: ViewInfo,
@@ -518,7 +543,7 @@ impl<D: SharedData + 'static> Consensus<D> {
         &self,
         requests: Vec<StoredMessage<RequestMessage<D::Request>>>,
         synchronizer: &K,
-    ) -> SysMsg<D>
+    ) -> SysMsg<D, ST>
         where
             K: AbstractSynchronizer<D>,
     {
@@ -564,7 +589,7 @@ impl<D: SharedData + 'static> Consensus<D> {
         timeouts: &Timeouts,
         log: &mut DecidedLog<D>,
         node: &NT,
-    ) where NT: Node<PBFT<D>> {
+    ) where NT: Node<PBFT<D, ST>> {
         match &mut self.accessory {
             ConsensusAccessory::Follower => {}
             ConsensusAccessory::Replica(rep) => {
@@ -595,7 +620,7 @@ impl<D: SharedData + 'static> Consensus<D> {
         log: &mut DecidedLog<D>,
         node: &NT,
     ) -> ConsensusStatus<D>
-        where NT: Node<PBFT<D>> {
+        where NT: Node<PBFT<D, ST>> {
         // FIXME: make sure a replica doesn't vote twice
         // by keeping track of who voted, and not just
         // the amount of votes received
@@ -1001,9 +1026,10 @@ impl<D: SharedData + 'static> Consensus<D> {
     }
 }
 
-impl<D> Deref for Consensus<D>
+impl<D, ST> Deref for Consensus<D, ST>
     where
-        D: SharedData + 'static
+        D: SharedData + 'static,
+        ST: StateTransferMessage + 'static
 {
     type Target = TboQueue<D::Request>;
 

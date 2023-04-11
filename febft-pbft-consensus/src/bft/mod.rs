@@ -4,7 +4,6 @@
 //! with the feature flag `expose_impl`.
 
 pub mod consensus;
-pub mod cst;
 pub mod proposer;
 pub mod sync;
 pub mod msg_log;
@@ -26,28 +25,35 @@ use log4rs::{
 };
 use febft_common::error::*;
 use febft_common::{async_runtime, socket, threadpool};
+use febft_common::error::ErrorKind::CommunicationPeerNotFound;
 use febft_common::globals::Flag;
+use febft_common::node_id::NodeId;
+use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, StoredMessage};
 use febft_communication::Node;
 use febft_communication::serialize::Serializable;
 use febft_execution::app::{Request, Service, State};
+use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{Protocol, SystemMessage};
 use febft_messages::ordering_protocol::{OrderingProtocolImpl, OrderProtocolExecResult, OrderProtocolPoll};
-use febft_messages::serialize::System;
+use febft_messages::serialize::{StateTransferMessage, System};
+use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{AbstractConsensus, Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
-use crate::bft::message::{ConsensusMessage, PBFTMessage, ViewChangeMessage};
+use crate::bft::message::{ConsensusMessage, ObserveEventKind, PBFTMessage, ViewChangeMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::DecidedLog;
-use crate::bft::msg_log::Info;
+use crate::bft::msg_log::{Info, initialize_decided_log, initialize_pending_request_log, initialize_persistent_log};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
+use crate::bft::observer::MessageType;
 use crate::bft::proposer::Proposer;
-use crate::bft::sync::{Synchronizer, SynchronizerPollStatus, SynchronizerStatus};
+use crate::bft::sync::{AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus};
+use crate::bft::sync::view::ViewInfo;
 
 // The types responsible for this protocol
-pub type PBFT<D> = System<D, PBFTConsensus<D>>;
+pub type PBFT<D, ST> = System<D, PBFTConsensus<D>, ST>;
 // The message type for this consensus protocol
-pub type SysMsg<D> = <PBFT<D> as Serializable>::Message;
+pub type SysMsg<D, ST> = <PBFT<D, ST> as Serializable>::Message;
 
 static INITIALIZED: Flag = Flag::new();
 
@@ -150,14 +156,18 @@ pub enum SyncPhaseRes {
     RunCSTProtocol,
 }
 
-/*
+
 /// a PBFT based ordering protocol
-pub struct PBFTOrderProtocol<D: SharedData + 'static, NT: Node<PBFT<D>> + 'static> {
+pub struct PBFTOrderProtocol<D, ST, NT>
+    where
+        D: SharedData + 'static,
+        ST: StateTransferMessage + 'static,
+        NT: Node<PBFT<D, ST>> + 'static {
     // What phase of the consensus algorithm are we currently executing
     phase: ConsensusPhase,
 
     /// The consensus state machine
-    consensus: Consensus<D>,
+    consensus: Consensus<D, ST>,
     /// The synchronizer state machine
     synchronizer: Arc<Synchronizer<D>>,
 
@@ -177,14 +187,61 @@ pub struct PBFTOrderProtocol<D: SharedData + 'static, NT: Node<PBFT<D>> + 'stati
     // Require any synchronization
     decided_log: DecidedLog<D>,
     // The proposer of this replica
-    proposer: Arc<Proposer<D, NT>>,
+    proposer: Arc<Proposer<D, ST, NT>>,
     // The networking layer for a Node in the network (either Client or Replica)
     node: Arc<NT>,
 }
 
-impl<D, NT> OrderingProtocolImpl<PBFTConsensus<D>> for PBFTOrderProtocol<D, NT>
+impl<D, ST, NT> OrderingProtocolImpl<PBFTConsensus<D>> for PBFTOrderProtocol<D, ST, NT>
     where D: SharedData + 'static,
-          NT: Node<PBFT<D>> + 'static {
+          ST: StateTransferMessage + 'static,
+          NT: Node<PBFT<D, ST>> + 'static {
+    type Serialization = PBFTConsensus<D>;
+    type Config = PBFTConfig<D, Self::Serialization, ST, NT>;
+
+    fn initialize(config: Config) -> Result<Self> {
+        let PBFTConfig {
+            node_id,
+            node,
+            executor,
+            observer_handle,
+            follower_handle,
+            view, timeout_dur, db_path,
+            timeouts, proposer_config
+        } = config;
+
+        let sync = Synchronizer::new_replica(view.clone(), timeout_dur);
+
+        let consensus = Consensus::<D, ST>::new_replica(node_id, view.clone(),
+                                                        SeqNo::ZERO, executor.clone(),
+                                                        observer_handle.clone(), follower_handle);
+
+        let consensus_guard = ConsensusGuard::new(consensus.sequence_number(), view.clone());
+
+        let pending_rq_log = Arc::new(initialize_pending_request_log()?);
+
+        let persistent_log = initialize_persistent_log(executor, db_path)?;
+
+        let dec_log = initialize_decided_log::<D>(persistent_log)?;
+
+        let proposer = Proposer::<D, ST, NT>::new(node.clone(), sync.clone(),
+                                                  pending_rq_log.clone(), timeouts,
+                                                  executor.clone(), consensus_guard.clone(),
+                                                  proposer_config, observer_handle.clone());
+
+        Ok(Self {
+            phase: ConsensusPhase::NormalPhase,
+            consensus,
+            synchronizer: sync,
+            consensus_guard,
+            unordered_rq_guard: Arc::new(Default::default()),
+            pending_request_log: pending_rq_log,
+            decided_log: dec_log,
+            proposer,
+            node,
+        })
+    }
+
     fn poll(&mut self) -> OrderProtocolPoll<PBFTMessage<D::State, D::Request>> {
         match self.phase {
             ConsensusPhase::NormalPhase => {
@@ -209,9 +266,9 @@ impl<D, NT> OrderingProtocolImpl<PBFTConsensus<D>> for PBFTOrderProtocol<D, NT>
 }
 
 
-impl<D, NT> PBFTOrderProtocol<D, NT> where D: SharedData + 'static,
-                                           NT: Node<PBFT<D>> + 'static {
-
+impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
+                                                   ST: StateTransferMessage + 'static,
+                                                   NT: Node<PBFT<D, ST>> + 'static {
     fn poll_sync_phase(&mut self) -> OrderProtocolPoll<PBFTMessage<D::State, D::Request>> {
         // retrieve a view change message to be processed
         match self.synchronizer.poll() {
@@ -480,4 +537,70 @@ impl<D, NT> PBFTOrderProtocol<D, NT> where D: SharedData + 'static,
 
         SyncPhaseRes::RunSyncProtocol
     }
-}*/
+}
+
+impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT>
+    where D: SharedData + 'static,
+          ST: StateTransferMessage + 'static,
+          NT: Node<PBFT<D, ST>> + 'static {
+    pub(crate) fn switch_phase(&mut self, new_phase: ConsensusPhase) {
+        let old_phase = self.phase.clone();
+
+        self.phase = new_phase;
+
+        //TODO: Handle locking the consensus to the proposer thread
+        //When we change to another phase to prevent the proposer thread from
+        //Constantly proposing new batches. This is also "fixed" by the fact that the proposer
+        //thread never proposes two batches to the same sequence id (this might have to be changed
+        //however if it's possible to have various proposals for the same seq number in case of leader
+        //Failure or something like that. I think that's impossible though so lets keep it as is)
+
+        if self.phase != old_phase {
+            //If the phase is the same, then we got nothing to do as no states have changed
+
+            match (&old_phase, &self.phase) {
+                (ConsensusPhase::NormalPhase, _) => {
+                    //We want to stop the proposer from trying to propose any requests while we are performing
+                    //Other operations.
+                    self.consensus_guard.lock_consensus();
+                }
+                (ConsensusPhase::SyncPhase, ConsensusPhase::NormalPhase) => {
+                    // When changing from the sync phase to the normal phase
+                    // The phase starts with a SYNC phase, so we don't want to allow
+                    // The proposer to propose anything
+                    self.consensus_guard.lock_consensus();
+                }
+                (_, ConsensusPhase::NormalPhase) => {
+                    //Mark the consensus as available, since we are changing to the normal phase
+                    //And are therefore ready to receive pre-prepares (if are are the leaders)
+                    self.consensus_guard.unlock_consensus();
+                }
+                (_, _) => {}
+            }
+
+            /*
+            Observe event stuff
+            @{
+             */
+            let to_send = match (&old_phase, &self.phase) {
+                (_, ConsensusPhase::SyncPhase) => ObserveEventKind::ViewChangePhase,
+                (_, ConsensusPhase::NormalPhase) => {
+                    let current_view = self.synchronizer.view();
+
+                    let current_seq = self.consensus.sequence_number();
+
+                    ObserveEventKind::NormalPhase((current_view, current_seq))
+                }
+            };
+
+            self.observer_handle
+                .tx()
+                .send(MessageType::Event(to_send))
+                .expect("Failed to notify observer thread");
+
+            /*
+            }@
+            */
+        }
+    }
+}

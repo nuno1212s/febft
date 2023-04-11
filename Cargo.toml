@@ -11,6 +11,7 @@ readme = "README.md"
 members = [
     "febft-common",
     "febft-communication",
+    "febft-state-transfer",
     "febft-capnp",
     "febft-execution",
     "febft-metrics",

@@ -24,7 +24,6 @@ use febft_execution::serialize::SharedData;
 use febft_messages::messages::RequestMessage;
 
 use crate::bft::sync::LeaderCollects;
-use crate::bft::cst::RecoveryState;
 use crate::bft::msg_log::decisions::CollectData;
 use crate::bft::PBFT;
 use crate::bft::sync::view::ViewInfo;
@@ -38,8 +37,6 @@ pub enum PBFTMessage<S, R> {
     /// Consensus message
     Consensus(ConsensusMessage<R>),
     FwdConsensus(FwdConsensusMessage<R>),
-    /// Consensus state transfer messages
-    Cst(CstMessage<S, R>),
     /// View change messages
     ViewChange(ViewChangeMessage<R>),
     //Observer related messages
@@ -116,56 +113,6 @@ pub enum ViewChangeMessageKind<O> {
     Stop(Vec<StoredMessage<RequestMessage<O>>>),
     StopData(CollectData<O>),
     Sync(LeaderCollects<O>),
-}
-
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct CstMessage<S, O> {
-    // NOTE: not the same sequence number used in the
-    // consensus layer to order client requests!
-    seq: SeqNo,
-    kind: CstMessageKind<S, O>,
-}
-
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub enum CstMessageKind<S, O> {
-    RequestLatestConsensusSeq,
-    ReplyLatestConsensusSeq(SeqNo),
-    RequestState,
-    ReplyState(RecoveryState<S, O>),
-}
-
-impl<S, O> Orderable for CstMessage<S, O> {
-    /// Returns the sequence number of this state transfer message.
-    fn sequence_number(&self) -> SeqNo {
-        self.seq
-    }
-}
-
-impl<S, O> CstMessage<S, O> {
-    /// Creates a new `CstMessage` with sequence number `seq`,
-    /// and of the kind `kind`.
-    pub fn new(seq: SeqNo, kind: CstMessageKind<S, O>) -> Self {
-        Self { seq, kind }
-    }
-
-    /// Returns a reference to the state transfer message kind.
-    pub fn kind(&self) -> &CstMessageKind<S, O> {
-        &self.kind
-    }
-
-    /// Takes the recovery state embedded in this cst message, if it is available.
-    pub fn take_state(&mut self) -> Option<RecoveryState<S, O>> {
-        let kind = std::mem::replace(&mut self.kind, CstMessageKind::RequestState);
-        match kind {
-            CstMessageKind::ReplyState(state) => Some(state),
-            _ => {
-                self.kind = kind;
-                None
-            }
-        }
-    }
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]

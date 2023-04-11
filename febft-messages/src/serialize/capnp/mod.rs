@@ -5,13 +5,13 @@ use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, StoredMessage};
 use febft_communication::serialize::{Buf, Serializable};
 use crate::messages::{ForwardedProtocolMessage, ForwardedRequestsMessage, Protocol, ReplyMessage, RequestMessage, SystemMessage};
-use crate::serialize::{OrderingProtocolMessage, System};
+use crate::serialize::{OrderingProtocolMessage, StateTransferMessage, System};
 
 const DEFAULT_SERIALIZE_BUFFER_SIZE: usize = 1024;
 
-pub type Message<D, P> = <System<D, P> as Serializable>::Message;
+pub type Message<D, P, SP> = <System<D, P, SP> as Serializable>::Message;
 
-pub(super) fn serialize_message<D, P>(builder: messages_capnp::system::Builder, msg: &Message<D, P>) -> Result<()> where D: SharedData, P: OrderingProtocolMessage {
+pub(super) fn serialize_message<D, P, SP>(builder: messages_capnp::system::Builder, msg: &Message<D, P, SP>) -> Result<()> where D: SharedData, P: OrderingProtocolMessage, SP: StateTransferMessage {
     match msg {
         SystemMessage::OrderedRequest(req) => {
             let rq_builder = builder.init_request();
@@ -65,13 +65,14 @@ pub(super) fn serialize_message<D, P>(builder: messages_capnp::system::Builder, 
                 }
             }
         }
+        SystemMessage::StateTransferMessage(_) => {}
     }
 
     Ok(())
 }
 
-pub(super) fn deserialize_message<D, P>(reader: messages_capnp::system::Reader) -> Result<Message<D, P>>
-    where D: SharedData, P: OrderingProtocolMessage {
+pub(super) fn deserialize_message<D, P, ST>(reader: messages_capnp::system::Reader) -> Result<Message<D, P, ST>>
+    where D: SharedData, P: OrderingProtocolMessage, ST: StateTransferMessage {
     let which = reader.which().wrapped_msg(ErrorKind::CommunicationSerialize, "Failed to read which type of message for the system message")?;
 
     return match which {

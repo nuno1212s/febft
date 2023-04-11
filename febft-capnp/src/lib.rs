@@ -39,3 +39,11 @@ pub mod service_messages_capnp {
     "/service_messages_capnp.rs"
     ));
 }
+
+pub mod cst_messages_capnp {
+    #![allow(unused)]
+    include!(concat!(
+    env!("OUT_DIR"),
+    "/cst_messages_capnp.rs"
+    ));
+}

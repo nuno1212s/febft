@@ -8,11 +8,11 @@ use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::StoredMessage;
 use febft_execution::app::{Request, Service, State, UpdateBatch};
 use febft_execution::serialize::SharedData;
+use febft_messages::state_transfer::Checkpoint;
 
-use crate::bft::cst::RecoveryState;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::msg_log::{Info, operation_key, PERIOD};
-use crate::bft::msg_log::decisions::{Checkpoint, DecisionLog, Proof};
+use crate::bft::msg_log::decisions::{ DecisionLog, Proof};
 use crate::bft::msg_log::deciding_log::CompletedBatch;
 use crate::bft::msg_log::persistent::{PersistentLog, WriteMode};
 use crate::bft::sync::view::ViewInfo;

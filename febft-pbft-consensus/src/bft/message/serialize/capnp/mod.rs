@@ -10,7 +10,7 @@ use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, PingMessage, StoredMessage};
 use febft_messages::serialize::capnp::deserialize_request;
 
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, CstMessage, ObserveEventKind, ObserverMessage, PBFTMessage, RequestMessage, ViewChangeMessage};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind,  ObserveEventKind, ObserverMessage, PBFTMessage, RequestMessage, ViewChangeMessage};
 
 use crate::bft::msg_log::persistent::ProofInfo;
 use crate::bft::sync::view::ViewInfo;
@@ -30,11 +30,6 @@ pub fn serialize_message<D>(mut pbft_message: consensus_messages_capnp::protocol
             let mut consensus_builder = pbft_message.init_consensus_message();
 
             serialize_consensus_message::<D>(consensus_builder, consensus_msg)?;
-        }
-        PBFTMessage::Cst(cst_message) => {
-            let mut state_transfer = pbft_message.init_state_transfer_message();
-
-            serialize_state_transfer::<D>(state_transfer, cst_message)?;
         }
         PBFTMessage::ViewChange(view_change) => {
             let mut view_builder = pbft_message.init_view_change_message();
@@ -63,16 +58,10 @@ pub fn deserialize_message<D>(pbft_reader: consensus_messages_capnp::protocol_me
         consensus_messages_capnp::protocol_message::WhichReader::ViewChangeMessage(Ok(view_change)) => {
             Ok(PBFTMessage::ViewChange(deserialize_view_change::<D>(view_change)?))
         }
-        consensus_messages_capnp::protocol_message::WhichReader::StateTransferMessage(Ok(state_transfer)) => {
-            Ok(PBFTMessage::Cst(deserialize_state_transfer::<D>(state_transfer)?))
-        }
         consensus_messages_capnp::protocol_message::WhichReader::ObserverMessage(Ok(obs_msg)) => {
             Ok(PBFTMessage::ObserverMessage(deserialize_observer_message(obs_msg)?))
         }
         consensus_messages_capnp::protocol_message::WhichReader::ViewChangeMessage(Err(err)) => {
-            Err(Error::wrapped(ErrorKind::CommunicationSerialize, err))
-        }
-        consensus_messages_capnp::protocol_message::WhichReader::StateTransferMessage(Err(err)) => {
             Err(Error::wrapped(ErrorKind::CommunicationSerialize, err))
         }
         consensus_messages_capnp::protocol_message::WhichReader::ObserverMessage(Err(err)) => {
@@ -239,16 +228,6 @@ fn serialize_view_change<D>(mut view_change: consensus_messages_capnp::view_chan
 fn deserialize_view_change<D>(view_change: consensus_messages_capnp::view_change::Reader)
                               -> Result<ViewChangeMessage<D::Request>>
     where D: SharedData {
-    Err(Error::simple(ErrorKind::CommunicationSerialize))
-}
-
-fn serialize_state_transfer<D>(mut state_transfer: consensus_messages_capnp::state_transfer::Builder,
-                               msg: &CstMessage<D::State, D::Request>) -> Result<()> where D: SharedData {
-    Ok(())
-}
-
-fn deserialize_state_transfer<D>(state_transfer: consensus_messages_capnp::state_transfer::Reader)
-                                 -> Result<CstMessage<D::State, D::Request>> where D: SharedData {
     Err(Error::simple(ErrorKind::CommunicationSerialize))
 }
 

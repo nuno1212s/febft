@@ -11,50 +11,6 @@ use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::StoredMessage;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 
-/// Represents a local checkpoint.
-///
-/// Contains the last application state, as well as the sequence number
-/// which decided the last batch of requests executed before the checkpoint.
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct Checkpoint<S> {
-    seq: SeqNo,
-    app_state: S,
-}
-
-impl<S> Orderable for Checkpoint<S> {
-    /// Returns the sequence number of the batch of client requests
-    /// decided before the local checkpoint.
-    fn sequence_number(&self) -> SeqNo {
-        self.seq
-    }
-}
-
-impl<S> Checkpoint<S> {
-    pub(crate) fn new(seq: SeqNo, app_state: S) -> Arc<ReadOnly<Self>> {
-        Arc::new(ReadOnly::new(Self {
-            seq,
-            app_state,
-        }))
-    }
-
-    /// The last sequence no represented in this checkpoint
-    pub fn last_seq(&self) -> &SeqNo {
-        &self.seq
-    }
-
-    /// Returns a reference to the state of the application before
-    /// the local checkpoint.
-    pub fn state(&self) -> &S {
-        &self.app_state
-    }
-
-    /// Returns the inner values within this local checkpoint.
-    pub fn into_inner(self) -> (SeqNo, S) {
-        (self.seq, self.app_state)
-    }
-}
-
 pub type StoredConsensusMessage<O> = Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>;
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]

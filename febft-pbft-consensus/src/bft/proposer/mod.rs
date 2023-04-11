@@ -1,5 +1,6 @@
 pub mod follower_proposer;
 
+use std::cmp::max;
 use log::{error, warn, debug, info, trace};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -15,7 +16,9 @@ use febft_execution::app::{Request, Service, UnorderedBatch};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{RequestMessage, SystemMessage};
+use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::Timeouts;
+use crate::bft::config::ProposerConfig;
 use crate::bft::consensus::ConsensusGuard;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, PBFTMessage};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
@@ -29,15 +32,16 @@ pub type BatchType<R> = Vec<StoredMessage<RequestMessage<R>>>;
 ///Handles taking requests from the client pools and storing the requests in the log,
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
-pub struct Proposer<D: SharedData + 'static, NT: Node<PBFT<D>> + 'static> {
-    node_ref: Arc<NT>,
+pub struct Proposer<D, ST, NT>
+    where D: SharedData + 'static,
+          ST: StateTransferMessage,
+          NT: Node<PBFT<D, ST>> {
 
+    node_ref: Arc<NT>,
     synchronizer: Arc<Synchronizer<D>>,
     timeouts: Timeouts,
-
     /// The log of pending requests
     pending_decision_log: Arc<PendingRequestLog<D>>,
-
     consensus_guard: ConsensusGuard,
     // Should we shut down?
     cancelled: AtomicBool,
@@ -70,14 +74,16 @@ struct ProposeStats<D> where D: SharedData {
 
 impl<D> ProposeStats<D> where D: SharedData {
     pub fn new(target_size: usize) -> Self {
-        Self { currently_accumulated: Vec::with_capacity(target_size), last_proposal:Instant::now() }
+        Self { currently_accumulated: Vec::with_capacity(target_size), last_proposal: Instant::now() }
     }
 }
 
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
 
-impl<D: SharedData + 'static,NT: Node<PBFT<D>>> Proposer<D, NT> {
+impl<D, ST, NT> Proposer<D, ST, NT> where D: SharedData + 'static,
+                                          ST: StateTransferMessage + 'static,
+                                          NT: Node<PBFT<D, ST>> {
     pub fn new(
         node: Arc<NT>,
         sync: Arc<Synchronizer<D>>,
@@ -85,23 +91,25 @@ impl<D: SharedData + 'static,NT: Node<PBFT<D>>> Proposer<D, NT> {
         timeouts: Timeouts,
         executor_handle: ExecutorHandle<D>,
         consensus_guard: ConsensusGuard,
-        target_global_batch_size: usize,
-        global_batch_time_limit: u128,
-        max_batch_size: usize,
+        proposer_config: ProposerConfig,
         observer_handle: ObserverHandle,
     ) -> Arc<Self> {
+        let ProposerConfig {
+            target_batch_size, max_batch_size, batch_timeout
+        } = proposer_config;
+
         Arc::new(Self {
             node_ref: node,
             synchronizer: sync,
             timeouts,
             cancelled: AtomicBool::new(false),
             consensus_guard,
-            target_global_batch_size,
-            global_batch_time_limit,
+            target_global_batch_size: target_batch_size as usize,
+            global_batch_time_limit: batch_timeout as u128,
             observer_handle,
             executor_handle,
             pending_decision_log,
-            max_batch_size,
+            max_batch_size: max_batch_size as usize,
         })
     }
 
@@ -124,7 +132,7 @@ impl<D: SharedData + 'static,NT: Node<PBFT<D>>> Proposer<D, NT> {
                 let mut ordered_propose = ProposeStats::new(self.target_global_batch_size);
 
                 let mut unordered_propose = ProposeStats::new(self.target_global_batch_size);
-                
+
                 let mut last_seq = None;
 
                 loop {

@@ -21,6 +21,7 @@ use febft_communication::{Node};
 use febft_execution::app::{Request, Service};
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
+use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::{ClientRqInfo, Timeouts};
 
 use crate::bft::message::serialize::PBFTConsensus;
@@ -60,7 +61,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     ///
     /// Therefore, we start by clearing our stopped requests and treating them as
     /// newly proposed requests (by resetting their timer)
-    pub(super) fn handle_stopping_quorum<NT: Node<PBFT<D>>>(
+    pub(super) fn handle_stopping_quorum<ST, NT>(
         &self,
         base_sync: &Synchronizer<D>,
         previous_view: ViewInfo,
@@ -68,7 +69,8 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         pending_rq_log: &PendingRequestLog<D>,
         timeouts: &Timeouts,
         node: &NT,
-    ) {
+    )
+        where ST: StateTransferMessage, NT: Node<PBFT<D, ST>> {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
         // - add requests from STOP into client requests
@@ -98,13 +100,13 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     /// Start a new view change
     /// Receives the requests that it should send to the other
     /// nodes in its STOP message
-    pub(super) fn handle_begin_view_change<NT: Node<PBFT<D>>>(
+    pub(super) fn handle_begin_view_change<ST, NT>(
         &self,
         base_sync: &Synchronizer<D>,
         timeouts: &Timeouts,
         node: &NT,
         timed_out: Option<Vec<StoredMessage<RequestMessage<D::Request>>>>,
-    ) {
+    ) where ST: StateTransferMessage, NT: Node<PBFT<D, ST>> {
         // stop all timers
         self.unwatch_all_requests(timeouts);
 
@@ -137,7 +139,6 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         timeouts: &Timeouts,
         log: &PendingRequestLog<D>,
     ) {
-
         let phase = TimeoutPhase::TimedOutOnce(Instant::now());
 
         let requests = requests
@@ -348,7 +349,6 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
                 match timeout_phase {
                     TimeoutPhase::Init(instant)
                     if now.duration_since(*instant) >= self.timeout_dur.get() => {
-
                         forwarded.push(digest);
                         // NOTE: we don't update the timeout phase here, because this is
                         // done with the message we receive locally containing the forwarded
@@ -379,13 +379,13 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
     /// Forward the requests that timed out, `timed_out`, to all the nodes in the
     /// current view.
-    pub fn forward_requests<NT: Node<PBFT<D>>>(
+    pub fn forward_requests<ST, NT>(
         &self,
         base_sync: &Synchronizer<D>,
         timed_out: Vec<StoredMessage<RequestMessage<D::Request>>>,
         node: &NT,
         _log: &PendingRequestLog<D>,
-    ) {
+    ) where ST: StateTransferMessage, NT: Node<PBFT<D, ST>> {
         let message = SystemMessage::ForwardedRequestMessage(ForwardedRequestsMessage::new(timed_out));
         let targets = NodeId::targets(0..base_sync.view().params().n());
         node.broadcast(NetworkMessageKind::from(message), targets);

@@ -24,6 +24,7 @@ use febft_communication::serialize::Buf;
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
+use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::{ClientRqInfo, Timeouts};
 use crate::bft::consensus::Consensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
@@ -477,16 +478,17 @@ impl<D> Synchronizer<D>
     /// Advances the state of the view change state machine.
     //
     // TODO: retransmit STOP msgs
-    pub fn process_message<NT: Node<PBFT<D>>>(
+    pub fn process_message<ST, NT>(
         &self,
         header: Header,
         message: ViewChangeMessage<D::Request>,
         timeouts: &Timeouts,
         log: &mut DecidedLog<D>,
         pending_rq_log: &PendingRequestLog<D>,
-        consensus: &mut Consensus<D>,
+        consensus: &mut Consensus<D, ST>,
         node: &NT,
     ) -> SynchronizerStatus
+        where ST: StateTransferMessage, NT: Node<PBFT<D, ST>>
     {
         match *self.phase.borrow() {
             ProtoPhase::Init => {
@@ -743,7 +745,7 @@ impl<D> Synchronizer<D>
 
                                 let forged_pre_prepare = NetworkMessageKind::from(consensus.forge_propose(p.clone(), self));
 
-                                let digest = serialize::serialize_digest::<Vec<u8>, PBFT<D>>(
+                                let digest = serialize::serialize_digest::<Vec<u8>, PBFT<D, ST>>(
                                     &forged_pre_prepare,
                                     &mut buf,
                                 ).unwrap();
@@ -911,13 +913,14 @@ impl<D> Synchronizer<D>
     }
 
     /// Resume the view change protocol after running the CST protocol.
-    pub fn resume_view_change<NT: Node<PBFT<D>>>(
+    pub fn resume_view_change<ST, NT>(
         &self,
         log: &mut DecidedLog<D>,
         timeouts: &Timeouts,
-        consensus: &mut Consensus<D>,
+        consensus: &mut Consensus<D, ST>,
         node: &NT,
     ) -> Option<()>
+        where ST: StateTransferMessage, NT: Node<PBFT<D, ST>>
     {
         let state = self.finalize_state.borrow_mut().take()?;
 
@@ -944,13 +947,14 @@ impl<D> Synchronizer<D>
     /// that have timed out on the current replica.
     /// If the timed out requests are None, that means that the view change
     /// originated in the other replicas.
-    pub fn begin_view_change<NT: Node<PBFT<D>>>(
+    pub fn begin_view_change<ST, NT>(
         &self,
         timed_out: Option<Vec<StoredMessage<RequestMessage<D::Request>>>>,
         node: &NT,
         timeouts: &Timeouts,
         _log: &DecidedLog<D>,
     )
+        where ST: StateTransferMessage, NT: Node<PBFT<D, ST>>
     {
         match (&*self.phase.borrow(), &timed_out) {
             // we have received STOP messages from peer nodes,
@@ -1021,14 +1025,15 @@ impl<D> Synchronizer<D>
 
     /// Finalize a view change and install the new view in the other
     /// state machines (Consensus)
-    fn finalize<NT: Node<PBFT<D>>>(
+    fn finalize<ST, NT>(
         &self,
         state: FinalizeState<D::Request>,
         log: &mut DecidedLog<D>,
         timeouts: &Timeouts,
-        consensus: &mut Consensus<D>,
+        consensus: &mut Consensus<D, ST>,
         node: &NT,
     ) -> SynchronizerStatus
+        where ST: StateTransferMessage, NT: Node<PBFT<D, ST>>
     {
         let FinalizeState {
             curr_cid,
@@ -1130,10 +1135,11 @@ impl<D> Synchronizer<D>
     /// Forward the requests that have timed out to the whole network
     /// So that everyone knows about (including a leader that could still be correct, but
     /// Has not received the requests from the client)
-    pub fn forward_requests<NT: Node<PBFT<D>>>(&self,
-                                               timed_out: Vec<StoredMessage<RequestMessage<D::Request>>>,
-                                               node: &NT,
-                                               log: &PendingRequestLog<D>) {
+    pub fn forward_requests<ST, NT>(&self,
+                                    timed_out: Vec<StoredMessage<RequestMessage<D::Request>>>,
+                                    node: &NT,
+                                    log: &PendingRequestLog<D>)
+        where ST: StateTransferMessage, NT: Node<PBFT<D, ST>> {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {}
             SynchronizerAccessory::Replica(rep) => {
@@ -1176,11 +1182,13 @@ impl<D> Synchronizer<D>
 
     // TODO: quorum sizes may differ when we implement reconfiguration
     #[inline]
-    fn highest_proof<'a, NT: Node<PBFT<D>>>(
+    fn highest_proof<'a, ST, NT>(
         guard: &'a IntMap<StoredMessage<ViewChangeMessage<D::Request>>>,
         view: &ViewInfo,
         node: &NT,
-    ) -> Option<&'a Proof<D::Request>> {
+    ) -> Option<&'a Proof<D::Request>>
+        where ST: StateTransferMessage, NT: Node<PBFT<D, ST>>
+    {
         highest_proof::<D, _, _>(&view, node, guard.values())
     }
 }
@@ -1383,26 +1391,27 @@ fn normalized_collects<'a, O: 'a>(
     })
 }
 
-fn signed_collects<D, NT>(
+fn signed_collects<D, ST, NT>(
     node: &NT,
     collects: Vec<StoredMessage<ViewChangeMessage<D::Request>>>,
 ) -> Vec<StoredMessage<ViewChangeMessage<D::Request>>>
     where
         D: SharedData + 'static,
-        NT: Node<PBFT<D>>
+        ST: StateTransferMessage,
+        NT: Node<PBFT<D, ST>>
 {
     collects
         .into_iter()
-        .filter(|stored| validate_signature::<D, _, _>(node, stored))
+        .filter(|stored| validate_signature::<D, _, _, _>(node, stored))
         .collect()
 }
 
-fn validate_signature<'a, D, M, NT>(node: &'a NT, stored: &'a StoredMessage<M>) -> bool
+fn validate_signature<'a, D, M, ST, NT>(node: &'a NT, stored: &'a StoredMessage<M>) -> bool
     where
         D: SharedData + 'static,
-        NT: Node<PBFT<D>>
+        ST: StateTransferMessage,
+        NT: Node<PBFT<D, ST>>
 {
-
     //TODO: Fix this as I believe it will always be false
     let wm = match WireMessage::from_parts(*stored.header(), Buf::new()) {
         Ok(wm) => wm,
@@ -1419,7 +1428,7 @@ fn validate_signature<'a, D, M, NT>(node: &'a NT, stored: &'a StoredMessage<M>) 
     wm.is_valid(Some(&key))
 }
 
-fn highest_proof<'a, D, I, NT>(
+fn highest_proof<'a, D, I, ST, NT>(
     view: &ViewInfo,
     node: &NT,
     collects: I,
@@ -1427,7 +1436,8 @@ fn highest_proof<'a, D, I, NT>(
     where
         D: SharedData + 'static,
         I: Iterator<Item=&'a StoredMessage<ViewChangeMessage<D::Request>>>,
-        NT: Node<PBFT<D>>
+        ST: StateTransferMessage,
+        NT: Node<PBFT<D, ST>>
 {
     collect_data(collects)
         // fetch proofs

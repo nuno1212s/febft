@@ -34,7 +34,6 @@ use crate::bft::sync::view::ViewInfo;
 use self::consensus_backlog::ConsensusBackLogHandle;
 use self::consensus_backlog::ConsensusBacklog;
 
-use super::Checkpoint;
 use super::DecisionLog;
 
 ///Latest checkpoint made by febft
