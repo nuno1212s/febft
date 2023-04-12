@@ -10,7 +10,6 @@ pub mod msg_log;
 pub mod config;
 pub mod message;
 pub mod observer;
-pub mod follower;
 
 use std::ops::Drop;
 use std::sync::Arc;
@@ -37,7 +36,7 @@ use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{Protocol, SystemMessage};
 use febft_messages::ordering_protocol::{OrderingProtocol, OrderProtocolExecResult, OrderProtocolPoll};
-use febft_messages::serialize::{StateTransferMessage, ServiceMsg, OrderingProtocolMessage};
+use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
 use febft_messages::timeouts::Timeouts;
 use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{AbstractConsensus, Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};

@@ -6,11 +6,13 @@ use febft_communication::Node;
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use crate::messages::{Protocol, SystemMessage};
-use crate::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg};
+use crate::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg, NetworkView};
 use crate::timeouts::Timeouts;
 
 pub trait OrderingProtocol<D, NT> where D: SharedData + 'static {
     type Serialization: OrderingProtocolMessage + 'static;
+
+    type ViewInfo: NetworkView = <Self::Serialization as OrderingProtocolMessage>::ViewInfo;
 
     type Config;
 

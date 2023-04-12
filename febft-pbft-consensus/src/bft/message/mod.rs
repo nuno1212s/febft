@@ -36,7 +36,6 @@ pub mod serialize;
 pub enum PBFTMessage<R> {
     /// Consensus message
     Consensus(ConsensusMessage<R>),
-    FwdConsensus(FwdConsensusMessage<R>),
     /// View change messages
     ViewChange(ViewChangeMessage<R>),
     //Observer related messages
@@ -110,32 +109,6 @@ pub enum ViewChangeMessageKind<O> {
     Stop(Vec<StoredMessage<RequestMessage<O>>>),
     StopData(CollectData<O>),
     Sync(LeaderCollects<O>),
-}
-
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct FwdConsensusMessage<O> {
-    header: Header,
-    consensus_msg: ConsensusMessage<O>,
-}
-
-impl<O> FwdConsensusMessage<O> {
-    pub fn new(header: Header, msg: ConsensusMessage<O>) -> Self {
-        Self {
-            header,
-            consensus_msg: msg,
-        }
-    }
-
-    pub fn header(&self) -> &Header { &self.header }
-
-    pub fn consensus(&self) -> &ConsensusMessage<O> {
-        &self.consensus_msg
-    }
-
-    pub fn into_inner(self) -> (Header, ConsensusMessage<O>) {
-        (self.header, self.consensus_msg)
-    }
 }
 
 /// Represents a message from the consensus sub-protocol.

@@ -91,28 +91,14 @@ pub trait StateTransferProtocol<D, NT> {
               OP: StatefulOrderProtocol<D, NT>;
 }
 
-/// The basic methods needed for a view
-pub trait NetworkView {
-    fn quorum(&self) -> usize;
-
-    fn f(&self) -> usize;
-
-    fn n(&self) -> usize;
-}
-
 /// An order protocol that uses the state transfer protocol to manage its state.
 pub trait StatefulOrderProtocol<D: SharedData + 'static, NT>: OrderingProtocol<D, NT> {
+
     #[cfg(feature = "serialize_capnp")]
     type DecLog: Send + Clone;
 
     #[cfg(feature = "serialize_serde")]
     type DecLog: for<'a> Deserialize<'a> + Serialize + Send + Clone;
-
-    #[cfg(feature = "serialize_capnp")]
-    type ViewInfo: NetworkView + Send + Clone;
-
-    #[cfg(feature = "serialize_serde")]
-    type ViewInfo: NetworkView + for<'a> Deserialize<'a> + Serialize + Send + Clone;
 
     fn view(&self) -> Self::ViewInfo;
 
@@ -126,9 +112,4 @@ pub trait StatefulOrderProtocol<D: SharedData + 'static, NT>: OrderingProtocol<D
     #[cfg(feature = "serialize_capnp")]
     fn deserialize_declog_capnp(reader: febft_capnp::cst_messages_capnp::dec_log::Reader) -> Result<Self::DecLog>;
 
-    #[cfg(feature = "serialize_capnp")]
-    fn serialize_view_capnp(builder: febft_capnp::cst_messages_capnp::view_info::Builder, msg: &Self::ViewInfo) -> Result<()>;
-
-    #[cfg(feature = "serialize_capnp")]
-    fn deserialize_view_capnp(reader: febft_capnp::cst_messages_capnp::view_info::Reader) -> Result<Self::ViewInfo>;
 }

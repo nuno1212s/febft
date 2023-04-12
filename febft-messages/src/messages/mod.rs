@@ -81,6 +81,10 @@ impl<D, P, ST> SystemMessage<D, P, ST> where D: SharedData {
     pub fn from_state_transfer_message(msg: ST) -> Self {
         SystemMessage::StateTransferMessage(StateTransfer::new(msg))
     }
+    
+    pub fn from_fwd_protocol_message(msg: StoredMessage<Protocol<P>>) -> Self {
+        SystemMessage::ForwardedProtocolMessage(ForwardedProtocolMessage::new(msg))
+    }
 
     pub fn into_protocol_message(self) -> P {
         match self {

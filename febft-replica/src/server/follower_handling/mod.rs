@@ -1,9 +1,5 @@
 use std::ops::Deref;
 use std::sync::Arc;
-use febft_pbft_consensus::bft::follower::{FollowerChannelMsg, FollowerEvent, FollowerHandle};
-use febft_pbft_consensus::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
-use febft_pbft_consensus::bft::PBFT;
-use febft_pbft_consensus::bft::sync::view::ViewInfo;
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 use febft_common::globals::ReadOnly;
@@ -11,7 +7,10 @@ use febft_common::node_id::NodeId;
 use febft_communication::message::{NetworkMessageKind, StoredMessage, System};
 use febft_communication::{Node};
 use febft_execution::app::{Request, Service};
-use febft_messages::messages::SystemMessage;
+use febft_execution::serialize::SharedData;
+use febft_messages::followers::{FollowerChannelMsg, FollowerEvent, FollowerHandle};
+use febft_messages::messages::{Protocol, SystemMessage};
+use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage, NetworkView};
 
 /// Store information of the current followers of the quorum
 /// This information will be used to calculate which replicas have to send the
@@ -20,17 +19,22 @@ use febft_messages::messages::SystemMessage;
 /// This routing is only relevant to the Preprepare requests, all other requests
 /// Can be broadcast from each replica as they are very small and therefore
 /// don't have any effects on performance
-struct FollowersFollowing<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> {
+struct FollowersFollowing<OP: OrderingProtocolMessage, NT> {
     own_id: NodeId,
     followers: Vec<NodeId>,
     send_node: Arc<NT>,
-    rx: ChannelSyncRx<FollowerChannelMsg<S::Data>>,
+    rx: ChannelSyncRx<FollowerChannelMsg<OP>>,
 }
 
-impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> FollowersFollowing<S, NT> {
+impl<OP, NT> FollowersFollowing<OP, NT> where
+    OP: OrderingProtocolMessage + 'static,
+    NT: Send + Sync + 'static {
     /// Starts the follower handling thread and returns a cloneable handle that
     /// can be used to deliver messages to it.
-    pub fn init_follower_handling(id: NodeId, node: &Arc<NT>) -> FollowerHandle<S::Data> {
+    pub fn init_follower_handling<D, ST>(id: NodeId, node: &Arc<NT>) -> FollowerHandle<OP>
+        where D: SharedData + 'static,
+              ST: StateTransferMessage + 'static,
+              NT: Node<ServiceMsg<D, OP, ST>>  {
         let (tx, rx) = channel::new_bounded_sync(1024);
 
         let follower_handling = Self {
@@ -40,39 +44,38 @@ impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> FollowersFollowing
             rx,
         };
 
-        Self::start_thread(follower_handling);
+        Self::start_thread::<D, ST>(follower_handling);
 
         FollowerHandle::new(tx)
     }
 
-    fn start_thread(self) {
+    fn start_thread<D, ST>(self) where D: SharedData + 'static,
+                                       ST: StateTransferMessage + 'static,
+                                       NT: Node<ServiceMsg<D, OP, ST>> {
         std::thread::Builder::new()
             .name(format!(
                 "Follower Handling Thread for node {:?}",
                 self.own_id
             ))
             .spawn(move || {
-                self.run();
+                self.run::<D, ST>();
             })
             .expect("Failed to launch follower handling thread!");
     }
 
-    fn run(mut self) {
+    fn run<D, ST>(mut self)
+        where D: SharedData + 'static,
+              ST: StateTransferMessage + 'static,
+              NT: Node<ServiceMsg<D, OP, ST>> {
         loop {
             let message = self.rx.recv().unwrap();
 
             match message {
                 FollowerEvent::ReceivedConsensusMsg(view, consensus_msg) => {
-                    match consensus_msg.message().kind() {
-                        ConsensusMessageKind::PrePrepare(_) => {
-                            self.handle_preprepare_msg_rcvd(&view, consensus_msg)
-                        }
-                        ConsensusMessageKind::Prepare(_) => self.handle_prepare_msg(consensus_msg),
-                        ConsensusMessageKind::Commit(_) => self.handle_commit_msg(consensus_msg),
-                    }
+                    todo!()
                 }
                 FollowerEvent::ReceivedViewChangeMsg(view_change_msg) => {
-                    self.handle_sync_msg(view_change_msg)
+                    self.handle_sync_msg::<D, ST>(view_change_msg)
                 }
             }
         }
@@ -83,9 +86,9 @@ impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> FollowersFollowing
     ///
     /// (This is only needed for the preprepare message, all others use
     /// multicast)
-    fn targets(&self, view: &ViewInfo) -> Vec<NodeId> {
+    fn targets(&self, view: &OP::ViewInfo) -> Vec<NodeId> {
         //How many replicas are not the leader?
-        let available_replicas = view.params().n() - 1;
+        let available_replicas = view.n() - 1;
 
         //How many followers do we have to provide for
         let followers = self.followers.len();
@@ -93,13 +96,13 @@ impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> FollowersFollowing
         //We only need one pre prepare in reality, since it is signed by the current leader
         //And can't be forged, but since we want to prevent message dropping attacks,
         //We need to use f+1 replicas
-        let replicas_per_follower = view.params().f() + 1;
+        let replicas_per_follower = view.f() + 1;
 
         //We do not want to have spaces between each id so we don't get inconsistencies
         //In how we arrange the replicas
         //In this layout, we will always get 0, 1, 2 as IDs, independently of what the leader
         //is
-        let temp_id = if self.own_id > view.leader() {
+        let temp_id = if self.own_id > view.primary() {
             NodeId::from(self.own_id.id() - 1)
         } else {
             self.own_id
@@ -129,12 +132,14 @@ impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> FollowersFollowing
     }
 
     /// Handle when we have received a preprepare message
-    fn handle_preprepare_msg_rcvd(
+    fn handle_preprepare_msg_rcvd<D, ST>(
         &mut self,
-        view: &ViewInfo,
-        message: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-    ) {
-        if view.leader() == self.own_id {
+        view: &OP::ViewInfo,
+        message: Arc<ReadOnly<StoredMessage<Protocol<OP::ProtocolMessage>>>>,
+    ) where D: SharedData + 'static,
+            ST: StateTransferMessage + 'static,
+            NT: Node<ServiceMsg<D, OP, ST>> {
+        if view.primary() == self.own_id {
             //Leaders don't send pre_prepares to followers in order to save bandwidth
             //as they already have to send the to all of the replicas
             return;
@@ -145,7 +150,7 @@ impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> FollowersFollowing
 
         let pre_prepare = message.message().clone();
 
-        let message = SystemMessage::from_protocol_message(PBFTMessage::FwdConsensus(FwdConsensusMessage::new(header, pre_prepare)));
+        let message = SystemMessage::from_fwd_protocol_message(StoredMessage::new(header, pre_prepare));
 
         let targets = self.targets(view);
 
@@ -156,19 +161,23 @@ impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> FollowersFollowing
     /// and prepare/commit are handled on sending, this is because we don't want the leader
     /// to have to send the pre prepare to all followers but since these messages are very small,
     /// it's fine for all replicas to broadcast it to followers)
-    fn handle_prepare_msg(
+    fn handle_prepare_msg<D, ST>(
         &mut self,
-        prepare: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-    ) {
+        prepare: Arc<ReadOnly<StoredMessage<Protocol<OP::ProtocolMessage>>>>,
+    ) where D: SharedData + 'static,
+            ST: StateTransferMessage + 'static,
+            NT: Node<ServiceMsg<D, OP, ST>> {
         if prepare.header().from() != self.own_id {
             //We only broadcast our own prepare messages, not other peoples
             return;
         }
 
+        let header = prepare.header().clone();
+
         //Clone the messages here in this thread so we don't slow down the consensus thread at all
         let prepare = prepare.message().clone();
 
-        let message = SystemMessage::from_protocol_message(PBFTMessage::Consensus(prepare));
+        let message = SystemMessage::from_fwd_protocol_message(StoredMessage::new(header, prepare));
 
         self.send_node
             .broadcast(NetworkMessageKind::from(message), self.followers.iter().copied()).unwrap();
@@ -178,49 +187,35 @@ impl<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> FollowersFollowing
     /// and prepare/commit are handled on sending, this is because we don't want the leader
     /// to have to send the pre prepare to all followers but since these messages are very small,
     /// it's fine for all replicas to broadcast it to followers)
-    fn handle_commit_msg(
+    fn handle_commit_msg<D, ST>(
         &mut self,
-        commit: Arc<ReadOnly<StoredMessage<ConsensusMessage<Request<S>>>>>,
-    ) {
+        commit: Arc<ReadOnly<StoredMessage<Protocol<OP::ProtocolMessage>>>>,
+    ) where D: SharedData + 'static,
+            ST: StateTransferMessage + 'static,
+            NT: Node<ServiceMsg<D, OP, ST>> {
         if commit.header().from() != self.own_id {
             //Like with prepares, we only broadcast our own commit messages
             return;
         }
 
+        let header = commit.header().clone();
         let commit = commit.message().clone();
 
-        let message = SystemMessage::from_protocol_message(PBFTMessage::Consensus(commit));
+        let message = SystemMessage::from_fwd_protocol_message(StoredMessage::new(header, commit));
 
         self.send_node
             .broadcast(NetworkMessageKind::from(message), self.followers.iter().copied()).unwrap();
     }
 
     ///
-    fn handle_sync_msg(&mut self, msg: Arc<ReadOnly<StoredMessage<ViewChangeMessage<Request<S>>>>>) {
-        let message = msg.message();
-
-        match message.kind() {
-            ViewChangeMessageKind::Stop(_) => {
-                // We kind of need to send these, but then again they should be sent directly to the
-                // followers instead of being forwarded, since they are not sent by the leader
-                // so no real bottleneck is present
-            }
-            ViewChangeMessageKind::StopData(_) => {
-                //Followers don't need these messages (only the leader of the quorum needs them)
-
-                return;
-            }
-            ViewChangeMessageKind::Sync(_) => {
-                //Sync msgs are weird
-                //TODO:
-                // They are sort of like pre prepare messages so it would be nice for us to
-                // send them like we do preprepare msgs
-            }
-        }
-
-        let message = PBFTMessage::ViewChange(message.clone());
+    fn handle_sync_msg<D, ST>(&mut self, msg: Arc<ReadOnly<StoredMessage<Protocol<OP::ProtocolMessage>>>>)
+        where D: SharedData + 'static,
+              ST: StateTransferMessage + 'static,
+              NT: Node<ServiceMsg<D, OP, ST>> {
+        let header = msg.header().clone();
+        let message = msg.message().clone();
 
         self.send_node
-            .broadcast(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), self.followers.iter().copied()).unwrap();
+            .broadcast(NetworkMessageKind::from(SystemMessage::from_fwd_protocol_message(StoredMessage::new(header, message))), self.followers.iter().copied()).unwrap();
     }
 }

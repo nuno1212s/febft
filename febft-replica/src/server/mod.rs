@@ -8,18 +8,6 @@ use std::time::{Duration};
 use chrono::offset::Utc;
 use chrono::DateTime;
 use log::{debug, warn};
-use febft_pbft_consensus::bft::consensus::{Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
-use febft_pbft_consensus::bft::cst::{CollabStateTransfer, CstProgress, CstStatus, install_recovery_state};
-use febft_pbft_consensus::bft::message::{ConsensusMessage, CstMessage, ObserveEventKind, PBFTMessage, ViewChangeMessage};
-use febft_pbft_consensus::bft::msg_log::decided_log::DecidedLog;
-use febft_pbft_consensus::bft::msg_log::pending_decision::PendingRequestLog;
-use febft_pbft_consensus::bft::msg_log::persistent::PersistentLogModeTrait;
-use febft_pbft_consensus::bft::{msg_log, PBFT};
-use febft_pbft_consensus::bft::msg_log::Info;
-use febft_pbft_consensus::bft::observer::{MessageType, ObserverHandle};
-use febft_pbft_consensus::bft::proposer::Proposer;
-use febft_pbft_consensus::bft::sync::{AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus};
-use febft_pbft_consensus::bft::sync::view::ViewInfo;
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx};
 
@@ -36,11 +24,10 @@ use febft_messages::ordering_protocol::OrderingProtocol;
 use febft_messages::serialize::{StateTransferMessage, ServiceMsg};
 use febft_messages::state_transfer::{StatefulOrderProtocol, StateTransferProtocol};
 use febft_messages::timeouts::{Timeout, TimeoutKind, Timeouts};
-use febft_pbft_consensus::bft::message::serialize::PBFTConsensus;
 use crate::executable::{Executor, ReplicaReplier};
 use crate::server::client_replier::Replier;
 
-pub mod observer;
+//pub mod observer;
 
 pub mod client_replier;
 pub mod follower_handling;
@@ -55,7 +42,7 @@ pub(crate) enum ReplicaPhase2 {
     StateTransferProtocol,
 }
 
-pub struct Replica2<S, OP, ST, NT> {
+pub struct Replica2<S, OP, ST, NT> where S: Service {
     replica_phase: ReplicaPhase2,
     // The ordering protocol
     ordering_protocol: OP,
@@ -70,7 +57,7 @@ pub struct Replica2<S, OP, ST, NT> {
 
 /// Represents a configuration used to bootstrap a `Replica`.
 // TODO: load files from persistent storage
-pub struct ReplicaConfig<S: Service, OP: OrderingProtocol<S::Data, _>, ST: StateTransferProtocol<S::Data, _>> {
+pub struct ReplicaConfig<S: Service + 'static, T, OP: OrderingProtocol<S::Data, T> + 'static, ST: StateTransferProtocol<S::Data, T> + 'static> {
     /// The application logic.
     pub service: S,
 
@@ -98,10 +85,9 @@ pub struct ReplicaConfig<S: Service, OP: OrderingProtocol<S::Data, _>, ST: State
 impl<S, OP, ST, NT> Replica2<S, OP, ST, NT> where S: Service + 'static,
                                                   OP: OrderingProtocol<S::Data, NT> + 'static,
                                                   ST: StateTransferProtocol<S::Data, NT> + 'static,
-                                                  NT: Node<ServiceMsg<S::Data, OP::Serialization, ST::Serialization>> {
-
-    pub async fn bootstrap<T>(cfg: ReplicaConfig<S, OP, ST>) -> Result<Self> {
-        let ReplicaConfig  {
+                                                  NT: Node<ServiceMsg<S::Data, OP::Serialization, ST::Serialization>> + 'static {
+    pub async fn bootstrap<T>(cfg: ReplicaConfig<S, NT, OP, ST>) -> Result<Self> {
+        let ReplicaConfig {
             service,
             n,
             f,
@@ -110,7 +96,7 @@ impl<S, OP, ST, NT> Replica2<S, OP, ST, NT> where S: Service + 'static,
             op_config,
             st_config,
             db_path,
-            node
+            node: node_config
         } = cfg;
 
         let per_pool_batch_timeout = node_config.client_pool_config.batch_timeout_micros;
@@ -123,19 +109,11 @@ impl<S, OP, ST, NT> Replica2<S, OP, ST, NT> where S: Service + 'static,
 
         let node = NT::bootstrap(node_config).await?;
 
-        let (executor, handle) = Executor::<S, ReplicaReplier, NT>::init_handle();
+        let (executor, handle) = Executor::<S, NT>::init_handle();
         let (exec_tx, exec_rx) = channel::new_bounded_sync(1024);
 
-        // start executor
-        Executor::<S, ReplicaReplier, NT>::new(
-            reply_handle,
-            handle,
-            service,
-            state,
-            node.clone(),
-            exec_tx.clone(),
-            None,
-        )?;
+        //CURRENTLY DISABLED, USING THREADPOOL INSTEAD
+        let reply_handle = Replier::new(node.id(), node.clone());
 
         debug!("Initializing timeouts");
         // start timeouts handler
@@ -146,7 +124,38 @@ impl<S, OP, ST, NT> Replica2<S, OP, ST, NT> where S: Service + 'static,
 
         let state_transfer_protocol = ST::initialize(st_config, timeouts.clone(), node.clone())?;
 
+        let state = None;
+
+        // start executor
+        Executor::<S, NT>::new::<OP::Serialization, ST::Serialization, ReplicaReplier>(
+            reply_handle,
+            handle,
+            service,
+            state,
+            node.clone(),
+            exec_tx.clone(),
+        )?;
+
+        debug!("{:?} // Started replica.", log_node_id);
+
+        debug!(
+            "{:?} // Per Pool Batch size: {}",
+            log_node_id,
+            per_pool_batch_size
+        );
+        debug!(
+            "{:?} // Per pool batch sleep: {}",
+            log_node_id,
+            per_pool_batch_sleep
+        );
+        debug!(
+            "{:?} // Per pool batch timeout: {}",
+            log_node_id,
+            per_pool_batch_timeout
+        );
+
         Ok(Self {
+            // We start with the state transfer protocol to make sure everything is up to date
             replica_phase: ReplicaPhase2::StateTransferProtocol,
             ordering_protocol,
             state_transfer_protocol,
@@ -155,11 +164,10 @@ impl<S, OP, ST, NT> Replica2<S, OP, ST, NT> where S: Service + 'static,
             node,
             execution_rx: exec_rx,
         })
-
     }
-
 }
 
+/*
 impl<S, NT> Replica<S, NT>
     where
         S: Service + Send + 'static,
@@ -945,3 +953,4 @@ impl<S, NT> Replica<S, NT>
         self.pending_request_log.insert(h, r);
     }
 }
+*/

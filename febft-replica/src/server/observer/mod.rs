@@ -2,9 +2,6 @@ use std::collections::BTreeSet;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use log::{debug, info, warn};
-use febft_pbft_consensus::bft::message::{ObserveEventKind, ObserverMessage, PBFTMessage};
-use febft_pbft_consensus::bft::{PBFT, SysMsg};
-use febft_pbft_consensus::bft::observer::{ConnState, MessageType, ObserverHandle, ObserverType};
 use febft_common::channel;
 use febft_common::channel::{ChannelMixedRx, ChannelMixedTx};
 use febft_common::node_id::NodeId;
@@ -14,10 +11,11 @@ use febft_communication::Node;
 use febft_communication::serialize::Serializable;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::SystemMessage;
+use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
 
 use super::ViewInfo;
 
-pub fn start_observers<D, NT>(send_node: Arc<NT>) -> ObserverHandle where D: SharedData + 'static, NT: Node<PBFT<D>> + 'static   {
+pub fn start_observers<NT>(send_node: Arc<NT>) -> ObserverHandle {
     let (tx, rx) = channel::new_bounded_mixed(16834);
 
     let observer_handle = ObserverHandle::new(tx);
@@ -28,7 +26,6 @@ pub fn start_observers<D, NT>(send_node: Arc<NT>) -> ObserverHandle where D: Sha
         last_normal_event: None,
         last_event: None,
         rx,
-        ph: Default::default(),
     };
 
     observer.start();
@@ -36,16 +33,20 @@ pub fn start_observers<D, NT>(send_node: Arc<NT>) -> ObserverHandle where D: Sha
     observer_handle
 }
 
-struct Observers<D, NT> where D: SharedData + 'static, NT: Node<PBFT<D>> +'static {
+struct Observers<NT> {
     registered_observers: BTreeSet<ObserverType>,
     send_node: Arc<NT>,
     rx: ChannelMixedRx<MessageType<ObserverType>>,
     last_normal_event: Option<(ViewInfo, SeqNo)>,
     last_event: Option<ObserveEventKind>,
-    ph: PhantomData<D>
 }
 
-impl<D, NT> Observers<D, NT> where D: SharedData + 'static, NT: Node<PBFT<D>> + 'static {
+impl<D, OP, ST, NT> Observers<NT>
+    where D: SharedData + 'static,
+          OP: OrderingProtocolMessage + 'static,
+          ST: StateTransferMessage + 'static,
+          NT: Node<ServiceMsg<D, OP, ST>> {
+
     fn register_observer(&mut self, observer: ObserverType) -> bool {
         self.registered_observers.insert(observer)
     }

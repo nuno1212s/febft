@@ -3,9 +3,6 @@
 use log::error;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use febft_pbft_consensus::bft::message::{ObserveEventKind};
-use febft_pbft_consensus::bft::observer::{MessageType, ObserverHandle};
-use febft_pbft_consensus::bft::PBFT;
 use febft_common::{channel, threadpool};
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 
@@ -15,32 +12,41 @@ use febft_communication::{Node};
 use febft_communication::message::{NetworkMessageKind};
 use febft_execution::app::{BatchReplies, Reply, Request, Service, State, UnorderedBatch, UpdateBatch};
 use febft_execution::{ExecutionRequest, ExecutorHandle};
+use febft_execution::serialize::SharedData;
 use febft_messages::messages::{Message, ReplyMessage, SystemMessage};
+use febft_messages::ordering_protocol::OrderingProtocol;
+use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
 use crate::server::client_replier::ReplyHandle;
 
 const EXECUTING_BUFFER: usize = 8096;
 
 pub trait ExecutorReplier: Send {
-    fn execution_finished<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static>(
+    fn execution_finished<D, OP, ST, NT>(
         node: Arc<NT>,
         seq: Option<SeqNo>,
-        batch: BatchReplies<Reply<S>>,
-    );
+        batch: BatchReplies<D::Reply>,
+    ) where D: SharedData + 'static,
+            OP: OrderingProtocolMessage + 'static,
+            ST: StateTransferMessage + 'static,
+            NT: Node<ServiceMsg<D, OP, ST>> + 'static;
 }
 
 pub struct FollowerReplier;
 
 impl ExecutorReplier for FollowerReplier {
-    fn execution_finished<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static>(
+    fn execution_finished<D, OP, ST, NT>(
         node: Arc<NT>,
         seq: Option<SeqNo>,
-        batch: BatchReplies<Reply<S>>,
-    ) {
+        batch: BatchReplies<D::Reply>,
+    ) where D: SharedData + 'static,
+            OP: OrderingProtocolMessage + 'static,
+            ST: StateTransferMessage + 'static,
+            NT: Node<ServiceMsg<D, OP, ST>> + 'static {
         if let None = seq {
             //Followers only deliver replies to the unordered requests, since it's not part of the quorum
             // And the requests it executes are only forwarded to it
 
-            ReplicaReplier::execution_finished::<S, NT>(node, seq, batch);
+            ReplicaReplier::execution_finished::<D, OP, ST, NT>(node, seq, batch);
         }
     }
 }
@@ -48,11 +54,14 @@ impl ExecutorReplier for FollowerReplier {
 pub struct ReplicaReplier;
 
 impl ExecutorReplier for ReplicaReplier {
-    fn execution_finished<S: Service+ 'static, NT: Node<PBFT<S::Data>> + 'static>(
+    fn execution_finished<D, OP, ST, NT>(
         mut send_node: Arc<NT>,
         _seq: Option<SeqNo>,
-        batch: BatchReplies<Reply<S>>,
-    ) {
+        batch: BatchReplies<D::Reply>,
+    ) where D: SharedData + 'static,
+            OP: OrderingProtocolMessage + 'static,
+            ST: StateTransferMessage + 'static,
+            NT: Node<ServiceMsg<D, OP, ST>> + 'static {
         if batch.len() == 0 {
             //Ignore empty batches.
             return;
@@ -103,27 +112,22 @@ impl ExecutorReplier for ReplicaReplier {
 
 /// Stateful data of the task responsible for executing
 /// client requests.
-pub struct Executor<S: Service + 'static, T: ExecutorReplier, NT: Node<PBFT<S::Data>>> {
+pub struct Executor<S, NT> where
+    S: Service + 'static, {
     service: S,
     state: State<S>,
     e_rx: ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>,
     reply_worker: ReplyHandle<S>,
     send_node: Arc<NT>,
     loopback_channel: ChannelSyncTx<Message<S::Data>>,
-    observer_handle: Option<ObserverHandle>,
 
-    p: PhantomData<T>,
 }
 
 
-impl<S, T, NT> Executor<S, T, NT>
+impl<S, NT> Executor<S, NT>
     where
-        S: Service + Send + 'static,
-        State<S>: Send + Clone + 'static,
-        Request<S>: Send + 'static,
-        Reply<S>: Send + 'static,
-        T: ExecutorReplier + 'static,
-        NT: Node<PBFT<S::Data>> + 'static
+        S: Service + 'static,
+        NT: 'static
 {
     pub fn init_handle() -> (ExecutorHandle<S::Data>, ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>) {
         let (tx, rx) = channel::new_bounded_sync(EXECUTING_BUFFER);
@@ -131,30 +135,29 @@ impl<S, T, NT> Executor<S, T, NT>
         (ExecutorHandle::new(tx), rx)
     }
     /// Spawns a new service executor into the async runtime.
-    pub fn new(
+    pub fn new<OP, ST, T>(
         reply_worker: ReplyHandle<S>,
         handle: ChannelSyncRx<ExecutionRequest<State<S>, Request<S>>>,
         mut service: S,
         current_state: Option<(State<S>, Vec<Request<S>>)>,
         send_node: Arc<NT>,
         loopback_channel: ChannelSyncTx<Message<S::Data>>,
-        observer: Option<ObserverHandle>,
-    ) -> Result<()> {
+    ) -> Result<()>
+        where OP: OrderingProtocolMessage + 'static,
+              ST: StateTransferMessage + 'static,
+              T: ExecutorReplier + 'static,
+              NT: Node<ServiceMsg<S::Data, OP, ST>> {
         let (state, requests) = if let Some((state, requests)) = current_state {
             (state, Some(requests))
         } else { (service.initial_state()?, None) };
 
-        let id = send_node.id();
-
-        let mut exec: Executor<S, T, NT> = Executor {
+        let mut exec: Executor<S, NT> = Executor {
             e_rx: handle,
             service,
             state,
             reply_worker,
             send_node,
-            loopback_channel,
-            observer_handle: observer,
-            p: Default::default(),
+            loopback_channel
         };
 
         if let Some(requests) = requests {
@@ -170,7 +173,7 @@ impl<S, T, NT> Executor<S, T, NT>
         // FIXME: serialize data on exit
 
         std::thread::Builder::new()
-            .name(format!("{:?} // Executor thread", id))
+            .name(format!("Executor thread"))
             .spawn(move || {
                 while let Ok(exec_req) = exec.e_rx.recv() {
                     match exec_req {
@@ -187,7 +190,7 @@ impl<S, T, NT> Executor<S, T, NT>
                                 exec.service.update_batch(&mut exec.state, batch);
 
                             // deliver replies
-                            exec.execution_finished(Some(seq_no), reply_batch);
+                            exec.execution_finished::<OP, ST, T>(Some(seq_no), reply_batch);
                         }
                         ExecutionRequest::UpdateAndGetAppstate(batch) => {
                             let seq_no = batch.sequence_number();
@@ -199,7 +202,7 @@ impl<S, T, NT> Executor<S, T, NT>
                             exec.deliver_checkpoint_state(seq_no);
 
                             // deliver replies
-                            exec.execution_finished(Some(seq_no), reply_batch);
+                            exec.execution_finished::<OP, ST, T>(Some(seq_no), reply_batch);
                         }
                         ExecutionRequest::Read(_peer_id) => {
                             todo!()
@@ -208,7 +211,7 @@ impl<S, T, NT> Executor<S, T, NT>
                             let reply_batch =
                                 exec.service.unordered_batched_execution(&exec.state, batch);
 
-                            exec.execution_finished(None, reply_batch);
+                            exec.execution_finished::<OP, ST, T>(None, reply_batch);
                         }
                     }
                 }
@@ -227,16 +230,19 @@ impl<S, T, NT> Executor<S, T, NT>
 
         if let Err(_err) = self.loopback_channel.send(m) {
             error!(
-                "{:?} // FAILED TO DELIVER CHECKPOINT STATE",
-                self.send_node.id()
+                "FAILED TO DELIVER CHECKPOINT STATE",
             );
         };
     }
 
-    fn execution_finished(&self, seq: Option<SeqNo>, batch: BatchReplies<Reply<S>>) {
+    fn execution_finished<OP, ST, T>(&self, seq: Option<SeqNo>, batch: BatchReplies<Reply<S>>)
+        where OP: OrderingProtocolMessage + 'static,
+              ST: StateTransferMessage + 'static,
+              NT: Node<ServiceMsg<S::Data, OP, ST>>,
+              T: ExecutorReplier + 'static {
         let send_node = self.send_node.clone();
 
-        {
+        /*{
             if let Some(seq) = seq {
                 if let Some(observer_handle) = &self.observer_handle {
                     //Do not notify of unordered events
@@ -247,8 +253,8 @@ impl<S, T, NT> Executor<S, T, NT>
                     }
                 }
             }
-        }
+        }*/
 
-        T::execution_finished::<S, NT>(send_node, seq, batch);
+        T::execution_finished::<S::Data, OP, ST, NT>(send_node, seq, batch);
     }
 }
