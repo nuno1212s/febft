@@ -74,26 +74,35 @@ pub trait StateTransferProtocol<D, NT> {
     fn initialize(config: Self::Config, timeouts: Timeouts, node: Arc<NT>) -> Result<Self>
         where Self: Sized;
 
+    /// Request the latest state from the rest of replicas
+    fn request_latest_state(&mut self) -> Result<()>;
+
     /// Handle a state transfer protocol message that was received while executing the ordering protocol
     fn handle_off_ctx_message<OP>(&mut self,
-                                     order_protocol: &mut OP,
-                                     message: StoredMessage<StateTransfer<<Self::Serialization as StateTransferMessage>::StateTransferMessage>>)
-                                     -> Result<STResult>
+                                  order_protocol: &mut OP,
+                                  message: StoredMessage<StateTransfer<<Self::Serialization as StateTransferMessage>::StateTransferMessage>>)
+                                  -> Result<()>
         where D: SharedData + 'static,
               OP: StatefulOrderProtocol<D, NT>;
 
     /// Process a state transfer protocol message
     fn process_message<OP>(&mut self,
-                              order_protocol: &mut OP,
-                              message: StoredMessage<StateTransfer<<Self::Serialization as StateTransferMessage>::StateTransferMessage>>)
-                              -> Result<STResult>
+                           order_protocol: &mut OP,
+                           message: StoredMessage<StateTransfer<<Self::Serialization as StateTransferMessage>::StateTransferMessage>>)
+                           -> Result<STResult>
+        where D: SharedData + 'static,
+              OP: StatefulOrderProtocol<D, NT>;
+
+    /// Handle having received a state from the application
+    fn handle_state_received_from_app<OP>(&mut self,
+                                          order_protocol: &mut OP,
+                                          state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()>
         where D: SharedData + 'static,
               OP: StatefulOrderProtocol<D, NT>;
 }
 
 /// An order protocol that uses the state transfer protocol to manage its state.
 pub trait StatefulOrderProtocol<D: SharedData + 'static, NT>: OrderingProtocol<D, NT> {
-
     #[cfg(feature = "serialize_capnp")]
     type DecLog: Send + Clone;
 
@@ -102,14 +111,18 @@ pub trait StatefulOrderProtocol<D: SharedData + 'static, NT>: OrderingProtocol<D
 
     fn view(&self) -> Self::ViewInfo;
 
+    /// Install a state received from other replicas in the system
     fn install_state(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>, view_info: Self::ViewInfo, dec_log: Self::DecLog) -> Result<(D::State, Vec<D::Request>)>;
 
+    /// Snapshot the current log of the replica
     fn snapshot_log(&mut self) -> Result<(Arc<ReadOnly<Checkpoint<D::State>>>, Self::ViewInfo, Self::DecLog)>;
+
+    /// Finalize the checkpoint of the replica
+    fn finalize_checkpoint(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()>;
 
     #[cfg(feature = "serialize_capnp")]
     fn serialize_declog_capnp(builder: febft_capnp::cst_messages_capnp::dec_log::Builder, msg: &Self::DecLog) -> Result<()>;
 
     #[cfg(feature = "serialize_capnp")]
     fn deserialize_declog_capnp(reader: febft_capnp::cst_messages_capnp::dec_log::Reader) -> Result<Self::DecLog>;
-
 }
