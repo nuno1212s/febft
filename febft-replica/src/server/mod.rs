@@ -25,6 +25,7 @@ use febft_messages::ordering_protocol::{OrderingProtocol, OrderProtocolExecResul
 use febft_messages::serialize::{StateTransferMessage, ServiceMsg};
 use febft_messages::state_transfer::{Checkpoint, StatefulOrderProtocol, StateTransferProtocol, STResult};
 use febft_messages::timeouts::{Timeout, TimeoutKind, Timeouts};
+use crate::config::ReplicaConfig;
 use crate::executable::{Executor, ReplicaReplier};
 use crate::server::client_replier::Replier;
 
@@ -54,32 +55,6 @@ pub struct Replica<S, OP, ST, NT> where S: Service {
     node: Arc<NT>,
     // THe handle to the execution and timeouts handler
     execution_rx: ChannelSyncRx<Message<S::Data>>,
-}
-
-/// Represents a configuration used to bootstrap a `Replica`.
-pub struct ReplicaConfig<S: Service + 'static, T, OP: OrderingProtocol<S::Data, T> + 'static, ST: StateTransferProtocol<S::Data, T> + 'static> {
-    /// The application logic.
-    pub service: S,
-
-    pub n: usize,
-    pub f: usize,
-
-    //TODO: These two values should be loaded from storage
-    /// The sequence number for the current view.
-    pub view: SeqNo,
-    /// Next sequence number attributed to a request by
-    /// the consensus layer.
-    pub next_consensus_seq: SeqNo,
-
-    /// The configuration for the ordering protocol
-    pub op_config: OP::Config,
-    /// The configuration for the State transfer protocol
-    pub st_config: ST::Config,
-
-    /// The path to the persistent database
-    pub db_path: String,
-    /// Check out the docs on `NodeConfig`.
-    pub node: NodeConfig,
 }
 
 impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
@@ -218,8 +193,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                     }
                 }
                 ReplicaPhase::StateTransferProtocol => {
-
-
+                    let (header, message) = self.node.receive_from_replicas().unwrap().into_inner();
 
                 }
             }

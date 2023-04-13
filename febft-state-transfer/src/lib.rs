@@ -1,13 +1,8 @@
+#![feature(inherent_associated_types)]
+
 pub mod message;
 pub mod config;
 
-//! The collaborative state transfer algorithm.
-//!
-//! The implementation is based on the paper «On the Efﬁciency of
-//! Durable State Machine Replication», by A. Bessani et al.
-
-// NOTE: in this module, we may use cid interchangeably with
-// consensus sequence number
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -30,17 +25,17 @@ use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{StateTransfer, SystemMessage};
 use febft_messages::ordering_protocol::OrderingProtocol;
-use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
-use febft_messages::state_transfer::{Checkpoint, StatefulOrderProtocol, StateTransferProtocol, STResult};
+use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage, NetworkView};
+use febft_messages::state_transfer::{Checkpoint, CstM, DecLog, StatefulOrderProtocol, StateTransferProtocol, STResult, ViewInfo};
 use febft_messages::timeouts::Timeouts;
 use crate::config::StateTransferConfig;
 
 use crate::message::{CstMessage, CstMessageKind};
-use crate::message::serialize::STMsg;
+use crate::message::serialize::{CSTMsg};
 
-enum ProtoPhase<S, O, V> {
+enum ProtoPhase<S, V, O> {
     Init,
-    WaitingCheckpoint(Header, CstMessage<S, O, V>),
+    WaitingCheckpoint(Header, CstMessage<S, V, O>),
     ReceivingCid(usize),
     ReceivingState(usize),
 }
@@ -60,7 +55,7 @@ pub struct RecoveryState<S, V, O> {
 
 /// Allow a replica to recover from the state received by peer nodes.
 pub fn install_recovery_state<D, NT, OP>(
-    recovery_state: RecoveryState<D::State, OP::DecLog, OP::ViewInfo>,
+    recovery_state: RecoveryState<D::State, ViewInfo<OP::StateSerialization>, DecLog<OP::StateSerialization>>,
     order_protocol: &mut OP,
     executor: &mut ExecutorHandle<D>,
 ) -> Result<()>
@@ -85,7 +80,7 @@ pub fn install_recovery_state<D, NT, OP>(
         log
     } = recovery_state;
 
-    let (state, req) = order_protocol.install_state(checkpoint, view, log);
+    let (state, req) = order_protocol.install_state(checkpoint, view, log)?;
 
     //Update the executor phase
     executor.install_state(state, req)?;
@@ -93,7 +88,7 @@ pub fn install_recovery_state<D, NT, OP>(
     Ok(())
 }
 
-impl<S, O, V> RecoveryState<S, O, V> {
+impl<S, O, V> RecoveryState<S, V, O> {
     /// Creates a new `RecoveryState`.
     pub fn new(
         view: V,
@@ -119,18 +114,23 @@ impl<S, O, V> RecoveryState<S, O, V> {
 
     /// Returns a reference to the decided consensus messages of this recovery state.
     pub fn log(&self) -> &O {
-        &self.declog
+        &self.log
     }
 }
 
-struct ReceivedState<S, O, V> {
+struct ReceivedState<S, V, O> {
     count: usize,
-    state: RecoveryState<S, O, V>,
+    state: RecoveryState<S, V, O>,
 }
 
-/// Represents the state of an on-going colloborative
-/// state transfer protocol execution.
-pub struct CollabStateTransfer<D: SharedData, NT, SOP: StatefulOrderProtocol<D, NT>> {
+
+// NOTE: in this module, we may use cid interchangeably with
+// consensus sequence number
+/// The collaborative state transfer algorithm.
+///
+/// The implementation is based on the paper «On the Efﬁciency of
+/// Durable State Machine Replication», by A. Bessani et al.
+pub struct CollabStateTransfer<D: SharedData + 'static, OP: StatefulOrderProtocol<D, NT>, NT> {
     latest_cid: SeqNo,
     cst_seq: SeqNo,
     latest_cid_count: usize,
@@ -140,12 +140,12 @@ pub struct CollabStateTransfer<D: SharedData, NT, SOP: StatefulOrderProtocol<D, 
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
     node: Arc<NT>,
-    received_states: HashMap<Digest, ReceivedState<D::State, SOP::DecLog, SOP::ViewInfo>>,
-    phase: ProtoPhase<D::State, SOP::DecLog, SOP::ViewInfo>,
+    received_states: HashMap<Digest, ReceivedState<D::State, ViewInfo<OP::StateSerialization>, DecLog<OP::StateSerialization>>>,
+    phase: ProtoPhase<D::State, ViewInfo<OP::StateSerialization>, DecLog<OP::StateSerialization>>,
 }
 
 /// Status returned from processing a state transfer message.
-pub enum CstStatus<S, O, V> {
+pub enum CstStatus<S, V, O> {
     /// We are not running the CST protocol.
     ///
     /// Drop any attempt of processing a message in this condition.
@@ -161,20 +161,20 @@ pub enum CstStatus<S, O, V> {
     SeqNo(SeqNo),
     /// We have received and validated the state from
     /// a group of replicas.
-    State(RecoveryState<S, O, V>),
+    State(RecoveryState<S, V, O>),
 }
 
 /// Represents progress in the CST state machine.
 ///
 /// To clarify, the mention of state machine here has nothing to do with the
 /// SMR protocol, but rather the implementation in code of the CST protocol.
-pub enum CstProgress<S, O, V> {
+pub enum CstProgress<S, V, O> {
     // TODO: Timeout( some type here)
     /// This value represents null progress in the CST code's state machine.
     Nil,
     /// We have a fresh new message to feed the CST state machine, from
     /// the communication layer.
-    Message(Header, CstMessage<S, O, V>),
+    Message(Header, CstMessage<S, V, O>),
 }
 
 macro_rules! getmessage {
@@ -194,12 +194,11 @@ macro_rules! getmessage {
     }};
 }
 
-impl<D, SOP, NT> StateTransferProtocol<D, NT> for CollabStateTransfer<D, NT, SOP>
+impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, NT>
     where D: SharedData + 'static,
-          SOP: StatefulOrderProtocol<D, NT> + 'static,
-          NT: Node<ServiceMsg<D, SOP::Serialization, CollabStateTransfer<D, NT, SOP>>>
+          OP: StatefulOrderProtocol<D, NT> + 'static
 {
-    type Serialization = CollabStateTransfer<D, NT, SOP>;
+    type Serialization = CSTMsg<D, OP::StateSerialization>;
     type Config = StateTransferConfig;
 
     fn initialize(config: Self::Config, timeouts: Timeouts, node: Arc<NT>)
@@ -210,14 +209,17 @@ impl<D, SOP, NT> StateTransferProtocol<D, NT> for CollabStateTransfer<D, NT, SOP
             timeout_duration
         } = config;
 
-        Ok(CollabStateTransfer::<D, NT, SOP>::new(node, timeout_duration))
+        Ok(CollabStateTransfer::<D, OP, NT>::new(node, timeout_duration))
     }
 
-    fn handle_off_ctx_message<OP>(&mut self, order_protocol: &mut OP,
-                                     message: StoredMessage<StateTransfer<CstMessage<D::State, OP::DecLog, OP::ViewInfo>>>)
-                                     -> Result<STResult>
-        where D: SharedData + 'static,
-              OP: StatefulOrderProtocol<D, NT> {
+    fn request_latest_state(&mut self) -> Result<()> {
+        todo!()
+    }
+
+    fn handle_off_ctx_message(&mut self, order_protocol: &mut OP,
+                              message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
+                              -> Result<()>
+        where NT: Node<ServiceMsg<D, OP::StateSerialization, Self::Serialization>> {
         let (header, message) = message.into_inner();
 
         let message = message.into_inner();
@@ -235,23 +237,27 @@ impl<D, SOP, NT> StateTransferProtocol<D, NT> for CollabStateTransfer<D, NT, SOP
             }
         }
 
-        Ok(STResult::CstNotNeeded)
+        Ok(())
     }
 
-    fn process_message<OP>(&mut self, order_protocol: &mut OP,
-                              message: StoredMessage<StateTransfer<CstMessage<D::State, OP::DecLog, OP::ViewInfo>>>)
-                              -> Result<STResult>
-        where D: SharedData + 'static,
-              OP: StatefulOrderProtocol<D, NT> {
+    fn process_message(&mut self, order_protocol: &mut OP,
+                       message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
+                       -> Result<STResult>
+        where NT: Node<ServiceMsg<D, OP::StateSerialization, Self::Serialization>> {
+        todo!()
+    }
+
+    fn handle_state_received_from_app(&mut self, order_protocol: &mut OP, state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()>
+        where NT: Node<ServiceMsg<D, OP::StateSerialization, Self::Serialization>> {
         todo!()
     }
 }
 
 // TODO: request timeouts
-impl<D, NT, SOP> CollabStateTransfer<D, NT, SOP>
+impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
     where
         D: SharedData + 'static,
-        SOP: StatefulOrderProtocol<D, NT>
+        OP: StatefulOrderProtocol<D, NT>
 {
     /// Craete a new instance of `CollabStateTransfer`.
     pub fn new(node: Arc<NT>, base_timeout: Duration) -> Self {
@@ -278,10 +284,11 @@ impl<D, NT, SOP> CollabStateTransfer<D, NT, SOP>
     fn process_reply_state(
         &mut self,
         header: Header,
-        message: CstMessage<D::State, SOP::DecLog, SOP::ViewInfo>,
-        op: &mut SOP,
+        message: CstMessage<D::State, ViewInfo<OP::StateSerialization>, DecLog<OP::StateSerialization>>,
+        op: &mut OP,
     ) where
-        NT: Node<ServiceMsg<D, SOP::Serialization, Self>>
+        OP: StatefulOrderProtocol<D, NT>,
+        NT: Node<ServiceMsg<D, OP::StateSerialization, CSTMsg<D, OP::StateSerialization>>>
     {
         let (state, view, dec_log) = match op.snapshot_log() {
             Ok((state, view, dec_log)) => { (state, view, dec_log) }
@@ -309,11 +316,12 @@ impl<D, NT, SOP> CollabStateTransfer<D, NT, SOP>
     /// Advances the state of the CST state machine.
     pub fn process_message(
         &mut self,
-        progress: CstProgress<D::State, SOP::DecLog, SOP::ViewInfo>,
-        order_protocol: &mut SOP,
-    ) -> CstStatus<D::State, SOP::DecLog, SOP::ViewInfo>
+        progress: CstProgress<D::State, ViewInfo<OP::StateSerialization>, DecLog<OP::StateSerialization>>,
+        order_protocol: &mut OP,
+    ) -> CstStatus<D::State, ViewInfo<OP::StateSerialization>, DecLog<OP::StateSerialization>>
         where
-            NT: Node<ServiceMsg<D, SOP::Serialization, Self>>
+            OP: StatefulOrderProtocol<D, NT>,
+            NT: Node<ServiceMsg<D, OP::StateSerialization, CSTMsg<D, OP::StateSerialization>>>
     {
         match self.phase {
             ProtoPhase::WaitingCheckpoint(_, _) => {
@@ -327,7 +335,8 @@ impl<D, NT, SOP> CollabStateTransfer<D, NT, SOP>
                 let (header, message) = getmessage!(progress, CstStatus::Nil);
                 match message.kind() {
                     CstMessageKind::RequestLatestConsensusSeq => {
-                        let kind = CstMessageKind::ReplyLatestConsensusSeq(consensus.sequence_number());
+                        let kind = CstMessageKind::ReplyLatestConsensusSeq(order_protocol.sequence_number());
+
                         let reply = CstMessage::new(message.sequence_number(), kind);
 
                         let network_msg = NetworkMessageKind::from(SystemMessage::from_state_transfer_message(reply));
@@ -476,11 +485,12 @@ impl<D, NT, SOP> CollabStateTransfer<D, NT, SOP>
     /// Handle a timeout received from the timeouts layer.
     /// Returns a bool to signify if we must move to the Retrieving state
     /// If the timeout is no longer relevant, returns false (Can remain in current phase)
-    pub fn cst_request_timed_out<NT>(&mut self, seq: SeqNo,
-                                     timeouts: &Timeouts,
-                                     order_protocol: &SOP) -> bool
+    pub fn cst_request_timed_out(&mut self, seq: SeqNo,
+                                 timeouts: &Timeouts,
+                                 order_protocol: &OP) -> bool
         where
-            NT: Node<ServiceMsg<D, SOP::Serialization, Self>> {
+            OP: StatefulOrderProtocol<D, NT>,
+            NT: Node<ServiceMsg<D, OP::StateSerialization, CSTMsg<D, OP::StateSerialization>>> {
         let status = self.timed_out(seq);
 
         match status {
@@ -505,7 +515,7 @@ impl<D, NT, SOP> CollabStateTransfer<D, NT, SOP>
         }
     }
 
-    fn timed_out(&mut self, seq: SeqNo) -> CstStatus<D::State, SOP::DecLog, SOP::ViewInfo> {
+    fn timed_out(&mut self, seq: SeqNo) -> CstStatus<D::State, ViewInfo<OP::StateSerialization>, DecLog<OP::StateSerialization>> {
         if seq.next() != self.cst_seq {
             // the timeout we received is for a request
             // that has already completed, therefore we ignore it
@@ -535,12 +545,13 @@ impl<D, NT, SOP> CollabStateTransfer<D, NT, SOP>
 
     /// Used by a recovering node to retrieve the latest sequence number
     /// attributed to a client request by the consensus layer.
-    pub fn request_latest_consensus_seq_no<NT>(
+    pub fn request_latest_consensus_seq_no(
         &mut self,
-        order_protocol: &SOP,
+        order_protocol: &OP,
         timeouts: &Timeouts,
     ) where
-        NT: Node<ServiceMsg<D, SOP::Serialization, Self>>
+        OP: StatefulOrderProtocol<D, NT>,
+        NT: Node<ServiceMsg<D, OP::StateSerialization, CSTMsg<D, OP::StateSerialization>>>
     {
         // reset state of latest seq no. request
         self.latest_cid = SeqNo::ZERO;
@@ -568,10 +579,11 @@ impl<D, NT, SOP> CollabStateTransfer<D, NT, SOP>
     /// Used by a recovering node to retrieve the latest state.
     pub fn request_latest_state(
         &mut self,
-        order_protocol: &SOP,
+        order_protocol: &OP,
         timeouts: &Timeouts,
     ) where
-        NT: Node<ServiceMsg<D, SOP::Serialization, Self>>
+        OP: StatefulOrderProtocol<D, NT>,
+        NT: Node<ServiceMsg<D, OP::StateSerialization, CSTMsg<D, OP::StateSerialization>>>
     {
         // reset hashmap of received states
         self.received_states.clear();

@@ -10,7 +10,7 @@ serialize_serde = ["febft-messages/serialize_serde", "febft-communication/serial
     "febft-common/serialize_serde"]
 serialize_capnp = ["febft-messages/serialize_capnp", "febft-execution/serialize_capnp", "febft-communication/serialize_capnp"]
 
-default = ["serialize_capnp"]
+default = ["serialize_serde"]
 
 [dependencies]
 log = "*"

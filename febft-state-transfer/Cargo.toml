@@ -7,12 +7,14 @@ edition = "2021"
 
 [features]
 
-serialize-serde = ["serde"]
-serialize-capnp = ["febft-capnp", "capnp"]
+serialize_serde = ["serde"]
+serialize_capnp = ["febft-capnp", "capnp"]
+
+default = ["serialize_serde", "febft-communication/serialize_serde", "febft-execution/serialize_serde", "febft-common/serialize_serde", "febft-messages/serialize_serde"]
 
 [dependencies]
 
-serde = { version = "1.0.159", optional = true }
+serde = { version = "*", optional = true }
 capnp = { version = "0.16.1", optional = true }
 
 febft-capnp = { path = "../febft-capnp", optional = true }

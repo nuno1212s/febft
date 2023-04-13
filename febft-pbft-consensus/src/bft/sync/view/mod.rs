@@ -12,6 +12,7 @@ use febft_common::ordering::{Orderable, SeqNo};
 use febft_common::error::*;
 use febft_common::node_id::NodeId;
 use febft_execution::system_params::SystemParams;
+use febft_messages::serialize::NetworkView;
 
 /// This struct contains information related with an
 /// active `febft` view.
@@ -34,6 +35,24 @@ impl Orderable for ViewInfo {
     /// Returns the sequence number of the current view.
     fn sequence_number(&self) -> SeqNo {
         self.seq
+    }
+}
+
+impl NetworkView for ViewInfo {
+    fn primary(&self) -> NodeId {
+        self.leader()
+    }
+
+    fn quorum(&self) -> usize {
+        self.params().quorum()
+    }
+
+    fn f(&self) -> usize {
+        self.params().f()
+    }
+
+    fn n(&self) -> usize {
+        self.params().n()
     }
 }
 

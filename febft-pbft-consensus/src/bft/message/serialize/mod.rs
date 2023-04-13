@@ -15,6 +15,7 @@ use crate::bft::msg_log::persistent::ProofInfo;
 
 #[cfg(feature = "serialize_serde")]
 use ::serde::{Deserialize, Serialize};
+use febft_capnp::cst_messages_capnp::view_info::{Builder, Reader};
 use febft_common::crypto::hash::{Context, Digest};
 use febft_communication::Node;
 use febft_communication::serialize::Serializable;
@@ -23,6 +24,7 @@ use febft_execution::serialize::SharedData;
 use febft_messages::serialize::OrderingProtocolMessage;
 use crate::bft::message::{ConsensusMessage, PBFTMessage};
 use crate::bft::{PBFT};
+use crate::bft::sync::view::ViewInfo;
 
 #[cfg(feature = "serialize_capnp")]
 pub mod capnp;
@@ -65,6 +67,7 @@ pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
 pub struct PBFTConsensus<D: SharedData>(PhantomData<D>);
 
 impl<D> OrderingProtocolMessage for PBFTConsensus<D> where D: SharedData {
+    type ViewInfo = ViewInfo;
     type ProtocolMessage = PBFTMessage<D::Request>;
 
     #[cfg(feature = "serialize_capnp")]
@@ -75,5 +78,13 @@ impl<D> OrderingProtocolMessage for PBFTConsensus<D> where D: SharedData {
     #[cfg(feature = "serialize_capnp")]
     fn deserialize_capnp(reader: febft_capnp::consensus_messages_capnp::protocol_message::Reader) -> Result<Self::ProtocolMessage> {
         capnp::deserialize_message::<D>(reader)
+    }
+
+    fn serialize_view_capnp(builder: Builder, msg: &Self::ViewInfo) -> Result<()> {
+        todo!()
+    }
+
+    fn deserialize_view_capnp(reader: Reader) -> Result<Self::ViewInfo> {
+        todo!()
     }
 }

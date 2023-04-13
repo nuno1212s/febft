@@ -2,6 +2,7 @@ use std::sync::Arc;
 use febft_communication::message::{Header, NetworkMessage, StoredMessage, System};
 use febft_common::error::*;
 use febft_common::node_id::NodeId;
+use febft_common::ordering::Orderable;
 use febft_communication::Node;
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
@@ -9,10 +10,9 @@ use crate::messages::{Protocol, SystemMessage};
 use crate::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg, NetworkView};
 use crate::timeouts::Timeouts;
 
-pub trait OrderingProtocol<D, NT> where D: SharedData + 'static {
-    type Serialization: OrderingProtocolMessage + 'static;
+pub trait OrderingProtocol<D, NT>: Orderable where D: SharedData + 'static {
 
-    type ViewInfo: NetworkView = <Self::Serialization as OrderingProtocolMessage>::ViewInfo;
+    type Serialization: OrderingProtocolMessage + 'static;
 
     type Config;
 
