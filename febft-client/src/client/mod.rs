@@ -13,8 +13,6 @@ use std::time::Instant;
 use futures_timer::Delay;
 use intmap::IntMap;
 use log::{error, debug, info};
-use febft_pbft_consensus::bft::{PBFT, SysMsg};
-use febft_pbft_consensus::bft::message::{PBFTMessage};
 use febft_common::async_runtime;
 use febft_common::crypto::hash::Digest;
 
@@ -27,13 +25,13 @@ use febft_communication::Node;
 use febft_execution::serialize::SharedData;
 use febft_execution::system_params::SystemParams;
 use febft_messages::messages::{ReplyMessage, SystemMessage};
+use febft_messages::serialize::{ClientMessage, ClientServiceMsg, OrderingProtocolMessage, ServiceMessage, ServiceMsg, StateTransferMessage};
 use febft_metrics::benchmarks::ClientPerf;
 use febft_metrics::{measure_ready_rq_time, measure_response_deliver_time, measure_response_rcv_time, measure_sent_rq_info, measure_target_init_time, measure_time_rq_init, start_measurement};
-use crate::client::observing_client::ObserverClient;
 
 use self::unordered_client::{FollowerData, UnorderedClientMode};
 
-pub mod observing_client;
+//pub mod observing_client;
 pub mod ordered_client;
 pub mod unordered_client;
 
@@ -103,21 +101,21 @@ pub struct ClientData<D>
     //To call the awaiting tasks
     ready: Vec<Mutex<IntMap<ClientAwaker<D::Reply>>>>,
 
-    //We only want to have a single observer client for any and all sessions that the user
+    /*//We only want to have a single observer client for any and all sessions that the user
     //May have, so we keep this reference in here
     observer: Arc<Mutex<Option<ObserverClient>>>,
-    observer_ready: Mutex<Option<observing_client::Ready>>,
+    observer_ready: Mutex<Option<observing_client::Ready>>,*/
 
     stats: Option<Arc<ClientPerf>>,
 }
 
-pub trait ClientType<D: SharedData + 'static, NT: Node<PBFT<D>>> {
+pub trait ClientType<D: SharedData + 'static, NT> {
     ///Initialize request in accordance with the type of clients
     fn init_request(
         session_id: SeqNo,
         operation_id: SeqNo,
         operation: D::Request,
-    ) -> SysMsg<D>;
+    ) -> ClientMessage<D>;
 
     ///The return types for the iterator
     type Iter: Iterator<Item=NodeId>;
@@ -133,7 +131,7 @@ pub trait ClientType<D: SharedData + 'static, NT: Node<PBFT<D>>> {
 
 /// Represents a client node in `febft`.
 // TODO: maybe make the clone impl more efficient
-pub struct Client<D: SharedData + 'static, NT: Node<PBFT<D>> +'static> {
+pub struct Client<D: SharedData + 'static, NT: 'static> {
     session_id: SeqNo,
     operation_counter: SeqNo,
     data: Arc<ClientData<D>>,
@@ -141,7 +139,7 @@ pub struct Client<D: SharedData + 'static, NT: Node<PBFT<D>> +'static> {
     node: Arc<NT>,
 }
 
-impl<D: SharedData, NT: Node<PBFT<D>>> Clone for Client<D, NT> {
+impl<D: SharedData, NT> Clone for Client<D, NT> {
     fn clone(&self) -> Self {
         let session_id = self
             .data
@@ -243,13 +241,10 @@ pub struct ReplicaVotes {
 impl<D, NT> Client<D, NT>
     where
         D: SharedData + 'static,
-        D::State: Send + Clone + 'static,
-        D::Request: Send + 'static,
-        D::Reply: Send + 'static,
-        NT: Node<PBFT<D>> + 'static
+        NT: 'static
 {
     /// Bootstrap a client in `febft`.
-    pub async fn bootstrap(cfg: ClientConfig) -> Result<Self> {
+    pub async fn bootstrap(cfg: ClientConfig) -> Result<Self> where NT: Node<ClientServiceMsg<D>> {
         let ClientConfig {
             n, f, node: node_config,
             unordered_rq_mode,
@@ -282,9 +277,6 @@ impl<D, NT> Client<D, NT>
             ready: std::iter::repeat_with(|| Mutex::new(IntMap::new()))
                 .take(num_cpus::get())
                 .collect(),
-
-            observer: Arc::new(Mutex::new(None)),
-            observer_ready: Mutex::new(None),
             stats,
         });
 
@@ -311,7 +303,7 @@ impl<D, NT> Client<D, NT>
     }
 
     ///Bootstrap an observer client and get a reference to the observer client
-    pub async fn bootstrap_observer(&mut self) -> &Arc<Mutex<Option<ObserverClient>>> {
+    /*pub async fn bootstrap_observer(&mut self) -> &Arc<Mutex<Option<ObserverClient>>> {
         {
             let guard = self.data.observer.lock().unwrap();
 
@@ -327,10 +319,10 @@ impl<D, NT> Client<D, NT>
         }
 
         &self.data.observer
-    }
+    }*/
 
     #[inline]
-    pub fn id(&self) -> NodeId {
+    pub fn id(&self) -> NodeId where NT: Node<ClientServiceMsg<D>> {
         self.node.id()
     }
 
@@ -340,6 +332,7 @@ impl<D, NT> Client<D, NT>
     pub async fn update<T>(&mut self, operation: D::Request) -> Result<D::Reply>
         where
             T: ClientType<D, NT>,
+            NT: Node<ClientServiceMsg<D>>
     {
         let session_id = self.session_id;
         let operation_id = self.next_operation_id();
@@ -366,7 +359,7 @@ impl<D, NT> Client<D, NT>
         }
 
         // broadcast our request to the node group
-        self.node.broadcast(NetworkMessageKind::from(message), targets);
+        self.node.broadcast(NetworkMessageKind::from(message), targets).unwrap();
 
         // await response
         let ready = get_ready::<D>(session_id, &*self.data);
@@ -400,6 +393,7 @@ impl<D, NT> Client<D, NT>
         callback: Box<dyn FnOnce(Result<D::Reply>) + Send>,
     ) where
         T: ClientType<D, NT>,
+        NT: Node<ClientServiceMsg<D>>
     {
         let session_id = self.session_id;
 
@@ -460,7 +454,7 @@ impl<D, NT> Client<D, NT>
 
         measure_ready_rq_time!(&self.data.stats, rq_ready_init);
 
-        self.node.broadcast(NetworkMessageKind::from(message), targets);
+        self.node.broadcast(NetworkMessageKind::from(message), targets).unwrap();
 
         Self::start_timeout(
             self.node.clone(),
@@ -485,9 +479,8 @@ impl<D, NT> Client<D, NT>
         session_id: SeqNo,
         rq_id: SeqNo,
         client_data: Arc<ClientData<D>>,
-    ) {
+    ) where NT: Node<ClientServiceMsg<D>> {
         let node = node.clone();
-        let node_id = node.id();
 
         async_runtime::spawn(async move {
             //Timeout delay
@@ -702,7 +695,7 @@ impl<D, NT> Client<D, NT>
     ///This task might become a large bottleneck with the scenario of few clients with high concurrent rqs,
     /// As the replicas will make very large batches and respond to all the sent requests in one go.
     /// This leaves this thread with a very large task to do in a very short time and it just can't keep up
-    fn message_recv_task(params: SystemParams, data: Arc<ClientData<D>>, node: Arc<NT>) {
+    fn message_recv_task(params: SystemParams, data: Arc<ClientData<D>>, node: Arc<NT>) where NT: Node<ClientServiceMsg<D>> {
         // use session id as key
         let mut last_operation_ids: IntMap<SeqNo> = IntMap::new();
         let mut replica_votes: IntMap<ReplicaVotes> = IntMap::new();
@@ -830,20 +823,6 @@ impl<D, NT> Client<D, NT>
                 _ => {}
             }
 
-            match sys_msg {
-                SystemMessage::ProtocolMessage(message) => {
-                    match message.payload() {
-                        PBFTMessage::ObserverMessage(_) => {
-
-                            //Pass this message off to the observing module
-                            ObserverClient::handle_observed_message(&data, header, message);
-                        }
-                        _ => {}
-                    }
-                }
-                // FIXME: handle rogue messages on clients
-                _ => panic!("rogue message detected"),
-            }
         }
     }
 }

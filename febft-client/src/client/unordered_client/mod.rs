@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 
 use std::sync::{Mutex};
-use febft_pbft_consensus::bft::{PBFT, SysMsg};
 
 use febft_common::error::*;
 use febft_common::node_id::NodeId;
@@ -10,6 +9,7 @@ use febft_communication::{Node, NodeConnections};
 use febft_communication::tcpip::TlsNodeConnector;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{RequestMessage, SystemMessage};
+use febft_messages::serialize::{ClientMessage, ClientServiceMsg};
 
 use super::{Client, ClientType};
 
@@ -48,14 +48,13 @@ impl FollowerData {
 
 impl<D, NT> Client<D, NT>
     where
-        D: SharedData,
-        NT: Node<PBFT<D>> + 'static
+        D: SharedData + 'static,
 {
     ///Connect to a follower with a given node id
     ///
     /// Returns Err if we are already connecting to or connected to
     /// the given follower.
-    fn connect_to_follower(&self, node_id: NodeId) -> Result<()> {
+    fn connect_to_follower(&self, node_id: NodeId) -> Result<()> where NT: Node<ClientServiceMsg<D>> {
         {
             let connecting = self.data.follower_data.connecting_followers.lock().unwrap();
 
@@ -101,13 +100,12 @@ pub struct Unordered;
 impl<D, NT> ClientType<D, NT> for Unordered
     where
         D: SharedData + 'static,
-        NT: Node<PBFT<D>> + 'static
 {
     fn init_request(
         session_id: SeqNo,
         operation_id: SeqNo,
         operation: D::Request,
-    ) -> SysMsg<D>
+    ) -> ClientMessage<D>
     {
         SystemMessage::UnorderedRequest(RequestMessage::new(session_id, operation_id, operation))
     }

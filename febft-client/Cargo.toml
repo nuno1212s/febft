@@ -7,9 +7,8 @@ edition = "2021"
 [features]
 
 serialize_serde = ["febft-messages/serialize_serde", "febft-communication/serialize_serde", "febft-execution/serialize_serde",
-    "febft-common/serialize_serde", "febft-pbft-consensus/serialize_serde"]
-serialize_capnp = ["febft-messages/serialize_capnp", "febft-execution/serialize_capnp", "febft-communication/serialize_capnp",
-    "febft-pbft-consensus/serialize_capnp"]
+    "febft-common/serialize_serde"]
+serialize_capnp = ["febft-messages/serialize_capnp", "febft-execution/serialize_capnp", "febft-communication/serialize_capnp"]
 
 default = ["serialize_capnp"]
 
@@ -22,5 +21,4 @@ febft-communication = { path = "../febft-communication" }
 febft-execution = { path = "../febft-execution" }
 febft-common = { path = "../febft-common" }
 febft-messages = { path = "../febft-messages" }
-febft-pbft-consensus = { path = "../febft-pbft-consensus" }
 febft-metrics = {path = "../febft-metrics"}

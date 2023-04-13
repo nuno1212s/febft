@@ -5,8 +5,9 @@ use febft_execution::serialize::SharedData;
 use crate::messages::SystemMessage;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
+use febft_capnp::consensus_messages_capnp::protocol_message::{Builder, Reader};
 use febft_common::node_id::NodeId;
-use febft_common::ordering::Orderable;
+use febft_common::ordering::{Orderable, SeqNo};
 use crate::state_transfer::StateTransferProtocol;
 
 #[cfg(feature = "serialize_capnp")]
@@ -71,6 +72,75 @@ pub trait StateTransferMessage: Send {
 
 /// The type that encapsulates all the serializing, so we don't have to constantly use SystemMessage
 pub struct ServiceMsg<D: SharedData, P: OrderingProtocolMessage, S: StateTransferMessage>(PhantomData<D>, PhantomData<P>, PhantomData<S>);
+
+pub type ServiceMessage<D: SharedData, P: OrderingProtocolMessage, S: StateTransferMessage> = <ServiceMsg<D, P, S> as Serializable>::Message;
+
+pub type ClientServiceMsg<D:SharedData> = ServiceMsg<D, NoProtocol, NoProtocol>;
+
+pub type ClientMessage<D: SharedData> = <ClientServiceMsg<D> as Serializable>::Message;
+
+pub struct NoProtocol;
+
+#[derive(Clone)]
+pub struct NoView;
+
+impl Orderable for NoView {
+    fn sequence_number(&self) -> SeqNo {
+        unimplemented!()
+    }
+}
+
+impl NetworkView for NoView {
+    fn primary(&self) -> NodeId {
+        unimplemented!()
+    }
+
+    fn quorum(&self) -> usize {
+        unimplemented!()
+    }
+
+    fn f(&self) -> usize {
+        unimplemented!()
+    }
+
+    fn n(&self) -> usize {
+        unimplemented!()
+    }
+}
+
+impl OrderingProtocolMessage for NoProtocol {
+    type ViewInfo = NoView;
+
+    type ProtocolMessage = ();
+
+    fn serialize_capnp(builder: Builder, msg: &Self::ProtocolMessage) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn deserialize_capnp(reader: Reader) -> Result<Self::ProtocolMessage> {
+        unimplemented!()
+    }
+
+    fn serialize_view_capnp(builder: febft_capnp::cst_messages_capnp::view_info::Builder, msg: &Self::ViewInfo) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn deserialize_view_capnp(reader: febft_capnp::cst_messages_capnp::view_info::Reader) -> Result<Self::ViewInfo> {
+        unimplemented!()
+    }
+}
+
+impl StateTransferMessage for NoProtocol {
+    type StateTransferMessage = ();
+
+    fn serialize_capnp(builder: febft_capnp::cst_messages_capnp::cst_message::Builder, msg: &Self::StateTransferMessage) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn deserialize_capnp(reader: febft_capnp::cst_messages_capnp::cst_message::Reader) -> Result<Self::StateTransferMessage> {
+        unimplemented!()
+    }
+}
 
 impl<D: SharedData, P: OrderingProtocolMessage, S: StateTransferMessage> Serializable for ServiceMsg<D, P, S> {
     type Message = SystemMessage<D, P::ProtocolMessage, S::StateTransferMessage>;
