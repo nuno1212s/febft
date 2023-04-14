@@ -1,30 +1,28 @@
 //! Contains the server side core protocol logic of `febft`.
 
-use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool};
 use std::sync::Arc;
-use std::time::{Duration};
+use std::time::Duration;
+use futures_timer::Delay;
 
-use chrono::offset::Utc;
-use chrono::DateTime;
-use log::{debug, warn};
+use log::{debug};
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx};
 
 use febft_common::error::*;
-use febft_common::globals::ReadOnly;
 use febft_common::node_id::NodeId;
-use febft_common::ordering::{Orderable, SeqNo};
-use febft_communication::{Node};
-use febft_communication::config::NodeConfig;
-use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, StoredMessage};
-use febft_execution::app::{Reply, Request, Service, State};
+use febft_common::ordering::{SeqNo};
+use febft_communication::{Node, NodeConnections};
+use febft_communication::message::{StoredMessage};
+use febft_execution::app::{Service, State};
 use febft_execution::ExecutorHandle;
-use febft_messages::messages::{ForwardedRequestsMessage, Message, RequestMessage, SystemMessage};
-use febft_messages::ordering_protocol::{OrderingProtocol, OrderProtocolExecResult, OrderProtocolPoll};
-use febft_messages::serialize::{StateTransferMessage, ServiceMsg, OrderingProtocolMessage};
+use febft_messages::messages::Message;
+use febft_messages::messages::SystemMessage;
+use febft_messages::ordering_protocol::OrderingProtocol;
+use febft_messages::ordering_protocol::OrderProtocolExecResult;
+use febft_messages::ordering_protocol::OrderProtocolPoll;
+use febft_messages::serialize::ServiceMsg;
 use febft_messages::state_transfer::{Checkpoint, StatefulOrderProtocol, StateTransferProtocol, STResult};
-use febft_messages::timeouts::{Timeout, TimeoutKind, Timeouts};
+use febft_messages::timeouts::{Timeouts};
 use crate::config::ReplicaConfig;
 use crate::executable::{Executor, ReplicaReplier};
 use crate::server::client_replier::Replier;
@@ -74,7 +72,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             node: node_config
         } = cfg;
 
-        debug!("Bootstrapping replica, starting with networking");
+        debug!("{:?} // Bootstrapping replica, starting with networking", log_node_id);
 
         let node = NT::bootstrap(node_config).await?;
 
@@ -84,7 +82,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
         //CURRENTLY DISABLED, USING THREADPOOL INSTEAD
         let reply_handle = Replier::new(node.id(), node.clone());
 
-        debug!("Initializing timeouts");
+        debug!("{:?} // Initializing timeouts", log_node_id);
         // start timeouts handler
         let timeouts = Timeouts::new::<S::Data>(500, exec_tx.clone());
 
@@ -105,7 +103,47 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             exec_tx.clone(),
         )?;
 
-        debug!("{:?} // Started replica.", log_node_id);
+        debug!("{:?} // Connecting to other replicas.", log_node_id);
+
+        let mut connections = Vec::new();
+
+        for node_id in NodeId::targets(0..n) {
+            if node_id == log_node_id {
+                continue;
+            }
+
+            debug!("{:?} // Connecting to node {:?}", log_node_id, node_id);
+
+            let mut connection_results = node.node_connections().connect_to_node(node_id);
+
+            connections.append(&mut connection_results);
+        }
+
+        while node.node_connections().connected_nodes() + 1 < n {
+            debug!("{:?} // Waiting for node connections. Currently {} of {}",
+                log_node_id, node.node_connections().connected_nodes() + 1, n);
+
+            Delay::new(Duration::from_millis(500)).await;
+        }
+
+        /*
+        for conn_result in connections {
+            match conn_result.await {
+                Ok(result) => {
+                    if let Err(err) = result {
+                        error!("Failed to connect to the given node. {:?}", err);
+                    } else {
+                        info!("Established a new connection.");
+                    }
+                }
+                Err(error) => {
+                    error!("Failed to connect to the given node. {:?}", error);
+                }
+            }
+        }
+         */
+
+        debug!("{:?} // Finished bootstrapping node.", log_node_id);
 
         Ok(Self {
             // We start with the state transfer protocol to make sure everything is up to date
@@ -124,6 +162,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             match self.replica_phase {
                 ReplicaPhase::OrderingProtocol => {
                     let poll_res = self.ordering_protocol.poll();
+
                     match poll_res {
                         OrderProtocolPoll::RePoll => {
                             //Continue
@@ -180,13 +219,28 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                             self.ordering_protocol.handle_off_ctx_message(StoredMessage::new(header, protocol));
                         }
                         SystemMessage::StateTransferMessage(state_transfer) => {
-                            self.state_transfer_protocol.process_message(&mut self.ordering_protocol, StoredMessage::new(header, state_transfer))?;
+                            let result = self.state_transfer_protocol.process_message(&mut self.ordering_protocol, StoredMessage::new(header, state_transfer))?;
+
+                            match result {
+                                STResult::CstRunning => {}
+                                STResult::CstFinished | STResult::CstNotNeeded => {
+                                    self.run_ordering_protocol()?;
+                                }
+                            }
                         }
                         _ => {}
                     }
                 }
             }
         }
+
+        Ok(())
+    }
+
+    /// Run the ordering protocol on this replica
+    fn run_ordering_protocol(&mut self) -> Result<()> {
+        self.replica_phase = ReplicaPhase::OrderingProtocol;
+
         Ok(())
     }
 

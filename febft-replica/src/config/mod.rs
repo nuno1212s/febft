@@ -15,13 +15,16 @@ pub struct ReplicaConfig<S, OP, ST, NT> where
     NT: Node<ServiceMsg<S::Data, OP::Serialization, ST::Serialization>> {
     /// The application logic.
     pub service: S,
-    
+
+    /// ID of the Node in question
     pub id: NodeId,
 
+    /// The number of nodes in the network
     pub n: usize,
+    /// The number of nodes that can fail in the network
     pub f: usize,
 
-    //TODO: These two values should be loaded from storage
+    ///TODO: These two values should be loaded from storage
     /// The sequence number for the current view.
     pub view: SeqNo,
     /// Next sequence number attributed to a request by

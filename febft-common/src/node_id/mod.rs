@@ -8,6 +8,7 @@ use serde::{Serialize, Deserialize};
 pub struct NodeId(pub u32);
 
 impl NodeId {
+    
     pub fn targets_u32<I>(into_iterator: I) -> impl Iterator<Item=Self>
         where
             I: IntoIterator<Item=u32>,

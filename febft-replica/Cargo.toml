@@ -28,3 +28,4 @@ febft-execution = { path = "../febft-execution" }
 febft-common = { path = "../febft-common" }
 febft-messages = { path = "../febft-messages" }
 febft-metrics = {path = "../febft-metrics"}
+futures-timer = "3.0.2"
