@@ -297,7 +297,11 @@ impl<M: Serializable + 'static> TcpNode<M> {
 }
 
 impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
+
+    type Config = NodeConfig;
+
     type ConnectionManager = PeerConnections<M>;
+
     type Crypto = NodePKCrypto;
 
     async fn bootstrap(cfg: NodeConfig) -> Result<Arc<Self>> {

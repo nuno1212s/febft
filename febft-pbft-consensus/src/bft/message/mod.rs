@@ -48,9 +48,6 @@ impl<R> Debug for PBFTMessage<R> {
             PBFTMessage::Consensus(_) => {
                 write!(f, "Consensus ")
             }
-            PBFTMessage::FwdConsensus(_) => {
-                write!(f, "Forwarded consensus msg")
-            }
             PBFTMessage::ViewChange(_) => {
                 write!(f, "View change msg")
             }
@@ -217,6 +214,32 @@ impl<O> ConsensusMessage<O> {
                 None
             }
         }
+    }
+}
+
+#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct FwdConsensusMessage<O> {
+    header: Header,
+    consensus_msg: ConsensusMessage<O>,
+}
+
+impl<O> FwdConsensusMessage<O> {
+    pub fn new(header: Header, msg: ConsensusMessage<O>) -> Self {
+        Self {
+            header,
+            consensus_msg: msg,
+        }
+    }
+
+    pub fn header(&self) -> &Header { &self.header }
+
+    pub fn consensus(&self) -> &ConsensusMessage<O> {
+        &self.consensus_msg
+    }
+
+    pub fn into_inner(self) -> (Header, ConsensusMessage<O>) {
+        (self.header, self.consensus_msg)
     }
 }
 

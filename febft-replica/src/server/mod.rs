@@ -22,7 +22,7 @@ use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_messages::messages::{ForwardedRequestsMessage, Message, RequestMessage, SystemMessage};
 use febft_messages::ordering_protocol::{OrderingProtocol, OrderProtocolExecResult, OrderProtocolPoll};
-use febft_messages::serialize::{StateTransferMessage, ServiceMsg};
+use febft_messages::serialize::{StateTransferMessage, ServiceMsg, OrderingProtocolMessage};
 use febft_messages::state_transfer::{Checkpoint, StatefulOrderProtocol, StateTransferProtocol, STResult};
 use febft_messages::timeouts::{Timeout, TimeoutKind, Timeouts};
 use crate::config::ReplicaConfig;
@@ -59,26 +59,20 @@ pub struct Replica<S, OP, ST, NT> where S: Service {
 
 impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                                  OP: StatefulOrderProtocol<S::Data, NT> + 'static,
-                                                 ST: StateTransferProtocol<S::Data, NT> + 'static,
+                                                 ST: StateTransferProtocol<S::Data, OP, NT> + 'static,
                                                  NT: Node<ServiceMsg<S::Data, OP::Serialization, ST::Serialization>> + 'static {
-    pub async fn bootstrap<T>(cfg: ReplicaConfig<S, NT, OP, ST>) -> Result<Self> {
+    pub async fn bootstrap(cfg: ReplicaConfig<S, OP, ST, NT>) -> Result<Self> {
         let ReplicaConfig {
             service,
+            id: log_node_id,
             n,
             f,
             view,
             next_consensus_seq,
             op_config,
             st_config,
-            db_path,
             node: node_config
         } = cfg;
-
-        let per_pool_batch_timeout = node_config.client_pool_config.batch_timeout_micros;
-        let per_pool_batch_sleep = node_config.client_pool_config.batch_sleep_micros;
-        let per_pool_batch_size = node_config.client_pool_config.batch_size;
-
-        let log_node_id = node_config.id.clone();
 
         debug!("Bootstrapping replica, starting with networking");
 
@@ -112,22 +106,6 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
         )?;
 
         debug!("{:?} // Started replica.", log_node_id);
-
-        debug!(
-            "{:?} // Per Pool Batch size: {}",
-            log_node_id,
-            per_pool_batch_size
-        );
-        debug!(
-            "{:?} // Per pool batch sleep: {}",
-            log_node_id,
-            per_pool_batch_sleep
-        );
-        debug!(
-            "{:?} // Per pool batch timeout: {}",
-            log_node_id,
-            per_pool_batch_timeout
-        );
 
         Ok(Self {
             // We start with the state transfer protocol to make sure everything is up to date
@@ -195,6 +173,17 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                 ReplicaPhase::StateTransferProtocol => {
                     let (header, message) = self.node.receive_from_replicas().unwrap().into_inner();
 
+                    let message = message.into_system();
+
+                    match message {
+                        SystemMessage::ProtocolMessage(protocol) => {
+                            self.ordering_protocol.handle_off_ctx_message(StoredMessage::new(header, protocol));
+                        }
+                        SystemMessage::StateTransferMessage(state_transfer) => {
+                            self.state_transfer_protocol.process_message(&mut self.ordering_protocol, StoredMessage::new(header, state_transfer))?;
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
@@ -213,7 +202,6 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
     }
 
     fn execution_finished_with_appstate(&mut self, seq: SeqNo, appstate: State<S>) -> Result<()> {
-
         let checkpoint = Checkpoint::new(seq, appstate);
 
         self.state_transfer_protocol.handle_state_received_from_app(&mut self.ordering_protocol, checkpoint)?;

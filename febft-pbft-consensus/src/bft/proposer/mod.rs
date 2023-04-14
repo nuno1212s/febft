@@ -53,8 +53,6 @@ pub struct Proposer<D, NT>
     //For unordered request execution
     executor_handle: ExecutorHandle<D>,
 
-    //Observer related stuff
-    observer_handle: ObserverHandle,
 }
 
 const TIMEOUT: Duration = Duration::from_micros(10);
@@ -88,7 +86,6 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
         executor_handle: ExecutorHandle<D>,
         consensus_guard: ConsensusGuard,
         proposer_config: ProposerConfig,
-        observer_handle: ObserverHandle,
     ) -> Arc<Self> {
         let ProposerConfig {
             target_batch_size, max_batch_size, batch_timeout
@@ -102,7 +99,6 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
             consensus_guard,
             target_global_batch_size: target_batch_size as usize,
             global_batch_time_limit: batch_timeout as u128,
-            observer_handle,
             executor_handle,
             pending_decision_log,
             max_batch_size: max_batch_size as usize,
@@ -218,7 +214,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                                     unordered_propose.currently_accumulated.push(StoredMessage::new(header, req));
                                 }
                                 SystemMessage::ProtocolMessage(protocol) => {
-                                    match protocol.into_inner() {
+                                    /*match protocol.into_inner() {
                                         PBFTMessage::ObserverMessage(msg) => {
                                             if let ObserverMessage::ObserverRegister = msg {
                                                 //Avoid sending these messages to the main replica
@@ -234,7 +230,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                                         _ => {
                                             warn!("Rogue message detected from clients")
                                         }
-                                    }
+                                    }*/
                                 }
                                 _ => {}
                             }

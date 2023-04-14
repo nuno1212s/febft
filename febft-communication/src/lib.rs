@@ -64,12 +64,14 @@ pub trait NodePK {
 /// A network node. Handles all the connections between nodes.
 pub trait Node<M: Serializable + 'static> : Send + Sync {
 
+    type Config;
+
     type ConnectionManager : NodeConnections;
 
     type Crypto: NodePK;
 
     /// Bootstrap the node
-    async fn bootstrap(node_config: NodeConfig) -> Result<Arc<Self>>;
+    async fn bootstrap(node_config: Self::Config) -> Result<Arc<Self>>;
 
     /// Reports the id of this `Node`.
     fn id(&self) -> NodeId;

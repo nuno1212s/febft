@@ -27,7 +27,6 @@ pub trait NetworkView: Orderable {
 /// We do not need a serde module since serde serialization is just done on the network level.
 /// The abstraction for ordering protocol messages.
 pub trait OrderingProtocolMessage: Send {
-
     #[cfg(feature = "serialize_capnp")]
     type ViewInfo: NetworkView + Send + Clone;
 
@@ -70,8 +69,7 @@ pub trait StateTransferMessage: Send {
 }
 
 /// The messages for the stateful ordering protocol
-pub trait StatefulOrderProtocolMessage: OrderingProtocolMessage + Send  {
-
+pub trait StatefulOrderProtocolMessage: Send {
     #[cfg(feature = "serialize_capnp")]
     type DecLog: Send + Clone;
 
@@ -90,7 +88,7 @@ pub struct ServiceMsg<D: SharedData, P: OrderingProtocolMessage, S: StateTransfe
 
 pub type ServiceMessage<D: SharedData, P: OrderingProtocolMessage, S: StateTransferMessage> = <ServiceMsg<D, P, S> as Serializable>::Message;
 
-pub type ClientServiceMsg<D:SharedData> = ServiceMsg<D, NoProtocol, NoProtocol>;
+pub type ClientServiceMsg<D: SharedData> = ServiceMsg<D, NoProtocol, NoProtocol>;
 
 pub type ClientMessage<D: SharedData> = <ClientServiceMsg<D> as Serializable>::Message;
 

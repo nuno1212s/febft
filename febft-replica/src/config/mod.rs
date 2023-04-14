@@ -1,13 +1,22 @@
+use febft_common::node_id::NodeId;
 use febft_common::ordering::SeqNo;
 use febft_communication::config::NodeConfig;
+use febft_communication::Node;
 use febft_execution::app::Service;
 use febft_messages::ordering_protocol::OrderingProtocol;
+use febft_messages::serialize::ServiceMsg;
 use febft_messages::state_transfer::{StatefulOrderProtocol, StateTransferProtocol};
 
 /// Represents a configuration used to bootstrap a `Replica`.
-pub struct ReplicaConfig<S: Service + 'static, NT, OP: StatefulOrderProtocol<S::Data, NT> + 'static, ST: StateTransferProtocol<S::Data, OP, NT> + 'static> {
+pub struct ReplicaConfig<S, OP, ST, NT> where
+    S: Service + 'static,
+    OP: StatefulOrderProtocol<S::Data, NT> + 'static,
+    ST: StateTransferProtocol<S::Data, OP, NT> + 'static,
+    NT: Node<ServiceMsg<S::Data, OP::Serialization, ST::Serialization>> {
     /// The application logic.
     pub service: S,
+    
+    pub id: NodeId,
 
     pub n: usize,
     pub f: usize,
@@ -24,8 +33,6 @@ pub struct ReplicaConfig<S: Service + 'static, NT, OP: StatefulOrderProtocol<S::
     /// The configuration for the State transfer protocol
     pub st_config: ST::Config,
 
-    /// The path to the persistent database
-    pub db_path: String,
     /// Check out the docs on `NodeConfig`.
-    pub node: NodeConfig,
+    pub node: NT::Config,
 }

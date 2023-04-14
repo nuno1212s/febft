@@ -10,6 +10,8 @@ use crate::messages::{Protocol, SystemMessage};
 use crate::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg, NetworkView};
 use crate::timeouts::Timeouts;
 
+pub type View<OP> = <OP as OrderingProtocolMessage>::ViewInfo;
+
 pub trait OrderingProtocol<D, NT>: Orderable where D: SharedData + 'static {
 
     type Serialization: OrderingProtocolMessage + 'static;

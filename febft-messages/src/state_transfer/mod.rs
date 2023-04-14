@@ -6,7 +6,7 @@ use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::StoredMessage;
 use febft_communication::Node;
 use crate::messages::{Protocol, StateTransfer};
-use crate::ordering_protocol::OrderingProtocol;
+use crate::ordering_protocol::{OrderingProtocol, View};
 use crate::serialize::{NetworkView, OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage};
 use crate::timeouts::Timeouts;
 #[cfg(feature = "serialize_serde")]
@@ -87,39 +87,39 @@ pub trait StateTransferProtocol<D, OP, NT> where
                               order_protocol: &mut OP,
                               message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
                               -> Result<()>
-        where NT: Node<ServiceMsg<D, OP::StateSerialization, Self::Serialization>>;
+        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>;
 
     /// Process a state transfer protocol message
     fn process_message(&mut self,
                        order_protocol: &mut OP,
                        message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
                        -> Result<STResult>
-        where NT: Node<ServiceMsg<D, OP::StateSerialization, Self::Serialization>>;
+        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>;
 
     /// Handle having received a state from the application
     fn handle_state_received_from_app(&mut self,
                                       order_protocol: &mut OP,
                                       state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()>
-        where NT: Node<ServiceMsg<D, OP::StateSerialization, Self::Serialization>>;
+        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>;
 }
 
-pub type ViewInfo<OP> = <OP as OrderingProtocolMessage>::ViewInfo;
 pub type DecLog<OP> = <OP as StatefulOrderProtocolMessage>::DecLog;
 
 /// An order protocol that uses the state transfer protocol to manage its state.
 pub trait StatefulOrderProtocol<D: SharedData + 'static, NT>: OrderingProtocol<D, NT> {
+    /// The serialization abstraction for
     type StateSerialization: StatefulOrderProtocolMessage + 'static;
 
-    fn view(&self) -> ViewInfo<Self::StateSerialization>;
+    fn view(&self) -> View<Self::Serialization>;
 
     /// Install a state received from other replicas in the system
     fn install_state(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>,
-                     view_info:  ViewInfo<Self::StateSerialization>,
+                     view_info:  View<Self::Serialization>,
                      dec_log: DecLog<Self::StateSerialization>) -> Result<(D::State, Vec<D::Request>)>;
 
     /// Snapshot the current log of the replica
     fn snapshot_log(&mut self) -> Result<(Arc<ReadOnly<Checkpoint<D::State>>>,
-                                          ViewInfo<Self::StateSerialization>,
+                                          View<Self::Serialization>,
                                           DecLog<Self::StateSerialization>)>;
 
     /// Finalize the checkpoint of the replica

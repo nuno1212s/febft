@@ -23,6 +23,7 @@ use febft_communication::{Node};
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
+use febft_messages::followers::FollowerHandle;
 use febft_messages::messages::{RequestMessage, SystemMessage};
 use febft_messages::serialize::StateTransferMessage;
 use febft_messages::state_transfer::Checkpoint;
@@ -39,7 +40,7 @@ use crate::bft::msg_log::Info;
 
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::{PBFT, SysMsg};
-use crate::bft::follower::FollowerHandle;
+use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::observer::ObserverHandle;
 
 use crate::bft::sync::view::ViewInfo;
@@ -353,8 +354,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
         view: ViewInfo,
         next_seq_num: SeqNo,
         executor_handle: ExecutorHandle<D>,
-        observer_handle: ObserverHandle,
-        follower_handle: Option<FollowerHandle<D>>,
+        follower_handle: Option<FollowerHandle<PBFTConsensus<D>>>,
     ) -> Self {
         Self {
             node_id,
@@ -365,7 +365,6 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
             accessory: ConsensusAccessory::Replica(ReplicaConsensus::new(
                 view,
                 next_seq_num,
-                observer_handle,
                 follower_handle,
             )),
         }

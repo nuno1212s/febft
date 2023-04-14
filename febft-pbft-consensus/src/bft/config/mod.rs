@@ -5,9 +5,9 @@ use febft_common::node_id::NodeId;
 use febft_communication::Node;
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
+use febft_messages::followers::FollowerHandle;
 use febft_messages::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg};
 use febft_messages::timeouts::Timeouts;
-use crate::bft::follower::FollowerHandle;
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::observer::ObserverHandle;
@@ -15,8 +15,8 @@ use crate::bft::sync::view::ViewInfo;
 
 pub struct PBFTConfig<D: SharedData, ST> {
     pub node_id: NodeId,
-    pub observer_handle: ObserverHandle,
-    pub follower_handle: Option<FollowerHandle<D>>,
+    // pub observer_handle: ObserverHandle,
+    pub follower_handle: Option<FollowerHandle<PBFTConsensus<D>>>,
     pub view: ViewInfo,
     pub timeout_dur: Duration,
     pub db_path: String,
@@ -27,12 +27,12 @@ pub struct PBFTConfig<D: SharedData, ST> {
 impl<D: SharedData + 'static,
     ST: StateTransferMessage + 'static> PBFTConfig<D, ST> {
     pub fn new(node_id: NodeId,
-               observer_handle: ObserverHandle, follower_handle: Option<FollowerHandle<D>>,
+               follower_handle: Option<FollowerHandle<PBFTConsensus<D>>>,
                view: ViewInfo, timeout_dur: Duration,
                db_path: String, proposer_config: ProposerConfig) -> Self {
         Self {
             node_id,
-            observer_handle,
+            // observer_handle,
             follower_handle,
             view,
             timeout_dur,

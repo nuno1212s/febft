@@ -23,10 +23,11 @@ use febft_communication::{Node, NodePK, serialize};
 use febft_communication::serialize::Buf;
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::serialize::SharedData;
+use febft_messages::followers::{FollowerEvent, FollowerHandle};
 use febft_messages::messages::{SystemMessage};
 use febft_messages::serialize::StateTransferMessage;
-use crate::bft::follower::{FollowerEvent, FollowerHandle};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage};
+use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::deciding_log::DecidingLog;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::observer::{MessageType, ObserverHandle};
@@ -65,8 +66,7 @@ pub struct ReplicaConsensus<D: SharedData + 'static, ST: StateTransferMessage> {
     missing_swapbuf: Vec<usize>,
     speculative_commits: Arc<Mutex<BTreeMap<NodeId, StoredSerializedNetworkMessage<PBFT<D, ST>>>>>,
     consensus_guard: ConsensusGuard,
-    observer_handle: ObserverHandle,
-    follower_handle: Option<FollowerHandle<D>>,
+    follower_handle: Option<FollowerHandle<PBFTConsensus<D>>>,
 }
 
 /// Preparing requests phase (This is no longer used, maybe remove it?)
@@ -156,15 +156,20 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ReplicaConsens
 
         let targets = NodeId::targets(0..view.params().n());
 
-        node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
+        node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets).unwrap();
 
-        //Notify the followers
-        if let Some(follower_handle) = &self.follower_handle {
-            if let Err(err) =
-                follower_handle.send(FollowerEvent::ReceivedConsensusMsg(view, msg))
-            {
-                error!("{:?}", err);
-            }
+        /*TODO:
+                //Notify the followers
+                if let Some(follower_handle) = &self.follower_handle {
+
+                     let follower_event = FollowerEvent::ReceivedConsensusMsg(view, msg);
+
+                    if let Err(err) =
+                        follower_handle.send(follower_event)
+                    {
+                        error!("{:?}", err);
+                    }
+
         }
 
         //Notify the observers
@@ -175,6 +180,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ReplicaConsens
         {
             error!("{:?}", err);
         }
+           */
     }
 
     ///Handle a prepare message when we have not yet reached a consensus
@@ -187,12 +193,13 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ReplicaConsens
         where NT: Node<PBFT<D, ST>>
     {
         if let Some(follower_handle) = &self.follower_handle {
-            if let Err(err) = follower_handle.send(FollowerEvent::ReceivedConsensusMsg(
+            /*TODO:
+               if let Err(err) = follower_handle.send(FollowerEvent::ReceivedConsensusMsg(
                 curr_view,
                 preparing_msg,
             )) {
                 error!("{:?}", err);
-            }
+            }*/
         }
     }
 
@@ -237,15 +244,18 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ReplicaConsens
 
         //Follower notifications
         if let Some(follower_handle) = &self.follower_handle {
+            /*
             if let Err(err) = follower_handle.send(FollowerEvent::ReceivedConsensusMsg(
                 curr_view,
                 preparing_msg,
             )) {
                 error!("{:?}", err);
             }
+             */
         }
 
         //Observer notifications
+        /*
         if let Err(err) = self
             .observer_handle
             .tx()
@@ -253,6 +263,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ReplicaConsens
         {
             error!("{:?}", err);
         }
+         */
     }
 
     pub(super) fn handle_committing_no_quorum(
@@ -261,6 +272,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ReplicaConsens
         commit_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
     ) {
         //Notify followers of the received message
+        /*TODO:
         if let Some(follower_handle) = &self.follower_handle {
             if let Err(err) = follower_handle
                 .send(FollowerEvent::ReceivedConsensusMsg(curr_view, commit_msg))
@@ -268,6 +280,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ReplicaConsens
                 error!("{:?}", err);
             }
         }
+
+         */
     }
 
     pub(super) fn handle_committing_quorum(
@@ -277,6 +291,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ReplicaConsens
         commit_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
     ) {
         //Notify follower of the received message
+        /*TODO:
         if let Some(follower_handle) = &self.follower_handle {
             if let Err(err) = follower_handle
                 .send(FollowerEvent::ReceivedConsensusMsg(view_info, commit_msg))
@@ -294,6 +309,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ReplicaConsens
         {
             warn!("Failed to notify observers of the consensus instance")
         }
+
+         */
     }
 
     pub(super) fn handle_installed_seq_num(&mut self, seq: SeqNo) {
@@ -312,6 +329,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ReplicaConsens
         //Mark as ready for the next batch to come in
         self.consensus_guard.unlock_consensus();
 
+        /*
+        TODO:
         if let Err(_) = self
             .observer_handle
             .tx()
@@ -319,6 +338,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ReplicaConsens
         {
             warn!("Failed to notify observers of the consensus instance")
         }
+
+         */
     }
 
     pub(super) fn handle_finalize_view_change<T>(&mut self, synchronizer: &T)
@@ -368,8 +389,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage> ReplicaConsensus<D, ST> 
     pub(super) fn new(
         view: ViewInfo,
         next_seq: SeqNo,
-        observer_handle: ObserverHandle,
-        follower_handle: Option<FollowerHandle<D>>,
+        follower_handle: Option<FollowerHandle<PBFTConsensus<D>>>,
     ) -> Self {
         Self {
             missing_requests: VecDeque::new(),
@@ -379,7 +399,6 @@ impl<D: SharedData + 'static, ST: StateTransferMessage> ReplicaConsensus<D, ST> 
                 consensus_information: Arc::new(Mutex::new((next_seq, view))),
                 consensus_guard: Arc::new(AtomicBool::new(false)),
             },
-            observer_handle,
             follower_handle,
         }
     }

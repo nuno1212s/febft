@@ -25,7 +25,7 @@ use log4rs::{
 use febft_common::error::*;
 use febft_common::{async_runtime, socket, threadpool};
 use febft_common::error::ErrorKind::CommunicationPeerNotFound;
-use febft_common::globals::Flag;
+use febft_common::globals::{Flag, ReadOnly};
 use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, StoredMessage};
@@ -35,8 +35,9 @@ use febft_execution::app::{Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{Protocol, SystemMessage};
-use febft_messages::ordering_protocol::{OrderingProtocol, OrderProtocolExecResult, OrderProtocolPoll};
+use febft_messages::ordering_protocol::{OrderingProtocol, OrderProtocolExecResult, OrderProtocolPoll, View};
 use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
+use febft_messages::state_transfer::{Checkpoint, DecLog, StatefulOrderProtocol};
 use febft_messages::timeouts::Timeouts;
 use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{AbstractConsensus, Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
@@ -197,25 +198,27 @@ pub struct PBFTOrderProtocol<D, ST, NT>
     node: Arc<NT>,
 
     executor: ExecutorHandle<D>,
-    observer_handle: ObserverHandle,
+}
+
+impl<D, ST, NT> Orderable for PBFTOrderProtocol<D, ST, NT> where D: 'static + SharedData, NT: 'static + Node<PBFT<D, ST>>, ST: 'static + StateTransferMessage {
+    fn sequence_number(&self) -> SeqNo {
+        self.consensus.sequence_number()
+    }
 }
 
 impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     where D: SharedData + 'static,
           ST: StateTransferMessage + 'static,
           NT: Node<PBFT<D, ST>> + 'static, {
-
     type Serialization = PBFTConsensus<D>;
     type Config = PBFTConfig<D, ST>;
 
     fn initialize(config: PBFTConfig<D, ST>, executor: ExecutorHandle<D>,
-                             timeouts: Timeouts, node: Arc<NT>) -> Result<Self> where
+                  timeouts: Timeouts, node: Arc<NT>) -> Result<Self> where
         Self: Sized,
     {
-
         let PBFTConfig {
             node_id,
-            observer_handle,
             follower_handle,
             view, timeout_dur, db_path,
             proposer_config, _phantom_data
@@ -224,8 +227,7 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
         let sync = Synchronizer::new_replica(view.clone(), timeout_dur);
 
         let consensus = Consensus::<D, ST>::new_replica(node_id, view.clone(),
-                                                        SeqNo::ZERO, executor.clone(),
-                                                        observer_handle.clone(), follower_handle);
+                                                        SeqNo::ZERO, executor.clone(), follower_handle);
 
         let consensus_guard = ConsensusGuard::new(consensus.sequence_number(), view.clone());
 
@@ -238,7 +240,7 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
         let proposer = Proposer::<D, NT>::new(node.clone(), sync.clone(),
                                               pending_rq_log.clone(), timeouts.clone(),
                                               executor.clone(), consensus_guard.clone(),
-                                              proposer_config, observer_handle.clone());
+                                              proposer_config);
 
         Ok(Self {
             phase: ConsensusPhase::NormalPhase,
@@ -252,12 +254,21 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
             decided_log: dec_log,
             proposer,
             node,
-            observer_handle,
         })
     }
 
     fn handle_off_ctx_message(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>) {
+        let (header, message) = message.into_inner();
 
+        match message.into_inner() {
+            PBFTMessage::Consensus(consensus) => {
+                self.consensus.queue(header, consensus)
+            }
+            PBFTMessage::ViewChange(view_change) => {
+                self.synchronizer.queue(header, view_change)
+            }
+            _ => {todo!()}
+        }
     }
 
     fn poll(&mut self) -> OrderProtocolPoll<PBFTMessage<D::Request>> {
@@ -548,6 +559,31 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
     }
 }
 
+impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
+where D: SharedData + 'static,
+      ST: StateTransferMessage + 'static,
+      NT: Node<PBFT<D, ST>> + 'static {
+    type StateSerialization = PBFTConsensus<D>;
+
+    fn view(&self) -> View<Self::Serialization> {
+        self.synchronizer.view()
+    }
+
+    fn install_state(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>,
+                     view_info: View<Self::Serialization>,
+                     dec_log: DecLog<Self::StateSerialization>) -> Result<(D::State, Vec<D::Request>)> {
+        todo!()
+    }
+
+    fn snapshot_log(&mut self) -> Result<(Arc<ReadOnly<Checkpoint<D::State>>>, View<Self::Serialization>, DecLog<Self::StateSerialization>)> {
+        todo!()
+    }
+
+    fn finalize_checkpoint(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()> {
+        todo!()
+    }
+}
+
 impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT>
     where D: SharedData + 'static,
           ST: StateTransferMessage + 'static,
@@ -602,11 +638,11 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT>
                 }
             };
 
-            self.observer_handle
+            /*self.observer_handle
                 .tx()
                 .send(MessageType::Event(to_send))
                 .expect("Failed to notify observer thread");
-
+            */
             /*
             }@
             */

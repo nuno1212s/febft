@@ -216,14 +216,14 @@ impl<'a, P> Future for ClientRequestFut<'a, P> {
 }
 
 /// Represents a configuration used to bootstrap a `Client`.
-pub struct ClientConfig {
+pub struct ClientConfig<D: SharedData + 'static, NT: Node<ClientServiceMsg<D>>> {
     pub n: usize,
     pub f: usize,
 
     pub unordered_rq_mode: UnorderedClientMode,
 
     /// Check out the docs on `NodeConfig`.
-    pub node: NodeConfig,
+    pub node: NT::Config,
 }
 
 ///Keeps track of the replica (or follower, depending on the request mode) votes for a given request
@@ -244,7 +244,7 @@ impl<D, NT> Client<D, NT>
         NT: 'static
 {
     /// Bootstrap a client in `febft`.
-    pub async fn bootstrap(cfg: ClientConfig) -> Result<Self> where NT: Node<ClientServiceMsg<D>> {
+    pub async fn bootstrap(cfg: ClientConfig<D, NT>) -> Result<Self> where NT: Node<ClientServiceMsg<D>> {
         let ClientConfig {
             n, f, node: node_config,
             unordered_rq_mode,
