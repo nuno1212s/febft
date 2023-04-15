@@ -1,6 +1,7 @@
 pub mod serialize;
 
 
+use std::fmt::{Debug, Formatter};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use febft_common::ordering::{Orderable, SeqNo};
@@ -13,6 +14,26 @@ pub struct CstMessage<S, V, O> {
     // consensus layer to order client requests!
     seq: SeqNo,
     kind: CstMessageKind<S, V, O>,
+}
+
+impl<S, V, O> Debug for CstMessage<S, V, O> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.kind {
+            CstMessageKind::RequestLatestConsensusSeq => {
+                write!(f, "Request consensus ID")
+            }
+            CstMessageKind::ReplyLatestConsensusSeq(seq) => {
+                write!(f, "Reply consensus seq {:?}", seq)
+            }
+            CstMessageKind::RequestState => {
+                write!(f, "Request state message")
+            }
+            CstMessageKind::ReplyState(_) => {
+                write!(f, "Reply with state message")
+            }
+        }
+
+    }
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]

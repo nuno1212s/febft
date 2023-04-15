@@ -156,6 +156,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             execution_rx: exec_rx,
         };
 
+        debug!("{:?} // Requesting state", log_node_id);
+
         replica.state_transfer_protocol.request_latest_state(&mut replica.ordering_protocol)?;
 
         Ok(replica)
@@ -246,6 +248,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
     /// Run the ordering protocol on this replica
     fn run_ordering_protocol(&mut self) -> Result<()> {
+        debug!("{:?} // Running ordering protocol.", self.node.id());
+
         self.replica_phase = ReplicaPhase::OrderingProtocol;
 
         Ok(())

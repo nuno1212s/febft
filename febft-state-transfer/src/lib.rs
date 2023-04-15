@@ -4,8 +4,10 @@ pub mod message;
 pub mod config;
 
 use std::cmp::Ordering;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
+use log::debug;
 
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
@@ -160,6 +162,31 @@ pub enum CstStatus<S, V, O> {
     State(RecoveryState<S, V, O>),
 }
 
+impl<S, V, O> Debug for CstStatus<S, V, O> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CstStatus::Nil => {
+                write!(f, "Nil")
+            }
+            CstStatus::Running => {
+                write!(f, "Running")
+            }
+            CstStatus::RequestLatestCid => {
+                write!(f, "Request latest CID")
+            }
+            CstStatus::RequestState => {
+                write!(f, "Request latest state")
+            }
+            CstStatus::SeqNo(seq) => {
+                write!(f, "Received seq no {:?}", seq)
+            }
+            CstStatus::State(_) => {
+                write!(f, "Received state")
+            }
+        }
+    }
+}
+
 /// Represents progress in the CST state machine.
 ///
 /// To clarify, the mention of state machine here has nothing to do with the
@@ -209,6 +236,7 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
     }
 
     fn request_latest_state(&mut self, order_protocol: &mut OP) -> Result<()> where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> {
+        debug!("Requesting latest state.");
 
         self.request_latest_consensus_seq_no(order_protocol);
 
@@ -247,10 +275,28 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
 
         let message = message.into_inner();
 
+        debug!("{:?} // Message {:?}", self.node.id(), message);
+
+        match &message.kind() {
+            CstMessageKind::RequestLatestConsensusSeq => {
+                self.process_request_seq(header, message, order_protocol);
+
+                return Ok(STResult::CstRunning);
+            }
+            CstMessageKind::RequestState => {
+                self.process_request_state(header, message, order_protocol);
+
+                return Ok(STResult::CstRunning);
+            }
+            _ => {}
+        }
+
         let status = self.process_message(
             CstProgress::Message(header, message),
             order_protocol,
         );
+
+        debug!("{:?} // Returned {:?}", self.node.id(), status);
 
         match status {
             CstStatus::Running => (),
@@ -337,7 +383,27 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
         matches!(self.phase, ProtoPhase::WaitingCheckpoint(_, _))
     }
 
-    fn process_reply_state(
+    fn process_request_seq(
+        &mut self,
+        header: Header,
+        message: CstMessage<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>>,
+        order_protocol: &mut OP, )
+        where
+            OP: StatefulOrderProtocol<D, NT>,
+            NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>
+    {
+        let kind = CstMessageKind::ReplyLatestConsensusSeq(order_protocol.sequence_number());
+
+        let reply = CstMessage::new(message.sequence_number(), kind);
+
+        let network_msg = NetworkMessageKind::from(SystemMessage::from_state_transfer_message(reply));
+
+        debug!("{:?} // Replying with seq no {:?}", self.node.id(), order_protocol.sequence_number());
+
+        self.node.send(network_msg, header.from(), true).unwrap();
+    }
+
+    fn process_request_state(
         &mut self,
         header: Header,
         message: CstMessage<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>>,
@@ -383,24 +449,19 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
             ProtoPhase::WaitingCheckpoint(_, _) => {
                 let (header, message) = getmessage!(&mut self.phase);
 
-                self.process_reply_state(header, message, order_protocol);
+                self.process_request_state(header, message, order_protocol);
 
                 CstStatus::Nil
             }
             ProtoPhase::Init => {
                 let (header, message) = getmessage!(progress, CstStatus::Nil);
+
                 match message.kind() {
                     CstMessageKind::RequestLatestConsensusSeq => {
-                        let kind = CstMessageKind::ReplyLatestConsensusSeq(order_protocol.sequence_number());
-
-                        let reply = CstMessage::new(message.sequence_number(), kind);
-
-                        let network_msg = NetworkMessageKind::from(SystemMessage::from_state_transfer_message(reply));
-
-                        self.node.send(network_msg, header.from(), true).unwrap();
+                        self.process_request_seq(header, message, order_protocol);
                     }
                     CstMessageKind::RequestState => {
-                        self.process_reply_state(header, message, order_protocol);
+                        self.process_request_state(header, message, order_protocol);
                     }
                     // we are not running cst, so drop any reply msgs
                     //
@@ -412,10 +473,13 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                 CstStatus::Nil
             }
             ProtoPhase::ReceivingCid(i) => {
-                let (_header, message) = getmessage!(progress, CstStatus::RequestLatestCid);
+                debug!("{:?} // Receiving Cid {} responses", self.node.id(), i);
+
+                let (header, message) = getmessage!(progress, CstStatus::RequestLatestCid);
 
                 // drop cst messages with invalid seq no
                 if message.sequence_number() != self.cst_seq {
+                    debug!("{:?} // Wait what? {:?} {:?}", self.node.id(), self.cst_seq, message.sequence_number());
                     // FIXME: how to handle old or newer messages?
                     // BFT-SMaRt simply ignores messages with a
                     // value of `queryID` different from the current
@@ -439,6 +503,12 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                             Ordering::Less => (),
                         }
                     }
+                    CstMessageKind::RequestLatestConsensusSeq => {
+                        self.process_request_seq(header, message, order_protocol);
+                    }
+                    CstMessageKind::RequestState => {
+                        self.process_request_state(header, message, order_protocol);
+                    }
                     // drop invalid message kinds
                     _ => return CstStatus::Running,
                 }
@@ -449,8 +519,15 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                 // TODO: check for more than one reply from the same node
                 let i = i + 1;
 
+                debug!("{:?} // Quorum count {}, i: {}",
+                        self.node.id(),
+                        order_protocol.view().quorum(),
+                        i);
+
                 if i == order_protocol.view().quorum() {
+
                     self.phase = ProtoPhase::Init;
+
                     if self.latest_cid_count > order_protocol.view().f() {
                         // reset timeout, since req was successful
                         self.curr_timeout = self.base_timeout;
@@ -463,6 +540,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                     }
                 } else {
                     self.phase = ProtoPhase::ReceivingCid(i);
+
                     CstStatus::Running
                 }
             }
@@ -533,9 +611,9 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
     }
 
     fn next_seq(&mut self) -> SeqNo {
-        let next = self.cst_seq;
         self.cst_seq = self.cst_seq.next();
-        next
+
+        self.cst_seq
     }
 
     /// Handle a timeout received from the timeouts layer.
@@ -613,8 +691,8 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
         let current_view = order_protocol.view();
 
         self.timeouts.timeout_cst_request(self.curr_timeout,
-                                     current_view.quorum() as u32,
-                                     cst_seq);
+                                          current_view.quorum() as u32,
+                                          cst_seq);
 
         self.phase = ProtoPhase::ReceivingCid(0);
 
@@ -643,8 +721,8 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
         let current_view = order_protocol.view();
 
         self.timeouts.timeout_cst_request(self.curr_timeout,
-                                     current_view.quorum() as u32,
-                                     cst_seq);
+                                          current_view.quorum() as u32,
+                                          cst_seq);
 
         self.phase = ProtoPhase::ReceivingState(0);
 
