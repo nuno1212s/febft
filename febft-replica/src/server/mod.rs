@@ -255,7 +255,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
     fn run_state_transfer_protocol(&mut self) -> Result<()> {
 
         // Start by requesting the current state from neighbour replicas
-        self.state_transfer_protocol.request_latest_state()?;
+        self.state_transfer_protocol.request_latest_state(&mut self.ordering_protocol)?;
 
         self.replica_phase = ReplicaPhase::StateTransferProtocol;
 

@@ -215,7 +215,8 @@ impl<OP, NT> FollowersFollowing<OP, NT> where
         let header = msg.header().clone();
         let message = msg.message().clone();
 
-        self.send_node
-            .broadcast(NetworkMessageKind::from(SystemMessage::from_fwd_protocol_message(StoredMessage::new(header, message))), self.followers.iter().copied()).unwrap();
+        let network_msg = NetworkMessageKind::from(SystemMessage::from_fwd_protocol_message(StoredMessage::new(header, message)));
+
+        self.send_node.broadcast(network_msg, self.followers.iter().copied()).unwrap();
     }
 }

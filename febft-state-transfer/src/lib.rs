@@ -131,7 +131,7 @@ pub struct CollabStateTransfer<D: SharedData + 'static, OP: StatefulOrderProtoco
     latest_cid_count: usize,
     base_timeout: Duration,
     curr_timeout: Duration,
-    timeouts: TImeouts,
+    timeouts: Timeouts,
     // NOTE: remembers whose replies we have
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
@@ -209,7 +209,8 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
     }
 
     fn request_latest_state(&mut self, order_protocol: &mut OP) -> Result<()> where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> {
-        self.request_latest_consensus_seq_no(order_protocol, &self.timeouts);
+
+        self.request_latest_consensus_seq_no(order_protocol);
 
         Ok(())
     }
@@ -276,7 +277,6 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
 
                     self.request_latest_state(
                         order_protocol,
-                        &self.timeouts,
                     );
                 } else {
                     return Ok(STResult::CstNotNeeded);
@@ -285,13 +285,11 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
             CstStatus::RequestLatestCid => {
                 self.request_latest_consensus_seq_no(
                     order_protocol,
-                    &self.timeouts,
                 );
             }
             CstStatus::RequestState => {
                 self.request_latest_state(
                     order_protocol,
-                    &self.timeouts,
                 );
             }
             // should not happen...
@@ -544,7 +542,6 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
     /// Returns a bool to signify if we must move to the Retrieving state
     /// If the timeout is no longer relevant, returns false (Can remain in current phase)
     pub fn cst_request_timed_out(&mut self, seq: SeqNo,
-                                 timeouts: &Timeouts,
                                  order_protocol: &OP) -> bool
         where
             OP: StatefulOrderProtocol<D, NT>,
@@ -555,7 +552,6 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
             CstStatus::RequestLatestCid => {
                 self.request_latest_consensus_seq_no(
                     order_protocol,
-                    timeouts,
                 );
 
                 true
@@ -563,7 +559,6 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
             CstStatus::RequestState => {
                 self.request_latest_state(
                     order_protocol,
-                    timeouts,
                 );
 
                 true
@@ -606,7 +601,6 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
     pub fn request_latest_consensus_seq_no(
         &mut self,
         order_protocol: &OP,
-        timeouts: &Timeouts,
     ) where
         OP: StatefulOrderProtocol<D, NT>,
         NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>
@@ -618,7 +612,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
         let cst_seq = self.next_seq();
         let current_view = order_protocol.view();
 
-        timeouts.timeout_cst_request(self.curr_timeout,
+        self.timeouts.timeout_cst_request(self.curr_timeout,
                                      current_view.quorum() as u32,
                                      cst_seq);
 
@@ -638,7 +632,6 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
     pub fn request_latest_state(
         &mut self,
         order_protocol: &OP,
-        timeouts: &Timeouts,
     ) where
         OP: StatefulOrderProtocol<D, NT>,
         NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>
@@ -649,7 +642,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
         let cst_seq = self.next_seq();
         let current_view = order_protocol.view();
 
-        timeouts.timeout_cst_request(self.curr_timeout,
+        self.timeouts.timeout_cst_request(self.curr_timeout,
                                      current_view.quorum() as u32,
                                      cst_seq);
 
