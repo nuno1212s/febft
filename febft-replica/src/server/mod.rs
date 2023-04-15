@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use futures_timer::Delay;
 
-use log::{debug};
+use log::{debug, info};
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx};
 
@@ -21,8 +21,8 @@ use febft_messages::ordering_protocol::OrderingProtocol;
 use febft_messages::ordering_protocol::OrderProtocolExecResult;
 use febft_messages::ordering_protocol::OrderProtocolPoll;
 use febft_messages::serialize::ServiceMsg;
-use febft_messages::state_transfer::{Checkpoint, StatefulOrderProtocol, StateTransferProtocol, STResult};
-use febft_messages::timeouts::{Timeouts};
+use febft_messages::state_transfer::{Checkpoint, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
+use febft_messages::timeouts::{Timeout, TimeoutKind, Timeouts};
 use crate::config::ReplicaConfig;
 use crate::executable::{Executor, ReplicaReplier};
 use crate::server::client_replier::Replier;
@@ -33,6 +33,8 @@ pub mod client_replier;
 pub mod follower_handling;
 // pub mod rq_finalizer;
 
+
+pub const REPLICA_WAIT_TIME: Duration = Duration::from_millis(50);
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub(crate) enum ReplicaPhase {
@@ -165,6 +167,9 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
     pub fn run(&mut self) -> Result<()> {
         loop {
+
+            self.receive_internal()?;
+
             match self.replica_phase {
                 ReplicaPhase::OrderingProtocol => {
                     let poll_res = self.ordering_protocol.poll();
@@ -174,30 +179,35 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                             //Continue
                         }
                         OrderProtocolPoll::ReceiveFromReplicas => {
-                            let network_message = self.node.receive_from_replicas().unwrap();
+                            let network_message = self.node.receive_from_replicas(Some(REPLICA_WAIT_TIME)).unwrap();
 
-                            let (header, message) = network_message.into_inner();
+                            if let Some(network_message) = network_message {
+                                let (header, message) = network_message.into_inner();
 
-                            let message = message.into_system();
+                                let message = message.into_system();
 
-                            match message {
-                                SystemMessage::ProtocolMessage(protocol) => {
-                                    match self.ordering_protocol.process_message(StoredMessage::new(header, protocol))? {
-                                        OrderProtocolExecResult::Success => {
-                                            //Continue execution
-                                        }
-                                        OrderProtocolExecResult::RunCst => {
-                                            self.run_state_transfer_protocol()?;
+                                match message {
+                                    SystemMessage::ProtocolMessage(protocol) => {
+                                        match self.ordering_protocol.process_message(StoredMessage::new(header, protocol))? {
+                                            OrderProtocolExecResult::Success => {
+                                                //Continue execution
+                                            }
+                                            OrderProtocolExecResult::RunCst => {
+                                                self.run_state_transfer_protocol()?;
+                                            }
                                         }
                                     }
+                                    SystemMessage::StateTransferMessage(state_transfer) => {
+                                        self.state_transfer_protocol.handle_off_ctx_message(&mut self.ordering_protocol,
+                                                                                            StoredMessage::new(header, state_transfer)).unwrap();
+                                    }
+                                    _ => {
+                                        todo!()
+                                    }
                                 }
-                                SystemMessage::StateTransferMessage(state_transfer) => {
-                                    self.state_transfer_protocol.handle_off_ctx_message(&mut self.ordering_protocol,
-                                                                                        StoredMessage::new(header, state_transfer)).unwrap();
-                                }
-                                _ => {
-                                    todo!()
-                                }
+                            } else {
+                                // Receive timeouts in the beginning of the next iteration
+                                continue;
                             }
                         }
                         OrderProtocolPoll::Exec(message) => {
@@ -216,28 +226,38 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                     }
                 }
                 ReplicaPhase::StateTransferProtocol => {
-                    let (header, message) = self.node.receive_from_replicas().unwrap().into_inner();
+                    let message = self.node.receive_from_replicas(Some(REPLICA_WAIT_TIME)).unwrap();
 
-                    let message = message.into_system();
+                    if let Some(message) = message {
+                        let (header, message) = message.into_inner();
 
-                    match message {
-                        SystemMessage::ProtocolMessage(protocol) => {
-                            self.ordering_protocol.handle_off_ctx_message(StoredMessage::new(header, protocol));
-                        }
-                        SystemMessage::StateTransferMessage(state_transfer) => {
-                            let result = self.state_transfer_protocol.process_message(&mut self.ordering_protocol, StoredMessage::new(header, state_transfer))?;
+                        let message = message.into_system();
 
-                            match result {
-                                STResult::CstRunning => {}
-                                STResult::CstFinished(state, requests) => {
-                                    self.executor_handle.install_state(state, requests).unwrap();
-                                }
-                                STResult::CstNotNeeded => {
-                                    self.run_ordering_protocol()?;
+                        match message {
+                            SystemMessage::ProtocolMessage(protocol) => {
+                                self.ordering_protocol.handle_off_ctx_message(StoredMessage::new(header, protocol));
+                            }
+                            SystemMessage::StateTransferMessage(state_transfer) => {
+                                let result = self.state_transfer_protocol.process_message(&mut self.ordering_protocol, StoredMessage::new(header, state_transfer))?;
+
+                                match result {
+                                    STResult::CstRunning => {}
+                                    STResult::CstFinished(state, requests) => {
+                                        self.executor_handle.install_state(state, requests).unwrap();
+                                    }
+                                    STResult::CstNotNeeded => {
+                                        self.run_ordering_protocol()?;
+                                    }
+                                    STResult::RunCst => {
+                                        self.run_state_transfer_protocol()?;
+                                    }
                                 }
                             }
+                            _ => {}
                         }
-                        _ => {}
+                    } else {
+                        // Receive timeouts
+                        continue
                     }
                 }
             }
@@ -246,9 +266,68 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
         Ok(())
     }
 
+    /// FIXME: Do this with a select?
+    fn receive_internal(&mut self) -> Result<()> {
+        while let Ok(recvd) = self.execution_rx.try_recv() {
+            match recvd {
+                Message::ExecutionFinishedWithAppstate((seq, state)) => {
+                    let checkpoint = Checkpoint::new(seq, state);
+
+                    self.state_transfer_protocol.handle_state_received_from_app(&mut self.ordering_protocol, checkpoint)?;
+                }
+                Message::Timeout(timeout) => {
+                    self.timeout_received(timeout)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn timeout_received(&mut self, timeouts: Timeout) -> Result<()> {
+
+        let mut client_rq = Vec::with_capacity(timeouts.len());
+        let mut cst_rq = Vec::with_capacity(timeouts.len());
+
+        for timeout in timeouts {
+            match timeout {
+                TimeoutKind::ClientRequestTimeout(rq) => {
+                    client_rq.push(rq);
+                }
+                TimeoutKind::Cst(rq) => {
+                    cst_rq.push(rq);
+                }
+            }
+
+        }
+
+        if !client_rq.is_empty() {
+            debug!("{:?} // Received client request timeouts: {}", self.node.id(), client_rq.len());
+            match self.ordering_protocol.handle_timeout(client_rq)? {
+                OrderProtocolExecResult::RunCst => {
+                    self.run_state_transfer_protocol()?;
+                }
+                _ => {}
+            };
+        }
+
+        if !cst_rq.is_empty() {
+            debug!("{:?} // Received cst timeouts: {}", self.node.id(), cst_rq.len());
+
+            match self.state_transfer_protocol.handle_timeout(&mut self.ordering_protocol, cst_rq)? {
+                STTimeoutResult::RunCst => {
+                    self.run_state_transfer_protocol()?;
+                }
+                _ => {}
+            };
+        }
+
+        Ok(())
+    }
+
     /// Run the ordering protocol on this replica
     fn run_ordering_protocol(&mut self) -> Result<()> {
-        debug!("{:?} // Running ordering protocol.", self.node.id());
+        info!("{:?} // Running ordering protocol.", self.node.id());
 
         self.replica_phase = ReplicaPhase::OrderingProtocol;
 
@@ -257,6 +336,13 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
     /// Run the state transfer protocol on this replica
     fn run_state_transfer_protocol(&mut self) -> Result<()> {
+
+        if self.replica_phase == ReplicaPhase::StateTransferProtocol {
+            //TODO: This is here for when we receive various timeouts that consecutively call run cst
+            // In reality, this should also lead to a new state request since the previous one could have
+            // Timed out
+            return Ok(());
+        }
 
         // Start by requesting the current state from neighbour replicas
         self.state_transfer_protocol.request_latest_state(&mut self.ordering_protocol)?;

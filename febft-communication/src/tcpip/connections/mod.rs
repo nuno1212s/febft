@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use dashmap::DashMap;
 use intmap::IntMap;
-use log::warn;
+use log::{debug, warn};
 
 use febft_common::channel::{ChannelMixedRx, ChannelMixedTx, new_bounded_mixed, new_oneshot_channel, OneShotRx};
 use febft_common::error::*;
@@ -161,7 +161,11 @@ impl<M> PeerConnection<M> where M: Serializable {
         if let None = previous {
             let current_connections = self.active_connection_count.fetch_add(1, Ordering::Relaxed);
 
-            if current_connections > conn_limit {
+            //FIXME: This is a hack to prevent a bug where all replicas attempting to connect at once meant that
+            // We first stored the connection we established (since that would be established first) and then the connection
+            // that the other node is trying to establish (which will also be registered first) would be disposed of by us
+            // since we would think we already have a connection to that node, but we don't because that node would do the same
+            if current_connections >= conn_limit * 2 {
                 self.active_connection_count.fetch_sub(1, Ordering::Relaxed);
 
                 warn!("{:?} // Already reached the max connections for the peer {:?}, disposing of connection",
@@ -169,6 +173,12 @@ impl<M> PeerConnection<M> where M: Serializable {
                     self.node_id,);
 
                 return;
+            } else {
+                debug!("{:?} // New connection to peer {:?} with id {:?} conn count: {}",
+                    self.node_connections.id(),
+                    self.node_id,
+                    conn_handle.id,
+                current_connections + 1);
             }
         } else {
             todo!("How do we handle this really?

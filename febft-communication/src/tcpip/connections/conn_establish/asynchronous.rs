@@ -4,7 +4,7 @@ use bytes::Bytes;
 use either::Either;
 use futures::{AsyncReadExt, AsyncWriteExt};
 use futures_timer::Delay;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use febft_common::error::*;
 use febft_common::socket::{AsyncListener, AsyncSocket, SecureReadHalf, SecureSocketAsync, SecureWriteHalf};
 use febft_common::{async_runtime as rt, prng, socket};
@@ -51,8 +51,6 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
 
         //TODO: Are we currently connected?
 
-        debug!("{:?} // Connecting to the node {:?}", conn_handler.id(), peer_id);
-
         let mut rng = prng::State::new();
 
         let nonce = rng.next_state();
@@ -81,13 +79,6 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
                 }.clone()
             }
         };
-
-        debug!(
-            "{:?} // Starting connection to node {:?} with address {:?}",
-            conn_handler.id(),
-            peer_id,
-            addr.0
-        );
 
         let connector = match &conn_handler.connector {
             TlsNodeConnector::Async(connector) => { connector }
@@ -166,11 +157,13 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
                     let write = SecureWriteHalf::Async(write);
                     let read = SecureReadHalf::Async(read);
 
+                    info!("{:?} // Established connection to node {:?}", my_id, peer_id);
+
                     connections.handle_connection_established(peer_id, (write, read));
 
                     conn_handler.done_connecting_to_node(&peer_id);
 
-                    tx.send(Ok(())).unwrap();
+                    let _ = tx.send(Ok(()));
                     return;
                 }
                 Err(err) => {
@@ -191,7 +184,7 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
         //if we fail to connect, then just ignore
         error!("{:?} // Failed to connect to the node {:?} ", conn_handler.id(), peer_id);
 
-        tx.send(Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to establish connection"))).unwrap();
+        let _ = tx.send(Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to establish connection")));
     });
 
     rx
@@ -264,7 +257,7 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
                 }
             };
 
-            debug!("{:?} // Received new connection from id {:?}", my_id, peer_id);
+            info!("{:?} // Received new connection from id {:?}", my_id, peer_id);
 
             let (write, read) = sock.split();
 

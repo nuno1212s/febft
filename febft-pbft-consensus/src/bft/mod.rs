@@ -38,7 +38,7 @@ use febft_messages::messages::{Protocol, SystemMessage};
 use febft_messages::ordering_protocol::{OrderingProtocol, OrderProtocolExecResult, OrderProtocolPoll, View};
 use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
 use febft_messages::state_transfer::{Checkpoint, DecLog, StatefulOrderProtocol};
-use febft_messages::timeouts::Timeouts;
+use febft_messages::timeouts::{ClientRqInfo, Timeout, TimeoutKind, Timeouts};
 use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{AbstractConsensus, Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::message::{ConsensusMessage, ObserveEventKind, PBFTMessage, ViewChangeMessage};
@@ -186,7 +186,7 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
             PBFTMessage::ViewChange(view_change) => {
                 self.synchronizer.queue(header, view_change)
             }
-            _ => {todo!()}
+            _ => { todo!() }
         }
     }
 
@@ -210,6 +210,40 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
                 self.update_sync_phase(message)
             }
         }
+    }
+
+    fn handle_timeout(&mut self, timeout: Vec<ClientRqInfo>) -> Result<OrderProtocolExecResult> {
+        let status = self.synchronizer
+            .client_requests_timed_out(&timeout);
+
+        match status {
+            SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
+                if forwarded.len() > 0 {
+                    let requests = self.pending_request_log.clone_pending_requests(&forwarded);
+
+                    self.synchronizer.forward_requests(
+                        requests,
+                        &*self.node,
+                        &self.pending_request_log,
+                    );
+                }
+
+                if stopped.len() > 0 {
+                    let stopped = self.pending_request_log.clone_pending_requests(&stopped);
+
+                    self.synchronizer.begin_view_change(Some(stopped),
+                                                        &*self.node,
+                                                        &self.timeouts,
+                                                        &self.decided_log);
+
+                    self.switch_phase(ConsensusPhase::SyncPhase)
+                }
+            }
+            // nothing to do
+            _ => (),
+        }
+
+        Ok(OrderProtocolExecResult::Success)
     }
 }
 
@@ -479,9 +513,9 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
 }
 
 impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
-where D: SharedData + 'static,
-      ST: StateTransferMessage + 'static,
-      NT: Node<PBFT<D, ST>> + 'static {
+    where D: SharedData + 'static,
+          ST: StateTransferMessage + 'static,
+          NT: Node<PBFT<D, ST>> + 'static {
     type StateSerialization = PBFTConsensus<D>;
 
     fn view(&self) -> View<Self::Serialization> {
@@ -542,11 +576,6 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT>
                     // The phase starts with a SYNC phase, so we don't want to allow
                     // The proposer to propose anything
                     self.consensus_guard.lock_consensus();
-                }
-                (_, ConsensusPhase::NormalPhase) => {
-                    //Mark the consensus as available, since we are changing to the normal phase
-                    //And are therefore ready to receive pre-prepares (if are are the leaders)
-                    self.consensus_guard.unlock_consensus();
                 }
                 (_, _) => {}
             }

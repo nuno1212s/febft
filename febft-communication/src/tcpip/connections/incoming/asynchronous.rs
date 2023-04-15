@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use futures::AsyncReadExt;
-use log::{error, info};
+use log::{debug, error, info};
 
 use febft_common::async_runtime as rt;
 use febft_common::socket::SecureReadHalfAsync;
@@ -73,8 +73,10 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(
                 }
             };
 
+            debug!("{:?} // Received message from peer {:?}", header.to(), peer_id);
+            
             let msg = NetworkMessage::new(header, message);
-
+            
             if let Err(inner) = client_pool_buffer.push_request(msg) {
                 error!("Channel closed, closing tcp connection as well to peer {:?}. {:?}",
                     peer_id,

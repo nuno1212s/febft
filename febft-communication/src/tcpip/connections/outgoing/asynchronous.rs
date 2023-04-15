@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use log::{error, info};
+use log::{debug, error, info};
 
 use febft_common::async_runtime as rt;
 use febft_common::socket::SecureWriteHalfAsync;
@@ -38,6 +38,8 @@ pub (super) fn spawn_outgoing_task<M: Serializable + 'static>(
                 // Return as we don't want to call delete connection again
                 return
             }
+
+            debug!("{:?} // Sending message to peer {:?}", to_send.header().from(), to_send.header().to());
 
             match to_send.write_to(&mut socket, true).await {
                 Ok(_) => {

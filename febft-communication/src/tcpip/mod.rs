@@ -461,8 +461,8 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
         self.client_pooling.try_receive_from_clients()
     }
 
-    fn receive_from_replicas(&self) -> Result<NetworkMessage<M>> {
-        self.client_pooling.receive_from_replicas()
+    fn receive_from_replicas(&self, timeout: Option<Duration>) -> Result<Option<NetworkMessage<M>>> {
+        self.client_pooling.receive_from_replicas(timeout)
     }
 }
 

@@ -59,9 +59,15 @@ impl<S> Checkpoint<S> {
 
 /// The result of processing a message in the state transfer protocol
 pub enum STResult<D: SharedData> {
+    RunCst,
     CstNotNeeded,
     CstRunning,
     CstFinished(D::State, Vec<D::Request>),
+}
+
+pub enum STTimeoutResult {
+    RunCst,
+    CstNotNeeded,
 }
 
 pub type CstM<M: StateTransferMessage> = <M as StateTransferMessage>::StateTransferMessage;
@@ -102,6 +108,10 @@ pub trait StateTransferProtocol<D, OP, NT> where
                                       order_protocol: &mut OP,
                                       state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()>
         where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>;
+
+    /// Handle a timeout being received from the timeout layer
+    fn handle_timeout(&mut self, order_protocol: &mut OP, timeout: Vec<SeqNo>) -> Result<STTimeoutResult>
+        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> ;
 }
 
 pub type DecLog<OP> = <OP as StatefulOrderProtocolMessage>::DecLog;

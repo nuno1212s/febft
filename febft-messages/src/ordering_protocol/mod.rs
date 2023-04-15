@@ -8,15 +8,18 @@ use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use crate::messages::{Protocol, SystemMessage};
 use crate::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg, NetworkView};
-use crate::timeouts::Timeouts;
+use crate::timeouts::{ClientRqInfo, Timeout, Timeouts};
 
 pub type View<OP> = <OP as OrderingProtocolMessage>::ViewInfo;
+
+pub type ProtocolMessage<OP> = <OP as OrderingProtocolMessage>::ProtocolMessage;
 
 pub trait OrderingProtocol<D, NT>: Orderable where D: SharedData + 'static {
 
     type Serialization: OrderingProtocolMessage + 'static;
 
     type Config;
+    
 
     /// Initialize this ordering protocol with the given configuration, executor, timeouts and node
     fn initialize(config: Self::Config, executor: ExecutorHandle<D>,
@@ -24,14 +27,17 @@ pub trait OrderingProtocol<D, NT>: Orderable where D: SharedData + 'static {
         Self: Sized;
 
     /// Handle a protocol message that was received while we are executing the state transfer protocol
-    fn handle_off_ctx_message(&mut self, message: StoredMessage<Protocol<<Self::Serialization as OrderingProtocolMessage>::ProtocolMessage>>);
+    fn handle_off_ctx_message(&mut self, message: StoredMessage<Protocol<ProtocolMessage<Self::Serialization>>>);
 
     /// Poll from the ordering protocol in order to know what we should do next
     /// We do this to check if there are already
-    fn poll(&mut self) -> OrderProtocolPoll<<Self::Serialization as OrderingProtocolMessage>::ProtocolMessage>;
+    fn poll(&mut self) -> OrderProtocolPoll<ProtocolMessage<Self::Serialization>>;
 
     /// Process a protocol message that we have received
-    fn process_message(&mut self, message: StoredMessage<Protocol<<Self::Serialization as OrderingProtocolMessage>::ProtocolMessage>>) -> Result<OrderProtocolExecResult>;
+    fn process_message(&mut self, message: StoredMessage<Protocol<ProtocolMessage<Self::Serialization>>>) -> Result<OrderProtocolExecResult>;
+
+    /// Handle a timeout received from the timeouts layer
+    fn handle_timeout(&mut self, timeout: Vec<ClientRqInfo>) -> Result<OrderProtocolExecResult>;
 }
 
 /// result from polling the ordering protocol

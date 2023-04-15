@@ -134,6 +134,12 @@ pub trait Node<M: Serializable + 'static> : Send + Sync {
     ) -> Result<Option<Vec<NetworkMessage<M>>>>;
 
     //Receive messages from the replicas we are connected to
-    fn receive_from_replicas(&self) -> Result<NetworkMessage<M>>;
+    fn receive_from_replicas(&self, timeout: Option<Duration>) -> Result<Option<NetworkMessage<M>>>;
+
+    /// Receive from replicas without a timeout
+    fn receive_from_replicas_no_timeout(&self) -> Result<NetworkMessage<M>> {
+        // We can unwrap it since we know it will always contain a value, unless there was an error
+        Ok(self.receive_from_replicas(None)?.unwrap())
+    }
 
 }

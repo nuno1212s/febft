@@ -5,9 +5,11 @@ mod communication_test {
     use std::iter;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::process::id;
-    use std::sync::Arc;
+    use std::sync::{Arc, Barrier};
+    use std::time::Duration;
+    use futures::SinkExt;
     use intmap::IntMap;
-    use log::{error, info, warn};
+    use log::{debug, error, info, warn};
     use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig};
     use rustls::server::AllowAnyAuthenticatedClient;
     use rustls_pemfile::Item;
@@ -15,7 +17,7 @@ mod communication_test {
     use febft_common::crypto::signature::{KeyPair, PublicKey};
     use febft_common::error::*;
     use febft_common::node_id::NodeId;
-    use febft_common::async_runtime as rt;
+    use febft_common::{async_runtime as rt, channel};
     use febft_common::threadpool;
     use febft_communication::config::{ClientPoolConfig, NodeConfig, PKConfig, TcpConfig, TlsConfig};
     use febft_communication::{Node, NodeConnections};
@@ -334,15 +336,19 @@ mod communication_test {
 
         warn!("Sent message. Attempting to receive");
 
-        let message = node_2_.receive_from_replicas().unwrap();
+        let message = node_2_.receive_from_replicas(None).unwrap();
 
-        let (header, network_msg) = message.into_inner();
+        assert!(message.is_some());
 
-        let x1: TestMessage = network_msg.into_system();
+        if let Some(message) = message {
+            let (header, network_msg) = message.into_inner();
 
-        warn!("Received message.");
+            let x1: TestMessage = network_msg.into_system();
 
-        assert_eq!(str, x1.hello);
+            warn!("Received message.");
+
+            assert_eq!(str, x1.hello);
+        }
     }
 
     /// Test whether the messages are being passed along correctly
@@ -391,7 +397,11 @@ mod communication_test {
         }
 
         for i in 0..msgs {
-            let message = node_2_.receive_from_replicas().unwrap();
+            let message = node_2_.receive_from_replicas(None).unwrap();
+
+            assert!(message.is_some());
+
+            let message = message.unwrap();
 
             let (header, network_msg) = message.into_inner();
 
@@ -400,6 +410,99 @@ mod communication_test {
             warn!("Received message.");
 
             assert_eq!(str, x1.hello);
+        }
+    }
+
+    const NODE_COUNT: u16 = 3;
+
+    #[test]
+    fn multi_node_startup() {
+        env_logger::init();
+
+        unsafe {
+            rt::init(4).unwrap();
+            threadpool::init(4).unwrap();
+        }
+
+        let addrs = setup_addrs(NODE_COUNT as u32, 0);
+
+        let mut nodes = Vec::with_capacity(NODE_COUNT as usize);
+        let mut ids = Vec::with_capacity(NODE_COUNT as usize);
+
+        for i in 0..NODE_COUNT {
+            let id = NodeId(i as u32);
+            let node = gen_node::<TestMessage>(id, addrs.clone(), NODE_COUNT as usize,
+                                               format!("srv{}", i).as_str(), 1000 + i as u16).unwrap();
+            nodes.push(node);
+            ids.push(id);
+        }
+
+        let nodes = Arc::new(nodes);
+        let ids = Arc::new(ids);
+
+        let mut rxs = Vec::with_capacity(NODE_COUNT as usize);
+
+        let barrier = Arc::new(Barrier::new(NODE_COUNT as usize));
+
+        for i in 0..NODE_COUNT {
+            let (tx, mut rx) = channel::new_oneshot_channel();
+
+            rxs.push(rx);
+
+            let node = nodes[i as usize].clone();
+            let id = ids[i as usize].clone();
+
+            let nodes = nodes.clone();
+            let ids = ids.clone();
+            let barrier = barrier.clone();
+
+            std::thread::spawn(move || {
+                let mut connections = Vec::new();
+
+                // Wait for all nodes to be created
+                barrier.wait();
+
+                for other_node in &*nodes {
+                    if node.id() != other_node.id() {
+                        let mut connection_results = node.node_connections().connect_to_node(other_node.id());
+
+                        connections.append(&mut connection_results);
+                    }
+                }
+
+                while node.node_connections().connected_nodes_count() + 1 < NODE_COUNT as usize {
+                    debug!("{:?} // Waiting for node connections. Currently {} of {} ({:?})",
+                id, node.node_connections().connected_nodes_count() + 1, NODE_COUNT, node.node_connections().connected_nodes());
+
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+
+                debug!("{:?} // All nodes connected, sending message", id);
+
+                let network_message = NetworkMessageKind::from(TestMessage { hello: format!("Hello from {:?}", id) });
+
+                node.broadcast(network_message.clone(), ids.iter().cloned()).unwrap();
+
+                for _ in 0..NODE_COUNT {
+                    let message = node.receive_from_replicas_no_timeout().unwrap();
+
+                    let (header, network_msg) = message.into_inner();
+
+                    let msg : TestMessage = network_msg.into_system();
+
+                    debug!("{:?} // Received message from {:?}: {:?}",id, header.from(), msg.hello);
+
+                    node.send(network_message.clone(), header.from(), true).unwrap();
+                }
+
+                barrier.wait();
+
+                tx.send(()).expect("Failed to respond");
+            });
+        }
+
+        for rx in rxs {
+            rx.recv().unwrap();
         }
     }
 }

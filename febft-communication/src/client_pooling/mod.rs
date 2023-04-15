@@ -223,8 +223,8 @@ impl<T> PeerIncomingRqHandling<T> where T: Send {
     }
 
     ///Receive a single request from the replicas
-    pub fn receive_from_replicas(&self) -> Result<T> {
-        Ok(self.replica_handling.receive_from_replicas())
+    pub fn receive_from_replicas(&self, timeout: Option<Duration>) -> Result<Option<T>> {
+        Ok(self.replica_handling.receive_from_replicas(timeout))
     }
 
     ///Count the amount of clients present (not including replicas)
@@ -326,8 +326,34 @@ impl<T> ReplicaHandling<T> where T: Send {
         }
     }
 
-    pub fn receive_from_replicas(&self) -> T {
-        self.channel_rx_replica.recv().unwrap()
+    pub fn receive_from_replicas(&self, timeout: Option<Duration>) -> Option<T> {
+        return match timeout {
+            None => {
+                // This channel is always active,
+                Some(self.channel_rx_replica.recv().unwrap())
+            }
+            Some(timeout) => {
+                let result = self.channel_rx_replica.recv_timeout(timeout);
+
+                match result {
+                    Ok(item) => {
+                        Some(item)
+                    }
+                    Err(err) => {
+                        match err {
+                            TryRecvError::Timeout | TryRecvError::ChannelEmpty => {
+                                None
+                            }
+                            TryRecvError::ChannelDc => {
+                                // Since we always hold at least one reference to the TX side,
+                                // We know it will never disconnect
+                                unreachable!()
+                            }
+                        }
+                    }
+                }
+            }
+        };
     }
 }
 

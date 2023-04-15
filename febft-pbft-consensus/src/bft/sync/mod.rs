@@ -954,7 +954,8 @@ impl<D> Synchronizer<D>
         timeouts: &Timeouts,
         _log: &DecidedLog<D>,
     )
-        where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>>
+        where ST: StateTransferMessage + 'static,
+              NT: Node<PBFT<D, ST>>
     {
         match (&*self.phase.borrow(), &timed_out) {
             // we have received STOP messages from peer nodes,

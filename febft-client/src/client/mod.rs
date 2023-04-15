@@ -700,7 +700,8 @@ impl<D, NT> Client<D, NT>
         let mut last_operation_ids: IntMap<SeqNo> = IntMap::new();
         let mut replica_votes: IntMap<ReplicaVotes> = IntMap::new();
 
-        while let Ok(message) = node.receive_from_replicas() {
+        //TODO: Maybe change this to make clients use the same timeouts service?
+        while let Ok(message) = node.receive_from_replicas_no_timeout() {
             let NetworkMessage { header, message } = message;
 
             let sys_msg = message.into();
