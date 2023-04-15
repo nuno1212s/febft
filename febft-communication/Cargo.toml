@@ -18,6 +18,8 @@ readme = "README.md"
 serialize_serde = ["serde", "bincode", "serde_bytes"]
 serialize_capnp = ["febft-capnp", "capnp"]
 
+default = ["serialize_serde"]
+
 [dependencies]
 febft-common = {path = "../febft-common"}
 febft-capnp = {path = "../febft-capnp", optional = true}

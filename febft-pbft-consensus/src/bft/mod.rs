@@ -157,7 +157,7 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
                                               executor.clone(), consensus_guard.clone(),
                                               proposer_config);
 
-        Ok(Self {
+        let replica = Self {
             phase: ConsensusPhase::NormalPhase,
             consensus,
             synchronizer: sync,
@@ -169,7 +169,11 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
             decided_log: dec_log,
             proposer,
             node,
-        })
+        };
+
+        replica.proposer.clone().start();
+
+        Ok(replica)
     }
 
     fn handle_off_ctx_message(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>) {
@@ -487,15 +491,24 @@ where D: SharedData + 'static,
     fn install_state(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>,
                      view_info: View<Self::Serialization>,
                      dec_log: DecLog<Self::StateSerialization>) -> Result<(D::State, Vec<D::Request>)> {
-        todo!()
+        self.consensus.install_state(state.state().clone(), view_info, dec_log)
+    }
+
+    fn install_seq_no(&mut self, seq_no: SeqNo) -> Result<()> {
+        self.consensus.install_sequence_number(seq_no);
+
+        Ok(())
     }
 
     fn snapshot_log(&mut self) -> Result<(Arc<ReadOnly<Checkpoint<D::State>>>, View<Self::Serialization>, DecLog<Self::StateSerialization>)> {
-        todo!()
+        self.consensus.snapshot_log()
     }
 
-    fn finalize_checkpoint(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()> {
-        todo!()
+    fn finalize_checkpoint(&mut self, checkpoint: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()> {
+        let state = checkpoint.state().clone();
+        let seq_no = checkpoint.sequence_number();
+
+        self.decided_log.finalize_checkpoint(seq_no, state)
     }
 }
 

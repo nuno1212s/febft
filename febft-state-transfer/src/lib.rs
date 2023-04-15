@@ -56,8 +56,7 @@ pub struct RecoveryState<S, V, O> {
 pub fn install_recovery_state<D, NT, OP>(
     recovery_state: RecoveryState<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>>,
     order_protocol: &mut OP,
-    executor: &mut ExecutorHandle<D>,
-) -> Result<()>
+) -> Result<(D::State, Vec<D::Request>)>
     where
         D: SharedData + 'static,
         OP: StatefulOrderProtocol<D, NT>
@@ -81,10 +80,7 @@ pub fn install_recovery_state<D, NT, OP>(
 
     let (state, req) = order_protocol.install_state(checkpoint, view, log)?;
 
-    //Update the executor phase
-    executor.install_state(state, req)?;
-
-    Ok(())
+    Ok((state, req))
 }
 
 impl<S, O, V> RecoveryState<S, V, O> {
@@ -135,6 +131,7 @@ pub struct CollabStateTransfer<D: SharedData + 'static, OP: StatefulOrderProtoco
     latest_cid_count: usize,
     base_timeout: Duration,
     curr_timeout: Duration,
+    timeouts: TImeouts,
     // NOTE: remembers whose replies we have
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
@@ -208,11 +205,13 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
             timeout_duration
         } = config;
 
-        Ok(CollabStateTransfer::<D, OP, NT>::new(node, timeout_duration))
+        Ok(CollabStateTransfer::<D, OP, NT>::new(node, timeout_duration, timeouts))
     }
 
-    fn request_latest_state(&mut self) -> Result<()> {
-        todo!()
+    fn request_latest_state(&mut self, order_protocol: &mut OP) -> Result<()> where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> {
+        self.request_latest_consensus_seq_no(order_protocol, &self.timeouts);
+
+        Ok(())
     }
 
     fn handle_off_ctx_message(&mut self, order_protocol: &mut OP,
@@ -241,9 +240,68 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
 
     fn process_message(&mut self, order_protocol: &mut OP,
                        message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
-                       -> Result<STResult>
+                       -> Result<STResult<D>>
         where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> {
-        todo!()
+        let (header, message) = message.into_inner();
+
+        let message = message.into_inner();
+
+        let status = self.process_message(
+            CstProgress::Message(header, message),
+            order_protocol,
+        );
+
+        match status {
+            CstStatus::Running => (),
+            CstStatus::State(state) => {
+                let (state, requests) = install_recovery_state(
+                    state,
+                    order_protocol,
+                )?;
+
+                // If we were in the middle of performing a view change, then continue that
+                // View change. If not, then proceed to the normal phase
+                return Ok(STResult::CstFinished(state, requests));
+            }
+            CstStatus::SeqNo(seq) => {
+                if order_protocol.sequence_number() < seq {
+                    // this step will allow us to ignore any messages
+                    // for older consensus instances we may have had stored;
+                    //
+                    // after we receive the latest recovery state, we
+                    // need to install the then latest sequence no;
+                    // this is done with the function
+                    // `install_recovery_state` from cst
+                    order_protocol.install_seq_no(seq)?;
+
+                    self.request_latest_state(
+                        order_protocol,
+                        &self.timeouts,
+                    );
+                } else {
+                    return Ok(STResult::CstNotNeeded);
+                }
+            }
+            CstStatus::RequestLatestCid => {
+                self.request_latest_consensus_seq_no(
+                    order_protocol,
+                    &self.timeouts,
+                );
+            }
+            CstStatus::RequestState => {
+                self.request_latest_state(
+                    order_protocol,
+                    &self.timeouts,
+                );
+            }
+            // should not happen...
+            CstStatus::Nil => {
+                return Err("Invalid state reached!")
+                    .wrapped(ErrorKind::CoreServer);
+            }
+        }
+
+        Ok(STResult::CstRunning)
     }
 
     fn handle_state_received_from_app(&mut self, order_protocol: &mut OP, state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()>
@@ -259,10 +317,11 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
         OP: StatefulOrderProtocol<D, NT>
 {
     /// Craete a new instance of `CollabStateTransfer`.
-    pub fn new(node: Arc<NT>, base_timeout: Duration) -> Self {
+    pub fn new(node: Arc<NT>, base_timeout: Duration, timeouts: Timeouts) -> Self {
         Self {
             base_timeout,
             curr_timeout: base_timeout,
+            timeouts,
             node,
             received_states: collections::hash_map(),
             phase: ProtoPhase::Init,

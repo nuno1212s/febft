@@ -240,6 +240,7 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
             if !conn_handler.register_connecting_to_node(peer_id) {
                 warn!("{:?} // Tried to connect to node that I'm already connecting to {:?}",
                 my_id, peer_id);
+
                 //Drop the connection since we are already establishing connection
 
                 return;
@@ -251,12 +252,13 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
             } else {
                 match acceptor.accept(sock).await {
                     Ok(s) => SecureSocketAsync::new_tls_server(s),
-                    Err(_) => {
+                    Err(err) => {
                         error!(
-                            "{:?} // Failed to setup tls connection to node {:?}",
-                            my_id, peer_id
+                            "{:?} // Failed to setup tls connection to node {:?}, {:?}",
+                            my_id, peer_id, err
                         );
 
+                        conn_handler.done_connecting_to_node(&peer_id);
                         break;
                     }
                 }

@@ -37,7 +37,10 @@ pub trait NodeConnections {
     fn is_connected_to_node(&self, node: &NodeId) -> bool;
 
     /// How many nodes are we currently connected to in this node
-    fn connected_nodes(&self) -> usize;
+    fn connected_nodes_count(&self) -> usize;
+
+    /// Get the nodes we are connected to at this time
+    fn connected_nodes(&self) -> Vec<NodeId>;
 
     /// Connect this node to another node.
     /// Returns a vec with the results of each of the attempted connections

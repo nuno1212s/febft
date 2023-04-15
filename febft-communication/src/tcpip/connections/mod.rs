@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use dashmap::DashMap;
 use intmap::IntMap;
+use log::warn;
 
 use febft_common::channel::{ChannelMixedRx, ChannelMixedTx, new_bounded_mixed, new_oneshot_channel, OneShotRx};
 use febft_common::error::*;
@@ -46,6 +47,7 @@ impl ConnCounts {
         }
     }
 
+    /// How many connections should we maintain with a given node
     fn get_connections_to_node(&self, my_id: NodeId, other_id: NodeId, first_cli: NodeId) -> usize {
         if my_id < first_cli && other_id < first_cli {
             self.replica_connections
@@ -162,6 +164,10 @@ impl<M> PeerConnection<M> where M: Serializable {
             if current_connections > conn_limit {
                 self.active_connection_count.fetch_sub(1, Ordering::Relaxed);
 
+                warn!("{:?} // Already reached the max connections for the peer {:?}, disposing of connection",
+                    self.node_connections.id(),
+                    self.node_id,);
+
                 return;
             }
         } else {
@@ -230,8 +236,18 @@ impl<M: Serializable + 'static> NodeConnections for PeerConnections<M> {
         self.connection_map.contains_key(node)
     }
 
-    fn connected_nodes(&self) -> usize {
+    fn connected_nodes_count(&self) -> usize {
         self.connection_map.len()
+    }
+
+    fn connected_nodes(&self) -> Vec<NodeId> {
+        let mut nodes = Vec::with_capacity(self.connection_map.len());
+
+        self.connection_map.iter().for_each(|node| {
+            nodes.push(node.key().clone());
+        });
+
+        nodes
     }
 
     fn connect_to_node(self: &Arc<Self>, node: NodeId) -> Vec<OneShotRx<Result<()>>> {
@@ -290,6 +306,10 @@ impl<M: Serializable + 'static> PeerConnections<M> {
             client_pooling,
             connection_establisher: connection_establish,
         })
+    }
+
+    pub(crate) fn id(&self) -> NodeId {
+        self.id.clone()
     }
 
     /// Setup a tcp listener inside this peer connections object.

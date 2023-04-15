@@ -58,10 +58,10 @@ impl<S> Checkpoint<S> {
 }
 
 /// The result of processing a message in the state transfer protocol
-pub enum STResult {
+pub enum STResult<D: SharedData> {
     CstNotNeeded,
     CstRunning,
-    CstFinished,
+    CstFinished(D::State, Vec<D::Request>),
 }
 
 pub type CstM<M: StateTransferMessage> = <M as StateTransferMessage>::StateTransferMessage;
@@ -70,7 +70,6 @@ pub type CstM<M: StateTransferMessage> = <M as StateTransferMessage>::StateTrans
 pub trait StateTransferProtocol<D, OP, NT> where
     D: SharedData + 'static,
     OP: StatefulOrderProtocol<D, NT> + 'static {
-
     type Serialization: StateTransferMessage + 'static;
 
     type Config;
@@ -80,7 +79,9 @@ pub trait StateTransferProtocol<D, OP, NT> where
         where Self: Sized;
 
     /// Request the latest state from the rest of replicas
-    fn request_latest_state(&mut self) -> Result<()>;
+    fn request_latest_state(&mut self,
+                            order_protocol: &mut OP) -> Result<()>
+        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>;
 
     /// Handle a state transfer protocol message that was received while executing the ordering protocol
     fn handle_off_ctx_message(&mut self,
@@ -93,7 +94,7 @@ pub trait StateTransferProtocol<D, OP, NT> where
     fn process_message(&mut self,
                        order_protocol: &mut OP,
                        message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
-                       -> Result<STResult>
+                       -> Result<STResult<D>>
         where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>;
 
     /// Handle having received a state from the application
@@ -114,8 +115,11 @@ pub trait StatefulOrderProtocol<D: SharedData + 'static, NT>: OrderingProtocol<D
 
     /// Install a state received from other replicas in the system
     fn install_state(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>,
-                     view_info:  View<Self::Serialization>,
+                     view_info: View<Self::Serialization>,
                      dec_log: DecLog<Self::StateSerialization>) -> Result<(D::State, Vec<D::Request>)>;
+
+    /// Install a given sequence number
+    fn install_seq_no(&mut self, seq_no: SeqNo) -> Result<()>;
 
     /// Snapshot the current log of the replica
     fn snapshot_log(&mut self) -> Result<(Arc<ReadOnly<Checkpoint<D::State>>>,

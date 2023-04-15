@@ -343,7 +343,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> AbstractConsen
         Ok((state, reqs))
     }
 
-    fn snapshot_log(&mut self) -> Result<((D::State, SeqNo), ViewInfo, DecisionLog<D::Request>)> {
+    fn snapshot_log(&mut self) -> Result<(Arc<ReadOnly<Checkpoint<D::State>>>, ViewInfo, DecisionLog<D::Request>)> {
         todo!()
     }
 }

@@ -110,6 +110,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
         where ST: StateTransferMessage + 'static,
               NT: Node<PBFT<D, ST>> {
         std::thread::Builder::new()
+            .name(format!("Proposer thread"))
             .spawn(move || {
 
                 //DEBUGGING
@@ -424,6 +425,8 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
         ));
 
         let targets = view.quorum_members().iter().copied();
+
+        info!("{:?} // Proposing new batch", self.node_ref.id());
 
         self.node_ref.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets)
             .unwrap();

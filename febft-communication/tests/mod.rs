@@ -12,14 +12,16 @@ mod communication_test {
     use rustls::server::AllowAnyAuthenticatedClient;
     use rustls_pemfile::Item;
     use serde::{Deserialize, Serialize};
-    use febft_communication_2::config::{ClientPoolConfig, NodeConfig, PKConfig, TcpConfig, TlsConfig};
-    use febft_communication_2::{Node, NodeConnections, NodeId};
-    use febft_communication_2::tcpip::{PeerAddr, TcpNode};
-    use febft_common::{async_runtime as rt, threadpool};
     use febft_common::crypto::signature::{KeyPair, PublicKey};
     use febft_common::error::*;
-    use febft_communication_2::message::NetworkMessageKind;
-    use febft_communication_2::serialize::Serializable;
+    use febft_common::node_id::NodeId;
+    use febft_common::async_runtime as rt;
+    use febft_common::threadpool;
+    use febft_communication::config::{ClientPoolConfig, NodeConfig, PKConfig, TcpConfig, TlsConfig};
+    use febft_communication::{Node, NodeConnections};
+    use febft_communication::message::NetworkMessageKind;
+    use febft_communication::serialize::Serializable;
+    use febft_communication::tcpip::{PeerAddr, TcpNode};
 
     const FIRST_CLI: NodeId = NodeId(1000u32);
     const CLI_POOL_CFG: ClientPoolConfig = ClientPoolConfig {
@@ -372,6 +374,9 @@ mod communication_test {
 
             res.unwrap().unwrap();
         }
+
+        assert!(node.node_connections().is_connected_to_node(&node_2));
+        assert!(node_2_.node_connections().is_connected_to_node(&node_1));
 
         let str = String::from("Test");
 

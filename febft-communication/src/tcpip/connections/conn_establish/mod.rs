@@ -66,7 +66,7 @@ impl ConnectionHandler {
 
         *value += 1;
 
-        if *value > self.concurrent_conn.get_connections_to_node(self.id(), peer_id, self.first_cli) {
+        if *value > self.concurrent_conn.get_connections_to_node(self.id(), peer_id, self.first_cli) * 2 {
             *value -= 1;
 
             false
@@ -78,7 +78,13 @@ impl ConnectionHandler {
     fn done_connecting_to_node(&self, peer_id: &NodeId) {
         let mut connection_guard = self.currently_connecting.lock().unwrap();
 
-        connection_guard.entry(peer_id.clone());
+        connection_guard.entry(peer_id.clone()).and_modify(|value| { *value -= 1 });
+
+        if let Some(connection_count) = connection_guard.get(peer_id) {
+            if *connection_count <= 0 {
+                connection_guard.remove(peer_id);
+            }
+        }
     }
 
     pub fn connect_to_node<M: Serializable + 'static>(self: &Arc<Self>, peer_connections: &Arc<PeerConnections<M>>,

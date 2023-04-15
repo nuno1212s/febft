@@ -119,9 +119,9 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             connections.append(&mut connection_results);
         }
 
-        while node.node_connections().connected_nodes() + 1 < n {
-            debug!("{:?} // Waiting for node connections. Currently {} of {}",
-                log_node_id, node.node_connections().connected_nodes() + 1, n);
+        while node.node_connections().connected_nodes_count() + 1 < n {
+            debug!("{:?} // Waiting for node connections. Currently {} of {} ({:?})",
+                log_node_id, node.node_connections().connected_nodes_count() + 1, n, node.node_connections().connected_nodes());
 
             Delay::new(Duration::from_millis(500)).await;
         }
@@ -145,7 +145,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
         debug!("{:?} // Finished bootstrapping node.", log_node_id);
 
-        Ok(Self {
+        let mut replica = Self {
             // We start with the state transfer protocol to make sure everything is up to date
             replica_phase: ReplicaPhase::StateTransferProtocol,
             ordering_protocol,
@@ -154,7 +154,11 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             executor_handle: executor,
             node,
             execution_rx: exec_rx,
-        })
+        };
+
+        replica.state_transfer_protocol.request_latest_state(&mut replica.ordering_protocol)?;
+
+        Ok(replica)
     }
 
     pub fn run(&mut self) -> Result<()> {
@@ -223,7 +227,10 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
                             match result {
                                 STResult::CstRunning => {}
-                                STResult::CstFinished | STResult::CstNotNeeded => {
+                                STResult::CstFinished(state, requests) => {
+                                    self.executor_handle.install_state(state, requests).unwrap();
+                                }
+                                STResult::CstNotNeeded => {
                                     self.run_ordering_protocol()?;
                                 }
                             }
