@@ -10,14 +10,14 @@ pub mod synchronous;
 
 pub(super) fn spawn_outgoing_task_handler<M: Serializable>(
     conn_handle: ConnHandle,
-    connection_rx: Arc<PeerConnection<M>>,
+    connection: Arc<PeerConnection<M>>,
     socket: SecureWriteHalf) {
     match socket {
         SecureWriteHalf::Async(asynchronous) => {
-            asynchronous::spawn_outgoing_task(conn_handle, connection_rx, asynchronous);
+            asynchronous::spawn_outgoing_task(conn_handle, connection, asynchronous);
         }
         SecureWriteHalf::Sync(synchronous) => {
-            synchronous::spawn_outgoing_thread(conn_handle, connection_rx, synchronous);
+            synchronous::spawn_outgoing_thread(conn_handle, connection, synchronous);
         }
     }
 }

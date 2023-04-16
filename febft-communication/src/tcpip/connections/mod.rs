@@ -61,7 +61,7 @@ impl ConnCounts {
 /// We can have multiple underlying tcp connections for a given connection between two peers
 pub struct PeerConnection<M: Serializable + 'static> {
     // The ID of the connected node
-    node_id: NodeId,
+    peer_node_id: NodeId,
     // Node connections
     node_connections: Arc<PeerConnections<M>>,
     //A handle to the request buffer of the peer we are connected to in the client pooling module
@@ -103,7 +103,7 @@ impl<M> PeerConnection<M> where M: Serializable {
         let (tx, rx) = new_bounded_mixed(TX_CONNECTION_QUEUE);
 
         Arc::new(Self {
-            node_id: client.client_id().clone(),
+            peer_node_id: client.client_id().clone(),
             node_connections: node_conns,
             client,
             tx,
@@ -139,7 +139,7 @@ impl<M> PeerConnection<M> where M: Serializable {
 
         ConnHandle {
             id: conn_id,
-            my_id: self.node_id.clone(),
+            my_id: self.node_connections.id(),
             cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -160,6 +160,8 @@ impl<M> PeerConnection<M> where M: Serializable {
             guard.insert(conn_handle.id, conn_handle.clone())
         };
 
+        let clone = Arc::clone(self);
+
         if let None = previous {
             let current_connections = self.active_connection_count.fetch_add(1, Ordering::Relaxed);
 
@@ -172,24 +174,27 @@ impl<M> PeerConnection<M> where M: Serializable {
 
                 warn!("{:?} // Already reached the max connections for the peer {:?}, disposing of connection",
                     self.node_connections.id(),
-                    self.node_id,);
+                    self.peer_node_id,);
 
                 return;
             } else {
-                debug!("{:?} // New connection to peer {:?} with id {:?} conn count: {}",
+                let id = clone.client_pool_peer().client_id();
+
+                debug!("{:?} // New connection to peer {:?} with id {:?} conn count: {}. DEBUG: {:?}",
                     self.node_connections.id(),
-                    self.node_id,
+                    self.peer_node_id,
                     conn_handle.id,
-                current_connections + 1);
+                    current_connections + 1,
+                    id);
+
+                //Spawn the corresponding handlers for each side of the connection
+                outgoing::spawn_outgoing_task_handler(conn_handle.clone(), clone.clone(), socket.0);
+                incoming::spawn_incoming_task_handler(conn_handle, clone, socket.1);
             }
         } else {
             todo!("How do we handle this really?
                         This probably means it went all the way around u32 connections, really weird")
         }
-
-        //Spawn the corresponding handlers for each side of the connection
-        outgoing::spawn_outgoing_task_handler(conn_handle.clone(), Arc::clone(self), socket.0);
-        incoming::spawn_incoming_task_handler(conn_handle, Arc::clone(self), socket.1);
     }
 
     /// Delete a given tcp stream from this connection
@@ -215,9 +220,9 @@ impl<M> PeerConnection<M> where M: Serializable {
         };
 
         // Retry to establish the connections if possible
-        self.node_connections.handle_conn_lost(&self.node_id, remaining_conns);
+        self.node_connections.handle_conn_lost(&self.peer_node_id, remaining_conns);
 
-        warn!("{:?} // Connection {} has been deleted", self.node_id, conn_id);
+        warn!("{:?} // Connection {} has been deleted", self.peer_node_id, conn_id);
 
         remaining_conns
     }
@@ -349,10 +354,19 @@ impl<M: Serializable + 'static> PeerConnections<M> {
     /// This will either create the corresponding peer connection or add the connection to the already existing
     /// connection
     pub(crate) fn handle_connection_established(self: &Arc<Self>, node: NodeId, socket: (SecureWriteHalf, SecureReadHalf)) {
+        debug!("{:?} // Handling established connection to {:?}", self.id, node);
+
         let option = self.connection_map.entry(node);
 
         let peer_conn = option.or_insert_with(||
-            { PeerConnection::new_peer(Arc::clone(self), self.client_pooling.init_peer_conn(node)) });
+            {
+                let con = PeerConnection::new_peer(Arc::clone(self), self.client_pooling.init_peer_conn(node));
+
+                debug!("{:?} // Creating new peer connection to {:?}. {:?}", self.id, node,
+                    con.client_pool_peer().client_id());
+
+                con
+            });
 
         let concurrency_level = self.concurrent_conn.get_connections_to_node(self.id, node, self.first_cli);
 

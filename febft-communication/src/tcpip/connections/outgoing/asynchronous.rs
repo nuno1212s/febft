@@ -17,6 +17,9 @@ pub(super) fn spawn_outgoing_task<M: Serializable + 'static>(
 
         let bytes = &conn_handle.id().to_be_bytes();
 
+        debug!("{:?} // Sending our conn handle ID to peer node {:?} {}", conn_handle.my_id, peer.client_pool_peer().client_id().clone(),
+            conn_handle.id());
+
         socket.write_all(bytes).await.unwrap();
 
         loop {

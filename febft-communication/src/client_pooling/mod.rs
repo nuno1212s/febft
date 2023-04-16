@@ -256,7 +256,7 @@ pub enum ConnectedPeer<T> where T: Send {
     },
     UnpooledConnection {
         client_id: NodeId,
-        sender: Mutex<Option<ChannelSyncTx<T>>>,
+        sender: ChannelSyncTx<T>,
     },
 }
 
@@ -297,7 +297,7 @@ impl<T> ReplicaHandling<T> where T: Send {
     pub fn init_client(&self, peer_id: NodeId) -> Arc<ConnectedPeer<T>> {
         let peer = Arc::new(ConnectedPeer::UnpooledConnection {
             client_id: peer_id,
-            sender: Mutex::new(Some(self.channel_tx_replica.clone())),
+            sender: self.channel_tx_replica.clone(),
         });
 
         match self.connected_clients.insert(peer_id.id(), peer.clone()) {
@@ -803,8 +803,8 @@ impl<T> ConnectedPeer<T> where T: Send {
             Self::PoolConnection { disconnected, .. } => {
                 disconnected.load(Ordering::Relaxed)
             }
-            Self::UnpooledConnection { sender, .. } => {
-                sender.lock().unwrap().is_none()
+            Self::UnpooledConnection { .. } => {
+                false
             }
         }
     }
@@ -814,9 +814,7 @@ impl<T> ConnectedPeer<T> where T: Send {
             Self::PoolConnection { disconnected, .. } => {
                 disconnected.store(false, Ordering::Relaxed)
             }
-            Self::UnpooledConnection { sender, .. } => {
-                sender.lock().unwrap().take();
-            }
+            Self::UnpooledConnection { .. } => {}
         };
     }
 
@@ -864,29 +862,14 @@ impl<T> ConnectedPeer<T> where T: Send {
                 }
             }
             Self::UnpooledConnection { sender, client_id } => {
-                let send_lock = sender.lock().unwrap();
-                let sender_guard = send_lock.as_ref();
-
-                match sender_guard {
-                    None => {
-                        error!("Failed to send to replica {:?} as he was already disconnected", client_id);
+                match sender.send(msg) {
+                    Ok(_) => {
+                        Ok(())
+                    }
+                    Err(err) => {
+                        error!("Failed to deliver data from {:?} because {:?}", self.client_id(), err);
 
                         Err(Error::simple_with_msg(ErrorKind::Communication, "Channel is closed"))
-                    }
-                    Some(send) => {
-                        //We don't clone and ditch the lock since each client
-                        //has a thread dedicated to receiving his requests, but only the single thread
-                        //So, no more than one thread will be trying to acquire this lock at the same time
-                        match send.send(msg) {
-                            Ok(_) => {
-                                Ok(())
-                            }
-                            Err(err) => {
-                                error!("Failed to receive data from {:?} because {:?}", self.client_id(), err);
-
-                                Err(Error::simple_with_msg(ErrorKind::Communication, "Channel is closed"))
-                            }
-                        }
                     }
                 }
             }

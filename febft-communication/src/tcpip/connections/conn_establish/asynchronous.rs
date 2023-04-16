@@ -143,6 +143,8 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
 
                         SecureSocketAsync::new_plain(sock)
                     } else {
+                        SecureSocketAsync::new_plain(sock)
+                        /*
                         match connector.connect(addr.1, sock).await {
                             Ok(s) => SecureSocketAsync::new_tls_client(s),
                             Err(err) => {
@@ -150,6 +152,7 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
                                 break;
                             }
                         }
+                        */
                     };
 
                     let (write, read) = sock.split();
@@ -232,7 +235,7 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
 
             if !conn_handler.register_connecting_to_node(peer_id) {
                 warn!("{:?} // Tried to connect to node that I'm already connecting to {:?}",
-                my_id, peer_id);
+                    my_id, peer_id);
 
                 //Drop the connection since we are already establishing connection
 
@@ -243,7 +246,9 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
             let sock = if peer_id >= first_cli || my_id >= first_cli {
                 SecureSocketAsync::new_plain(sock)
             } else {
-                match acceptor.accept(sock).await {
+                SecureSocketAsync::new_plain(sock)
+
+                /*match acceptor.accept(sock).await {
                     Ok(s) => SecureSocketAsync::new_tls_server(s),
                     Err(err) => {
                         error!(
@@ -255,6 +260,8 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
                         break;
                     }
                 }
+
+                 */
             };
 
             info!("{:?} // Received new connection from id {:?}", my_id, peer_id);
