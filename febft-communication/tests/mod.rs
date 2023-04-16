@@ -35,11 +35,22 @@ mod communication_test {
 
     #[derive(Serialize, Deserialize, Clone)]
     struct TestMessage {
+        req: bool,
         hello: String,
     }
 
     impl Serializable for TestMessage {
         type Message = TestMessage;
+
+        #[cfg(feature = "serialize_capnp")]
+        fn serialize_capnp(builder: Builder, msg: &Self::Message) -> Result<()> {
+            todo!()
+        }
+
+        #[cfg(feature = "serialize_capnp")]
+        fn deserialize_capnp(reader: Reader) -> Result<Self::Message> {
+            todo!()
+        }
     }
 
     fn sk_stream() -> impl Iterator<Item=KeyPair> {
@@ -330,7 +341,7 @@ mod communication_test {
 
         let str = String::from("Test");
 
-        let network = NetworkMessageKind::from(TestMessage { hello: str.clone() });
+        let network = NetworkMessageKind::from(TestMessage { req: false, hello: str.clone() });
 
         node.send(network, node_2, true).unwrap();
 
@@ -389,7 +400,7 @@ mod communication_test {
         let msgs = 100;
 
         for i in 0..msgs {
-            let network = NetworkMessageKind::from(TestMessage { hello: str.clone() });
+            let network = NetworkMessageKind::from(TestMessage { req: false, hello: str.clone() });
 
             node.send(network, node_2, true).unwrap();
 
@@ -477,23 +488,32 @@ mod communication_test {
                     std::thread::sleep(Duration::from_millis(500));
                 }
 
+                barrier.wait();
+
                 debug!("{:?} // All nodes connected, sending message", id);
 
-                let network_message = NetworkMessageKind::from(TestMessage { hello: format!("Hello from {:?}", id) });
+                let req = NetworkMessageKind::from(TestMessage { req: true, hello: format!("Hello from {:?}", id) });
+                let response = NetworkMessageKind::from(TestMessage { req: false, hello: format!("Goodbye from {:?}", id) });
 
-                node.broadcast(network_message.clone(), ids.iter().cloned()).unwrap();
+                node.broadcast(req.clone(), ids.iter().cloned()).unwrap();
 
-                for _ in 0..NODE_COUNT {
+                for _ in 0..NODE_COUNT * 2 {
                     let message = node.receive_from_replicas_no_timeout().unwrap();
 
                     let (header, network_msg) = message.into_inner();
 
-                    let msg : TestMessage = network_msg.into_system();
+                    let msg: TestMessage = network_msg.into_system();
 
                     debug!("{:?} // Received message from {:?}: {:?}",id, header.from(), msg.hello);
 
-                    node.send(network_message.clone(), header.from(), true).unwrap();
+                    if msg.req {
+                        debug!("{:?} // Sending response to {:?}", id, header.from());
+
+                        node.send(response.clone(), header.from(), true).unwrap();
+                    }
                 }
+
+                debug!("{:?} // All messages received, waiting for other nodes to finish", id);
 
                 barrier.wait();
 

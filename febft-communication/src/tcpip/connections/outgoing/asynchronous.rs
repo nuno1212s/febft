@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use futures::AsyncWriteExt;
 use log::{debug, error, info};
 
 use febft_common::async_runtime as rt;
@@ -7,19 +8,22 @@ use crate::serialize::Serializable;
 
 use crate::tcpip::connections::{ConnHandle, PeerConnection, SerializedMessage};
 
-pub (super) fn spawn_outgoing_task<M: Serializable + 'static>(
+pub(super) fn spawn_outgoing_task<M: Serializable + 'static>(
     conn_handle: ConnHandle,
     peer: Arc<PeerConnection<M>>,
     mut socket: SecureWriteHalfAsync) {
-
     rt::spawn(async move {
         let mut rx = peer.to_send_handle().clone();
 
+        let bytes = &conn_handle.id().to_be_bytes();
+
+        socket.write_all(bytes).await.unwrap();
+
         loop {
             let (to_send, callback) = match rx.recv_async().await {
-                Ok(message) => {message}
+                Ok(message) => { message }
                 Err(error_kind) => {
-                    error!("Failed to receive message to send. {:?}", error_kind);
+                    error!("{:?} // Failed to receive message to send. {:?}", conn_handle.my_id, error_kind);
 
                     break;
                 }
@@ -32,14 +36,16 @@ pub (super) fn spawn_outgoing_task<M: Serializable + 'static>(
 
                 // Put the taken request back into the send queue
                 if let Err(err) = peer.peer_msg_return_async(to_send, callback).await {
-                    error!("Failed to return message because {:?}", err);
+                    error!("{:?} // Failed to return message because {:?}",conn_handle.my_id, err);
                 }
 
                 // Return as we don't want to call delete connection again
-                return
+                return;
             }
 
-            debug!("{:?} // Sending message to peer {:?}", to_send.header().from(), to_send.header().to());
+            debug!("{:?} // Sending message to peer {:?} through connection {} {:?}", to_send.header().from(), to_send.header().to(),
+                to_send.header().nonce(),
+                conn_handle.id());
 
             match to_send.write_to(&mut socket, true).await {
                 Ok(_) => {
@@ -50,14 +56,14 @@ pub (super) fn spawn_outgoing_task<M: Serializable + 'static>(
                     }
                 }
                 Err(error_kind) => {
-                    error!("Failed to write message to socket. {:?}", error_kind);
+                    error!("{:?} // Failed to write message to socket. {:?}", conn_handle.my_id, error_kind);
 
                     // Put the taken request back into the send queue
                     if let Err(err) = peer.peer_msg_return_async(to_send, callback).await {
-                        error!("Failed to return message because {:?}", err);
+                        error!("{:?} // Failed to return message because {:?}", conn_handle.my_id, err);
                     }
 
-                    break
+                    break;
                 }
             }
         }

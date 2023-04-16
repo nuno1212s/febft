@@ -490,6 +490,10 @@ impl<M: Serializable + 'static> SendTo<M> {
             None
         };
 
+        if self.my_id != self.peer_id {
+            debug!("{:?} // SENDTO: Sending message to {:?} with nonce {}", self.my_id, self.peer_id, self.nonce);
+        }
+
         match (self.peer_cnn, msg) {
             (SendToPeer::Me(conn), Either::Left((msg, buf, digest))) => {
                 let message = WireMessage::new(self.my_id, self.peer_id,

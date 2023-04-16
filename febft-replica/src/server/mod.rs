@@ -226,6 +226,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                     }
                 }
                 ReplicaPhase::StateTransferProtocol => {
+                    info!("{:?} // Receiving from replicas", self.node.id());
+
                     let message = self.node.receive_from_replicas(Some(REPLICA_WAIT_TIME)).unwrap();
 
                     if let Some(message) = message {

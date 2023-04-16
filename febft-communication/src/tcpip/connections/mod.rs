@@ -82,6 +82,7 @@ pub struct PeerConnection<M: Serializable + 'static> {
 #[derive(Clone)]
 pub struct ConnHandle {
     id: u32,
+    my_id: NodeId,
     cancelled: Arc<AtomicBool>,
 }
 
@@ -138,6 +139,7 @@ impl<M> PeerConnection<M> where M: Serializable {
 
         ConnHandle {
             id: conn_id,
+            my_id: self.node_id.clone(),
             cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -214,6 +216,8 @@ impl<M> PeerConnection<M> where M: Serializable {
 
         // Retry to establish the connections if possible
         self.node_connections.handle_conn_lost(&self.node_id, remaining_conns);
+
+        warn!("{:?} // Connection {} has been deleted", self.node_id, conn_id);
 
         remaining_conns
     }
