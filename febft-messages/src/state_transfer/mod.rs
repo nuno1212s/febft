@@ -124,6 +124,9 @@ pub trait StatefulOrderProtocol<D: SharedData + 'static, NT>: OrderingProtocol<D
     fn view(&self) -> View<Self::Serialization>;
 
     /// Install a state received from other replicas in the system
+    /// Should only alter the necessary things within its own state and
+    /// then should return the state and a list of all requests that should
+    /// then be executed by the application.
     fn install_state(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>,
                      view_info: View<Self::Serialization>,
                      dec_log: DecLog<Self::StateSerialization>) -> Result<(D::State, Vec<D::Request>)>;

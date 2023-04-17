@@ -351,7 +351,17 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
 
     fn handle_state_received_from_app(&mut self, order_protocol: &mut OP, state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()>
         where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> {
-        todo!()
+        order_protocol.finalize_checkpoint(state)?;
+
+        if self.needs_checkpoint() {
+            // This will make the state transfer protocol aware of the latest state
+            if let CstStatus::Nil = self.process_message(CstProgress::Nil, order_protocol) {} else {
+                return Err("Process message while needing checkpoint returned something else than nil")
+                    .wrapped(ErrorKind::Cst);
+            }
+        }
+
+        Ok(())
     }
 
     fn handle_timeout(&mut self, order_protocol: &mut OP, timeout: Vec<SeqNo>) -> Result<STTimeoutResult>

@@ -175,9 +175,11 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                         }
                     };
 
-                    let discovered_requests = opt_msgs.is_some();
+                    let discovered_requests = opt_msgs.is_some() &&
+                        opt_msgs.as_ref().map(|msg| !msg.is_empty()).unwrap_or(false);
 
                     if let Some(messages) = opt_msgs {
+
                         debug_stats.collected_per_batch_total += messages.len() as u64;
                         debug_stats.collections += 1;
 
@@ -215,25 +217,6 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                                 }
                                 SystemMessage::UnorderedRequest(req) => {
                                     unordered_propose.currently_accumulated.push(StoredMessage::new(header, req));
-                                }
-                                SystemMessage::ProtocolMessage(protocol) => {
-                                    /*match protocol.into_inner() {
-                                        PBFTMessage::ObserverMessage(msg) => {
-                                            if let ObserverMessage::ObserverRegister = msg {
-                                                //Avoid sending these messages to the main replica
-                                                //Processing thread and just process them here instead as it
-                                                //Does not delay the process
-                                                let observer_message = MessageType::Conn(ConnState::Connected(header.from()));
-
-                                                if let Err(_) = self.observer_handle.tx().send(observer_message) {
-                                                    error!("Failed to send messages to the observer handle.");
-                                                }
-                                            }
-                                        }
-                                        _ => {
-                                            warn!("Rogue message detected from clients")
-                                        }
-                                    }*/
                                 }
                                 _ => {}
                             }

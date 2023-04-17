@@ -145,7 +145,8 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
                         SecureSocketAsync::new_plain(sock)
                     } else {
 
-                        let dns_ref = match ServerName::try_from(addr.1.as_str()) {
+                        SecureSocketAsync::new_plain(sock)
+                        /*let dns_ref = match ServerName::try_from(addr.1.as_str()) {
                             Ok(server_name) => server_name,
                             Err(err) => {
                                 error!("Failed to parse DNS name {:?}", err);
@@ -160,7 +161,7 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
                                 error!("{:?} // Failed to connect to the node {:?} {:?} ", conn_handler.id(), peer_id, err);
                                 break;
                             }
-                        }
+                        }*/
                     };
 
                     let (write, read) = sock.split();
@@ -254,6 +255,7 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
             let sock = if peer_id >= first_cli || my_id >= first_cli {
                 SecureSocketAsync::new_plain(sock)
             } else {
+                /*
                 match acceptor.accept(sock.compat_layer()).await {
                     Ok(s) => SecureSocketAsync::new_tls(TlsStream::from(s)),
                     Err(err) => {
@@ -265,7 +267,8 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
                         conn_handler.done_connecting_to_node(&peer_id);
                         break;
                     }
-                }
+                }*/
+                SecureSocketAsync::new_plain(sock)
             };
 
             info!("{:?} // Received new connection from id {:?}", my_id, peer_id);

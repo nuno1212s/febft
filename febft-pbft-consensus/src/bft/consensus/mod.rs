@@ -264,7 +264,7 @@ pub enum ConsensusStatus<D> where D: SharedData {
 pub trait AbstractConsensus<D: SharedData> {
     fn sequence_number(&self) -> SeqNo;
 
-    fn install_state(&mut self, state: D::State, view_info: ViewInfo, dec_log: DecisionLog<D::Request>) -> Result<(D::State, Vec<D::Request>)>;
+    fn install_state(&mut self, state: D::State, view_info: ViewInfo, dec_log: &DecisionLog<D::Request>) -> Result<(D::State, Vec<D::Request>)>;
 
     fn snapshot_log(&mut self) -> Result<(Arc<ReadOnly<Checkpoint<D::State>>>, ViewInfo, DecisionLog<D::Request>)>;
     /*fn handle_message(&mut self, header: Header, message: ConsensusMessage<Request<S>>,
@@ -300,7 +300,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> AbstractConsen
         self.tbo.curr_seq
     }
 
-    fn install_state(&mut self, state: D::State, view_info: ViewInfo, dec_log: DecisionLog<D::Request>) -> Result<(D::State, Vec<D::Request>)> {
+    fn install_state(&mut self, state: D::State, view_info: ViewInfo, dec_log: &DecisionLog<D::Request>) -> Result<(D::State, Vec<D::Request>)> {
         // get the latest seq no
         let seq_no = {
             let last_exec = dec_log.last_execution();

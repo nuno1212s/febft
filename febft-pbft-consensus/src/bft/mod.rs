@@ -548,7 +548,14 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     fn install_state(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>,
                      view_info: View<Self::Serialization>,
                      dec_log: DecLog<Self::StateSerialization>) -> Result<(D::State, Vec<D::Request>)> {
-        self.consensus.install_state(state.state().clone(), view_info, dec_log)
+
+        let res = self.consensus.install_state(state.state().clone(), view_info.clone(),&dec_log)?;
+
+        self.synchronizer.install_view(view_info);
+
+        self.decided_log.install_state(state, dec_log);
+
+        Ok(res)
     }
 
     fn install_seq_no(&mut self, seq_no: SeqNo) -> Result<()> {
