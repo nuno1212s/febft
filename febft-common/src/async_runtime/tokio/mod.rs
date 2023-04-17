@@ -16,7 +16,7 @@ pub fn init(num_threads: usize) -> Result<Runtime> {
 
             let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
 
-            format!("FeBFT-IO-Worker-{}", id)
+            format!("Atlas-IO-Worker-{}", id)
         })
         .enable_all()
         .build()

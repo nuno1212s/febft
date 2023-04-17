@@ -21,7 +21,7 @@ use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::config::NodeConfig;
 use febft_communication::message::{NetworkMessage, NetworkMessageKind, System};
-use febft_communication::Node;
+use febft_communication::{Node, NodeConnections};
 use febft_execution::serialize::SharedData;
 use febft_execution::system_params::SystemParams;
 use febft_messages::messages::{ReplyMessage, SystemMessage};
@@ -291,6 +291,20 @@ impl<D, NT> Client<D, NT>
             .expect("Failed to launch message processing thread");
 
         let session_id = data.session_counter.fetch_add(1, Ordering::Relaxed).into();
+
+        let mut conn = Vec::new();
+
+        for node_id in NodeId::targets(0..n) {
+            let mut result = cli_node.node_connections().connect_to_node(node_id);
+
+            conn.append(&mut result);
+        }
+
+        for result in conn {
+            result.await.unwrap()?;
+        }
+
+        info!("{:?} // Client has connected to all nodes and is ready to start", cli_node.id());
 
         Ok(Client {
             data,

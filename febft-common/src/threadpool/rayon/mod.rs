@@ -31,7 +31,7 @@ impl Builder {
         let mut builder = ThreadPoolBuilder::new();
 
         builder = builder.thread_name(|t| {
-            format!("FeBFT-CPU-Worker-{}", t)
+            format!("Atlas-CPU-Worker-{}", t)
         });
 
         let inner = match self.threads {
