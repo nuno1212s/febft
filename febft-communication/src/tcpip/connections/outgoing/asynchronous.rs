@@ -17,20 +17,6 @@ pub(super) fn spawn_outgoing_task<M: Serializable + 'static>(
     rt::spawn(async move {
         let mut rx = peer.to_send_handle().clone();
 
-        let bytes = &conn_handle.id().to_be_bytes();
-
-        socket.write_all(bytes).await.unwrap();
-
-        socket.flush().await.unwrap();
-
-        match &socket {
-            SecureWriteHalfAsync::Plain(_) => {}
-            SecureWriteHalfAsync::Tls(either) => {
-                debug!("{:?} // Sending our conn handle ID to peer node {:?} {} (CLI CONN)",
-                            conn_handle.my_id, peer.client_pool_peer().client_id().clone(),conn_handle.id());
-            }
-        }
-
         loop {
             let (to_send, callback) = match rx.recv_async().await {
                 Ok(message) => { message }
@@ -54,10 +40,6 @@ pub(super) fn spawn_outgoing_task<M: Serializable + 'static>(
                 // Return as we don't want to call delete connection again
                 return;
             }
-
-            debug!("{:?} // Sending message to peer {:?} through connection {} {:?}", to_send.header().from(), to_send.header().to(),
-                to_send.header().nonce(),
-                conn_handle.id());
 
             match to_send.write_to(&mut socket, true).await {
                 Ok(_) => {

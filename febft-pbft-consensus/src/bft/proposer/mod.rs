@@ -422,6 +422,9 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
         view: &ViewInfo,
         currently_accumulated: Vec<StoredMessage<RequestMessage<D::Request>>>,
     ) where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
+
+        info!("{:?} // Proposing new batch with {} requests", self.node_ref.id(), currently_accumulated.len());
+
         let message = PBFTMessage::Consensus(ConsensusMessage::new(
             seq,
             view.sequence_number(),
@@ -429,8 +432,6 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
         ));
 
         let targets = view.quorum_members().iter().copied();
-
-        info!("{:?} // Proposing new batch", self.node_ref.id());
 
         self.node_ref.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets)
             .unwrap();

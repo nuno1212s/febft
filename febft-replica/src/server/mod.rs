@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use futures_timer::Delay;
 
-use log::{debug, info};
+use log::{debug, error, info};
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx};
 
@@ -201,8 +201,23 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                         self.state_transfer_protocol.handle_off_ctx_message(&mut self.ordering_protocol,
                                                                                             StoredMessage::new(header, state_transfer)).unwrap();
                                     }
+                                    SystemMessage::ForwardedRequestMessage(fwd_reqs) => {
+
+                                        self.ordering_protocol.handle_forwarded_requests(StoredMessage::new(header, fwd_reqs))?;
+
+                                    }
+                                    SystemMessage::ForwardedProtocolMessage(fwd_protocol) => {
+                                        match self.ordering_protocol.process_message(fwd_protocol.into_inner())? {
+                                            OrderProtocolExecResult::Success => {
+                                                //Continue execution
+                                            }
+                                            OrderProtocolExecResult::RunCst => {
+                                                self.run_state_transfer_protocol()?;
+                                            }
+                                        }
+                                    }
                                     _ => {
-                                        todo!()
+                                        error!("{:?} // Received off context message {:?}", self.node.id(), message);
                                     }
                                 }
                             } else {
@@ -226,8 +241,6 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                     }
                 }
                 ReplicaPhase::StateTransferProtocol => {
-                    info!("{:?} // Receiving from replicas", self.node.id());
-
                     let message = self.node.receive_from_replicas(Some(REPLICA_WAIT_TIME)).unwrap();
 
                     if let Some(message) = message {
@@ -333,6 +346,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
         self.replica_phase = ReplicaPhase::OrderingProtocol;
 
+        self.ordering_protocol.handle_execution_changed(true)?;
+
         Ok(())
     }
 
@@ -345,6 +360,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             // Timed out
             return Ok(());
         }
+
+        self.ordering_protocol.handle_execution_changed(false)?;
 
         // Start by requesting the current state from neighbour replicas
         self.state_transfer_protocol.request_latest_state(&mut self.ordering_protocol)?;

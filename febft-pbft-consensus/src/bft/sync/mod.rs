@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+use std::cell::Cell;
 use std::sync::MutexGuard;
 use bytes::BytesMut;
 
@@ -276,6 +277,7 @@ pub(super) enum TimeoutPhase {
     TimedOut,
 }
 
+#[derive(Copy, Clone)]
 pub(super) enum ProtoPhase {
     // the view change protocol isn't running;
     // we are watching pending client requests for
@@ -355,7 +357,7 @@ type CollectsType<D: SharedData> = IntMap<StoredMessage<ViewChangeMessage<D::Req
 /// This part of the protocol is responsible for handling the changing of views and
 /// for keeping track of any timed out client requests
 pub struct Synchronizer<D: SharedData> {
-    phase: RefCell<ProtoPhase>,
+    phase: Cell<ProtoPhase>,
     //Tbo queue, keeps track of the current view and keeps messages arriving in order
     tbo: Mutex<TboQueue<D::Request>>,
     //Stores currently received requests from other nodes
@@ -404,7 +406,7 @@ impl<D> Synchronizer<D>
 {
     pub fn new_follower(view: ViewInfo) -> Arc<Self> {
         Arc::new(Self {
-            phase: RefCell::new(ProtoPhase::Init),
+            phase: Cell::new(ProtoPhase::Init),
             stopped: RefCell::new(Default::default()),
             collects: Mutex::new(Default::default()),
             tbo: Mutex::new(TboQueue::new(view)),
@@ -415,7 +417,7 @@ impl<D> Synchronizer<D>
 
     pub fn new_replica(view: ViewInfo, timeout_dur: Duration) -> Arc<Self> {
         Arc::new(Self {
-            phase: RefCell::new(ProtoPhase::Init),
+            phase: Cell::new(ProtoPhase::Init),
             stopped: RefCell::new(Default::default()),
             collects: Mutex::new(Default::default()),
             tbo: Mutex::new(TboQueue::new(view)),
@@ -443,7 +445,7 @@ impl<D> Synchronizer<D>
     /// We return them. If there are no pending messages then we will wait for new messages from other replicas
     pub fn poll(&self) -> SynchronizerPollStatus<D::Request> {
         let mut tbo_guard = self.tbo.lock().unwrap();
-        match *self.phase.borrow() {
+        match self.phase.get() {
             _ if !tbo_guard.get_queue => SynchronizerPollStatus::Recv,
             ProtoPhase::Init => {
                 //If we are
@@ -490,7 +492,7 @@ impl<D> Synchronizer<D>
     ) -> SynchronizerStatus
         where ST: StateTransferMessage, NT: Node<PBFT<D, ST>>
     {
-        match *self.phase.borrow() {
+        match self.phase.get() {
             ProtoPhase::Init => {
                 return match message.kind() {
                     ViewChangeMessageKind::Stop(_) => {
@@ -580,7 +582,7 @@ impl<D> Synchronizer<D>
 
                 // NOTE: we only take this branch of the code before
                 // we have sent our own STOP message
-                if let ProtoPhase::Stopping(_i) = *self.phase.borrow() {
+                if let ProtoPhase::Stopping(_i) = self.phase.get() {
                     return if i > current_view.params().f() {
                         self.begin_view_change(None, node, timeouts, log);
                         SynchronizerStatus::Running
@@ -957,19 +959,19 @@ impl<D> Synchronizer<D>
         where ST: StateTransferMessage + 'static,
               NT: Node<PBFT<D, ST>>
     {
-        match (&*self.phase.borrow(), &timed_out) {
+        match (self.phase.get(), &timed_out) {
             // we have received STOP messages from peer nodes,
             // but haven't sent our own STOP, yet; (And in the case of followers we will never send it)
             //
             // when `timed_out` is `None`, we were called from `process_message`,
             // so we need to update our phase with a new received message
             (ProtoPhase::Stopping(i), None) => {
-                self.phase.replace(ProtoPhase::Stopping2(*i + 1));
+                self.phase.replace(ProtoPhase::Stopping2(i + 1));
             }
             //When the timeout is not null, this means it was called from timed out client requests
             //And therefore we don't increase the received message count, just update the phase to Stopping2
             (ProtoPhase::Stopping(i), _) => {
-                self.phase.replace(ProtoPhase::Stopping2(*i));
+                self.phase.replace(ProtoPhase::Stopping2(i));
             }
             // we have timed out, therefore we should send a STOP msg;
             //

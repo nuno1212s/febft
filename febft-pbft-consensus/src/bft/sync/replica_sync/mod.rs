@@ -156,7 +156,14 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             digests.push(unique_digest.clone());
 
             if let Some(mut req) = self.watching.get_mut(&unique_digest) {
-                *req.value_mut() = phase;
+                match req.value() {
+                    TimeoutPhase::Init(_) => {
+                        *req.value_mut() = phase;
+                    }
+                    _ => {
+                        // we have already skipped this step
+                    }
+                }
             } else {
                 self.watching.insert(unique_digest, phase);
             }
@@ -276,7 +283,6 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
     /// Stop watching all pending client requests.
     pub fn unwatch_all_requests(&self, timeouts: &Timeouts) {
-
         self.watching.clear();
 
         timeouts.cancel_client_rq_timeouts(None);

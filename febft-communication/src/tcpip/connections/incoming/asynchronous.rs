@@ -23,39 +23,6 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(
         let mut read_buffer = BytesMut::with_capacity(Header::LENGTH);
         let peer_id = client_pool_buffer.client_id().clone();
 
-        read_buffer.resize(4, 0);
-
-        match &socket {
-            SecureReadHalfAsync::Tls(either) => {
-                debug!("{:?} // Receiving conn with peer {:?} ID {}",
-                            conn_handle.my_id,
-                            peer_id, conn_handle.id());
-            }
-            _ => {}
-        }
-
-        let peer_cnn_id = match socket.read_exact(&mut read_buffer[..4]).await {
-            Ok(_) => {
-                let id = u32::from_be_bytes(read_buffer[..4].try_into().unwrap());
-
-                id
-            }
-            Err(err) => {
-                error!("{:?} // Failed to read connection id from socket, faulty connection {:?}",
-                    conn_handle.my_id, err);
-                return;
-            }
-        };
-
-        match &socket {
-            SecureReadHalfAsync::Tls(either) => {
-                debug!("{:?} // Connection with peer {:?} ID {} is correspondent to ID {} on his end",
-                            conn_handle.my_id,
-                            peer_id, conn_handle.id(), peer_cnn_id);
-            }
-            _ => {}
-        }
-
         loop {
             read_buffer.resize(Header::LENGTH, 0);
 
@@ -87,9 +54,6 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(
                 break;
             }
 
-            debug!("{:?} // DESERIALIZING: Received message from peer {:?} through connection {} (Peer {}) with nonce {}",
-                header.to(), peer_id, conn_handle.id(),peer_cnn_id, header.nonce());
-
             // Use the threadpool for CPU intensive work in order to not block the IO threads
             let result = cpu_workers::deserialize_message(header.clone(),
                                                           read_buffer).await.unwrap();
@@ -107,9 +71,6 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(
                     break;
                 }
             };
-
-            debug!("{:?} // Received message from peer {:?} through connection {} (Peer {}) with nonce {}",
-                header.to(), peer_id, conn_handle.id(),peer_cnn_id, header.nonce());
 
             let msg = NetworkMessage::new(header, message);
 

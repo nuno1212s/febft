@@ -222,7 +222,8 @@ impl<M> PeerConnection<M> where M: Serializable {
         // Retry to establish the connections if possible
         self.node_connections.handle_conn_lost(&self.peer_node_id, remaining_conns);
 
-        warn!("{:?} // Connection {} has been deleted", self.peer_node_id, conn_id);
+        warn!("{:?} // Connection {} with peer {:?} has been deleted", self.node_connections.id(),
+            conn_id,self.peer_node_id);
 
         remaining_conns
     }
@@ -378,7 +379,7 @@ impl<M: Serializable + 'static> PeerConnections<M> {
     fn handle_conn_lost(self: &Arc<Self>, node: &NodeId, remaining_conns: usize) {
         let concurrency_level = self.concurrent_conn.get_connections_to_node(self.id, node.clone(), self.first_cli);
 
-        if remaining_conns > 0 {
+        if remaining_conns <= 0 {
             //The node is no longer accessible. We will remove it until a new TCP connection
             // Has been established
             let _ = self.connection_map.remove(node);

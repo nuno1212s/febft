@@ -34,7 +34,7 @@ use febft_communication::serialize::Serializable;
 use febft_execution::app::{Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
-use febft_messages::messages::{Protocol, SystemMessage};
+use febft_messages::messages::{ForwardedRequestsMessage, Protocol, SystemMessage};
 use febft_messages::ordering_protocol::{OrderingProtocol, OrderProtocolExecResult, OrderProtocolPoll, View};
 use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
 use febft_messages::state_transfer::{Checkpoint, DecLog, StatefulOrderProtocol};
@@ -262,6 +262,14 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
                 ConsensusPhase::SyncPhase => {}
             }
         }
+
+        Ok(())
+    }
+
+    fn handle_forwarded_requests(&mut self, requests: StoredMessage<ForwardedRequestsMessage<D::Request>>) -> Result<()> {
+        let (_header, requests) = requests.into_inner();
+
+        self.synchronizer.watch_forwarded_requests(requests, &self.timeouts, &self.pending_request_log);
 
         Ok(())
     }

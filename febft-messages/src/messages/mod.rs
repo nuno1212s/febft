@@ -138,6 +138,37 @@ impl<D, P, ST> Clone for SystemMessage<D, P, ST> where D: SharedData, P: Clone, 
     }
 }
 
+impl<D, P, ST> Debug for SystemMessage<D, P, ST> where D:SharedData, P: Clone, ST:Clone {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SystemMessage::OrderedRequest(_) => {
+                write!(f, "Ordered Request")
+            }
+            SystemMessage::UnorderedRequest(_) => {
+                write!(f, "Unordered Request")
+            }
+            SystemMessage::OrderedReply(_) => {
+                write!(f, "Ordered Reply")
+            }
+            SystemMessage::UnorderedReply(_) => {
+                write!(f, "Unordered Reply")
+            }
+            SystemMessage::ForwardedRequestMessage(_) => {
+                write!(f, "Forwarded Request")
+            }
+            SystemMessage::ProtocolMessage(_) => {
+                write!(f, "Protocol Message")
+            }
+            SystemMessage::ForwardedProtocolMessage(_) => {
+                write!(f, "Forwarded Protocol Message")
+            }
+            SystemMessage::StateTransferMessage(_) => {
+                write!(f, "State Transfer Message")
+            }
+        }
+    }
+}
+
 /// Represents a request from a client.
 ///
 /// The `O` type argument symbolizes the client operation to be performed
