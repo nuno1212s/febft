@@ -148,8 +148,10 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
         let mut digests = Vec::with_capacity(requests.len());
 
+        let mut vec_fwd_rqs = Vec::with_capacity(requests.len());
+
         for (header, request) in requests {
-            log.insert(header, request);
+            log.insert(header, request.clone());
 
             let unique_digest = header.unique_digest();
 
@@ -167,7 +169,11 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             } else {
                 self.watching.insert(unique_digest, phase);
             }
+
+            vec_fwd_rqs.push(StoredMessage::new(header, request));
         }
+
+        log.insert_forwarded(vec_fwd_rqs);
 
         timeouts.timeout_client_requests(self.timeout_dur.get(), digests);
     }

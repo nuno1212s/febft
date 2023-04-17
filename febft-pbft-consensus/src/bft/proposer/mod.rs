@@ -63,12 +63,12 @@ struct DebugStats {
     batches_made: u32,
 }
 
-struct ProposeStats<D> where D: SharedData {
+struct ProposeBuilder<D> where D: SharedData {
     currently_accumulated: Vec<StoredMessage<RequestMessage<D::Request>>>,
     last_proposal: Instant,
 }
 
-impl<D> ProposeStats<D> where D: SharedData {
+impl<D> ProposeBuilder<D> where D: SharedData {
     pub fn new(target_size: usize) -> Self {
         Self { currently_accumulated: Vec::with_capacity(target_size), last_proposal: Instant::now() }
     }
@@ -124,9 +124,9 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                 //END DEBUGGING
 
                 //The currently accumulated requests, accumulated while we wait for the next batch to propose
-                let mut ordered_propose = ProposeStats::new(self.target_global_batch_size);
+                let mut ordered_propose = ProposeBuilder::new(self.target_global_batch_size);
 
-                let mut unordered_propose = ProposeStats::new(self.target_global_batch_size);
+                let mut unordered_propose = ProposeBuilder::new(self.target_global_batch_size);
 
                 let mut last_seq = None;
 
@@ -179,7 +179,6 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                         opt_msgs.as_ref().map(|msg| !msg.is_empty()).unwrap_or(false);
 
                     if let Some(messages) = opt_msgs {
-
                         debug_stats.collected_per_batch_total += messages.len() as u64;
                         debug_stats.collections += 1;
 
@@ -194,29 +193,24 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                                 SystemMessage::OrderedRequest(req) => {
                                     let rq_digest = header.unique_digest();
 
-                                    /*let key = logg::operation_key(&header, &req);
-
-                                    let current_seq_for_client = lock_guard.get(key)
-                                        .copied()
-                                        .unwrap_or(SeqNo::ZERO);
-
-                                    if req.sequence_number() < current_seq_for_client {
-                                        //Avoid repeating requests for clients
-                                        continue;
-                                    }*/
-
                                     if is_leader && is_request_in_hash_space(&rq_digest,
                                                                              our_slice.as_ref().unwrap()) {
-                                        ordered_propose.currently_accumulated.push(StoredMessage::new(header, req));
+                                        // we know that these operations will always be proposed since we are a
+                                        // Correct replica. We can therefore just add them to the latest op log
+                                        let stored_message = StoredMessage::new(header, req);
+
+                                        ordered_propose.currently_accumulated.push(stored_message);
                                     } else {
                                         digest_vec.push(rq_digest);
 
                                         // TODO: Maybe this should be handled by another thread in blocks?
-                                        self.pending_decision_log.insert(header, req)
+                                        self.pending_decision_log.insert(header, req);
                                     }
                                 }
                                 SystemMessage::UnorderedRequest(req) => {
-                                    unordered_propose.currently_accumulated.push(StoredMessage::new(header, req));
+                                    let stored_message = StoredMessage::new(header, req);
+
+                                    unordered_propose.currently_accumulated.push(stored_message);
                                 }
                                 _ => {}
                             }
@@ -224,6 +218,11 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
 
                         self.synchronizer.watch_received_requests(digest_vec, &self.timeouts);
                     }
+
+                    // Check if we have any forwarded requests that we need to propose
+                    self.handle_forwarded_requests(is_leader,
+                                                   our_slice.as_ref().unwrap(),
+                                                   &mut ordered_propose);
 
                     //Lets first deal with unordered requests since it should be much quicker and easier
                     self.propose_unordered(&mut unordered_propose);
@@ -242,13 +241,12 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
             }).unwrap()
     }
 
-
     /// Attempt to propose an unordered request batch
     /// Fails if the batch is not large enough or the timeout
     /// Has not yet occurred
     fn propose_unordered<ST>(
         &self,
-        propose: &mut ProposeStats<D>,
+        propose: &mut ProposeBuilder<D>,
     ) where ST: StateTransferMessage + 'static,
             NT: Node<PBFT<D, ST>> {
         if !propose.currently_accumulated.is_empty() {
@@ -314,7 +312,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
     /// attempt to propose the ordered requests that we have collected
     fn propose_ordered<ST>(&self,
                            is_leader: bool,
-                           propose: &mut ProposeStats<D>,
+                           propose: &mut ProposeBuilder<D>,
                            last_seq: &mut Option<SeqNo>,
                            debug: &mut DebugStats)
         where ST: StateTransferMessage + 'static,
@@ -405,6 +403,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
         view: &ViewInfo,
         currently_accumulated: Vec<StoredMessage<RequestMessage<D::Request>>>,
     ) where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
+        let currently_accumulated = self.pending_decision_log.filter_and_update_more_recent(currently_accumulated);
 
         info!("{:?} // Proposing new batch with {} requests", self.node_ref.id(), currently_accumulated.len());
 
@@ -418,6 +417,28 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
 
         self.node_ref.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets)
             .unwrap();
+    }
+
+    fn handle_forwarded_requests(&self, is_leader: bool,
+                                 our_slice: _,
+                                 ordered_propose_builder: &mut ProposeBuilder<D>) {
+        let fwd_rqs = self.pending_decision_log.take_forwarded_requests(None);
+
+        if let Some(fwd_rqs) = fwd_rqs {
+            for req in fwd_rqs {
+                let rq_digest = req.header().unique_digest();
+
+                if is_leader && is_request_in_hash_space(&rq_digest, our_slice) {
+                    // We can safely add this request to our batch since it is in our hash space and
+                    // it will still be examined by the [`filter_and_update_more_recent`] method
+                    ordered_propose_builder.currently_accumulated.push(req);
+                } else {
+                    let (header, message) = req.into_inner();
+
+                    self.pending_decision_log.insert(header, message);
+                }
+            }
+        }
     }
 
     pub fn cancel(&self) {

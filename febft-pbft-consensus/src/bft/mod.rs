@@ -269,6 +269,10 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     fn handle_forwarded_requests(&mut self, requests: StoredMessage<ForwardedRequestsMessage<D::Request>>) -> Result<()> {
         let (_header, requests) = requests.into_inner();
 
+        requests.requests()
+
+        self.pending_request_log.insert_forwarded()
+
         self.synchronizer.watch_forwarded_requests(requests, &self.timeouts, &self.pending_request_log);
 
         Ok(())
