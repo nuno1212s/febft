@@ -177,12 +177,11 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
 
                     let discovered_requests = opt_msgs.is_some();
 
-
-                    //TODO: Handle timing out requests
-
                     if let Some(messages) = opt_msgs {
                         debug_stats.collected_per_batch_total += messages.len() as u64;
                         debug_stats.collections += 1;
+
+                        let mut digest_vec = Vec::with_capacity(messages.len());
 
                         for message in messages {
                             let NetworkMessage { header, message } = message;
@@ -208,7 +207,10 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                                                                              our_slice.as_ref().unwrap()) {
                                         ordered_propose.currently_accumulated.push(StoredMessage::new(header, req));
                                     } else {
-                                        //TODO: The synchronizer must be notified of this
+                                        digest_vec.push(rq_digest);
+
+                                        // TODO: Maybe this should be handled by another thread in blocks?
+                                        self.pending_decision_log.insert(header, req)
                                     }
                                 }
                                 SystemMessage::UnorderedRequest(req) => {
@@ -236,6 +238,8 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                                 _ => {}
                             }
                         }
+
+                        self.synchronizer.watch_received_requests(digest_vec, &self.timeouts);
                     }
 
                     //Lets first deal with unordered requests since it should be much quicker and easier

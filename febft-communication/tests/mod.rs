@@ -4,10 +4,8 @@ mod communication_test {
     use std::io::BufReader;
     use std::iter;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-    use std::process::id;
     use std::sync::{Arc, Barrier};
     use std::time::Duration;
-    use futures::SinkExt;
     use intmap::IntMap;
     use log::{debug, error, info, warn};
     use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig};

@@ -144,7 +144,7 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
         let consensus = Consensus::<D, ST>::new_replica(node_id, view.clone(),
                                                         SeqNo::ZERO, executor.clone(), follower_handle);
 
-        let consensus_guard = ConsensusGuard::new(consensus.sequence_number(), view.clone());
+        let consensus_guard = consensus.consensus_guard().cloned().unwrap();
 
         let pending_rq_log = Arc::new(initialize_pending_request_log()?);
 
@@ -244,6 +244,26 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
         }
 
         Ok(OrderProtocolExecResult::Success)
+    }
+
+    fn handle_execution_changed(&mut self, is_executing: bool) -> Result<()> {
+        if !is_executing {
+            if let Some(consensus_guard) = self.consensus.consensus_guard() {
+                consensus_guard.lock_consensus();
+            }
+        } else {
+            match self.phase {
+                ConsensusPhase::NormalPhase => {
+                    //TODO: Is this feasible? Do we know whether this is ready for a new batch?
+                    if let Some(consensus_guard) = self.consensus.consensus_guard() {
+                        consensus_guard.unlock_consensus();
+                    }
+                }
+                ConsensusPhase::SyncPhase => {}
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -457,11 +477,6 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         //     Instant::now().duration_since(start)
         // );
 
-
-        // yield execution since `signal()`
-        // will probably force a value from the
-        // TBO queue in the consensus layer
-        // std::hint::spin_loop();
         Ok(OrderProtocolExecResult::Success)
     }
 

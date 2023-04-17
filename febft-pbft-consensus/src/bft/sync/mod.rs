@@ -1058,7 +1058,6 @@ impl<D> Synchronizer<D>
                 consensus.catch_up_to_quorum(last_proof.seq_no(), last_proof, log)
                     .expect("Failed to catch up to quorum");
 
-
                 //TODO: Now we must replay this in the executor.
                 // Maybe do a sync write so we can make sure we only execute when it is done
             } else {

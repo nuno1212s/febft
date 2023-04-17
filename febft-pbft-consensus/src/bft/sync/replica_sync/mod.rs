@@ -202,8 +202,6 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
         let mut digests = Vec::with_capacity(requests.len());
 
-        //let mut client_rqs = Vec::with_capacity(requests.len());
-
         let sending_node = pre_prepare.header().from();
 
         for x in requests {
@@ -218,13 +216,11 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             //remove the request from the requests we are currently watching
             self.watching.remove(&digest);
 
-            //client_rqs.push(TimeoutKind::ClientRequestTimeout(
-            //    ClientRqInfo::new(digest.clone())));
-
             digests.push(digest);
         }
 
         //Notify the timeouts that we have received the following requests
+        //TODO: Should this only be done after the commit phase?
         timeouts.received_pre_prepare(sending_node, digests.clone());
 
         //If we only send the digest of the request in the pre prepare
@@ -280,8 +276,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
     /// Stop watching all pending client requests.
     pub fn unwatch_all_requests(&self, timeouts: &Timeouts) {
-        // since we will be on a different seq no,
-        // the time out will do nothing
+
         self.watching.clear();
 
         timeouts.cancel_client_rq_timeouts(None);

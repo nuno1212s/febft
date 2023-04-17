@@ -395,10 +395,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage> ReplicaConsensus<D, ST> 
             missing_requests: VecDeque::new(),
             missing_swapbuf: Vec::new(),
             speculative_commits: Arc::new(Mutex::new(Default::default())),
-            consensus_guard: ConsensusGuard {
-                consensus_information: Arc::new(Mutex::new((next_seq, view))),
-                consensus_guard: Arc::new(AtomicBool::new(false)),
-            },
+            consensus_guard: ConsensusGuard::new(next_seq, view),
             follower_handle,
         }
     }

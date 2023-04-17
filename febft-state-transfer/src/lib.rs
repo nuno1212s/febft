@@ -291,6 +291,9 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
             _ => {}
         }
 
+        // Notify timeouts that we have received this message
+        self.timeouts.received_cst_request(header.from(), message.sequence_number());
+
         let status = self.process_message(
             CstProgress::Message(header, message),
             order_protocol,

@@ -19,7 +19,6 @@ pub trait OrderingProtocol<D, NT>: Orderable where D: SharedData + 'static {
     type Serialization: OrderingProtocolMessage + 'static;
 
     type Config;
-    
 
     /// Initialize this ordering protocol with the given configuration, executor, timeouts and node
     fn initialize(config: Self::Config, executor: ExecutorHandle<D>,
@@ -38,6 +37,10 @@ pub trait OrderingProtocol<D, NT>: Orderable where D: SharedData + 'static {
 
     /// Handle a timeout received from the timeouts layer
     fn handle_timeout(&mut self, timeout: Vec<ClientRqInfo>) -> Result<OrderProtocolExecResult>;
+
+    /// Handle the protocol being executed having changed (for example to the state transfer protocol)
+    /// This is important for some of the protocols, which need to know when they are being executed or not
+    fn handle_execution_changed(&mut self, is_executing: bool) -> Result<()>;
 }
 
 /// result from polling the ordering protocol

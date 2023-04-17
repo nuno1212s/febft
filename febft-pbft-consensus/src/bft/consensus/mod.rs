@@ -516,6 +516,11 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
             ProtoPhase::Init => self.phase = ProtoPhase::PrePreparing(0),
             _ => return,
         }
+
+        // If we are a replica, when we get into this phase we must unlock the consensus
+        if let Some(consensus_guard) = self.consensus_guard() {
+            consensus_guard.unlock_consensus();
+        }
     }
 
     /// Starts a new consensus instance.
@@ -1070,6 +1075,6 @@ fn request_batch_received<D>(
 
     batch_guard.reception_time = Utc::now();
 
-    //Tell the synchronizer to watch this request batch
+    // Notify the synchronizer that a batch has been received
     synchronizer.request_batch_received(pre_prepare, timeouts)
 }
