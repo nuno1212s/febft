@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use async_tls::{TlsAcceptor, TlsConnector};
 use intmap::IntMap;
 use rustls::{ClientConfig, ServerConfig};
 use crate::message::{NetworkMessage, NetworkMessageKind, StoredSerializedNetworkMessage};

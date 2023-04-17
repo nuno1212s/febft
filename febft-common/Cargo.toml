@@ -85,8 +85,8 @@ serialize_serde = ["serde", "serde-big-array"]
 
 [dependencies]
 either = "1.8.1"
-async-tls = "0.12.0"
-rustls = "0.20.8"
+tokio-rustls = "0.24.0"
+rustls = "0.21.0"
 futures = "0.3.26"
 fastrand = "1.7.0"
 webpki = "0.22.0"

@@ -216,12 +216,13 @@ mod communication_test {
 
         // create server conf
         let auth = AllowAnyAuthenticatedClient::new(root_store);
+
         let cfg = ServerConfig::builder()
             .with_safe_default_cipher_suites()
             .with_safe_default_kx_groups()
             .with_safe_default_protocol_versions()
             .unwrap()
-            .with_client_cert_verifier(auth)
+            .with_client_cert_verifier(Arc::new(auth))
             .with_single_cert(chain, sk)
             .expect("Failed to make cfg");
 

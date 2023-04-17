@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use bytes::BytesMut;
+use either::Either;
 use futures::AsyncReadExt;
 use log::{debug, error, info};
 
@@ -20,9 +21,18 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(
     rt::spawn(async move {
         let client_pool_buffer = Arc::clone(peer.client_pool_peer());
         let mut read_buffer = BytesMut::with_capacity(Header::LENGTH);
-        let peer_id = peer.client_pool_peer().client_id().clone();
+        let peer_id = client_pool_buffer.client_id().clone();
 
         read_buffer.resize(4, 0);
+
+        match &socket {
+            SecureReadHalfAsync::Tls(either) => {
+                debug!("{:?} // Receiving conn with peer {:?} ID {}",
+                            conn_handle.my_id,
+                            peer_id, conn_handle.id());
+            }
+            _ => {}
+        }
 
         let peer_cnn_id = match socket.read_exact(&mut read_buffer[..4]).await {
             Ok(_) => {
@@ -31,13 +41,20 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(
                 id
             }
             Err(err) => {
-                error!("{:?} // Failed to read connection id from socket, faulty connection {:?}", conn_handle.my_id, err);
+                error!("{:?} // Failed to read connection id from socket, faulty connection {:?}",
+                    conn_handle.my_id, err);
                 return;
             }
         };
 
-        debug!("{:?} // Connection with peer {:?} ID {} is correspondent to ID {} on his end", conn_handle.my_id,
-            peer_id, conn_handle.id(), peer_cnn_id);
+        match &socket {
+            SecureReadHalfAsync::Tls(either) => {
+                debug!("{:?} // Connection with peer {:?} ID {} is correspondent to ID {} on his end",
+                            conn_handle.my_id,
+                            peer_id, conn_handle.id(), peer_cnn_id);
+            }
+            _ => {}
+        }
 
         loop {
             read_buffer.resize(Header::LENGTH, 0);

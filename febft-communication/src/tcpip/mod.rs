@@ -4,12 +4,12 @@ use std::net::SocketAddr;
 use std::sync::{Arc};
 use std::time::Duration;
 
-use async_tls::{TlsAcceptor, TlsConnector};
 use either::Either;
 
 use log::{debug, error, info};
 use rustls::{ClientConfig, ServerConfig};
 use smallvec::SmallVec;
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 use febft_common::{async_runtime as rt, socket, threadpool};
 use febft_common::crypto::hash::Digest;
@@ -175,8 +175,8 @@ impl<M: Serializable + 'static> TcpNode<M> {
     {
         debug!("Initializing TLS configurations.");
 
-        let async_acceptor: TlsAcceptor = cfg.async_server_config.into();
-        let async_connector: TlsConnector = cfg.async_client_config.into();
+        let async_acceptor: TlsAcceptor = Arc::new(cfg.async_server_config).into();
+        let async_connector: TlsConnector = Arc::new(cfg.async_client_config).into();
 
         let sync_acceptor = Arc::new(cfg.sync_server_config);
         let sync_connector = Arc::new(cfg.sync_client_config);

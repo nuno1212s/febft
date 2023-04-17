@@ -9,11 +9,6 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
 
-use async_tls::{
-    client::TlsStream as TlsStreamCli,
-    server::TlsStream as TlsStreamSrv,
-};
-use async_tls::server::TlsStream;
 use either::Either;
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite};
 
@@ -21,6 +16,9 @@ use futures::io::{BufReader, BufWriter};
 use log::error;
 
 use rustls::{ClientConnection, Error, IoState, ServerConnection, StreamOwned};
+use tokio::io::ReadBuf;
+use tokio_rustls::TlsStream;
+use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt, FuturesAsyncReadCompatExt};
 
 use crate::error;
 
@@ -146,6 +144,10 @@ impl SyncListener {
 }
 
 impl AsyncSocket {
+    pub fn compat_layer(self) -> Compat<Self> {
+        self.compat()
+    }
+
     pub(super) fn split(self) -> (WriteHalfAsync, ReadHalfAsync) {
         #[cfg(feature = "socket_tokio_tcp")]
             let (write, read) = tokio_tcp::split_socket(self.inner);
@@ -404,7 +406,7 @@ impl Write for SecureWriteHalfSync {
 
 pub enum SecureSocketAsync {
     Plain(AsyncSocket),
-    Tls(Either<TlsStream<AsyncSocket>, TlsStreamCli<AsyncSocket>>),
+    Tls(TlsStream<Compat<AsyncSocket>>),
 }
 
 impl SecureSocketAsync {
@@ -412,12 +414,8 @@ impl SecureSocketAsync {
         Self::Plain(socket)
     }
 
-    pub fn new_tls_server(stream: TlsStream<AsyncSocket>) -> Self {
-        Self::Tls(Either::Left(stream))
-    }
-
-    pub fn new_tls_client(stream: TlsStreamCli<AsyncSocket>) -> Self {
-        Self::Tls(Either::Right(stream))
+    pub fn new_tls(socket: TlsStream<Compat<AsyncSocket>>) -> Self {
+        Self::Tls(socket)
     }
 
     pub fn split(self) -> (SecureWriteHalfAsync, SecureReadHalfAsync) {
@@ -429,35 +427,25 @@ impl SecureSocketAsync {
                  SecureReadHalfAsync::Plain(read))
             }
             SecureSocketAsync::Tls(tls_stream) => {
+                //FIXME: We have found that TlsStreams really don't like to be used in duplex mode
+                // especially with async-tls, which is what we were using to maintain compatibility
+                // between async-std and tokio. This means that we currently have a pretty hard time
+                // implementing this.
+                // https://github.com/tokio-rs/tls/issues/40
+
                 //Unfortunately in this situation I don't think we can use async socket's efficient OS level split
                 // Since the stream requires duplex access. So we must wrap this in a bilock from futures
 
-                match tls_stream {
-                    Either::Left(stream) => {
-                        //Wrap in bilock
-                        let (read, write) = futures::AsyncReadExt::split(stream);
+                //Wrap in bilock
+                let (read, write) = tokio::io::split(tls_stream);
 
-                        //We have to wrap these at this point instead of at the lower level
-                        // since we can't use the same method but that's fine I guess
-                        let read_buffered = BufReader::with_capacity(READ_BUFFER_SIZE, read);
-                        let write_buffered = BufWriter::with_capacity(WRITE_BUFFER_SIZE, write);
+                //We have to wrap these at this point instead of at the lower level
+                // since we can't use the same method but that's fine I guess
+                let read_buffered = BufReader::with_capacity(READ_BUFFER_SIZE, read.compat());
+                let write_buffered = BufWriter::with_capacity(WRITE_BUFFER_SIZE, write.compat_write());
 
-                        (SecureWriteHalfAsync::Tls(Either::Left(write_buffered)),
-                         SecureReadHalfAsync::Tls(Either::Left(read_buffered)))
-                    }
-                    Either::Right(stream) => {
-                        //Wrap in bi lock
-                        let (read, write) = futures::AsyncReadExt::split(stream);
-
-                        //We have to wrap these at this point instead of at the lower level
-                        // since we can't use the same method but that's fine I guess
-                        let read_buffered = BufReader::with_capacity(READ_BUFFER_SIZE, read);
-                        let write_buffered = BufWriter::with_capacity(WRITE_BUFFER_SIZE, write);
-
-                        (SecureWriteHalfAsync::Tls(Either::Right(write_buffered)),
-                         SecureReadHalfAsync::Tls(Either::Right(read_buffered)))
-                    }
-                }
+                (SecureWriteHalfAsync::Tls(write_buffered),
+                 SecureReadHalfAsync::Tls(read_buffered))
             }
         }
     }
@@ -465,18 +453,12 @@ impl SecureSocketAsync {
 
 pub enum SecureWriteHalfAsync {
     Plain(WriteHalfAsync),
-    Tls(Either<
-        BufWriter<futures::io::WriteHalf<TlsStream<AsyncSocket>>>,
-        BufWriter<futures::io::WriteHalf<TlsStreamCli<AsyncSocket>>>
-    >),
+    Tls(BufWriter<Compat<tokio::io::WriteHalf<TlsStream<Compat<AsyncSocket>>>>>),
 }
 
 pub enum SecureReadHalfAsync {
     Plain(ReadHalfAsync),
-    Tls(Either<
-        BufReader<futures::io::ReadHalf<TlsStream<AsyncSocket>>>,
-        BufReader<futures::io::ReadHalf<TlsStreamCli<AsyncSocket>>>
-    >),
+    Tls(BufReader<Compat<tokio::io::ReadHalf<TlsStream<Compat<AsyncSocket>>>>>),
 }
 
 impl AsyncWrite for SecureWriteHalfAsync {
@@ -486,14 +468,7 @@ impl AsyncWrite for SecureWriteHalfAsync {
                 Pin::new(inner).poll_write(cx, buf)
             }
             SecureWriteHalfAsync::Tls(inner) => {
-                match inner {
-                    Either::Left(left) => {
-                        Pin::new(left).poll_write(cx, buf)
-                    }
-                    Either::Right(right) => {
-                        Pin::new(right).poll_write(cx, buf)
-                    }
-                }
+                Pin::new(inner).poll_write(cx, buf)
             }
         }
     }
@@ -504,14 +479,7 @@ impl AsyncWrite for SecureWriteHalfAsync {
                 Pin::new(inner).poll_flush(cx)
             }
             SecureWriteHalfAsync::Tls(inner) => {
-                match inner {
-                    Either::Left(left) => {
-                        Pin::new(left).poll_flush(cx)
-                    }
-                    Either::Right(right) => {
-                        Pin::new(right).poll_flush(cx)
-                    }
-                }
+                Pin::new(inner).poll_flush(cx)
             }
         }
     }
@@ -522,14 +490,7 @@ impl AsyncWrite for SecureWriteHalfAsync {
                 Pin::new(inner).poll_close(cx)
             }
             SecureWriteHalfAsync::Tls(inner) => {
-                match inner {
-                    Either::Left(left) => {
-                        Pin::new(left).poll_close(cx)
-                    }
-                    Either::Right(right) => {
-                        Pin::new(right).poll_close(cx)
-                    }
-                }
+                Pin::new(inner).poll_flush(cx)
             }
         }
     }
@@ -542,14 +503,7 @@ impl AsyncRead for SecureReadHalfAsync {
                 Pin::new(inner).poll_read(cx, buf)
             }
             SecureReadHalfAsync::Tls(inner) => {
-                match inner {
-                    Either::Left(left) => {
-                        Pin::new(left).poll_read(cx, buf)
-                    }
-                    Either::Right(right) => {
-                        Pin::new(right).poll_read(cx, buf)
-                    }
-                }
+                Pin::new(inner).poll_read(cx, buf)
             }
         }
     }
@@ -678,8 +632,8 @@ impl Read for SyncSocket {
 #[inline]
 fn set_listener_options(listener: AsyncListener) -> io::Result<AsyncListener> {
     let sock = socket2::SockRef::from(&listener.inner);
-    sock.set_send_buffer_size(8 * 10240 * 1024)?;
-    sock.set_recv_buffer_size(8 * 10240 * 1024)?;
+    sock.set_send_buffer_size(WRITE_BUFFER_SIZE)?;
+    sock.set_recv_buffer_size(READ_BUFFER_SIZE)?;
     sock.set_reuse_address(true)?;
     sock.set_keepalive(true)?;
     sock.set_nodelay(true)?;
@@ -693,8 +647,8 @@ fn set_listener_options(listener: AsyncListener) -> io::Result<AsyncListener> {
 #[inline]
 fn set_listener_options_replica(listener: SyncListener) -> io::Result<SyncListener> {
     let sock = socket2::SockRef::from(&listener.inner);
-    sock.set_send_buffer_size(8 * 1024 * 1024)?;
-    sock.set_recv_buffer_size(8 * 1024 * 1024)?;
+    sock.set_send_buffer_size(WRITE_BUFFER_SIZE)?;
+    sock.set_recv_buffer_size(READ_BUFFER_SIZE)?;
     sock.set_reuse_address(true)?;
     sock.set_keepalive(true)?;
     sock.set_nodelay(true)?;
@@ -708,8 +662,8 @@ fn set_listener_options_replica(listener: SyncListener) -> io::Result<SyncListen
 #[inline]
 fn set_sockstream_options(connection: AsyncSocket) -> io::Result<AsyncSocket> {
     let sock = socket2::SockRef::from(&connection.inner);
-    sock.set_send_buffer_size(8 * 1024 * 1024)?;
-    sock.set_recv_buffer_size(8 * 1024 * 1024)?;
+    sock.set_send_buffer_size(WRITE_BUFFER_SIZE)?;
+    sock.set_recv_buffer_size(READ_BUFFER_SIZE)?;
     sock.set_keepalive(true)?;
     sock.set_nodelay(true)?;
     // ChannelOption.CONNECT_TIMEOUT_MILLIS ??
@@ -720,8 +674,8 @@ fn set_sockstream_options(connection: AsyncSocket) -> io::Result<AsyncSocket> {
 #[inline]
 fn set_sockstream_options_sync(connection: SyncSocket) -> io::Result<SyncSocket> {
     let sock = socket2::SockRef::from(&connection.inner);
-    sock.set_send_buffer_size(8 * 1024 * 1024)?;
-    sock.set_recv_buffer_size(8 * 1024 * 1024)?;
+    sock.set_send_buffer_size(WRITE_BUFFER_SIZE)?;
+    sock.set_recv_buffer_size(READ_BUFFER_SIZE)?;
     sock.set_keepalive(true)?;
     sock.set_nodelay(true)?;
     // ChannelOption.CONNECT_TIMEOUT_MILLIS ??

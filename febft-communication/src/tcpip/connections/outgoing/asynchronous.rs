@@ -1,9 +1,11 @@
 use std::sync::Arc;
+use either::Either;
 use futures::AsyncWriteExt;
+use futures::io::{BufWriter, WriteHalf};
 use log::{debug, error, info};
 
 use febft_common::async_runtime as rt;
-use febft_common::socket::SecureWriteHalfAsync;
+use febft_common::socket::{AsyncSocket, SecureWriteHalfAsync};
 use crate::serialize::Serializable;
 
 use crate::tcpip::connections::{ConnHandle, PeerConnection, SerializedMessage};
@@ -17,10 +19,17 @@ pub(super) fn spawn_outgoing_task<M: Serializable + 'static>(
 
         let bytes = &conn_handle.id().to_be_bytes();
 
-        debug!("{:?} // Sending our conn handle ID to peer node {:?} {}", conn_handle.my_id, peer.client_pool_peer().client_id().clone(),
-            conn_handle.id());
-
         socket.write_all(bytes).await.unwrap();
+
+        socket.flush().await.unwrap();
+
+        match &socket {
+            SecureWriteHalfAsync::Plain(_) => {}
+            SecureWriteHalfAsync::Tls(either) => {
+                debug!("{:?} // Sending our conn handle ID to peer node {:?} {} (CLI CONN)",
+                            conn_handle.my_id, peer.client_pool_peer().client_id().clone(),conn_handle.id());
+            }
+        }
 
         loop {
             let (to_send, callback) = match rx.recv_async().await {

@@ -5,6 +5,8 @@ use either::Either;
 use futures::{AsyncReadExt, AsyncWriteExt};
 use futures_timer::Delay;
 use log::{debug, error, info, warn};
+use rustls::ServerName;
+use tokio_rustls::TlsStream;
 use febft_common::error::*;
 use febft_common::socket::{AsyncListener, AsyncSocket, SecureReadHalf, SecureSocketAsync, SecureWriteHalf};
 use febft_common::{async_runtime as rt, prng, socket};
@@ -38,7 +40,6 @@ pub(super) fn setup_conn_acceptor_task<M: Serializable + 'static>(tcp_listener: 
 pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc<ConnectionHandler>,
                                                                connections: Arc<PeerConnections<M>>,
                                                                peer_id: NodeId, addr: PeerAddr) -> OneShotRx<Result<()>> {
-
     let (tx, rx) = new_oneshot_channel();
 
     rt::spawn(async move {
@@ -143,16 +144,23 @@ pub(super) fn connect_to_node_async<M: Serializable + 'static>(conn_handler: Arc
 
                         SecureSocketAsync::new_plain(sock)
                     } else {
-                        SecureSocketAsync::new_plain(sock)
-                        /*
-                        match connector.connect(addr.1, sock).await {
-                            Ok(s) => SecureSocketAsync::new_tls_client(s),
+
+                        let dns_ref = match ServerName::try_from(addr.1.as_str()) {
+                            Ok(server_name) => server_name,
+                            Err(err) => {
+                                error!("Failed to parse DNS name {:?}", err);
+
+                                break;
+                            }
+                        };
+
+                        match connector.connect(dns_ref, sock.compat_layer()).await {
+                            Ok(s) => SecureSocketAsync::new_tls(TlsStream::from(s)),
                             Err(err) => {
                                 error!("{:?} // Failed to connect to the node {:?} {:?} ", conn_handler.id(), peer_id, err);
                                 break;
                             }
                         }
-                        */
                     };
 
                     let (write, read) = sock.split();
@@ -246,10 +254,8 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
             let sock = if peer_id >= first_cli || my_id >= first_cli {
                 SecureSocketAsync::new_plain(sock)
             } else {
-                SecureSocketAsync::new_plain(sock)
-
-                /*match acceptor.accept(sock).await {
-                    Ok(s) => SecureSocketAsync::new_tls_server(s),
+                match acceptor.accept(sock.compat_layer()).await {
+                    Ok(s) => SecureSocketAsync::new_tls(TlsStream::from(s)),
                     Err(err) => {
                         error!(
                             "{:?} // Failed to setup tls connection to node {:?}, {:?}",
@@ -260,8 +266,6 @@ pub(super) fn handle_server_conn_established<M: Serializable + 'static>(conn_han
                         break;
                     }
                 }
-
-                 */
             };
 
             info!("{:?} // Received new connection from id {:?}", my_id, peer_id);
