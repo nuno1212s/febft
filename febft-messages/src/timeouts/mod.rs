@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use chrono::Utc;
-use log::info;
+use log::{info, warn};
 use febft_common::{channel, collections};
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, TryRecvError};
 use febft_common::collections::HashMap;
@@ -64,7 +64,7 @@ enum MessageType {
 
 enum ReceivedRequest {
     //The node that proposed the message and all the requests contained within it
-    PrePrepareRequestReceived(NodeId, Vec<Digest>),
+    PrePrepareRequestReceived(NodeId, Vec<ClientRqInfo>),
     //Receive a CST message relating to the following sequence number from the given
     //Node
     Cst(NodeId, SeqNo),
@@ -84,6 +84,7 @@ pub struct Timeouts {
 /// This structure is responsible for handling timeouts for the entire project
 /// This includes timing out messages exchanged between replicas and between clients
 struct TimeoutsThread<D: SharedData + 'static> {
+    my_id: NodeId,
     //Stores the pending timeouts, grouped by the time at which they timeout.
     //Iterating a binary tree is pretty quick and it keeps the elements ordered
     //So we can use that to our advantage when timing out requests
@@ -106,9 +107,9 @@ struct TimeoutsThread<D: SharedData + 'static> {
 impl Timeouts {
     ///Initialize the timeouts thread and return a handle to it
     /// This handle can then be used everywhere timeouts are needed.
-    pub fn new<D: SharedData + 'static>(iteration_delay: u64,
+    pub fn new<D: SharedData + 'static>(node_id: NodeId, iteration_delay: u64,
                                         loopback_channel: ChannelSyncTx<Message<D>>) -> Self {
-        let tx = TimeoutsThread::<D>::new(iteration_delay, loopback_channel);
+        let tx = TimeoutsThread::<D>::new(node_id, iteration_delay, loopback_channel);
 
         Self {
             handle: tx,
@@ -133,7 +134,7 @@ impl Timeouts {
 
     /// Notify that a pre prepare with the following requests has been received and we must therefore
     /// Disable any timeouts pertaining to the received requests
-    pub fn received_pre_prepare(&self, from: NodeId, recvd_rqs: Vec<Digest>) {
+    pub fn received_pre_prepare(&self, from: NodeId, recvd_rqs: Vec<ClientRqInfo>) {
         self.handle.send(TimeoutMessage::MessagesReceived(
             ReceivedRequest::PrePrepareRequestReceived(from, recvd_rqs)
         ))
@@ -174,12 +175,13 @@ impl Timeouts {
 }
 
 impl<D: SharedData + 'static> TimeoutsThread<D> {
-    fn new(iteration_delay: u64, loopback_channel: ChannelSyncTx<Message<D>>) -> ChannelSyncTx<TimeoutMessage> {
+    fn new(node_id: NodeId, iteration_delay: u64, loopback_channel: ChannelSyncTx<Message<D>>) -> ChannelSyncTx<TimeoutMessage> {
         let (tx, rx) = channel::new_bounded_sync(CHANNEL_SIZE);
 
         std::thread::Builder::new().name("Timeout Thread".to_string())
             .spawn(move || {
                 let timeout_thread = Self {
+                    my_id: node_id,
                     pending_timeouts: Default::default(),
                     done_requests: collections::hash_map(),
                     pending_timeouts_reverse_search: Default::default(),
@@ -279,7 +281,7 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
 
         let mut timeout_rqs = Vec::with_capacity(timeout_info.len());
 
-        for timeout_kind in timeout_info {
+        'outer: for timeout_kind in timeout_info {
             let mut timeout_rq = TimeoutRequest {
                 time_made: current_timestamp,
                 timeout,
@@ -292,7 +294,10 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
                 TimeoutKind::ClientRequestTimeout(req) => {
                     if let Some(reqs) = self.done_requests.remove(&req.digest) {
                         for x in reqs {
-                            timeout_rq.register_received_from(x);
+                            if timeout_rq.register_received_from(x) {
+                                //If we have all the needed messages, then we can continue
+                                continue 'outer;
+                            }
                         }
                     }
                 }
@@ -311,12 +316,20 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
     }
 
     fn handle_messages_received(&mut self, mut received_request: ReceivedRequest) {
+
+        if let ReceivedRequest::PrePrepareRequestReceived(node, _) = &received_request {
+            if *node == self.my_id {
+                // We don't receive timeouts from requests in our own associated space
+                return;
+            }
+        }
+
         for timeout_requests in self.pending_timeouts.values_mut() {
             timeout_requests.retain_mut(|rq| {
                 return match (&rq.info, &mut received_request) {
                     (TimeoutKind::ClientRequestTimeout(rq_info),
                         ReceivedRequest::PrePrepareRequestReceived(received, rqs)) => {
-                        if let Some(index) = rqs.iter().position(|digest| { *digest == rq_info.digest }) {
+                        if let Some(index) = rqs.iter().position(|digest| { digest.digest == rq_info.digest }) {
                             rqs.swap_remove(index);
 
                             !rq.register_received_from(received.clone())
@@ -339,8 +352,12 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
         match received_request {
             ReceivedRequest::PrePrepareRequestReceived(node, ids) => {
                 if !ids.is_empty() {
+                    // This means we have not yet seen these requests (in the proposer).\
+                    // As soon as we see them, they will be skipped over
+                    warn!("{:?} // Received requests but did not have a timeout for them: {:?}, {:?}.", self.my_id, node, ids);
+
                     for rq_id in ids {
-                        self.done_requests.entry(rq_id).or_insert_with(|| {
+                        self.done_requests.entry(rq_id.digest).or_insert_with(|| {
                             vec![]
                         }).push(node.clone());
                     }

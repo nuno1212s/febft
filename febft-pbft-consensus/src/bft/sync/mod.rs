@@ -1447,8 +1447,7 @@ fn highest_proof<'a, D, I, ST, NT>(
                 .commits()
                 .iter()
                 .filter(|stored| {
-                    stored
-                        .message()
+                    stored.message()
                         .has_proposed_digest(&digest)
                         //If he does not have the digest, then it is not valid
                         .unwrap_or(false)

@@ -201,6 +201,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             }
         };
 
+        let mut timeout_info = Vec::with_capacity(requests.len());
         let mut digests = Vec::with_capacity(requests.len());
 
         let sending_node = pre_prepare.header().from();
@@ -212,17 +213,18 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             let seq_no = x.message().sequence_number();
             let session = x.message().session_id();
 
-            let request_digest = header.digest().clone();
+            //let request_digest = header.digest().clone();
 
             //remove the request from the requests we are currently watching
             self.watching.remove(&digest);
 
-            digests.push(digest);
+            digests.push(digest.clone());
+            timeout_info.push(ClientRqInfo::new(digest, seq_no, session));
         }
 
         //Notify the timeouts that we have received the following requests
         //TODO: Should this only be done after the commit phase?
-        timeouts.received_pre_prepare(sending_node, digests.clone());
+        timeouts.received_pre_prepare(sending_node, timeout_info);
 
         //If we only send the digest of the request in the pre prepare
         //It's possible that, if the latency of the client to a given replica A is smaller than the

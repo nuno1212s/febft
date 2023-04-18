@@ -409,7 +409,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
         let mut to_propose = Vec::with_capacity(currently_accumulated.len());
 
         for message in &currently_accumulated {
-            to_propose.push((message.message().session_id(), message.sequence_number()));
+            to_propose.push((message.message().session_id(), message.sequence_number(), message.header().unique_digest()));
         }
 
         info!("{:?} // Proposing new batch with {} request count {:?} ({:?})", self.node_ref.id(), currently_accumulated.len(), seq, to_propose);

@@ -85,8 +85,9 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
         let reply_handle = Replier::new(node.id(), node.clone());
 
         debug!("{:?} // Initializing timeouts", log_node_id);
+
         // start timeouts handler
-        let timeouts = Timeouts::new::<S::Data>(500, exec_tx.clone());
+        let timeouts = Timeouts::new::<S::Data>(log_node_id.clone(), 500, exec_tx.clone());
 
         // Initialize the ordering protocol
         let ordering_protocol = OP::initialize(op_config, executor.clone(), timeouts.clone(), node.clone())?;
@@ -287,8 +288,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                     self.state_transfer_protocol.handle_state_received_from_app(&mut self.ordering_protocol, checkpoint)?;
                 }
                 Message::Timeout(timeout) => {
-                    //self.timeout_received(timeout)?;
-                    info!("{:?} // Received and ignored timeout with {} timeouts {:?}", self.node.id(), timeout.len(), timeout);
+                    self.timeout_received(timeout)?;
+                    //info!("{:?} // Received and ignored timeout with {} timeouts {:?}", self.node.id(), timeout.len(), timeout);
                 }
             }
         }
