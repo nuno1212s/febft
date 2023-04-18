@@ -291,7 +291,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                     self.state_transfer_protocol.handle_state_received_from_app(&mut self.ordering_protocol, checkpoint)?;
                 }
                 Message::Timeout(timeout) => {
-                    self.timeout_received(timeout)?;
+                    //self.timeout_received(timeout)?;
+                    info!("{:?} // Received and ignored timeout", self.node.id());
                 }
             }
         }

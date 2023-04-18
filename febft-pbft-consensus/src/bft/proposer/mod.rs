@@ -195,6 +195,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
 
                                     if is_leader && is_request_in_hash_space(&rq_digest,
                                                                              our_slice.as_ref().unwrap()) {
+
                                         // we know that these operations will always be proposed since we are a
                                         // Correct replica. We can therefore just add them to the latest op log
                                         let stored_message = StoredMessage::new(header, req);
@@ -405,7 +406,13 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
     ) where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
         let currently_accumulated = self.pending_decision_log.filter_and_update_more_recent(currently_accumulated);
 
-        info!("{:?} // Proposing new batch with {} requests", self.node_ref.id(), currently_accumulated.len());
+        let mut to_propose = Vec::with_capacity(currently_accumulated.len());
+
+        for message in &currently_accumulated {
+            to_propose.push((message.message().session_id(), message.sequence_number()));
+        }
+
+        info!("{:?} // Proposing new batch with {} request count {:?} ({:?})", self.node_ref.id(), currently_accumulated.len(), seq, to_propose);
 
         let message = PBFTMessage::Consensus(ConsensusMessage::new(
             seq,
@@ -419,8 +426,10 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
             .unwrap();
     }
 
+    /// Check if we have received forwarded requests. If so, then
+    /// we want to add them to the next batch we are proposing
     fn handle_forwarded_requests(&self, is_leader: bool,
-                                 our_slice: _,
+                                 our_slice: &(Vec<u8>, Vec<u8>),
                                  ordered_propose_builder: &mut ProposeBuilder<D>) {
         let fwd_rqs = self.pending_decision_log.take_forwarded_requests(None);
 

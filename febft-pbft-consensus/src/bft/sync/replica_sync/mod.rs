@@ -135,23 +135,16 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     ///
     pub fn watch_forwarded_requests(
         &self,
-        requests: ForwardedRequestsMessage<D::Request>,
+        requests: &ForwardedRequestsMessage<D::Request>,
         timeouts: &Timeouts,
-        log: &PendingRequestLog<D>,
     ) {
         let phase = TimeoutPhase::TimedOutOnce(Instant::now());
 
-        let requests = requests
-            .into_inner()
-            .into_iter()
-            .map(|forwarded| forwarded.into_inner());
+        let mut digests = Vec::with_capacity(requests.requests().len());
 
-        let mut digests = Vec::with_capacity(requests.len());
+        for request in requests.requests() {
 
-        let mut vec_fwd_rqs = Vec::with_capacity(requests.len());
-
-        for (header, request) in requests {
-            log.insert(header, request.clone());
+            let header = request.header();
 
             let unique_digest = header.unique_digest();
 
@@ -169,11 +162,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             } else {
                 self.watching.insert(unique_digest, phase);
             }
-
-            vec_fwd_rqs.push(StoredMessage::new(header, request));
         }
-
-        log.insert_forwarded(vec_fwd_rqs);
 
         timeouts.timeout_client_requests(self.timeout_dur.get(), digests);
     }
@@ -326,6 +315,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     //
     pub fn client_requests_timed_out(
         &self,
+        my_id: NodeId,
         timed_out_rqs: &Vec<ClientRqInfo>,
     ) -> SynchronizerStatus {
 
@@ -343,7 +333,9 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         // - on the second timeout, we start a view change by
         //   broadcasting a STOP message
 
-        debug!("Received {} timeouts from the timeout layer", timed_out_rqs.len());
+        debug!("{:?} // Received {} timeouts from the timeout layer",
+            my_id,
+            timed_out_rqs.len());
 
         for timed_out_rq in timed_out_rqs {
             let watching_request = self.watching.get_mut(&timed_out_rq.digest);
@@ -375,11 +367,11 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         }
 
         if forwarded.is_empty() && stopped.is_empty() {
-            debug!("Forwarded and stopped requests are empty? What");
+            debug!("{:?} // Forwarded and stopped requests are empty? What", my_id);
             return SynchronizerStatus::Nil;
         }
 
-        debug!("Replying requests time out forwarded {}, stopped {}", forwarded.len(), stopped.len());
+        debug!("{:?} // Replying requests time out forwarded {}, stopped {}", my_id, forwarded.len(), stopped.len());
 
         SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
     }

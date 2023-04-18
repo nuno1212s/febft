@@ -1088,8 +1088,7 @@ impl<D> Synchronizer<D>
         &self,
         pre_prepare: &StoredMessage<ConsensusMessage<D::Request>>,
         timeouts: &Timeouts,
-    ) -> Vec<Digest>
-    {
+    ) -> Vec<Digest> {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
                 rep.received_request_batch(pre_prepare, timeouts)
@@ -1099,16 +1098,10 @@ impl<D> Synchronizer<D>
     }
 
     /// Watch requests that have been forwarded to us
-    pub fn watch_forwarded_requests(
-        &self,
-        requests: ForwardedRequestsMessage<D::Request>,
-        timeouts: &Timeouts,
-        log: &PendingRequestLog<D>,
-    )
-    {
+    pub fn watch_forwarded_requests(&self, requests: &ForwardedRequestsMessage<D::Request>, timeouts: &Timeouts, ) {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
-                rep.watch_forwarded_requests(requests, timeouts, log)
+                rep.watch_forwarded_requests(requests, timeouts)
             }
             _ => {}
         }
@@ -1154,6 +1147,7 @@ impl<D> Synchronizer<D>
     /// Requests that have timed out
     pub fn client_requests_timed_out(
         &self,
+        my_id: NodeId,
         seq: &Vec<ClientRqInfo>,
     ) -> SynchronizerStatus {
         match &self.accessory {
@@ -1161,7 +1155,7 @@ impl<D> Synchronizer<D>
                 SynchronizerStatus::Nil
             }
             SynchronizerAccessory::Replica(rep) => {
-                rep.client_requests_timed_out(seq)
+                rep.client_requests_timed_out(my_id,seq)
             }
         }
     }

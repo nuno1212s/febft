@@ -31,11 +31,7 @@ extern crate core;
 pub mod bft;
 
 pub mod tests {
-    pub mod peer_handling_tests {
-        pub mod peer_handling_tests;
-    }
-
-    pub mod persistent_db_tests;
+    //pub mod persistent_db_tests;
 }
 
 // TODO: re-export relevant stuff

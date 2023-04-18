@@ -23,16 +23,19 @@ default = [
     "febft-common/crypto_signature_ring_ed25519",
     "febft-common/crypto_hash_blake3_blake3",
     "febft-common/collections_randomstate_fxhash",
-    "febft-common/persistent_db_rocksdb"
+    "febft-common/persistent_db_rocksdb",
+    "serialize_serde"
 ]
 
-serialize_serde = ["febft-capnp", "serde", "serde_bytes", "bincode", "febft-common/serialize_serde"]
+serialize_serde = ["febft-capnp", "serde", "serde_bytes", "bincode", "febft-common/serialize_serde",
+    "febft-execution/serialize_serde", "febft-communication/serialize_serde", "febft-messages/serialize_serde"]
 serialize_capnp = ["febft-capnp"]
 
 [dev-dependencies]
 bincode = "1"
 num_cpus = "1"
 mimalloc = { version = "*", default-features = false }
+rand = {version = "0.8.5", features = ["small_rng"] }
 
 [dependencies]
 febft-common = { path = "../febft-common" }

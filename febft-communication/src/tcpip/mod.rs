@@ -203,9 +203,9 @@ impl<M: Serializable + 'static> TcpNode<M> {
 
         let my_id = self.id();
 
-        for id in targets {
-            let nonce = self.rng.next_state();
+        let nonce = self.rng.next_state();
 
+        for id in targets {
             if id == my_id {
                 send_to_me = Some(SendTo {
                     my_id,

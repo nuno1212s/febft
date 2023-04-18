@@ -54,9 +54,10 @@ impl<D> PendingRequestLog<D> where D: SharedData {
     }
 
     /// Delete forwarded requests from the forwarded request pool
-    pub fn take_forwarded_requests(&self, mut replacement: Option<Vec<_>>) -> Option<Vec<StoredMessage<RequestMessage<D::Request>>>> {
+    pub fn take_forwarded_requests(&self, mut replacement: Option<Vec<StoredMessage<RequestMessage<D::Request>>>>)
+                                   -> Option<Vec<StoredMessage<RequestMessage<D::Request>>>> {
         let original = {
-            let guard = self.forwarded_requests.lock().unwrap();
+            let mut guard = self.forwarded_requests.lock().unwrap();
 
             if guard.is_empty() {
                 return None;
@@ -72,11 +73,10 @@ impl<D> PendingRequestLog<D> where D: SharedData {
     }
 
     /// Insert a block of requests into the log
-    pub fn insert_latest_ops(&self, messages:&Vec<StoredMessage<RequestMessage<D::Request>>>) {
+    pub fn insert_latest_ops(&self, messages: &Vec<StoredMessage<RequestMessage<D::Request>>>) {
         let mut guard = self.latest_op.lock().unwrap();
 
         for message in messages {
-
             let key = operation_key::<D::Request>(message.header(), message.message());
 
             guard.insert(key, message.message().sequence_number());
@@ -92,7 +92,7 @@ impl<D> PendingRequestLog<D> where D: SharedData {
             let key = operation_key::<D::Request>(msg.header(), msg.message());
 
             let result = if let Some(seq_no) = mutex_guard.get(key) {
-                seq_no.value() < msg.message().sequence_number()
+                *seq_no < msg.message().sequence_number()
             } else {
                 true
             };
@@ -111,7 +111,7 @@ impl<D> PendingRequestLog<D> where D: SharedData {
 
         let seq_no = {
             if let Some(seq_no) = self.latest_op.lock().unwrap().get(key) {
-                seq_no.value().clone()
+                seq_no.clone()
             } else {
                 SeqNo::ZERO
             }
@@ -122,7 +122,6 @@ impl<D> PendingRequestLog<D> where D: SharedData {
 
     /// Insert a client message into the log
     pub fn insert(&self, header: Header, message: RequestMessage<D::Request>) {
-
         if self.has_received_more_recent(&header, &message) {
             return;
         }

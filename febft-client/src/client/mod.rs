@@ -334,7 +334,6 @@ impl<D, NT> Client<D, NT>
 
         &self.data.observer
     }*/
-
     #[inline]
     pub fn id(&self) -> NodeId where NT: Node<ClientServiceMsg<D>> {
         self.node.id()
@@ -751,10 +750,8 @@ impl<D, NT> Client<D, NT>
 
                     //Check if replicas try to vote twice on the same consensus instance
                     if votes.voted.contains(&header.from()) {
-                        error!(
-                                    "Replica {:?} voted twice for the same request, ignoring!",
-                                    header.from()
-                                );
+                        error!("{:?} // Replica {:?} voted twice for the same request, ignoring!",
+                            header.to(),header.from());
 
                         continue;
                     }
@@ -783,12 +780,13 @@ impl<D, NT> Client<D, NT>
 
                         replica_votes.remove(request_key);
 
-                        last_operation_ids.remove(session_id.into());
                         last_operation_ids.insert(session_id.into(), operation_id);
 
                         //Get the wakers for this request and deliver the payload
 
                         let ready = get_ready::<D>(session_id, &*data);
+
+                        info!("{:?} // Received and delivered response for request {:?}", node.id(), (session_id, operation_id));
 
                         Self::deliver_response(
                             node.id(),
@@ -817,10 +815,6 @@ impl<D, NT> Client<D, NT>
                             //What we will do now is call the awakers with an Err result
                             replica_votes.remove(request_key);
 
-                            //Clean up the memory corresponding to this request
-                            last_operation_ids.remove(session_id.into());
-                            last_operation_ids.insert(session_id.into(), operation_id);
-
                             //Get the wakers for this request and deliver the payload
                             let ready = get_ready::<D>(session_id, &*data);
 
@@ -837,7 +831,6 @@ impl<D, NT> Client<D, NT>
                 }
                 _ => {}
             }
-
         }
     }
 }

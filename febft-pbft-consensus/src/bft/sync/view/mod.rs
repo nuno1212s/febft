@@ -224,3 +224,43 @@ fn divide_hash_space(size_bytes: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)>
 
     slices
 }
+
+
+#[cfg(test)]
+mod view_tests {
+    use rand_core::{RngCore, SeedableRng};
+
+    #[test]
+    fn test_hash_space_partition() {
+        use super::*;
+
+        const TESTS : usize = 10000;
+
+        let view_info = ViewInfo::new(SeqNo::ZERO, 4, 1).unwrap();
+
+        let division = calculate_hash_space_division(view_info.leader_set());
+
+        let mut digest_vec : [u8; Digest::LENGTH] = [0; Digest::LENGTH];
+
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(812679233723);
+
+        for i in 0..TESTS {
+
+            rng.fill_bytes(&mut digest_vec);
+
+            let digest = Digest::from_bytes(&digest_vec).unwrap();
+
+            let mut count = 0;
+
+            for leader in view_info.leader_set() {
+                if is_request_in_hash_space(&digest, division.get(leader).unwrap()) {
+                    count+=1;
+                }
+            }
+
+            assert_eq!(count, 1, "The digest {:?} was found in {} hash spaces", digest, count);
+        }
+    }
+
+
+}

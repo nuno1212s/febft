@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use dashmap::DashMap;
 use intmap::IntMap;
-use log::{debug, warn};
+use log::{debug, error, warn};
 
 use febft_common::channel::{ChannelMixedRx, ChannelMixedTx, new_bounded_mixed, new_oneshot_channel, OneShotRx};
 use febft_common::error::*;
@@ -116,8 +116,15 @@ impl<M> PeerConnection<M> where M: Serializable {
 
     /// Send a message through this connection. Only valid for peer connections
     pub(crate) fn peer_message(&self, msg: WireMessage, callback: Callback) -> Result<()> {
+
+        let from = msg.header().from();
+        let to = msg.header().to();
+
         if let Err(_) = self.tx.send((msg, callback)) {
-            //TODO: There are no TX connections available. Close this connection
+            error!("{:?} // Failed to send peer message to {:?}", from,
+                to);
+
+            return Err(Error::simple(ErrorKind::Communication));
         }
 
         Ok(())

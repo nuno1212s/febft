@@ -35,6 +35,7 @@ mod communication_test {
     struct TestMessage {
         req: bool,
         hello: String,
+        data: Vec<u8>,
     }
 
     impl Serializable for TestMessage {
@@ -274,7 +275,7 @@ mod communication_test {
             tcp_config: TcpConfig {
                 addrs,
                 network_config: gen_tls_config(node_id, name),
-                replica_concurrent_connections: 2,
+                replica_concurrent_connections: 1,
                 client_concurrent_connections: 1,
             },
             client_pool_config: CLI_POOL_CFG,
@@ -340,7 +341,7 @@ mod communication_test {
 
         let str = String::from("Test");
 
-        let network = NetworkMessageKind::from(TestMessage { req: false, hello: str.clone() });
+        let network = NetworkMessageKind::from(TestMessage { req: false, hello: str.clone(), data: vec![] });
 
         node.send(network, node_2, true).unwrap();
 
@@ -399,7 +400,7 @@ mod communication_test {
         let msgs = 100;
 
         for i in 0..msgs {
-            let network = NetworkMessageKind::from(TestMessage { req: false, hello: str.clone() });
+            let network = NetworkMessageKind::from(TestMessage { req: false, hello: str.clone(), data: vec![] });
 
             node.send(network, node_2, true).unwrap();
 
@@ -423,7 +424,9 @@ mod communication_test {
         }
     }
 
-    const NODE_COUNT: u16 = 3;
+    const NODE_COUNT: u16 = 5;
+    const RUNS: usize = 100000;
+    const SIZE: usize = 1024 * 1024 * 10;
 
     #[test]
     fn multi_node_startup() {
@@ -491,30 +494,42 @@ mod communication_test {
 
                 debug!("{:?} // All nodes connected, sending message", id);
 
-                let req = NetworkMessageKind::from(TestMessage { req: true, hello: format!("Hello from {:?}", id) });
-                let response = NetworkMessageKind::from(TestMessage { req: false, hello: format!("Goodbye from {:?}", id) });
+                for i in 0..RUNS {
+                    let req = NetworkMessageKind::from(
+                        TestMessage {
+                            req: true,
+                            hello: format!("Hello from {:?}, run {}", id, i),
+                            data: Vec::with_capacity(SIZE),
+                        });
+                    let response = NetworkMessageKind::from(
+                        TestMessage {
+                            req: false,
+                            hello: format!("Goodbye from {:?}, run {}", id, i, ),
+                            data: Vec::with_capacity(SIZE),
+                        });
 
-                node.broadcast(req.clone(), ids.iter().cloned()).unwrap();
+                    node.broadcast(req.clone(), ids.iter().cloned()).unwrap();
 
-                for _ in 0..NODE_COUNT * 2 {
-                    let message = node.receive_from_replicas_no_timeout().unwrap();
+                    for _ in 0..NODE_COUNT * 2 {
+                        let message = node.receive_from_replicas_no_timeout().unwrap();
 
-                    let (header, network_msg) = message.into_inner();
+                        let (header, network_msg) = message.into_inner();
 
-                    let msg: TestMessage = network_msg.into_system();
+                        let msg: TestMessage = network_msg.into_system();
 
-                    debug!("{:?} // Received message from {:?}: {:?}",id, header.from(), msg.hello);
+                        debug!("{:?} // Received message from {:?}: {:?}",id, header.from(), msg.hello);
 
-                    if msg.req {
-                        debug!("{:?} // Sending response to {:?}", id, header.from());
+                        if msg.req {
+                            debug!("{:?} // Sending response to {:?}", id, header.from());
 
-                        node.send(response.clone(), header.from(), true).unwrap();
+                            node.send(response.clone(), header.from(), true).unwrap();
+                        }
                     }
+
+                    debug!("{:?} // All messages received, waiting for other nodes to finish", id);
+
+                    barrier.wait();
                 }
-
-                debug!("{:?} // All messages received, waiting for other nodes to finish", id);
-
-                barrier.wait();
 
                 tx.send(()).expect("Failed to respond");
             });

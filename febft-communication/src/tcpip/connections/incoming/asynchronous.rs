@@ -54,6 +54,11 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(
                 break;
             }
 
+            if conn_handle.my_id.0 < 1000 && peer_id.0 < 1000 {
+                debug!("{:?} // Received message from peer {:?} with payload {}",
+                    conn_handle.my_id, peer_id, header.payload_length());
+            }
+
             // Use the threadpool for CPU intensive work in order to not block the IO threads
             let result = cpu_workers::deserialize_message(header.clone(),
                                                           read_buffer).await.unwrap();
