@@ -121,7 +121,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             connections.push((node_id, connection_results));
         }
 
-
+        ///FIXME: Protect against a slow loris attack by only requiring connections to a quorum of nodes
+        /// and not wait with a for loop like this where we can spend a long time waiting for each connection
         'outer: for (peer_id, conn_result) in connections {
             for conn in conn_result {
                 match conn.await {
@@ -287,7 +288,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                 }
                 Message::Timeout(timeout) => {
                     //self.timeout_received(timeout)?;
-                    info!("{:?} // Received and ignored timeout", self.node.id());
+                    info!("{:?} // Received and ignored timeout with {} timeouts {:?}", self.node.id(), timeout.len(), timeout);
                 }
             }
         }

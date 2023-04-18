@@ -202,7 +202,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
 
                                         ordered_propose.currently_accumulated.push(stored_message);
                                     } else {
-                                        digest_vec.push(rq_digest);
+                                        digest_vec.push((rq_digest, req.sequence_number(), req.session_id()));
 
                                         // TODO: Maybe this should be handled by another thread in blocks?
                                         self.pending_decision_log.insert(header, req);

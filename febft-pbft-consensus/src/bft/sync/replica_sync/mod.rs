@@ -15,7 +15,7 @@ use febft_common::collections;
 use febft_common::collections::ConcurrentHashMap;
 use febft_common::crypto::hash::Digest;
 use febft_common::node_id::NodeId;
-use febft_common::ordering::Orderable;
+use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{NetworkMessageKind, StoredMessage, System};
 use febft_communication::{Node};
 use febft_execution::app::{Request, Service};
@@ -143,12 +143,11 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         let mut digests = Vec::with_capacity(requests.requests().len());
 
         for request in requests.requests() {
-
             let header = request.header();
 
             let unique_digest = header.unique_digest();
 
-            digests.push(unique_digest.clone());
+            digests.push((unique_digest.clone(), request.message().sequence_number(), request.message().session_id()));
 
             if let Some(mut req) = self.watching.get_mut(&unique_digest) {
                 match req.value() {
@@ -170,13 +169,13 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     /// Watch a vector of requests received
     pub fn watch_received_requests(
         &self,
-        requests: Vec<Digest>,
+        requests: Vec<(Digest, SeqNo, SeqNo)>,
         timeouts: &Timeouts,
     ) {
         let phase = TimeoutPhase::Init(Instant::now());
 
-        for x in &requests {
-            self.watching.insert(x.clone(), phase.clone());
+        for (req, seq, session) in &requests {
+            self.watching.insert(req.clone(), phase.clone());
         }
 
         timeouts.timeout_client_requests(
@@ -257,15 +256,17 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         &self,
         _phase: TimeoutPhase,
         digest: Digest,
+        seq: SeqNo,
+        session: SeqNo,
         timeouts: &Timeouts,
     ) {
-        timeouts.timeout_client_requests(self.timeout_dur.get(), vec![digest]);
+        timeouts.timeout_client_requests(self.timeout_dur.get(), vec![(digest, seq, session)]);
     }
 
     /// Watch a client request with the digest `digest`.
-    pub fn watch_request(&self, digest: Digest, timeouts: &Timeouts) {
+    pub fn watch_request(&self, digest: Digest, seq: SeqNo, session: SeqNo, timeouts: &Timeouts) {
         let phase = TimeoutPhase::Init(Instant::now());
-        self.watch_request_impl(phase, digest, timeouts);
+        self.watch_request_impl(phase, digest, seq, session, timeouts);
     }
 
     /// Remove a client request with digest `digest` from the watched list
@@ -298,7 +299,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
             *curr_phase = phase;
 
-            digests.push(rq_digest);
+            digests.push((rq_digest, SeqNo::ZERO, SeqNo::ZERO));
         });
 
         timeouts.timeout_client_requests(self.timeout_dur.get(), digests);

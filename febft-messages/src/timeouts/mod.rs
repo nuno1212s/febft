@@ -4,8 +4,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use chrono::Utc;
 use log::info;
-use febft_common::channel;
+use febft_common::{channel, collections};
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, TryRecvError};
+use febft_common::collections::HashMap;
 use febft_common::crypto::hash::Digest;
 use febft_common::node_id::NodeId;
 use febft_common::ordering::SeqNo;
@@ -19,13 +20,16 @@ const CHANNEL_SIZE: usize = 1024;
 ///Contains the requests that have just been timed out
 pub type Timeout = Vec<TimeoutKind>;
 
-#[derive(Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Debug)]
 pub struct ClientRqInfo {
     //The digest of the request in question
     pub digest: Digest,
+
+    pub seqno: SeqNo,
+    pub session: SeqNo,
 }
 
-#[derive(Eq, Ord, PartialOrd)]
+#[derive(Eq, Ord, PartialOrd, Debug)]
 pub enum TimeoutKind {
     ///Relates to the timeout of a client request.
     /// Stores the client who sent it, along with the request
@@ -84,6 +88,9 @@ struct TimeoutsThread<D: SharedData + 'static> {
     //Iterating a binary tree is pretty quick and it keeps the elements ordered
     //So we can use that to our advantage when timing out requests
     pending_timeouts: BTreeMap<u64, Vec<TimeoutRequest>>,
+    // Requests that we have already seen but have not been requested to timeout
+    // So when we receive the timeout request we can instantly cancel it
+    done_requests: HashMap<Digest, Vec<NodeId>>,
     //Allows us to quickly find the correct bucket for the request we are looking for
     pending_timeouts_reverse_search: BTreeMap<Rc<TimeoutRequest>, u64>,
     //Receive messages from other threads
@@ -100,7 +107,7 @@ impl Timeouts {
     ///Initialize the timeouts thread and return a handle to it
     /// This handle can then be used everywhere timeouts are needed.
     pub fn new<D: SharedData + 'static>(iteration_delay: u64,
-                                     loopback_channel: ChannelSyncTx<Message<D>>) -> Self {
+                                        loopback_channel: ChannelSyncTx<Message<D>>) -> Self {
         let tx = TimeoutsThread::<D>::new(iteration_delay, loopback_channel);
 
         Self {
@@ -109,8 +116,10 @@ impl Timeouts {
     }
 
     /// Start a timeout request on the list of digests that have been provided
-    pub fn timeout_client_requests(&self, timeout: Duration, requests: Vec<Digest>) {
-        let requests: Vec<TimeoutKind> = requests.into_iter().map(|req| TimeoutKind::ClientRequestTimeout(ClientRqInfo::new(req)))
+    pub fn timeout_client_requests(&self, timeout: Duration, requests: Vec<(Digest, SeqNo, SeqNo)>) {
+        let requests: Vec<TimeoutKind> = requests.into_iter()
+            .map(|(req, seq, session)|
+                TimeoutKind::ClientRequestTimeout(ClientRqInfo::new(req, seq, session)))
             .collect();
 
         self.handle.send(TimeoutMessage::TimeoutRequest(RqTimeoutMessage {
@@ -172,6 +181,7 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
             .spawn(move || {
                 let timeout_thread = Self {
                     pending_timeouts: Default::default(),
+                    done_requests: collections::hash_map(),
                     pending_timeouts_reverse_search: Default::default(),
                     channel_rx: rx,
                     loopback_channel,
@@ -270,13 +280,26 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
         let mut timeout_rqs = Vec::with_capacity(timeout_info.len());
 
         for timeout_kind in timeout_info {
-            timeout_rqs.push(TimeoutRequest {
+            let mut timeout_rq = TimeoutRequest {
                 time_made: current_timestamp,
                 timeout,
                 notifications_needed,
                 notifications_received: Default::default(),
                 info: timeout_kind,
-            });
+            };
+
+            match &timeout_rq.info {
+                TimeoutKind::ClientRequestTimeout(req) => {
+                    if let Some(reqs) = self.done_requests.remove(&req.digest) {
+                        for x in reqs {
+                            timeout_rq.register_received_from(x);
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            timeout_rqs.push(timeout_rq);
         }
 
         if self.pending_timeouts.contains_key(&final_timestamp) {
@@ -287,13 +310,15 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
         }
     }
 
-    fn handle_messages_received(&mut self, received_request: ReceivedRequest) {
+    fn handle_messages_received(&mut self, mut received_request: ReceivedRequest) {
         for timeout_requests in self.pending_timeouts.values_mut() {
             timeout_requests.retain_mut(|rq| {
-                return match (&rq.info, &received_request) {
+                return match (&rq.info, &mut received_request) {
                     (TimeoutKind::ClientRequestTimeout(rq_info),
                         ReceivedRequest::PrePrepareRequestReceived(received, rqs)) => {
-                        if rqs.contains(&rq_info.digest) {
+                        if let Some(index) = rqs.iter().position(|digest| { *digest == rq_info.digest }) {
+                            rqs.swap_remove(index);
+
                             !rq.register_received_from(received.clone())
                         } else {
                             true
@@ -309,6 +334,19 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
                     (_, _) => { true }
                 };
             });
+        }
+
+        match received_request {
+            ReceivedRequest::PrePrepareRequestReceived(node, ids) => {
+                if !ids.is_empty() {
+                    for rq_id in ids {
+                        self.done_requests.entry(rq_id).or_insert_with(|| {
+                            vec![]
+                        }).push(node.clone());
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -353,9 +391,11 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
 }
 
 impl ClientRqInfo {
-    pub fn new(digest: Digest) -> Self {
+    pub fn new(digest: Digest, seqno: SeqNo, session: SeqNo) -> Self {
         Self {
-            digest
+            digest,
+            seqno,
+            session,
         }
     }
 }

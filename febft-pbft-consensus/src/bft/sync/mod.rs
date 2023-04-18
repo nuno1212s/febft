@@ -1109,7 +1109,7 @@ impl<D> Synchronizer<D>
 
     /// Watch requests that have been received from other replicas
     ///
-    pub fn watch_received_requests(&self, digest: Vec<Digest>, timeouts: &Timeouts) {
+    pub fn watch_received_requests(&self, digest: Vec<(Digest, SeqNo, SeqNo)>, timeouts: &Timeouts) {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
                 rep.watch_received_requests(digest, timeouts);
@@ -1119,10 +1119,10 @@ impl<D> Synchronizer<D>
     }
 
     /// Watch a client request with the digest `digest`.
-    pub fn watch_request(&self, digest: Digest, timeouts: &Timeouts) {
+    pub fn watch_request(&self, digest: Digest, seq: SeqNo, session: SeqNo, timeouts: &Timeouts) {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) =>
-                rep.watch_request(digest, timeouts),
+                rep.watch_request(digest, seq, session, timeouts),
             _ => {}
         }
     }
