@@ -60,9 +60,9 @@ impl<T: 'static> Global<T> {
 
     /// Drops the global variable.
     #[inline]
-    pub fn drop(&'static mut self) {
+    pub fn drop(&'static mut self) -> Option<T> {
         self.flag.unset();
-        self.value.take();
+        self.value.take()
     }
 }
 

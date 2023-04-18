@@ -786,8 +786,6 @@ impl<D, NT> Client<D, NT>
 
                         let ready = get_ready::<D>(session_id, &*data);
 
-                        info!("{:?} // Received and delivered response for request {:?}", node.id(), (session_id, operation_id));
-
                         Self::deliver_response(
                             node.id(),
                             request_key,

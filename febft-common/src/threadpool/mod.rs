@@ -130,6 +130,7 @@ pub unsafe fn init(num_threads: usize) -> Result<()> {
 /// It shouldn't be needed to be called manually called, as the
 /// `InitGuard` should take care of calling this.
 pub unsafe fn drop() -> Result<()> {
+    join();
     POOL.drop();
     Ok(())
 }

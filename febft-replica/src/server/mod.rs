@@ -105,7 +105,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             exec_tx.clone(),
         )?;
 
-        debug!("{:?} // Connecting to other replicas.", log_node_id);
+        info!("{:?} // Connecting to other replicas.", log_node_id);
 
         let mut connections = Vec::new();
 
@@ -114,38 +114,36 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                 continue;
             }
 
-            debug!("{:?} // Connecting to node {:?}", log_node_id, node_id);
+            info!("{:?} // Connecting to node {:?}", log_node_id, node_id);
 
             let mut connection_results = node.node_connections().connect_to_node(node_id);
 
-            connections.append(&mut connection_results);
+            connections.push((node_id, connection_results));
         }
 
-        while node.node_connections().connected_nodes_count() + 1 < n {
-            debug!("{:?} // Waiting for node connections. Currently {} of {} ({:?})",
-                log_node_id, node.node_connections().connected_nodes_count() + 1, n, node.node_connections().connected_nodes());
 
-            Delay::new(Duration::from_millis(500)).await;
-        }
-
-        /*
-        for conn_result in connections {
-            match conn_result.await {
-                Ok(result) => {
-                    if let Err(err) = result {
-                        error!("Failed to connect to the given node. {:?}", err);
-                    } else {
-                        info!("Established a new connection.");
+        'outer: for (peer_id, conn_result) in connections {
+            for conn in conn_result {
+                match conn.await {
+                    Ok(result) => {
+                        if let Err(err) = result {
+                            error!("{:?} // Failed to connect to {:?} for {:?}", log_node_id, peer_id, err);
+                            continue 'outer;
+                        }
+                    }
+                    Err(error) => {
+                        error!("Failed to connect to the given node. {:?}", error);
+                        continue 'outer;
                     }
                 }
-                Err(error) => {
-                    error!("Failed to connect to the given node. {:?}", error);
-                }
             }
-        }
-         */
 
-        debug!("{:?} // Finished bootstrapping node.", log_node_id);
+            info!("{:?} // Established a new connection to node {:?}.", log_node_id, peer_id);
+        }
+
+        info!("{:?} // Connected to all other replicas.", log_node_id);
+
+        info!("{:?} // Finished bootstrapping node.", log_node_id);
 
         let mut replica = Self {
             // We start with the state transfer protocol to make sure everything is up to date
@@ -158,7 +156,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             execution_rx: exec_rx,
         };
 
-        debug!("{:?} // Requesting state", log_node_id);
+        info!("{:?} // Requesting state", log_node_id);
 
         replica.state_transfer_protocol.request_latest_state(&mut replica.ordering_protocol)?;
 
@@ -167,7 +165,6 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
     pub fn run(&mut self) -> Result<()> {
         loop {
-
             self.receive_internal()?;
 
             match self.replica_phase {
@@ -202,9 +199,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                                                                             StoredMessage::new(header, state_transfer)).unwrap();
                                     }
                                     SystemMessage::ForwardedRequestMessage(fwd_reqs) => {
-
                                         self.ordering_protocol.handle_forwarded_requests(StoredMessage::new(header, fwd_reqs))?;
-
                                     }
                                     SystemMessage::ForwardedProtocolMessage(fwd_protocol) => {
                                         match self.ordering_protocol.process_message(fwd_protocol.into_inner())? {
@@ -272,7 +267,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                         }
                     } else {
                         // Receive timeouts
-                        continue
+                        continue;
                     }
                 }
             }
@@ -301,7 +296,6 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
     }
 
     fn timeout_received(&mut self, timeouts: Timeout) -> Result<()> {
-
         let mut client_rq = Vec::with_capacity(timeouts.len());
         let mut cst_rq = Vec::with_capacity(timeouts.len());
 
@@ -314,7 +308,6 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                     cst_rq.push(rq);
                 }
             }
-
         }
 
         if !client_rq.is_empty() {
@@ -354,13 +347,14 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
     /// Run the state transfer protocol on this replica
     fn run_state_transfer_protocol(&mut self) -> Result<()> {
-
         if self.replica_phase == ReplicaPhase::StateTransferProtocol {
             //TODO: This is here for when we receive various timeouts that consecutively call run cst
             // In reality, this should also lead to a new state request since the previous one could have
             // Timed out
             return Ok(());
         }
+
+        info!("{:?} // Running state transfer protocol.", self.node.id());
 
         self.ordering_protocol.handle_execution_changed(false)?;
 

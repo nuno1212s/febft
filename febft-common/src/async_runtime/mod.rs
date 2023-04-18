@@ -9,6 +9,7 @@ mod async_std;
 use std::pin::Pin;
 use std::future::Future;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use crate::globals::Global;
 use crate::error::*;
@@ -57,7 +58,10 @@ pub unsafe fn init(num_threads: usize) -> Result<()> {
 /// It shouldn't be needed to be called manually called, as the
 /// `InitGuard` should take care of calling this.
 pub unsafe fn drop() -> Result<()> {
-    RUNTIME.drop();
+    if let Some(rt) = RUNTIME.drop() {
+        rt.shutdown_timeout(Duration::from_secs(1));
+    }
+
     Ok(())
 }
 
