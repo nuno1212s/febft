@@ -154,7 +154,7 @@ impl<OP, NT> FollowersFollowing<OP, NT> where
 
         let targets = self.targets(view);
 
-        self.send_node.broadcast(NetworkMessageKind::from(message), targets.into_iter()).unwrap();
+        self.send_node.broadcast(NetworkMessageKind::from(message), targets.into_iter());
     }
 
     /// Handle us having sent a prepare message (notice how pre prepare are handled on reception
@@ -180,7 +180,7 @@ impl<OP, NT> FollowersFollowing<OP, NT> where
         let message = SystemMessage::from_fwd_protocol_message(StoredMessage::new(header, prepare));
 
         self.send_node
-            .broadcast(NetworkMessageKind::from(message), self.followers.iter().copied()).unwrap();
+            .broadcast(NetworkMessageKind::from(message), self.followers.iter().copied());
     }
 
     /// Handle us having sent a commit message (notice how pre prepare are handled on reception
@@ -204,7 +204,7 @@ impl<OP, NT> FollowersFollowing<OP, NT> where
         let message = SystemMessage::from_fwd_protocol_message(StoredMessage::new(header, commit));
 
         self.send_node
-            .broadcast(NetworkMessageKind::from(message), self.followers.iter().copied()).unwrap();
+            .broadcast(NetworkMessageKind::from(message), self.followers.iter().copied());
     }
 
     ///
@@ -217,6 +217,6 @@ impl<OP, NT> FollowersFollowing<OP, NT> where
 
         let network_msg = NetworkMessageKind::from(SystemMessage::from_fwd_protocol_message(StoredMessage::new(header, message)));
 
-        self.send_node.broadcast(network_msg, self.followers.iter().copied()).unwrap();
+        self.send_node.broadcast(network_msg, self.followers.iter().copied());
     }
 }

@@ -372,7 +372,7 @@ impl<D, NT> Client<D, NT>
         }
 
         // broadcast our request to the node group
-        self.node.broadcast(NetworkMessageKind::from(message), targets).unwrap();
+        self.node.broadcast(NetworkMessageKind::from(message), targets);
 
         // await response
         let ready = get_ready::<D>(session_id, &*self.data);
@@ -467,7 +467,7 @@ impl<D, NT> Client<D, NT>
 
         measure_ready_rq_time!(&self.data.stats, rq_ready_init);
 
-        self.node.broadcast(NetworkMessageKind::from(message), targets).unwrap();
+        self.node.broadcast(NetworkMessageKind::from(message), targets);
 
         Self::start_timeout(
             self.node.clone(),

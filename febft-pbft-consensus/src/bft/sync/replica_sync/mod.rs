@@ -94,7 +94,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             ViewChangeMessageKind::StopData(collect),
         ));
 
-        node.send_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), current_leader, true).unwrap();
+        node.send_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), current_leader, true);
     }
 
     /// Start a new view change
@@ -248,7 +248,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             .into_iter()
             .map(|stopped| stopped.into_inner());
 
-        for (header, _request) in requests {
+        for (header, request) in requests {
             self.watching
                 .insert(header.unique_digest(), TimeoutPhase::TimedOut);
         }
@@ -376,6 +376,22 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
         debug!("{:?} // Replying requests time out forwarded {}, stopped {}", my_id, forwarded.len(), stopped.len());
 
+        if !stopped.is_empty() {
+
+            // Always include all our known stopped requests in all messages
+            self.watching.iter().for_each(|watched| {
+                let digest = watched.key();
+                let phase = watched.value();
+
+                if let TimeoutPhase::TimedOut = phase {
+                    if !stopped.contains(digest) {
+                        stopped.push(digest.clone());
+                    }
+                }
+            });
+
+        }
+
         SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
     }
 
@@ -393,7 +409,8 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         node.broadcast(NetworkMessageKind::from(message), targets);
     }
 
-    /// Obtain the requests that we know have timed out
+    /// Obtain the requests that we know have timed out so we can send out a stop message
+    /// to other nodes
     fn stopped_requests(
         &self,
         base_sync: &Synchronizer<D>,
@@ -402,15 +419,16 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
         let mut all_reqs = collections::hash_map();
 
-        // TODO: optimize this; we are including every STOP we have
-        // received thus far for the new view in our own STOP, plus
-        // the requests that timed out on us
+        // Include the requests that we have timed out
         if let Some(requests) = requests {
             for r in requests {
                 all_reqs.insert(r.header().unique_digest(), r);
             }
         }
 
+        // TODO: optimize this; we are including every STOP we have
+        // received thus far for the new view in our own STOP, plus
+        // the requests that timed out on us
         for (_, stopped) in base_sync.stopped.borrow().iter() {
             for r in stopped {
                 all_reqs

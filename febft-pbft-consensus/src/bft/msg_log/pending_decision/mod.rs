@@ -48,6 +48,18 @@ impl<D> PendingRequestLog<D> where D: SharedData {
         pending_messages
     }
 
+    /// Register a batch of requests that have been sent to us by other replicas in STOP rqs
+    pub fn register_stopped_requests(&self, rqs: &Vec<StoredMessage<RequestMessage<D::Request>>>) {
+
+        rqs.iter().for_each(|rq| {
+
+            let header = rq.header();
+
+            self.pending_requests.insert(header.unique_digest(), Arc::new(ReadOnly::new(rq.clone())));
+        });
+
+    }
+
     /// Insert a forwarded request vec into the log
     pub fn insert_forwarded(&self, mut messages: Vec<StoredMessage<RequestMessage<D::Request>>>) {
         self.forwarded_requests.lock().unwrap().append(&mut messages);

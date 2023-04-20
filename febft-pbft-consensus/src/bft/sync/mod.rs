@@ -576,6 +576,11 @@ impl<D> Synchronizer<D>
                     _ => unreachable!(),
                 };
 
+                // Register these requests into the pending request log so we
+                // Can later use it to retrieve all pending messages when sending
+                // Our stop data message
+                pending_rq_log.register_stopped_requests(&stopped);
+
                 self.stopped
                     .borrow_mut()
                     .insert(header.from().into(), stopped);
