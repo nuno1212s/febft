@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use ::log::debug;
 use chrono::Utc;
 use either::Either::{Left, Right};
+use log::warn;
 use febft_common::crypto::hash::Digest;
 
 use febft_common::error::*;
@@ -312,7 +313,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> AbstractConsen
         };
 
         // skip old messages
-        self.install_sequence_number(seq_no);
+        self.install_sequence_number(seq_no.next());
 
         // try to fetch msgs from tbo queue
         self.signal();
@@ -453,12 +454,16 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
     /// every request that we have already received via CST from
     /// our message queues
     pub fn install_sequence_number(&mut self, seq: SeqNo) {
+
+        warn!("{:?} // Installing sequence number: {:?} vs {:?} (Ours)", self.node_id, seq, self.sequence_number());
+
         // drop old msgs
         match seq.index(self.sequence_number()) {
             // nothing to do if we are on the same seq
             Right(0) => return,
             // drop messages up to `limit`
             Right(limit) if limit >= self.tbo.pre_prepares.len() => {
+                warn!("{:?} // Clearing all queues", self.node_id);
                 // NOTE: optimization to avoid draining the `VecDeque`
                 // structures when the difference between the seq
                 // numbers is huge
@@ -467,6 +472,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
                 self.tbo.commits.clear();
             }
             Right(limit) => {
+                warn!("{:?} // Removing {} queues", self.node_id, limit);
+
                 //Remove all messages up to the ones we are currently using
                 let iterator =
                     self.tbo.pre_prepares.drain(..limit)
@@ -479,6 +486,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
             }
             // drop all messages
             Left(_) => {
+                warn!("{:?} // Clearing all queues LEFT", self.node_id);
                 // NOTE: same as NOTE on the match branch above
                 self.tbo.pre_prepares.clear();
                 self.tbo.prepares.clear();

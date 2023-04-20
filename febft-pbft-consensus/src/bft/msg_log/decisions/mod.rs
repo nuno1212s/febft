@@ -289,7 +289,8 @@ impl<O> OnGoingDecision<O> {
 
         if self.pre_prepares.len() != leader_count {
             return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
-                                              "Failed to create a proof, pre_prepares do not match up to the leader count"));
+                                              format!("Failed to create a proof, pre_prepares do not match up to the leader count {} leader count {} preprepares",
+                                              leader_count, self.pre_prepares.len()).as_str()));
         }
 
         let mut ordered_pre_prepares = Vec::with_capacity(leader_count);
