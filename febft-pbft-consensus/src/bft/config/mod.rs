@@ -1,12 +1,14 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
+use febft_common::globals::ReadOnly;
 use febft_common::node_id::NodeId;
 use febft_communication::Node;
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::followers::FollowerHandle;
 use febft_messages::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg};
+use febft_messages::state_transfer::Checkpoint;
 use febft_messages::timeouts::Timeouts;
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;

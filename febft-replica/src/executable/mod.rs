@@ -147,9 +147,11 @@ impl<S, NT> Executor<S, NT>
               ST: StateTransferMessage + 'static,
               T: ExecutorReplier + 'static,
               NT: Node<ServiceMsg<S::Data, OP, ST>> {
-        let (state, requests) = if let Some((state, requests)) = current_state {
-            (state, Some(requests))
-        } else { (service.initial_state()?, None) };
+        let (state, requests) = if let Some(state) = current_state {
+            state
+        } else {
+            (S::initial_state()?, vec![])
+        };
 
         let mut exec: Executor<S, NT> = Executor {
             e_rx: handle,
@@ -157,13 +159,11 @@ impl<S, NT> Executor<S, NT>
             state,
             reply_worker,
             send_node,
-            loopback_channel
+            loopback_channel,
         };
 
-        if let Some(requests) = requests {
-            for request in requests {
-                exec.service.update(&mut exec.state, request);
-            }
+        for request in requests {
+            exec.service.update(&mut exec.state, request);
         }
 
         // this thread is responsible for actually executing

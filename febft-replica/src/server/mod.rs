@@ -5,17 +5,19 @@ use std::time::Duration;
 use futures_timer::Delay;
 
 use log::{debug, error, info};
-use febft_common::channel;
-use febft_common::channel::{ChannelSyncRx};
+use febft_common::{channel, threadpool};
+use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 
 use febft_common::async_runtime as rt;
 use febft_common::error::*;
+use febft_common::globals::ReadOnly;
 use febft_common::node_id::NodeId;
 use febft_common::ordering::{SeqNo};
 use febft_communication::{Node, NodeConnections};
 use febft_communication::message::{StoredMessage};
 use febft_execution::app::{Service, State};
 use febft_execution::ExecutorHandle;
+use febft_execution::serialize::digest_state;
 use febft_messages::messages::Message;
 use febft_messages::messages::SystemMessage;
 use febft_messages::ordering_protocol::OrderingProtocol;
@@ -35,7 +37,7 @@ pub mod follower_handling;
 // pub mod rq_finalizer;
 
 
-pub const REPLICA_WAIT_TIME: Duration = Duration::from_millis(50);
+pub const REPLICA_WAIT_TIME: Duration = Duration::from_millis(1000);
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub(crate) enum ReplicaPhase {
@@ -56,6 +58,7 @@ pub struct Replica<S, OP, ST, NT> where S: Service {
     node: Arc<NT>,
     // THe handle to the execution and timeouts handler
     execution_rx: ChannelSyncRx<Message<S::Data>>,
+    execution_tx: ChannelSyncTx<Message<S::Data>>
 }
 
 impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
@@ -90,11 +93,18 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
         // start timeouts handler
         let timeouts = Timeouts::new::<S::Data>(log_node_id.clone(), 500, exec_tx.clone());
 
+        //Calculate the initial state of the application so we can pass it to the ordering protocol
+        let init_ex_state = S::initial_state()?;
+        let digest = febft_execution::serialize::digest_state::<S::Data>(&init_ex_state)?;
+
+        let initial_state = Checkpoint::new(SeqNo::ZERO, init_ex_state, digest);
+
         // Initialize the ordering protocol
-        let ordering_protocol = OP::initialize(op_config, executor.clone(), timeouts.clone(), node.clone())?;
+        let ordering_protocol = OP::initialize_with_initial_state(op_config, executor.clone(), timeouts.clone(), node.clone(), initial_state)?;
 
         let state_transfer_protocol = ST::initialize(st_config, timeouts.clone(), node.clone())?;
 
+        // Check with the order protocol to see if there were no stored states
         let state = None;
 
         // start executor
@@ -159,6 +169,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             executor_handle: executor,
             node,
             execution_rx: exec_rx,
+            execution_tx: exec_tx,
         };
 
         info!("{:?} // Requesting state", log_node_id);
@@ -175,6 +186,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             match self.replica_phase {
                 ReplicaPhase::OrderingProtocol => {
                     let poll_res = self.ordering_protocol.poll();
+
+                    debug!("{:?} // Polling ordering protocol with result {:?}", self.node.id(), poll_res);
 
                     match poll_res {
                         OrderProtocolPoll::RePoll => {
@@ -217,7 +230,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                         }
                                     }
                                     _ => {
-                                        error!("{:?} // Received off context message {:?}", self.node.id(), message);
+                                        error!("{:?} // Received unsupported message {:?}", self.node.id(), message);
                                     }
                                 }
                             } else {
@@ -258,7 +271,11 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                 match result {
                                     STResult::CstRunning => {}
                                     STResult::CstFinished(state, requests) => {
-                                        self.executor_handle.install_state(state, requests).unwrap();
+                                        info!("{:?} // State transfer finished. Installing state in executor and running ordering protocol", self.node.id());
+
+                                        self.executor_handle.install_state(state, requests)?;
+
+                                        self.run_ordering_protocol()?;
                                     }
                                     STResult::CstNotNeeded => {
                                         self.run_ordering_protocol()?;
@@ -286,13 +303,14 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
         while let Ok(recvd) = self.execution_rx.try_recv() {
             match recvd {
                 Message::ExecutionFinishedWithAppstate((seq, state)) => {
-                    let checkpoint = Checkpoint::new(seq, state);
-
-                    self.state_transfer_protocol.handle_state_received_from_app(&mut self.ordering_protocol, checkpoint)?;
+                    self.execution_finished_with_appstate(seq, state)?;
                 }
                 Message::Timeout(timeout) => {
                     self.timeout_received(timeout)?;
                     //info!("{:?} // Received and ignored timeout with {} timeouts {:?}", self.node.id(), timeout.len(), timeout);
+                }
+                Message::DigestedAppState(digested) => {
+                    self.state_transfer_protocol.handle_state_received_from_app(&mut self.ordering_protocol, digested)?;
                 }
             }
         }
@@ -372,9 +390,24 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
     }
 
     fn execution_finished_with_appstate(&mut self, seq: SeqNo, appstate: State<S>) -> Result<()> {
-        let checkpoint = Checkpoint::new(seq, appstate);
+        let return_tx = self.execution_tx.clone();
 
-        self.state_transfer_protocol.handle_state_received_from_app(&mut self.ordering_protocol, checkpoint)?;
+        // Digest the app state before passing it on to the ordering protocols
+        threadpool::execute(move || {
+            let result = febft_execution::serialize::digest_state::<S::Data>(&appstate);
+
+            match result {
+                Ok(digest) => {
+                    let checkpoint = Checkpoint::new(seq, appstate, digest);
+
+                    return_tx.send(Message::DigestedAppState(checkpoint)).unwrap();
+                }
+                Err(error) => {
+                    error!("Failed to serialize and digest application state: {:?}", error)
+                }
+            }
+
+        });
 
         Ok(())
     }

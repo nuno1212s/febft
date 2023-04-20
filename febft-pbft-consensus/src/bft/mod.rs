@@ -132,56 +132,7 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
                   timeouts: Timeouts, node: Arc<NT>) -> Result<Self> where
         Self: Sized,
     {
-        let PBFTConfig {
-            node_id,
-            follower_handle,
-            view, timeout_dur, db_path,
-            proposer_config, _phantom_data
-        } = config;
-
-        let sync = Synchronizer::new_replica(view.clone(), timeout_dur);
-
-        let consensus = Consensus::<D, ST>::new_replica(node_id, view.clone(),
-                                                        SeqNo::ZERO, executor.clone(), follower_handle);
-
-        let consensus_guard = consensus.consensus_guard().cloned().unwrap();
-
-        let pending_rq_log = Arc::new(initialize_pending_request_log()?);
-
-        let persistent_log = initialize_persistent_log::<D, String, NoPersistentLog>(executor.clone(), db_path)?;
-
-        let dec_log = initialize_decided_log::<D>(persistent_log)?;
-
-        let proposer = Proposer::<D, NT>::new(node.clone(), sync.clone(),
-                                              pending_rq_log.clone(), timeouts.clone(),
-                                              executor.clone(), consensus_guard.clone(),
-                                              proposer_config);
-
-        let replica = Self {
-            phase: ConsensusPhase::NormalPhase,
-            consensus,
-            synchronizer: sync,
-            timeouts,
-            consensus_guard,
-            unordered_rq_guard: Arc::new(Default::default()),
-            executor,
-            pending_request_log: pending_rq_log,
-            decided_log: dec_log,
-            proposer,
-            node,
-        };
-
-        let crr_view = replica.synchronizer.view();
-
-        info!("{:?} // Initialized ordering protocol with view: {:?} and sequence number: {:?}",
-              replica.node.id(), crr_view.sequence_number(), replica.sequence_number());
-
-        info!("{:?} // Leader count: {}, Leader set: {:?}", replica.node.id(),
-        crr_view.leader_set().len(), crr_view.leader_set());
-
-        replica.proposer.clone().start();
-
-        Ok(replica)
+        Self::initialize_protocol(config, executor, timeouts, node, None)
     }
 
     fn handle_off_ctx_message(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>) {
@@ -189,10 +140,16 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
 
         match message.into_inner() {
             PBFTMessage::Consensus(consensus) => {
-                self.consensus.queue(header, consensus)
+                debug!("{:?} // Received off context consensus message {:?}", self.node.id(), consensus);
+                self.consensus.queue(header, consensus);
+
+                self.consensus.signal();
             }
             PBFTMessage::ViewChange(view_change) => {
-                self.synchronizer.queue(header, view_change)
+                debug!("{:?} // Received off context view change message {:?}", self.node.id(), view_change);
+                self.synchronizer.queue(header, view_change);
+
+                self.synchronizer.signal();
             }
             _ => { todo!() }
         }
@@ -288,6 +245,60 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
 impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
                                                    ST: StateTransferMessage + 'static,
                                                    NT: Node<PBFT<D, ST>> + 'static {
+    fn initialize_protocol(config: PBFTConfig<D, ST>, executor: ExecutorHandle<D>,
+                           timeouts: Timeouts, node: Arc<NT>, initial_state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<Self> {
+        let PBFTConfig {
+            node_id,
+            follower_handle,
+            view, timeout_dur, db_path,
+            proposer_config, _phantom_data
+        } = config;
+
+        let sync = Synchronizer::new_replica(view.clone(), timeout_dur);
+
+        let consensus = Consensus::<D, ST>::new_replica(node_id, view.clone(),
+                                                        SeqNo::ZERO, executor.clone(), follower_handle);
+
+        let consensus_guard = consensus.consensus_guard().cloned().unwrap();
+
+        let pending_rq_log = Arc::new(initialize_pending_request_log()?);
+
+        let persistent_log = initialize_persistent_log::<D, String, NoPersistentLog>(executor.clone(), db_path)?;
+
+        let dec_log = initialize_decided_log::<D>(persistent_log, initial_state)?;
+
+        let proposer = Proposer::<D, NT>::new(node.clone(), sync.clone(),
+                                              pending_rq_log.clone(), timeouts.clone(),
+                                              executor.clone(), consensus_guard.clone(),
+                                              proposer_config);
+
+        let replica = Self {
+            phase: ConsensusPhase::NormalPhase,
+            consensus,
+            synchronizer: sync,
+            timeouts,
+            consensus_guard,
+            unordered_rq_guard: Arc::new(Default::default()),
+            executor,
+            pending_request_log: pending_rq_log,
+            decided_log: dec_log,
+            proposer,
+            node,
+        };
+
+        let crr_view = replica.synchronizer.view();
+
+        info!("{:?} // Initialized ordering protocol with view: {:?} and sequence number: {:?}",
+              replica.node.id(), crr_view.sequence_number(), replica.sequence_number());
+
+        info!("{:?} // Leader count: {}, Leader set: {:?}", replica.node.id(),
+        crr_view.leader_set().len(), crr_view.leader_set());
+
+        replica.proposer.clone().start();
+
+        Ok(replica)
+    }
+
     fn poll_sync_phase(&mut self) -> OrderProtocolPoll<PBFTMessage<D::Request>> {
         // retrieve a view change message to be processed
         match self.synchronizer.poll() {
@@ -551,6 +562,10 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
           NT: Node<PBFT<D, ST>> + 'static {
     type StateSerialization = PBFTConsensus<D>;
 
+    fn initialize_with_initial_state(config: Self::Config, executor: ExecutorHandle<D>, timeouts: Timeouts, node: Arc<NT>, initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where Self: Sized {
+        Self::initialize_protocol(config, executor, timeouts, node, Some(initial_state))
+    }
+
     fn view(&self) -> View<Self::Serialization> {
         self.synchronizer.view()
     }
@@ -558,12 +573,24 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     fn install_state(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>,
                      view_info: View<Self::Serialization>,
                      dec_log: DecLog<Self::StateSerialization>) -> Result<(D::State, Vec<D::Request>)> {
+        info!("{:?} // Installing state with Seq No {:?} and View {:?}", self.node.id(),
+                state.sequence_number(), view_info.sequence_number());
 
-        let res = self.consensus.install_state(state.state().clone(), view_info.clone(),&dec_log)?;
+        let res = self.consensus.install_state(state.state().clone(), view_info.clone(), &dec_log)?;
 
         self.synchronizer.install_view(view_info);
 
+        let last_exec = if let Some(last_exec) = dec_log.last_execution() {
+            last_exec
+        } else {
+            SeqNo::ZERO
+        };
+
+        info!("{:?} // Installing decision log with last execution {:?}", self.node.id(),last_exec);
+
         self.decided_log.install_state(state, dec_log);
+
+        self.consensus.install_sequence_number(last_exec);
 
         Ok(res)
     }
@@ -579,10 +606,7 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     }
 
     fn finalize_checkpoint(&mut self, checkpoint: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()> {
-        let state = checkpoint.state().clone();
-        let seq_no = checkpoint.sequence_number();
-
-        self.decided_log.finalize_checkpoint(seq_no, state)
+        self.decided_log.finalize_checkpoint(checkpoint)
     }
 }
 

@@ -1,6 +1,8 @@
 use std::io::{Read, Write};
+use std::mem::size_of;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+use febft_common::crypto::hash::{Context, Digest};
 
 use febft_common::error::*;
 
@@ -59,4 +61,19 @@ pub trait SharedData: Send {
     ///Deserialize a reply that was generated using the serialize reply function above
     ///  (either for network sending or persistent storing)
     fn deserialize_reply<R>(r: R) -> Result<Self::Reply> where R: Read;
+}
+
+pub fn digest_state<D: SharedData>(appstate: &D::State) -> Result<Digest> {
+
+    let mut state_vec = Vec::with_capacity(size_of::<D::State>());
+
+    D::serialize_state(&mut state_vec, &appstate)?;
+
+    let mut ctx = Context::new();
+
+    ctx.update(&state_vec);
+
+    let digest = ctx.finish();
+
+    Ok(digest)
 }

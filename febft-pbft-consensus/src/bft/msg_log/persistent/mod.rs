@@ -752,7 +752,9 @@ fn read_latest_state<D: SharedData>(db: &KVDB) -> Result<Option<InstallState<D>>
 
     let dec_log = read_all_present_proofs::<D>(db)?;
 
-    let checkpoint = Checkpoint::new(first_seq.unwrap(), state.unwrap());
+    let digest= febft_execution::serialize::digest_state::<D>(state.as_ref().unwrap())?;
+
+    let checkpoint = Checkpoint::new(first_seq.unwrap(), state.unwrap(), digest);
 
     Ok(Some((view.unwrap(), checkpoint, dec_log)))
 }

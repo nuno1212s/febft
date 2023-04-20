@@ -12,6 +12,7 @@ use febft_execution::app::Service;
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::RequestMessage;
+use febft_messages::state_transfer::Checkpoint;
 use crate::bft::message::ConsensusMessage;
 use crate::bft::msg_log::decided_log::DecidedLog;
 use crate::bft::msg_log::deciding_log::{DecidingLog};
@@ -55,9 +56,9 @@ pub fn initialize_persistent_log<D, K, T>(executor: ExecutorHandle<D>, db_path: 
     PersistentLog::init_log::<K, T>(executor, db_path)
 }
 
-pub fn initialize_decided_log<D: SharedData + 'static>(persistent_log: PersistentLog<D>) -> Result<DecidedLog<D>> {
+pub fn initialize_decided_log<D: SharedData + 'static>(persistent_log: PersistentLog<D>, state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<DecidedLog<D>> {
 
-    Ok(DecidedLog::init_decided_log(persistent_log))
+    Ok(DecidedLog::init_decided_log(persistent_log, state))
 
 }
 

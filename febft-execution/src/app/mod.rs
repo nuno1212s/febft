@@ -28,7 +28,7 @@ pub trait Service: Send {
     //type Durability: ReplicaDurability;
 
     /// Returns the initial state of the application.
-    fn initial_state(&mut self) -> Result<State<Self>>;
+    fn initial_state() -> Result<State<Self>>;
 
     /// Process an unordered client request, and produce a matching reply
     /// Cannot alter the application state

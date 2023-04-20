@@ -72,6 +72,24 @@ impl<O> Orderable for ViewChangeMessage<O> {
     }
 }
 
+impl<O> Debug for ViewChangeMessage<O> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "View {:?}", self.view)?;
+
+        match self.kind {
+            ViewChangeMessageKind::Stop(_) => {
+                write!(f, "Stop Message")
+            }
+            ViewChangeMessageKind::StopData(_) => {
+                write!(f, "Stop Data Message")
+            }
+            ViewChangeMessageKind::Sync(_) => {
+                write!(f, "Sync Message")
+            }
+        }
+    }
+}
+
 impl<O> ViewChangeMessage<O> {
     /// Creates a new `ViewChangeMessage`, pertaining to the view
     /// with sequence number `view`, and of the kind `kind`.
@@ -122,9 +140,11 @@ pub struct ConsensusMessage<O> {
 
 impl<O> Debug for ConsensusMessage<O> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?} Seq {:?} View ", self.seq, self.view)?;
+
         match self.kind {
             ConsensusMessageKind::PrePrepare(_) => {
-                write!(f, "Pre prepare message")
+                write!(f, "View Pre prepare message")
             }
             ConsensusMessageKind::Prepare(_) => {
                 write!(f, "Prepare message")

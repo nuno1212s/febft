@@ -11,6 +11,8 @@ use crate::serialize::{NetworkView, OrderingProtocolMessage, ServiceMsg, Statefu
 use crate::timeouts::Timeouts;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
+use febft_common::crypto::hash::Digest;
+use febft_execution::ExecutorHandle;
 
 
 /// Represents a local checkpoint.
@@ -22,6 +24,7 @@ use serde::{Serialize, Deserialize};
 pub struct Checkpoint<S> {
     seq: SeqNo,
     app_state: S,
+    digest: Digest,
 }
 
 impl<S> Orderable for Checkpoint<S> {
@@ -33,10 +36,11 @@ impl<S> Orderable for Checkpoint<S> {
 }
 
 impl<S> Checkpoint<S> {
-    pub fn new(seq: SeqNo, app_state: S) -> Arc<ReadOnly<Self>> {
+    pub fn new(seq: SeqNo, app_state: S, digest: Digest) -> Arc<ReadOnly<Self>> {
         Arc::new(ReadOnly::new(Self {
             seq,
             app_state,
+            digest,
         }))
     }
 
@@ -51,9 +55,11 @@ impl<S> Checkpoint<S> {
         &self.app_state
     }
 
+    pub fn digest(&self) -> &Digest { &self.digest }
+
     /// Returns the inner values within this local checkpoint.
-    pub fn into_inner(self) -> (SeqNo, S) {
-        (self.seq, self.app_state)
+    pub fn into_inner(self) -> (SeqNo, S, Digest) {
+        (self.seq, self.app_state, self.digest)
     }
 }
 
@@ -111,7 +117,7 @@ pub trait StateTransferProtocol<D, OP, NT> where
 
     /// Handle a timeout being received from the timeout layer
     fn handle_timeout(&mut self, order_protocol: &mut OP, timeout: Vec<SeqNo>) -> Result<STTimeoutResult>
-        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> ;
+        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>;
 }
 
 pub type DecLog<OP> = <OP as StatefulOrderProtocolMessage>::DecLog;
@@ -120,6 +126,11 @@ pub type DecLog<OP> = <OP as StatefulOrderProtocolMessage>::DecLog;
 pub trait StatefulOrderProtocol<D: SharedData + 'static, NT>: OrderingProtocol<D, NT> {
     /// The serialization abstraction for
     type StateSerialization: StatefulOrderProtocolMessage + 'static;
+
+    fn initialize_with_initial_state(config: Self::Config, executor: ExecutorHandle<D>,
+                                     timeouts: Timeouts, node: Arc<NT>, initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where
+        Self: Sized;
+
 
     fn view(&self) -> View<Self::Serialization>;
 

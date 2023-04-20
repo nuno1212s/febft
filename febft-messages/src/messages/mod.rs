@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
+use std::sync::Arc;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_common::error::*;
 use febft_communication::message::{Header, NetworkMessage, StoredMessage};
@@ -8,6 +9,8 @@ use crate::serialize::{OrderingProtocolMessage, ServiceMsg};
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
+use febft_common::globals::ReadOnly;
+use crate::state_transfer::Checkpoint;
 use crate::timeouts::Timeout;
 
 
@@ -20,6 +23,7 @@ pub enum Message<D> where D: SharedData {
     ///
     /// This is useful for local checkpoints.
     ExecutionFinishedWithAppstate((SeqNo, D::State)),
+    DigestedAppState(Arc<ReadOnly<Checkpoint<D::State>>>),
     /// We received a timeout from the timeouts layer.
     Timeout(Timeout),
 }
@@ -32,6 +36,9 @@ impl<D> Debug for Message<D> where D: SharedData {
             }
             Message::Timeout(_) => {
                 write!(f, "timeout")
+            }
+            Message::DigestedAppState(_) => {
+                write!(f, "DigestedAppState")
             }
         }
     }
@@ -48,6 +55,10 @@ impl<D: SharedData> Message<D> {
             Message::Timeout(_) =>
                 Err("Expected System found Timeout")
                     .wrapped(ErrorKind::CommunicationMessage),
+            Message::DigestedAppState(_) => {
+                Err("Expected System found DigestedAppState")
+                    .wrapped(ErrorKind::CommunicationMessage)
+            }
         }
     }
 }

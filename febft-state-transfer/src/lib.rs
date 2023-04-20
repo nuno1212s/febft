@@ -4,6 +4,8 @@ pub mod message;
 pub mod config;
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
+use std::collections::hash_map::Entry;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,7 +38,7 @@ use crate::message::serialize::{CSTMsg};
 
 enum ProtoPhase<S, V, O> {
     Init,
-    WaitingCheckpoint(Header, CstMessage<S, V, O>),
+    WaitingCheckpoint(Vec<StoredMessage<CstMessage<S, V, O>>>),
     ReceivingCid(usize),
     ReceivingState(usize),
 }
@@ -47,8 +49,8 @@ impl<S, V, O> Debug for ProtoPhase<S, V, O> {
             ProtoPhase::Init => {
                 write!(f, "Init Phase")
             }
-            ProtoPhase::WaitingCheckpoint(header, msg) => {
-                write!(f, "Waiting for checkpoint {:?}, {:?}", header, msg)
+            ProtoPhase::WaitingCheckpoint(header) => {
+                write!(f, "Waiting for checkpoint {}", header.len())
             }
             ProtoPhase::ReceivingCid(size) => {
                 write!(f, "Receiving CID phase {} responses", size)
@@ -269,7 +271,8 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
         let (header, message) = message.into_inner();
 
         let message = message.into_inner();
-        debug!("{:?} // Off context Message {:?} from {:?}", self.node.id(), message, header.from());
+        debug!("{:?} // Off context Message {:?} from {:?} with seq {:?}", self.node.id(), message, header.from(),
+        message.sequence_number());
 
         match &message.kind() {
             CstMessageKind::RequestLatestConsensusSeq => {
@@ -437,7 +440,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
     ///
     /// This is used when a node is sending state to a peer.
     pub fn needs_checkpoint(&self) -> bool {
-        matches!(self.phase, ProtoPhase::WaitingCheckpoint(_, _))
+        matches!(self.phase, ProtoPhase::WaitingCheckpoint(_))
     }
 
     fn process_request_seq(
@@ -461,6 +464,42 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
         self.node.send(network_msg, header.from(), true);
     }
 
+
+    /// Process the entire list of pending state transfer requests
+    /// This will only reply to the latest request sent by each of the replicas
+    fn process_pending_state_requests(&mut self, order_protocol: &mut OP)
+        where
+            OP: StatefulOrderProtocol<D, NT>,
+            NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>> {
+        let waiting = std::mem::replace(&mut self.phase, ProtoPhase::Init);
+
+        if let ProtoPhase::WaitingCheckpoint(reqs) = waiting {
+            let mut map: HashMap<NodeId, StoredMessage<CstMessage<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>>>> = collections::hash_map();
+
+            for request in reqs {
+                // We only want to reply to the most recent requests from each of the nodes
+                if map.contains_key(&request.header().from()) {
+                    map.entry(request.header().from()).and_modify(|x| {
+                        if x.message().sequence_number() < request.message().sequence_number() {
+                            //Dispose of the previous request
+                            let _ = std::mem::replace(x, request);
+                        }
+                    });
+
+                    continue;
+                } else {
+                    map.insert(request.header().from(), request);
+                }
+            }
+
+            map.into_values().for_each(|req| {
+                let (header, message) = req.into_inner();
+
+                self.process_request_state(header, message, order_protocol);
+            });
+        }
+    }
+
     fn process_request_state(
         &mut self,
         header: Header,
@@ -470,10 +509,28 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
         OP: StatefulOrderProtocol<D, NT>,
         NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>
     {
+        match &mut self.phase {
+            ProtoPhase::Init => {}
+            ProtoPhase::WaitingCheckpoint(waiting) => {
+                waiting.push(StoredMessage::new(header, message));
+
+                return;
+            }
+            _ => {
+                // We can't reply to state requests when requesting state ourselves
+                return;
+            }
+        }
+
         let (state, view, dec_log) = match op.snapshot_log() {
             Ok((state, view, dec_log)) => { (state, view, dec_log) }
             Err(_) => {
-                self.phase = ProtoPhase::WaitingCheckpoint(header, message);
+                if let ProtoPhase::WaitingCheckpoint(waiting) = &mut self.phase {
+                    waiting.push(StoredMessage::new(header, message));
+                } else {
+                    self.phase = ProtoPhase::WaitingCheckpoint(vec![StoredMessage::new(header, message)]);
+                }
+
                 return;
             }
         };
@@ -504,10 +561,8 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
             NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>
     {
         match self.phase {
-            ProtoPhase::WaitingCheckpoint(_, _) => {
-                let (header, message) = getmessage!(&mut self.phase);
-
-                self.process_request_state(header, message, order_protocol);
+            ProtoPhase::WaitingCheckpoint(_) => {
+                self.process_pending_state_requests(order_protocol);
 
                 CstStatus::Nil
             }
@@ -626,9 +681,14 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                     None => return CstStatus::Running,
                 };
 
+                let state_digest = state.checkpoint.digest().clone();
+
+                debug!("{:?} // Received state with digest {:?}, is contained in map? {}", self.node.id(),
+                state_digest, self.received_states.contains_key(&state_digest));
+
                 let received_state = self
                     .received_states
-                    .entry(header.digest().clone())
+                    .entry(state_digest)
                     .or_insert(ReceivedState { count: 0, state });
 
                 received_state.count += 1;
@@ -655,10 +715,14 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                         Some((digest, _)) => digest.clone(),
                         None => {
                             self.received_states.clear();
+
+                            debug!("{:?} // No matching states found", self.node.id());
+
                             return CstStatus::RequestState;
                         }
                     }
                 };
+
                 let received_state = {
                     let received_state = self.received_states.remove(&digest);
                     self.received_states.clear();
@@ -671,8 +735,16 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                 // return the state
                 let f = order_protocol.view().f();
                 match received_state {
-                    Some(ReceivedState { count, state }) if count > f => CstStatus::State(state),
-                    _ => CstStatus::RequestState,
+                    Some(ReceivedState { count, state }) if count > f => {
+                        self.phase = ProtoPhase::Init;
+
+                        CstStatus::State(state)
+                    }
+                    _ => {
+                        debug!("{:?} // No states with more than f {} count", self.node.id(), f);
+
+                        CstStatus::RequestState
+                    }
                 }
             }
         }
@@ -806,7 +878,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
         //TODO: Maybe attempt to use followers to rebuild state and avoid
         // Overloading the replicas
         let message = CstMessage::new(cst_seq, CstMessageKind::RequestState);
-        let targets = NodeId::targets(0..current_view.n());
+        let targets = NodeId::targets(0..current_view.n()).filter(|id| *id != self.node.id());
 
         self.node.broadcast(NetworkMessageKind::from(SystemMessage::from_state_transfer_message(message)), targets);
     }

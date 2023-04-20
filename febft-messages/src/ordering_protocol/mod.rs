@@ -1,3 +1,4 @@
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use febft_communication::message::{Header, NetworkMessage, StoredMessage, System};
 use febft_common::error::*;
@@ -58,4 +59,23 @@ pub enum OrderProtocolPoll<P> {
 pub enum OrderProtocolExecResult {
     Success,
     RunCst,
+}
+
+impl<P> Debug for OrderProtocolPoll<P> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OrderProtocolPoll::RunCst => {
+                write!(f, "RunCst")
+            }
+            OrderProtocolPoll::ReceiveFromReplicas => {
+                write!(f, "Receive From Replicas")
+            }
+            OrderProtocolPoll::Exec(_) => {
+                write!(f, "Exec")
+            }
+            OrderProtocolPoll::RePoll => {
+                write!(f, "RePoll")
+            }
+        }
+    }
 }

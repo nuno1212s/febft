@@ -1,6 +1,7 @@
+use std::mem::size_of;
 use std::sync::Arc;
 use log::error;
-use febft_common::crypto::hash::Digest;
+use febft_common::crypto::hash::{Context, Digest};
 
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
@@ -70,14 +71,21 @@ pub struct BatchExecutionInfo<D> where D: SharedData {
 }
 
 impl<D> DecidedLog<D> where D: SharedData + 'static {
-    pub(crate) fn init_decided_log(persistent_log: PersistentLog<D>) -> Self {
+    pub(crate) fn init_decided_log(persistent_log: PersistentLog<D>, state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Self {
 
         //TODO: Maybe read state from local storage?
+        let checkpoint = if let Some(state) = state {
+            CheckpointState::Complete(state)
+        } else {
+            CheckpointState::None
+        };
+
+        let dec_log = DecisionLog::new();
 
         Self {
             curr_seq: SeqNo::ZERO,
-            dec_log: DecisionLog::new(),
-            checkpoint: CheckpointState::None,
+            dec_log,
+            checkpoint,
 
             persistent_log,
         }
@@ -231,7 +239,7 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
     /// This method should only be called when `finalize_request()` reports
     /// `Info::BeginCheckpoint`, and the requested application state is received
     /// on the core server task's master channel.
-    pub fn finalize_checkpoint(&mut self, final_seq: SeqNo, appstate: D::State) -> Result<()> {
+    pub fn finalize_checkpoint(&mut self, checkpoint: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()> {
         match &self.checkpoint {
             CheckpointState::None => {
                 Err("No checkpoint has been initiated yet").wrapped(ErrorKind::MsgLog)
@@ -240,9 +248,9 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
                 Err("Checkpoint already finalized").wrapped(ErrorKind::MsgLog)
             }
             CheckpointState::Partial { seq: _ } | CheckpointState::PartialWithEarlier { seq: _, .. } => {
-                let checkpoint_state = CheckpointState::Complete(
-                    Checkpoint::new(final_seq, appstate),
-                );
+                let final_seq = checkpoint.sequence_number();
+
+                let checkpoint_state = CheckpointState::Complete(checkpoint.clone());
 
                 self.checkpoint = checkpoint_state;
 
@@ -266,11 +274,7 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
                     }
                 }
 
-                // This will always execute, I just wanted to unpack the checkpoint
-                // Persist the newly received state
-                if let CheckpointState::Complete(checkpoint) = &self.checkpoint {
-                    self.persistent_log.write_checkpoint(WriteMode::NonBlockingSync(None), Arc::clone(checkpoint))?;
-                }
+                self.persistent_log.write_checkpoint(WriteMode::NonBlockingSync(None), checkpoint)?;
 
                 //Clear the decided requests log
 
