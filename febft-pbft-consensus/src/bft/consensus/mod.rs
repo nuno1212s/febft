@@ -266,7 +266,7 @@ pub trait AbstractConsensus<D: SharedData> {
 
     fn install_state(&mut self, state: D::State, view_info: ViewInfo, dec_log: &DecisionLog<D::Request>) -> Result<(D::State, Vec<D::Request>)>;
 
-    fn snapshot_log(&mut self) -> Result<(Arc<ReadOnly<Checkpoint<D::State>>>, ViewInfo, DecisionLog<D::Request>)>;
+    //fn snapshot_log(&mut self) -> Result<(Arc<ReadOnly<Checkpoint<D::State>>>, ViewInfo, DecisionLog<D::Request>)>;
     /*fn handle_message(&mut self, header: Header, message: ConsensusMessage<Request<S>>,
                       timeouts: &Timeouts,
                       synchronizer: impl AbstractSynchronizer<S>,
@@ -343,9 +343,6 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> AbstractConsen
         Ok((state, reqs))
     }
 
-    fn snapshot_log(&mut self) -> Result<(Arc<ReadOnly<Checkpoint<D::State>>>, ViewInfo, DecisionLog<D::Request>)> {
-        todo!()
-    }
 }
 
 impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, ST> {
