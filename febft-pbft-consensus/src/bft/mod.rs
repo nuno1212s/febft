@@ -15,7 +15,7 @@ use std::ops::Drop;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use log::{debug, LevelFilter};
+use log::{debug, info, LevelFilter};
 use log4rs::{
     append::file::FileAppender,
     config::{Appender, Logger, Root},
@@ -170,6 +170,14 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
             proposer,
             node,
         };
+
+        let crr_view = replica.synchronizer.view();
+
+        info!("{:?} // Initialized ordering protocol with view: {:?} and sequence number: {:?}",
+              replica.node.id(), crr_view.sequence_number(), replica.sequence_number());
+
+        info!("{:?} // Leader count: {}, Leader set: {:?}", replica.node.id(),
+        crr_view.leader_set().len(), crr_view.leader_set());
 
         replica.proposer.clone().start();
 

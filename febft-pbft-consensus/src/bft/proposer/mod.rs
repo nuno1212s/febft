@@ -222,7 +222,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
 
                     // Check if we have any forwarded requests that we need to propose
                     self.handle_forwarded_requests(is_leader,
-                                                   our_slice.as_ref().unwrap(),
+                                                   our_slice.as_ref(),
                                                    &mut ordered_propose);
 
                     //Lets first deal with unordered requests since it should be much quicker and easier
@@ -429,7 +429,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
     /// Check if we have received forwarded requests. If so, then
     /// we want to add them to the next batch we are proposing
     fn handle_forwarded_requests(&self, is_leader: bool,
-                                 our_slice: &(Vec<u8>, Vec<u8>),
+                                 our_slice: Option<&(Vec<u8>, Vec<u8>)>,
                                  ordered_propose_builder: &mut ProposeBuilder<D>) {
         let fwd_rqs = self.pending_decision_log.take_forwarded_requests(None);
 
@@ -437,7 +437,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
             for req in fwd_rqs {
                 let rq_digest = req.header().unique_digest();
 
-                if is_leader && is_request_in_hash_space(&rq_digest, our_slice) {
+                if is_leader && is_request_in_hash_space(&rq_digest, our_slice.unwrap()) {
                     // We can safely add this request to our batch since it is in our hash space and
                     // it will still be examined by the [`filter_and_update_more_recent`] method
                     ordered_propose_builder.currently_accumulated.push(req);
