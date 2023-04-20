@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use log::debug;
+use log::{debug, info};
 
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
@@ -250,6 +250,21 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
         let (header, message) = message.into_inner();
 
         let message = message.into_inner();
+        debug!("{:?} // Off context Message {:?} from {:?}", self.node.id(), message, header.from());
+
+        match &message.kind() {
+            CstMessageKind::RequestLatestConsensusSeq => {
+                self.process_request_seq(header, message, order_protocol);
+
+                return Ok(());
+            }
+            CstMessageKind::RequestState => {
+                self.process_request_state(header, message, order_protocol);
+
+                return Ok(());
+            }
+            _ => {}
+        }
 
         let status = self.process_message(
             CstProgress::Message(header, message),
@@ -275,7 +290,7 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
 
         let message = message.into_inner();
 
-        debug!("{:?} // Message {:?}", self.node.id(), message);
+        debug!("{:?} // Message {:?} from {:?}", self.node.id(), message, header.from());
 
         match &message.kind() {
             CstMessageKind::RequestLatestConsensusSeq => {
@@ -339,10 +354,13 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
                     order_protocol,
                 );
             }
-            // should not happen...
             CstStatus::Nil => {
-                return Err("Invalid state reached!")
-                    .wrapped(ErrorKind::CoreServer);
+                // No actions are required for the CST
+                // This can happen for example when we already received the a quorum of sequence number replies
+                // And therefore we are already in the Init phase and we are still receiving replies
+                // And have not yet processed the
+
+                return Err("Invalid state reached! State Transfer").wrapped(ErrorKind::CoreServer);
             }
         }
 
@@ -493,6 +511,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                     // CstStatus::RequestState
                     _ => (),
                 }
+
                 CstStatus::Nil
             }
             ProtoPhase::ReceivingCid(i) => {
@@ -529,9 +548,13 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                     }
                     CstMessageKind::RequestLatestConsensusSeq => {
                         self.process_request_seq(header, message, order_protocol);
+
+                        return CstStatus::Running;
                     }
                     CstMessageKind::RequestState => {
                         self.process_request_state(header, message, order_protocol);
+
+                        return CstStatus::Running;
                     }
                     // drop invalid message kinds
                     _ => return CstStatus::Running,
@@ -555,6 +578,10 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                     if self.latest_cid_count > order_protocol.view().f() {
                         // reset timeout, since req was successful
                         self.curr_timeout = self.base_timeout;
+
+                        info!("{:?} // Identified the latest consensus seq no as {:?} with {} votes.",
+                            self.node.id(),
+                            self.latest_cid, self.latest_cid_count);
 
                         // the latest cid was available in at least
                         // f+1 replicas

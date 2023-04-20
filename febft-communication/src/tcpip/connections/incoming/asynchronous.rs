@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bytes::BytesMut;
 use either::Either;
 use futures::AsyncReadExt;
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 
 use febft_common::async_runtime as rt;
 use febft_common::socket::SecureReadHalfAsync;
@@ -55,7 +55,7 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(
             }
 
             if conn_handle.my_id.0 < 1000 && peer_id.0 < 1000 {
-                debug!("{:?} // Received message from peer {:?} with payload {}",
+                trace!("{:?} // Received message from peer {:?} with payload {}",
                     conn_handle.my_id, peer_id, header.payload_length());
             }
 

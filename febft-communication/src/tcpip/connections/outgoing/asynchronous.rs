@@ -2,7 +2,7 @@ use std::sync::Arc;
 use either::Either;
 use futures::AsyncWriteExt;
 use futures::io::{BufWriter, WriteHalf};
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 
 use febft_common::async_runtime as rt;
 use febft_common::socket::{AsyncSocket, SecureWriteHalfAsync};
@@ -43,7 +43,7 @@ pub(super) fn spawn_outgoing_task<M: Serializable + 'static>(
             }
 
             if conn_handle.my_id.0 < 1000 && peer.peer_node_id.0 < 1000 {
-                debug!("{:?} // Sending message to peer {:?} with payload {}",
+                trace!("{:?} // Sending message to peer {:?} with payload {}",
                     conn_handle.my_id, peer.peer_node_id, to_send.header().payload_length());
             }
 
