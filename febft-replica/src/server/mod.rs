@@ -8,6 +8,7 @@ use log::{debug, error, info};
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx};
 
+use febft_common::async_runtime as rt;
 use febft_common::error::*;
 use febft_common::node_id::NodeId;
 use febft_common::ordering::{SeqNo};
@@ -124,24 +125,26 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
         ///FIXME: Protect against a slow loris attack by only requiring connections to a quorum of nodes
         /// and not wait with a for loop like this where we can spend a long time waiting for each connection
-        'outer: for (peer_id, conn_result) in connections {
-            for conn in conn_result {
-                match conn.await {
-                    Ok(result) => {
-                        if let Err(err) = result {
-                            error!("{:?} // Failed to connect to {:?} for {:?}", log_node_id, peer_id, err);
+        rt::spawn(async move {
+            'outer: for (peer_id, conn_result) in connections {
+                for conn in conn_result {
+                    match conn.await {
+                        Ok(result) => {
+                            if let Err(err) = result {
+                                error!("{:?} // Failed to connect to {:?} for {:?}", log_node_id, peer_id, err);
+                                continue 'outer;
+                            }
+                        }
+                        Err(error) => {
+                            error!("Failed to connect to the given node. {:?}", error);
                             continue 'outer;
                         }
                     }
-                    Err(error) => {
-                        error!("Failed to connect to the given node. {:?}", error);
-                        continue 'outer;
-                    }
                 }
-            }
 
-            info!("{:?} // Established a new connection to node {:?}.", log_node_id, peer_id);
-        }
+                info!("{:?} // Established a new connection to node {:?}.", log_node_id, peer_id);
+            }
+        });
 
         info!("{:?} // Connected to all other replicas.", log_node_id);
 

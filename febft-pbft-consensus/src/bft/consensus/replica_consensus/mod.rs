@@ -156,7 +156,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ReplicaConsens
 
         let targets = NodeId::targets(0..view.params().n());
 
-        node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets).unwrap();
+        node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
 
         /*TODO:
                 //Notify the followers

@@ -41,6 +41,25 @@ enum ProtoPhase<S, V, O> {
     ReceivingState(usize),
 }
 
+impl<S, V, O> Debug for ProtoPhase<S, V, O> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProtoPhase::Init => {
+                write!(f, "Init Phase")
+            }
+            ProtoPhase::WaitingCheckpoint(header, msg) => {
+                write!(f, "Waiting for checkpoint {:?}, {:?}", header, msg)
+            }
+            ProtoPhase::ReceivingCid(size) => {
+                write!(f, "Receiving CID phase {} responses", size)
+            }
+            ProtoPhase::ReceivingState(size) => {
+                write!(f, "Receiving state phase {} responses", size)
+            }
+        }
+    }
+}
+
 /// Contains state used by a recovering node.
 ///
 /// Cloning this is better than it was because of the read only checkpoint,
@@ -290,7 +309,7 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
 
         let message = message.into_inner();
 
-        debug!("{:?} // Message {:?} from {:?}", self.node.id(), message, header.from());
+        debug!("{:?} // Message {:?} from {:?} while in phase {:?}", self.node.id(), message, header.from(), self.phase);
 
         match &message.kind() {
             CstMessageKind::RequestLatestConsensusSeq => {
@@ -359,8 +378,6 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
                 // This can happen for example when we already received the a quorum of sequence number replies
                 // And therefore we are already in the Init phase and we are still receiving replies
                 // And have not yet processed the
-
-                return Err("Invalid state reached! State Transfer").wrapped(ErrorKind::CoreServer);
             }
         }
 
@@ -517,7 +534,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
             ProtoPhase::ReceivingCid(i) => {
                 let (header, message) = getmessage!(progress, CstStatus::RequestLatestCid);
 
-                debug!("{:?} // Received Cid with {} responses from {:?}  for seq {:?} vs Ours {:?}", self.node.id(),
+                debug!("{:?} // Received Cid with {} responses from {:?} for CST Seq {:?} vs Ours {:?}", self.node.id(),
                    i, header.from(), message.sequence_number(), self.cst_seq);
 
                 // drop cst messages with invalid seq no
@@ -535,6 +552,8 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
 
                 match message.kind() {
                     CstMessageKind::ReplyLatestConsensusSeq(seq) => {
+                        debug!("{:?} // Received CID vote {:?} from {:?}", self.node.id(), seq, header.from());
+
                         match seq.cmp(&self.latest_cid) {
                             Ordering::Greater => {
                                 self.latest_cid = *seq;
@@ -566,11 +585,9 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                 // TODO: check for more than one reply from the same node
                 let i = i + 1;
 
-                debug!("{:?} // Quorum count {}, i: {}, cst_seq {:?}",
-                        self.node.id(),
-                        order_protocol.view().quorum(),
-                        i,
-                        self.cst_seq);
+                debug!("{:?} // Quorum count {}, i: {}, cst_seq {:?}. Current Latest Cid: {:?}. Current Latest Cid Count: {}",
+                        self.node.id(), order_protocol.view().quorum(), i,
+                        self.cst_seq, self.latest_cid, self.latest_cid_count);
 
                 if i == order_protocol.view().quorum() {
                     self.phase = ProtoPhase::Init;
@@ -598,8 +615,8 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
             ProtoPhase::ReceivingState(i) => {
                 let (header, mut message) = getmessage!(progress, CstStatus::RequestState);
 
-                // NOTE: check comment above, on ProtoPhase::ReceivingCid
                 if message.sequence_number() != self.cst_seq {
+                    // NOTE: check comment above, on ProtoPhase::ReceivingCid
                     return CstStatus::Running;
                 }
 

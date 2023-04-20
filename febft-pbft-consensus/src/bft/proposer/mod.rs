@@ -422,8 +422,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
 
         let targets = view.quorum_members().iter().copied();
 
-        self.node_ref.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets)
-            .unwrap();
+        self.node_ref.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
     }
 
     /// Check if we have received forwarded requests. If so, then
