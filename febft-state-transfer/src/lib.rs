@@ -498,7 +498,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
             ProtoPhase::ReceivingCid(i) => {
                 let (header, message) = getmessage!(progress, CstStatus::RequestLatestCid);
 
-                debug!("{:?} // Received Cid with {} from {:?} responses for seq {:?} vs Ours {:?}", self.node.id(),
+                debug!("{:?} // Received Cid with {} responses from {:?}  for seq {:?} vs Ours {:?}", self.node.id(),
                    i, header.from(), message.sequence_number(), self.cst_seq);
 
                 // drop cst messages with invalid seq no
