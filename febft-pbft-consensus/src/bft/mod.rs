@@ -57,7 +57,7 @@ pub type PBFT<D, ST> = ServiceMsg<D, PBFTConsensus<D>, ST>;
 // The message type for this consensus protocol
 pub type SysMsg<D, ST> = <PBFT<D, ST> as Serializable>::Message;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 /// Which phase of the consensus algorithm are we currently executing
 pub enum ConsensusPhase {
     // The normal phase of the consensus
@@ -562,6 +562,7 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
           NT: Node<PBFT<D, ST>> + 'static {
     type StateSerialization = PBFTConsensus<D>;
 
+
     fn initialize_with_initial_state(config: Self::Config, executor: ExecutorHandle<D>, timeouts: Timeouts, node: Arc<NT>, initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where Self: Sized {
         Self::initialize_protocol(config, executor, timeouts, node, Some(initial_state))
     }
@@ -615,6 +616,9 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT>
           ST: StateTransferMessage + 'static,
           NT: Node<PBFT<D, ST>> + 'static {
     pub(crate) fn switch_phase(&mut self, new_phase: ConsensusPhase) {
+
+        info!("{:?} // Switching from phase {:?} to phase {:?}", self.node.id(), self.phase, new_phase);
+
         let old_phase = self.phase.clone();
 
         self.phase = new_phase;

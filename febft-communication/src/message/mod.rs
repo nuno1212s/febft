@@ -454,7 +454,15 @@ impl WireMessage {
     /// Wraps a `Header` and a byte array payload into a `WireMessage`.
     pub fn from_parts(header: Header, payload: Buf) -> Result<Self> {
         let wm = Self { header, payload };
-        if !wm.is_valid(None) {
+        if !wm.is_valid(None, true) {
+            return Err(Error::simple(ErrorKind::CommunicationMessage));
+        }
+        Ok(wm)
+    }
+
+    pub fn from_header(header: Header) -> Result<Self> {
+        let wm = Self { header, payload: Buf::new() };
+        if !wm.is_valid(None, false) {
             return Err(Error::simple(ErrorKind::CommunicationMessage));
         }
         Ok(wm)
@@ -523,10 +531,10 @@ impl WireMessage {
 
     /// Checks for the correctness of the `WireMessage`. This implies
     /// checking its signature, if a `PublicKey` is provided.
-    pub fn is_valid(&self, public_key: Option<&PublicKey>) -> bool {
+    pub fn is_valid(&self, public_key: Option<&PublicKey>, check_payload_len: bool) -> bool {
         let preliminary_check_failed =
             self.header.version != WireMessage::CURRENT_VERSION
-                || self.header.length != self.payload.len() as u64;
+                || (check_payload_len && self.header.length != self.payload.len() as u64);
 
         if preliminary_check_failed {
             return false;

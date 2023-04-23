@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
 use febft_common::error::*;
@@ -39,7 +40,7 @@ pub struct DecisionLog<O> {
 
 /// Metadata about a proof
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ProofMetadata {
     seq_no: SeqNo,
     batch_digest: Digest,
@@ -369,5 +370,11 @@ impl<O> Clone for Proof<O> {
             prepares: new_prepares,
             commits: new_commits,
         }
+    }
+}
+
+impl<O> Debug for Proof<O> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Proof {{ Metadata: {:?}, pre_prepares: {}, prepares: {}, commits: {} }}", self.metadata, self.pre_prepares.len(), self.prepares.len(), self.commits.len())
     }
 }

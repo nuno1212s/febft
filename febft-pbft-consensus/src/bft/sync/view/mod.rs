@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::{Debug, Formatter};
 use std::iter;
 
 use std::ops::{Add, Div};
@@ -76,7 +77,6 @@ impl ViewInfo {
             leader_set.push(quorum_members[(usize::from(seq) + i) % n]);
         }
 
-
         let division = calculate_hash_space_division(&leader_set);
 
         Ok(ViewInfo {
@@ -120,14 +120,12 @@ impl ViewInfo {
     /// Returns a new view with the sequence number after
     /// the current view's number.
     pub fn next_view(&self) -> ViewInfo {
-        self.peek(self.seq.next())
+        Self::new(self.seq.next(), self.params.n(), self.params.f()).unwrap()
     }
 
     /// Returns a new view with the specified sequence number.
     pub fn peek(&self, seq: SeqNo) -> ViewInfo {
-        let mut view = self.clone();
-        view.seq = seq;
-        view
+        Self::new(seq, self.params.n(), self.params.f()).unwrap()
     }
 
     /// Returns the primary of the current view.
@@ -263,4 +261,11 @@ mod view_tests {
     }
 
 
+}
+
+impl Debug for ViewInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Seq: {:?}, quorum: {:?}, primary: {:?}, leader_set: {:?}, params: {:?}",
+               self.seq, self.quorum, self.leader(), self.leader_set, self.params)
+    }
 }

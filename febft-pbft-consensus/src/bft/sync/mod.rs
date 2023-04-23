@@ -12,6 +12,7 @@ use bytes::BytesMut;
 use self::{follower_sync::FollowerSynchronizer, replica_sync::ReplicaSynchronizer};
 
 use intmap::IntMap;
+use log::{debug, error, info, warn};
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
@@ -277,7 +278,7 @@ pub(super) enum TimeoutPhase {
     TimedOut,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub(super) enum ProtoPhase {
     // the view change protocol isn't running;
     // we are watching pending client requests for
@@ -492,6 +493,12 @@ impl<D> Synchronizer<D>
     ) -> SynchronizerStatus
         where ST: StateTransferMessage, NT: Node<PBFT<D, ST>>
     {
+        debug!("{:?} // Processing view change message {:?} in phase {:?} from {:?}",
+               node.id(),
+               message,
+               self.phase.get(),
+               header.from());
+
         match self.phase.get() {
             ProtoPhase::Init => {
                 return match message.kind() {
@@ -597,11 +604,18 @@ impl<D> Synchronizer<D>
                 }
 
                 if i == current_view.params().quorum() {
+                    let next_view = current_view.next_view();
+
+                    warn!("{:?} // Stopping quorum reached, moving to next view {:?}", node.id(), next_view);
+
                     let previous_view = current_view.clone();
 
                     //We have received the necessary amount of stopping requests
                     //To now that we should move to the next view
-                    self.install_view(current_view.next_view());
+
+                    let next_leader = next_view.leader();
+
+                    self.install_view(next_view);
 
                     match &self.accessory {
                         SynchronizerAccessory::Replica(rep) => {
@@ -611,7 +625,7 @@ impl<D> Synchronizer<D>
                         SynchronizerAccessory::Follower(_) => {}
                     }
 
-                    if current_view.leader() == node.id() {
+                    if next_leader == node.id() {
                         //Move to the stopping data phase as we are the new leader
                         self.phase.replace(ProtoPhase::StoppingData(0));
                     } else {
@@ -649,7 +663,13 @@ impl<D> Synchronizer<D>
                                 return SynchronizerStatus::Running;
                             }
                             ViewChangeMessageKind::StopData(_) if msg_seq != seq => {
+                                warn!("{:?} // Received stop data message for view {:?} but we are in view {:?}",
+                                      node.id(), msg_seq, seq);
+
                                 if current_view.peek(msg_seq).leader() == node.id() {
+                                    warn!("{:?} // We are the leader of the view of the received message, so we will accept it",
+                                      node.id());
+
                                     //If we are the leader of the view the message is in,
                                     //Then we want to accept the message, but since it is not the current
                                     //View, then it cannot be processed atm
@@ -663,12 +683,16 @@ impl<D> Synchronizer<D>
                             ViewChangeMessageKind::StopData(_)
                             if current_view.leader() != node.id() =>
                                 {
+                                    warn!("{:?} // Received stop data message but we are not the leader of the current view",
+                                      node.id());
                                     //If we are not the leader, ignore
                                     return SynchronizerStatus::Running;
                                 }
                             ViewChangeMessageKind::StopData(_)
                             if collects_guard.contains_key(header.from().into()) =>
                                 {
+                                    warn!("{:?} // Received stop data message but we have already received one from this node",
+                                      node.id());
                                     // drop attempts to vote twice
                                     return SynchronizerStatus::Running;
                                 }
@@ -699,6 +723,8 @@ impl<D> Synchronizer<D>
                             .insert(header.from().into(), StoredMessage::new(header, message));
 
                         if i != current_view.params().quorum() {
+                            self.phase.replace(ProtoPhase::StoppingData(i));
+
                             return SynchronizerStatus::Running;
                         } else {
 
@@ -716,6 +742,8 @@ impl<D> Synchronizer<D>
 
                             let proof = Self::highest_proof(&*collects_guard,
                                                             previous_view_ref, node);
+
+                            info!("{:?} // Highest proof: {:?}", node.id(), proof);
 
                             let curr_cid = proof
                                 .map(|p| p.sequence_number())
@@ -1006,14 +1034,16 @@ impl<D> Synchronizer<D>
     fn pre_finalize(
         &self,
         state: FinalizeState<D::Request>,
-        _proof: Option<&Proof<D::Request>>,
+        proof: Option<&Proof<D::Request>>,
         _normalized_collects: Vec<Option<&CollectData<D::Request>>>,
         log: &Log<D>,
     ) -> FinalizeStatus<D::Request>
     {
+        let last_executed_cid = proof.as_ref().map(|p| p.sequence_number()).unwrap_or(SeqNo::ZERO);
+
         //If we are more than one operation behind the most recent consensus id,
         //Then we must run a consensus state transfer
-        if u32::from(log.decision_log().last_execution().unwrap_or(SeqNo::ZERO)) + 1 < u32::from(state.curr_cid) {
+        if u32::from(log.decision_log().last_execution().unwrap_or(SeqNo::ZERO)) + 1 < u32::from(last_executed_cid) {
             return FinalizeStatus::RunCst(state);
         }
 
@@ -1050,23 +1080,26 @@ impl<D> Synchronizer<D>
             last_proof
         } = state;
 
+        warn!("{:?} // Finalizing view change to CID {:?}", node.id(), curr_cid);
+
         // we will get some value to be proposed because of the
         // check we did in `pre_finalize()`, guarding against no values
         log.clear_last_occurrence(curr_cid);
 
         let (header, message) = proposed.into_inner();
 
+        let last_executed_cid = last_proof.as_ref().map(|p| p.sequence_number()).unwrap_or(SeqNo::ZERO);
+
         //TODO: Install the Last CID that was received in the finalize state
-        if u32::from(log.decision_log().last_execution().unwrap_or(SeqNo::ZERO)) + 1 == u32::from(curr_cid) {
+        if u32::from(log.decision_log().last_execution().unwrap_or(SeqNo::ZERO)) + 1 == u32::from(last_executed_cid) {
+            warn!("{:?} // Received more recent consensus ID, making quorum aware of it {:?} vs {:?} (Ours)", node.id(),
+            curr_cid, log.decision_log().last_execution());
 
             // We are missing the last decision, which should be included in the collect data
             // sent by the leader in the SYNC message
             if let Some(last_proof) = last_proof {
                 consensus.catch_up_to_quorum(last_proof.seq_no(), last_proof, log)
                     .expect("Failed to catch up to quorum");
-
-                //TODO: Now we must replay this in the executor.
-                // Maybe do a sync write so we can make sure we only execute when it is done
             } else {
                 // This maybe happens when a checkpoint is done and the first execution after it
                 // fails, leading to a view change? Don't really know how this would be possible
@@ -1103,7 +1136,7 @@ impl<D> Synchronizer<D>
     }
 
     /// Watch requests that have been forwarded to us
-    pub fn watch_forwarded_requests(&self, requests: &ForwardedRequestsMessage<D::Request>, timeouts: &Timeouts, ) {
+    pub fn watch_forwarded_requests(&self, requests: &ForwardedRequestsMessage<D::Request>, timeouts: &Timeouts) {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
                 rep.watch_forwarded_requests(requests, timeouts)
@@ -1160,7 +1193,7 @@ impl<D> Synchronizer<D>
                 SynchronizerStatus::Nil
             }
             SynchronizerAccessory::Replica(rep) => {
-                rep.client_requests_timed_out(my_id,seq)
+                rep.client_requests_timed_out(my_id, seq)
             }
         }
     }
@@ -1414,19 +1447,27 @@ fn validate_signature<'a, D, M, ST, NT>(node: &'a NT, stored: &'a StoredMessage<
         NT: Node<PBFT<D, ST>>
 {
     //TODO: Fix this as I believe it will always be false
-    let wm = match WireMessage::from_parts(*stored.header(), Buf::new()) {
+    let wm = match WireMessage::from_header(*stored.header()) {
         Ok(wm) => wm,
-        _ => return false,
+        _ => {
+            error!("{:?} // Failed to parse WireMessage", node.id());
+
+            return false;
+        }
     };
 
     // check if we even have the public key of the node that claims
     // to have sent this particular message
     let key = match node.pk_crypto().get_public_key(&stored.header().from()) {
         Some(k) => k,
-        None => return false,
+        None => {
+            error!("{:?} // Failed to get public key for node {:?}", node.id(), stored.header().from());
+
+            return false;
+        }
     };
 
-    wm.is_valid(Some(&key))
+    wm.is_valid(Some(&key), false)
 }
 
 fn highest_proof<'a, D, I, ST, NT>(
@@ -1474,6 +1515,9 @@ fn highest_proof<'a, D, I, ST, NT>(
                 .filter(move |&stored|
                     { validate_signature::<D, _, _, _>(node, stored) })
                 .count() >= view.params().quorum();
+
+            debug!("{:?} // Proof {:?} is valid? commits valid: {:?} &&  prepares_valid: {:?}",
+                node.id(), proof, commits_valid, prepares_valid);
 
             commits_valid && prepares_valid
         })

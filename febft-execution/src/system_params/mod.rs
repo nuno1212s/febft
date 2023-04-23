@@ -6,14 +6,13 @@ use serde::{Serialize, Deserialize};
 /// a replica or client in `febft`, i.e. `n` and `f`
 /// such that `n >= 3*f + 1`.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct SystemParams {
     n: usize,
     f: usize,
 }
 
 impl SystemParams {
-
     /// Creates a new instance of `SystemParams`.
     pub fn new(n: usize, f: usize) -> Result<Self> {
         if n < 3 * f + 1 {

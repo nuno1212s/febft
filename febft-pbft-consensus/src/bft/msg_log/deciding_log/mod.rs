@@ -4,6 +4,7 @@ use std::iter;
 use std::iter::zip;
 use std::sync::{Arc, Mutex};
 use futures::StreamExt;
+use log::error;
 use febft_common::crypto::hash::{Context, Digest};
 
 use febft_common::error::*;
@@ -328,7 +329,9 @@ impl<O> DecidingLog<O> {
 
             None
         } else {
-            unreachable!()
+            error!("Attempted to clear last occurrences of a different instance {:?} vs {:?} (ours)", in_exec, self.seq_no);
+
+            None
         }
     }
 

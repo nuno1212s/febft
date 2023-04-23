@@ -81,8 +81,10 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         self.add_stopped_requests(base_sync, pending_rq_log);
         self.watch_all_requests(timeouts);
 
-        let current_view_seq = base_sync.view().sequence_number();
-        let current_leader = base_sync.view().leader();
+        let view_info = base_sync.view();
+
+        let current_view_seq = view_info.sequence_number();
+        let current_leader = view_info.leader();
 
         let collect = log
             //we use the previous views' f because the new view could have changed
