@@ -10,6 +10,7 @@ use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::StoredMessage;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
+use crate::bft::msg_log::deciding_log::CompletedBatch;
 
 pub type StoredConsensusMessage<O> = Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>;
 
@@ -33,20 +34,7 @@ pub struct Decision<O> {
 #[derive(Clone)]
 pub struct DecisionLog<O> {
     last_exec: Option<SeqNo>,
-    currently_deciding: OnGoingDecision<O>,
     decided: Vec<Proof<O>>,
-}
-
-/// Represents the decision that is currently ongoing in the consensus instance
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct OnGoingDecision<O> {
-    seq_no: SeqNo,
-    batch_digest: Option<Digest>,
-    pre_prepare_ordering: Option<Vec<Digest>>,
-    pre_prepares: Vec<StoredConsensusMessage<O>>,
-    prepares: Vec<StoredConsensusMessage<O>>,
-    commits: Vec<StoredConsensusMessage<O>>,
 }
 
 /// Metadata about a proof
@@ -124,6 +112,18 @@ impl ProofMetadata {
 }
 
 impl<O> Proof<O> {
+    pub fn new(metadata: ProofMetadata,
+               pre_prepares: Vec<StoredConsensusMessage<O>>,
+               prepares: Vec<StoredConsensusMessage<O>>,
+               commits: Vec<StoredConsensusMessage<O>>) -> Self {
+        Self {
+            metadata,
+            pre_prepares,
+            prepares,
+            commits,
+        }
+    }
+
     /// Returns the `PRE-PREPARE` message of this `Proof`.
     pub fn pre_prepares(&self) -> &[StoredConsensusMessage<O>] {
         &self.pre_prepares[..]
@@ -139,7 +139,7 @@ impl<O> Proof<O> {
         &self.commits[..]
     }
 
-
+    /// Check if the amount of pre prepares line up with the expected amount
     fn check_pre_prepare_sizes(&self) -> Result<()> {
         if self.metadata.pre_prepare_ordering().len() != self.pre_prepares.len() {
             return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
@@ -211,6 +211,14 @@ impl<O> Deref for Proof<O> {
 }
 
 impl IncompleteProof {
+    pub fn new(in_exec: SeqNo, write_set: WriteSet, quorum_prepares: Option<ViewDecisionPair>) -> Self {
+        Self {
+            in_exec,
+            write_set,
+            quorum_prepares,
+        }
+    }
+
     /// Returns the sequence number of the consensus instance currently
     /// being executed.
     pub fn executing(&self) -> SeqNo {
@@ -242,6 +250,11 @@ pub struct CollectData<O> {
 }
 
 impl<O> CollectData<O> {
+
+    pub fn new(incomplete_proof: IncompleteProof, last_proof: Option<Proof<O>>) -> Self {
+        Self { incomplete_proof, last_proof }
+    }
+
     pub fn incomplete_proof(&self) -> &IncompleteProof {
         &self.incomplete_proof
     }
@@ -251,142 +264,17 @@ impl<O> CollectData<O> {
     }
 }
 
-impl<O> OnGoingDecision<O> {
-    pub(crate) fn init_blank(seq_no: SeqNo) -> Self {
-        Self {
-            seq_no,
-            batch_digest: None,
-            pre_prepare_ordering: None,
-            pre_prepares: vec![],
-            prepares: vec![],
-            commits: vec![],
-        }
-    }
-
-    pub(crate) fn init_from_info(seq_no: SeqNo, batch_digest: Digest, pre_prepare_ordering: Vec<Digest>) -> Self {
-        Self {
-            seq_no,
-            batch_digest: Some(batch_digest),
-            pre_prepare_ordering: Some(pre_prepare_ordering),
-            pre_prepares: vec![],
-            prepares: vec![],
-            commits: vec![],
-        }
-    }
-
-    pub(crate) fn proof(mut self, quorum: Option<usize>) -> Result<Proof<O>> {
-
-        //TODO: Order the pre prepares to match the ordering of the vector
-
-        let (leader_count, order) = {
-            if let Some(ordering) = self.pre_prepare_ordering {
-                (ordering.len(), ordering)
-            } else {
-                return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
-                                                  "Failed to create proof, no ordering available"));
-            }
-        };
-
-        if self.pre_prepares.len() != leader_count {
-            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
-                                              format!("Failed to create a proof, pre_prepares do not match up to the leader count {} leader count {} preprepares",
-                                              leader_count, self.pre_prepares.len()).as_str()));
-        }
-
-        let mut ordered_pre_prepares = Vec::with_capacity(leader_count);
-
-        for digest in &order {
-            for i in 0..self.pre_prepares.len() {
-                let message = self.pre_prepares.get(i).unwrap();
-
-                if *message.header().digest() == *digest {
-                    ordered_pre_prepares.push(self.pre_prepares.swap_remove(i));
-
-                    break;
-                }
-            }
-        }
-
-        if let Some(quorum) = quorum {
-            if self.prepares.len() < quorum {
-                return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
-                                                  "Failed to create a proof, prepares do not match up to the 2*f+1"));
-            }
-
-            if self.commits.len() < quorum {
-                return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
-                                                  "Failed to create a proof, commits do not match up to the 2*f+1"));
-            }
-        }
-
-        Ok(Proof {
-            metadata: ProofMetadata::new(self.seq_no,
-                                         self.batch_digest.unwrap(),
-                                         order),
-            pre_prepares: ordered_pre_prepares,
-            prepares: self.prepares,
-            commits: self.commits,
-        })
-    }
-
-    pub(crate) fn append_pre_prepare(&mut self, pre_prepare: StoredConsensusMessage<O>) {
-        self.pre_prepares.push(pre_prepare);
-    }
-
-    pub(crate) fn append_prepare(&mut self, prepare: StoredConsensusMessage<O>) {
-        self.prepares.push(prepare);
-    }
-
-    pub(crate) fn append_commit(&mut self, commit: StoredConsensusMessage<O>) {
-        self.commits.push(commit);
-    }
-
-    /// Register that all the batches have been received
-    pub(crate) fn all_batches_received(&mut self, digest: Digest, pre_prepare_ordering: Vec<Digest>) -> ProofMetadata {
-        self.batch_digest = Some(digest);
-        self.pre_prepare_ordering = Some(pre_prepare_ordering);
-
-        ProofMetadata::new(self.seq_no,
-                           self.batch_digest.unwrap().clone(),
-                           self.pre_prepare_ordering.as_ref().unwrap().clone())
-    }
-
-    pub fn seq_no(&self) -> SeqNo {
-        self.seq_no
-    }
-
-    pub fn batch_digest(&self) -> Option<Digest> {
-        self.batch_digest
-    }
-    pub fn pre_prepare_ordering(&self) -> &Option<Vec<Digest>> {
-        &self.pre_prepare_ordering
-    }
-    pub fn pre_prepares(&self) -> &Vec<StoredConsensusMessage<O>> {
-        &self.pre_prepares
-    }
-    pub fn prepares(&self) -> &Vec<StoredConsensusMessage<O>> {
-        &self.prepares
-    }
-    pub fn commits(&self) -> &Vec<StoredConsensusMessage<O>> {
-        &self.commits
-    }
-}
-
 impl<O> DecisionLog<O> {
     pub fn new() -> Self {
         Self {
             last_exec: None,
-            currently_deciding: OnGoingDecision::init_blank(SeqNo::ZERO),
             decided: vec![],
         }
     }
 
     pub fn from_decided(last_exec: SeqNo, proofs: Vec<Proof<O>>) -> Self {
-        let current_exec = last_exec.next();
-
         Self {
             last_exec: Some(last_exec),
-            currently_deciding: OnGoingDecision::init_blank(current_exec),
             decided: proofs,
         }
     }
@@ -402,18 +290,6 @@ impl<O> DecisionLog<O> {
         &self.decided[..]
     }
 
-    pub(crate) fn append_pre_prepare(&mut self, pre_prepare: StoredConsensusMessage<O>) {
-        self.currently_deciding.append_pre_prepare(pre_prepare);
-    }
-
-    pub(crate) fn append_prepare(&mut self, prepare: StoredConsensusMessage<O>) {
-        self.currently_deciding.append_prepare(prepare);
-    }
-
-    pub(crate) fn append_commit(&mut self, commit: StoredConsensusMessage<O>) {
-        self.currently_deciding.append_commit(commit);
-    }
-
     /// Append a proof to the end of the log. Assumes all prior checks have been done
     pub(crate) fn append_proof(&mut self, proof: Proof<O>) {
         self.last_exec = Some(proof.seq_no());
@@ -421,142 +297,23 @@ impl<O> DecisionLog<O> {
         self.decided.push(proof);
     }
 
-    /// Register that all the batches have been received
-    pub(crate) fn all_batches_received(&mut self, digest: Digest, pre_prepare_ordering: Vec<Digest>) -> ProofMetadata {
-        self.currently_deciding.all_batches_received(digest, pre_prepare_ordering)
-    }
-
     //TODO: Maybe make these data structures a BTreeSet so that the messages are always ordered
     //By their seq no? That way we cannot go wrong in the ordering of messages.
-    pub(crate) fn finished_quorum_execution(&mut self, seq_no: SeqNo, f: usize) -> Result<()> {
+    pub(crate) fn finished_quorum_execution(&mut self, completed_batch: &CompletedBatch<O>, seq_no: SeqNo, f: usize) -> Result<()> {
         self.last_exec.replace(seq_no);
 
-        let decided = std::mem::replace(&mut self.currently_deciding, OnGoingDecision::init_blank(seq_no.next()));
-        let proof = decided.proof(Some(f))?;
+        let proof = completed_batch.proof(Some(f))?;
 
         self.decided.push(proof);
 
         Ok(())
     }
-
-    /// Collects the most up to date data we have in store.
-    /// Accepts the f for the view that it is looking for
-    /// It must accept this f as the reconfiguration of the network
-    /// can alter the f from one seq no to the next
-    pub fn collect_data(&self, f: usize) -> CollectData<O> {
-        CollectData {
-            incomplete_proof: self.to_be_decided(f),
-            last_proof: self.last_decision(),
-        }
-    }
-    /// Returns the sequence number of the consensus instance
-    /// currently being executed
-    pub fn executing(&self) -> SeqNo {
-        // we haven't called `finalize_batch` yet, so the in execution
-        // seq no will be the last + 1 or 0
-        self.currently_deciding.seq_no
-    }
-
-    /// Get a reference to the current on going decision
-    pub fn current_execution(&self) -> &OnGoingDecision<O> {
-        &self.currently_deciding
-    }
-
     /// Returns the proof of the last executed consensus
     /// instance registered in this `DecisionLog`.
     pub fn last_decision(&self) -> Option<Proof<O>> {
         self.decided.get(self.decided.len() - 1).map(|p| (*p).clone())
     }
 
-    /// Returns an incomplete proof of the consensus
-    /// instance currently being decided in this `DecisionLog`.
-    /// Accepts the f of the system at the time of the request
-    pub fn to_be_decided(&self, f: usize) -> IncompleteProof {
-        let in_exec = self.executing();
-
-        // fetch write set
-        let write_set = WriteSet({
-            let mut buf = Vec::new();
-
-            for stored in self.currently_deciding.prepares.iter().rev() {
-                match stored.message().sequence_number().cmp(&in_exec) {
-                    Ordering::Equal => {
-                        buf.push(ViewDecisionPair(
-                            stored.message().view(),
-                            stored.header().digest().clone(),
-                        ));
-                    }
-                    Ordering::Less => break,
-                    // impossible, because we are executing `in_exec`
-                    Ordering::Greater => unreachable!(),
-                }
-            }
-
-            buf
-        });
-
-        // fetch quorum prepares
-        let quorum_writes = 'outer: loop {
-            // NOTE: check `last_decision` comment on quorum
-            let quorum = f << 1;
-            let mut last_view = None;
-            let mut count = 0;
-
-            for stored in self.currently_deciding.prepares.iter().rev() {
-                match stored.message().sequence_number().cmp(&in_exec) {
-                    Ordering::Equal => {
-                        match last_view {
-                            None => (),
-                            Some(v) if stored.message().view() == v => (),
-                            _ => count = 0,
-                        }
-                        last_view = Some(stored.message().view());
-                        count += 1;
-                        if count == quorum {
-                            let digest = match stored.message().kind() {
-                                ConsensusMessageKind::Prepare(d) => d.clone(),
-                                _ => unreachable!(),
-                            };
-                            break 'outer Some(ViewDecisionPair(stored.message().view(), digest));
-                        }
-                    }
-                    Ordering::Less => break,
-                    // impossible, because we are executing `in_exec`
-                    Ordering::Greater => unreachable!(),
-                }
-            }
-
-            break 'outer None;
-        };
-
-        IncompleteProof {
-            in_exec,
-            write_set,
-            quorum_prepares: quorum_writes,
-        }
-    }
-
-
-    /// Clear incomplete proofs from the log, which match the consensus
-    /// with sequence number `in_exec`.
-    ///
-    /// If `value` is `Some(v)`, then a `PRE-PREPARE` message will be
-    /// returned matching the digest `v`.
-    pub fn clear_last_occurrences(
-        &mut self,
-        in_exec: SeqNo,
-        value: Option<&Digest>,
-    ) -> Option<StoredMessage<ConsensusMessage<O>>> {
-        // let mut scratch = Vec::with_capacity(8);
-
-        if self.currently_deciding.seq_no == in_exec {
-            let ongoing_decision = std::mem::replace(&mut self.currently_deciding, OnGoingDecision::init_blank(in_exec));
-
-            todo!()
-        } else {
-            unreachable!()
-        }
-    }
 
     /// Clear the decision log until the given sequence number
     pub(crate) fn clear_until_seq(&mut self, seq_no: SeqNo) -> usize {

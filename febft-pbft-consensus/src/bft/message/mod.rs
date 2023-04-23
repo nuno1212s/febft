@@ -158,7 +158,6 @@ impl<O> Debug for ConsensusMessage<O> {
 
 /// Represents one of many different consensus stages.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
 pub enum ConsensusMessageKind<O> {
     /// Pre-prepare a request, according to the BFT consensus protocol.
     /// Sent by a single leader
@@ -183,6 +182,22 @@ impl<O> Orderable for ConsensusMessage<O> {
     /// Returns the sequence number of this consensus message.
     fn sequence_number(&self) -> SeqNo {
         self.seq
+    }
+}
+
+impl<O> Clone for ConsensusMessageKind<O> where O: Clone {
+    fn clone(&self) -> Self {
+        match self {
+            ConsensusMessageKind::PrePrepare(reqs) => {
+                ConsensusMessageKind::PrePrepare(reqs.clone())
+            }
+            ConsensusMessageKind::Prepare(digest) => {
+                ConsensusMessageKind::Prepare(*digest)
+            }
+            ConsensusMessageKind::Commit(digest) => {
+                ConsensusMessageKind::Commit(*digest)
+            }
+        }
     }
 }
 

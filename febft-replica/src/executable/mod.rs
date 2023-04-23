@@ -161,7 +161,7 @@ impl<S, NT> Executor<S, NT>
             send_node,
             loopback_channel,
         };
-
+        
         for request in requests {
             exec.service.update(&mut exec.state, request);
         }

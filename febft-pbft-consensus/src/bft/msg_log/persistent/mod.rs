@@ -29,7 +29,8 @@ use crate::bft::msg_log::persistent::serialization::{make_proof_info};
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::msg_log::decided_log::BatchExecutionInfo;
-use crate::bft::msg_log::decisions::{Decision, OnGoingDecision, Proof, ProofMetadata};
+use crate::bft::msg_log::deciding_log::{make_proof_from, OnGoingDecision};
+use crate::bft::msg_log::decisions::{Decision, Proof, ProofMetadata};
 use crate::bft::sync::view::ViewInfo;
 
 use self::consensus_backlog::ConsensusBackLogHandle;
@@ -67,7 +68,7 @@ pub enum PersistentLogMode<D: SharedData> {
     ///
     /// Performance will be dependent on the speed of the datastore as the consensus will only move to the
     /// executing phase once all requests have been successfully stored.
-    Strict(ConsensusBackLogHandle<D>),
+    Strict(ConsensusBackLogHandle<D::Request>),
 
     ///Optimistic mode relies a lot more on the assumptions that are made by the BFT algorithm in order
     /// to maximize the performance.
@@ -393,7 +394,7 @@ impl<D: SharedData + 'static> PersistentLog<D>
     ///Attempt to queue a batch into waiting for persistent logging
     /// If the batch does not have to wait, it's returned to it can be instantly
     /// passed to the executor
-    pub fn wait_for_batch_persistency_and_execute(&self, batch: BatchExecutionInfo<D>) -> Result<Option<BatchExecutionInfo<D>>> {
+    pub fn wait_for_batch_persistency_and_execute(&self, batch: BatchExecutionInfo<D::Request>) -> Result<Option<BatchExecutionInfo<D::Request>>> {
         match &self.persistency_mode {
             PersistentLogMode::Strict(consensus_backlog) => {
                 consensus_backlog.queue_batch(batch)?;
@@ -411,7 +412,7 @@ impl<D: SharedData + 'static> PersistentLog<D>
     /// a view change)
     /// If the batch does not have to wait, it's returned to it can be instantly
     /// passed to the executor
-    pub fn wait_for_proof_persistency_and_execute(&self, batch: BatchExecutionInfo<D>) -> Result<Option<BatchExecutionInfo<D>>> {
+    pub fn wait_for_proof_persistency_and_execute(&self, batch: BatchExecutionInfo<D::Request>) -> Result<Option<BatchExecutionInfo<D::Request>>> {
         match &self.persistency_mode {
             PersistentLogMode::Strict(backlog) => {
                 backlog.queue_batch_proof(batch)?;
@@ -752,7 +753,7 @@ fn read_latest_state<D: SharedData>(db: &KVDB) -> Result<Option<InstallState<D>>
 
     let dec_log = read_all_present_proofs::<D>(db)?;
 
-    let digest= febft_execution::serialize::digest_state::<D>(state.as_ref().unwrap())?;
+    let digest = febft_execution::serialize::digest_state::<D>(state.as_ref().unwrap())?;
 
     let checkpoint = Checkpoint::new(first_seq.unwrap(), state.unwrap(), digest);
 
@@ -980,6 +981,7 @@ fn read_all_present_proofs<D: SharedData>(db: &KVDB) -> Result<DecisionLog<D::Re
     let proof_infos = read_proof_infos_for_range(db, first_seq, last_seq)?;
 
     let mut final_decisions = BTreeMap::new();
+    let mut proof_metadata = BTreeMap::new();
 
     // Analyse all of the messages from the persistent log and place them in the correct part
     // Of the decision log
@@ -994,20 +996,19 @@ fn read_all_present_proofs<D: SharedData>(db: &KVDB) -> Result<DecisionLog<D::Re
 
             let (digest, ordering): (Digest, Vec<Digest>) = (proof_info.batch_digest.clone(), proof_info.pre_prepare_ordering.clone());
 
-            let mut ongoing_decision = OnGoingDecision::init_from_info(seq_no,
-                                                                       digest,
-                                                                       ordering);
+            let metadata = ProofMetadata::new(seq_no,
+                                              digest, ordering.clone());
+
+            proof_metadata.insert(seq_no, metadata);
+
+            let mut ongoing_decision = OnGoingDecision::initialize_with_ordering(ordering.len(), ordering);
 
             final_decisions.insert(seq_no, ongoing_decision);
         }
 
         let decision = final_decisions.get_mut(&seq_no).unwrap();
 
-        match wrapped_msg.message().kind() {
-            ConsensusMessageKind::PrePrepare(_) => decision.append_pre_prepare(wrapped_msg),
-            ConsensusMessageKind::Prepare(_) => decision.append_prepare(wrapped_msg),
-            ConsensusMessageKind::Commit(_) => decision.append_commit(wrapped_msg)
-        }
+        decision.insert_stored_msg(wrapped_msg)?;
     }
 
     // When we are done reading all of the messages, we must create the decision log
@@ -1025,9 +1026,13 @@ fn read_all_present_proofs<D: SharedData>(db: &KVDB) -> Result<DecisionLog<D::Re
                                                   "Failed to load proofs from local storage as\
                                                    we are missing a decision from the log"));
             }
+
         }
 
-        let result = ongoing_decision.proof(None)?;
+        let metadata = proof_metadata.remove(&seq).ok_or(Error::simple_with_msg(ErrorKind::MsgLogPersistent,
+                                                                               "Failed to load metadata proofs"))?;
+
+        let result = make_proof_from(metadata, ongoing_decision)?;
 
         proof_vec.push(result);
     }
@@ -1076,7 +1081,6 @@ fn write_message<D: SharedData>(
 /// Delete all the proofs stored between the first_seq and the last_seq
 /// [first_seq, last_seq]
 fn delete_proofs_between(db: &KVDB, first_seq: SeqNo, last_seq: SeqNo) -> Result<()> {
-
     delete_proof_metadata_between(db, first_seq, last_seq)?;
 
     delete_proof_messages_between(db, first_seq, last_seq)?;
@@ -1085,7 +1089,6 @@ fn delete_proofs_between(db: &KVDB, first_seq: SeqNo, last_seq: SeqNo) -> Result
 }
 
 fn delete_proof_messages_between(db: &KVDB, first_seq: SeqNo, last_seq: SeqNo) -> Result<()> {
-
     let start = serialization::make_message_key(first_seq, None)?;
     let end = serialization::make_message_key(last_seq.next(), None)?;
 
@@ -1097,7 +1100,6 @@ fn delete_proof_messages_between(db: &KVDB, first_seq: SeqNo, last_seq: SeqNo) -
 }
 
 fn delete_proof_metadata_between(db: &KVDB, first_seq: SeqNo, last_seq: SeqNo) -> Result<()> {
-
     let start = serialization::make_seq(first_seq)?;
     let end = serialization::make_seq(last_seq.next())?;
 

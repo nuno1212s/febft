@@ -5,6 +5,7 @@ use febft_common::crypto::hash::{Context, Digest};
 
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
+use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::StoredMessage;
 use febft_execution::app::{Request, Service, State, UpdateBatch};
@@ -13,8 +14,8 @@ use febft_messages::state_transfer::Checkpoint;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::msg_log::{Info, operation_key, PERIOD};
-use crate::bft::msg_log::decisions::{DecisionLog, Proof};
-use crate::bft::msg_log::deciding_log::CompletedBatch;
+use crate::bft::msg_log::decisions::{CollectData, DecisionLog, Proof, ProofMetadata};
+use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
 use crate::bft::msg_log::persistent::{InstallState, PersistentLog, WriteMode};
 use crate::bft::sync::view::ViewInfo;
 
@@ -39,14 +40,16 @@ pub(crate) enum CheckpointState<D> {
 
 /// The log of decisions that have already been processed by the consensus
 /// algorithm
-pub struct DecidedLog<D> where D: SharedData + 'static {
+pub struct Log<D> where D: SharedData + 'static {
     //This item will only be accessed by the replica request thread
     //The current stored SeqNo in the checkpoint state.
     //NOTE: THIS IS NOT THE CURR_SEQ NUMBER IN THE CONSENSUS
     curr_seq: SeqNo,
 
-    //This will only be accessed by the replica processing thread since requests will only be
-    //Decided by the consensus protocol, which operates completely in the replica thread
+    // The log for the consensus instance that is currently being decided
+    deciding_log: DecidingLog<D::Request>,
+
+    // The log for all of the already decided consensus instances
     dec_log: DecisionLog<D::Request>,
 
     //The most recent checkpoint that we have.
@@ -64,14 +67,14 @@ pub struct DecidedLog<D> where D: SharedData + 'static {
 /// Completed Batch: The information collected by the [DecidingLog], if applicable. (We can receive a batch
 /// via a complete proof which means this will be [None] or we can process a batch normally, which means
 /// this will be [Some(CompletedBatch<D>)])
-pub struct BatchExecutionInfo<D> where D: SharedData {
+pub struct BatchExecutionInfo<O> {
     info: Info,
-    update_batch: UpdateBatch<D::Request>,
-    completed_batch: Option<CompletedBatch<D>>,
+    update_batch: UpdateBatch<O>,
+    completed_batch: Option<CompletedBatch<O>>,
 }
 
-impl<D> DecidedLog<D> where D: SharedData + 'static {
-    pub(crate) fn init_decided_log(persistent_log: PersistentLog<D>, state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Self {
+impl<D> Log<D> where D: SharedData + 'static {
+    pub(crate) fn init_decided_log(node_id: NodeId, persistent_log: PersistentLog<D>, state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Self {
 
         //TODO: Maybe read state from local storage?
         let checkpoint = if let Some(state) = state {
@@ -84,6 +87,7 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
 
         Self {
             curr_seq: SeqNo::ZERO,
+            deciding_log: DecidingLog::new(node_id),
             dec_log,
             checkpoint,
 
@@ -101,6 +105,14 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
         &mut self.dec_log
     }
 
+    pub fn deciding_log(&self) -> &DecidingLog<D::Request> {
+        &self.deciding_log
+    }
+
+    pub fn mut_deciding_log(&mut self) -> &mut DecidingLog<D::Request> {
+        &mut self.deciding_log
+    }
+
     /// Read the current state, if existent, from the persistent storage
     ///
     /// FIXME: The view initialization might have to be changed if we want to introduce reconfiguration
@@ -108,7 +120,6 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
         let option = self.persistent_log.read_state()?;
 
         if let Some(state) = option {
-
             let (view_seq, checkpoint, dec_log) = state;
 
             let view_seq = ViewInfo::new(view_seq, n, f)?;
@@ -140,18 +151,7 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
         &mut self,
         consensus_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
     ) {
-        //These messages can only be sent by replicas, so the dec_log
-        //Is only accessed by one thread.
-
-        //Wrap the message in a read only reference so we can then pass it around without having to clone it everywhere,
-        //Saving a lot of copies especially when sending things to the asynchronous logging
-        let mut dec_log = &mut self.dec_log;
-
-        match consensus_msg.message().kind() {
-            ConsensusMessageKind::PrePrepare(_) => dec_log.append_pre_prepare(consensus_msg.clone()),
-            ConsensusMessageKind::Prepare(_) => dec_log.append_prepare(consensus_msg.clone()),
-            ConsensusMessageKind::Commit(_) => dec_log.append_commit(consensus_msg.clone()),
-        }
+        self.deciding_log.register_consensus_message(consensus_msg.clone());
 
         if let Err(err) = self
             .persistent_log
@@ -165,7 +165,7 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
     /// This is done when we receive the final SYNC message from the leader
     /// which contains all of the collects
     /// If we are missing the request determined by the
-    pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<D::Request>) -> Result<Option<BatchExecutionInfo<D>>> {
+    pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<D::Request>) -> Result<Option<BatchExecutionInfo<D::Request>>> {
         let batch_execution_info = BatchExecutionInfo::from(&proof);
 
         if let Some(decision) = self.decision_log().last_decision() {
@@ -191,10 +191,17 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
 
     /// Clear the occurrences of a seq no from the decision log
     pub fn clear_last_occurrence(&mut self, seq: SeqNo) {
-        self.mut_decision_log().clear_last_occurrences(seq, None);
+        self.mut_deciding_log().clear_last_occurrences(seq, None);
 
         if let Err(err) = self.persistent_log.write_invalidate(WriteMode::NonBlockingSync(None), seq) {
             error!("Failed to invalidate last occurrence {:?}", err);
+        }
+    }
+
+    /// Install a sequence number into the log.
+    pub fn install_sequence_number(&mut self, seq: SeqNo) {
+        if self.deciding_log.sequence_number() != seq {
+            self.deciding_log.reset();
         }
     }
 
@@ -209,6 +216,8 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
         // self.decided = rs.requests;
         self.checkpoint = CheckpointState::Complete(checkpoint.clone());
         self.curr_seq = last_seq.clone();
+
+        self.deciding_log.reset();
 
         if let Err(err) = self.persistent_log
             .write_install_state(WriteMode::NonBlockingSync(None),
@@ -276,65 +285,14 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
 
                 self.persistent_log.write_checkpoint(WriteMode::NonBlockingSync(None), checkpoint)?;
 
-                //Clear the decided requests log
-
-                /*{
-                    let mut decided = &mut self.de;
-
-                    if decided_request_count < decided.len() {
-
-                        let mut new_decided = Vec::with_capacity(decided.len() - decided_request_count);
-
-                        let to_keep = decided.len() - decided_request_count;
-
-                        for _ in 0..to_keep {
-                            let rq_to_keep = decided.pop().unwrap();
-
-                            new_decided.push(rq_to_keep);
-                        }
-
-                        //Get the requests in the correct order as we have inverted the order with the previous operation
-                        new_decided.reverse();
-
-                        drop(decided);
-
-                        self.decided.replace(new_decided);
-                    } else if decided_request_count == decided.len() {
-                        decided.clear();
-                    } else {
-                        //We can't have more decided requests than decided requests LOL
-                        unreachable!()
-                    }
-                }*/
-
-                // {@
-                // Observer code
-                // @}
-
-                /*
-                if let Some(observer) = &self.observer {
-                    observer
-                        .tx()
-                        .send(MessageType::Event(ObserveEventKind::CheckpointEnd(
-                            self.curr_seq.get(),
-                        )))
-                        .unwrap();
-                }
-                */
-
-                //
-                // @}
-                //
-
                 Ok(())
             }
         }
     }
 
     /// Register that all the batches for a given decision have already been received
-    pub fn all_batches_received(&mut self, digest: Digest, pre_prepare_ordering: Vec<Digest>) {
-        let metadata = self.dec_log.all_batches_received(digest, pre_prepare_ordering.clone());
-
+    /// Basically persists the metadata for a given consensus num
+    pub fn all_batches_received(&mut self, metadata: ProofMetadata) {
         self.persistent_log.write_proof_metadata(WriteMode::NonBlockingSync(None),
                                                  metadata).unwrap();
     }
@@ -352,8 +310,8 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
     pub fn finalize_batch(
         &mut self,
         seq: SeqNo,
-        completed_batch: CompletedBatch<D>,
-    ) -> Result<Option<BatchExecutionInfo<D>>> {
+        completed_batch: CompletedBatch<D::Request>,
+    ) -> Result<Option<BatchExecutionInfo<D::Request>>> {
         //println!("Finalized batch of OPS seq {:?} on Node {:?}", seq, self.node_id);
 
         let batch = {
@@ -408,7 +366,7 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
         //
         // Finalize the execution and store the proof in the log as a proof
         // instead of an ongoing decision
-        self.dec_log.finished_quorum_execution(seq, f).expect("Failed to create proof for the current instance");
+        self.dec_log.finished_quorum_execution(&completed_batch, seq, f)?;
 
         // Queue the batch for the execution
         let result = self.persistent_log.wait_for_batch_persistency_and_execute(BatchExecutionInfo {
@@ -419,28 +377,39 @@ impl<D> DecidedLog<D> where D: SharedData + 'static {
 
         result
     }
+
+    /// Collects the most up to date data we have in store.
+    /// Accepts the f for the view that it is looking for
+    /// It must accept this f as the reconfiguration of the network
+    /// can alter the f from one seq no to the next
+    pub fn collect_data(&self, f: usize) -> CollectData<D::Request> {
+        CollectData::new(
+            self.deciding_log.deciding(f),
+            self.dec_log.last_decision(),
+        )
+    }
 }
 
-impl<D> BatchExecutionInfo<D> where D: SharedData {
+impl<O> BatchExecutionInfo<O> {
     pub fn info(&self) -> &Info {
         &self.info
     }
-    pub fn update_batch(&self) -> &UpdateBatch<D::Request> {
+    pub fn update_batch(&self) -> &UpdateBatch<O> {
         &self.update_batch
     }
-    pub fn completed_batch(&self) -> &Option<CompletedBatch<D>> {
+    pub fn completed_batch(&self) -> &Option<CompletedBatch<O>> {
         &self.completed_batch
     }
 }
 
-impl<D> Into<(Info, UpdateBatch<D::Request>, Option<CompletedBatch<D>>)> for BatchExecutionInfo<D> where D: SharedData {
-    fn into(self) -> (Info, UpdateBatch<D::Request>, Option<CompletedBatch<D>>) {
+impl<O> Into<(Info, UpdateBatch<O>, Option<CompletedBatch<O>>)> for BatchExecutionInfo<O> {
+    fn into(self) -> (Info, UpdateBatch<O>, Option<CompletedBatch<O>>) {
         (self.info, self.update_batch, self.completed_batch)
     }
 }
 
-impl<D> From<&Proof<D::Request>> for BatchExecutionInfo<D> where D: SharedData {
-    fn from(value: &Proof<D::Request>) -> Self {
+impl<O> From<&Proof<O>> for BatchExecutionInfo<O> where O: Clone {
+    fn from(value: &Proof<O>) -> Self {
         let mut update_batch = UpdateBatch::new(value.seq_no());
 
         if !value.are_pre_prepares_ordered().unwrap() {
@@ -449,7 +418,9 @@ impl<D> From<&Proof<D::Request>> for BatchExecutionInfo<D> where D: SharedData {
         }
 
         for pre_prepare in value.pre_prepares() {
-            let reqs = match pre_prepare.message().kind().clone() {
+            let consensus_msg = (*pre_prepare.message()).clone();
+
+            let reqs = match consensus_msg.into_kind() {
                 ConsensusMessageKind::PrePrepare(reqs) => { reqs }
                 _ => {
                     unreachable!()

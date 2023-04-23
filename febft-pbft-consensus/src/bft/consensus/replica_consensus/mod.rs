@@ -210,7 +210,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ReplicaConsens
         current_digest: Digest,
         curr_view: ViewInfo,
         preparing_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
-        log: &DecidingLog<D>,
+        log: &DecidingLog<D::Request>,
         node: &NT,
     ) where NT: Node<PBFT<D, ST>> {
         let node_id = node.id();

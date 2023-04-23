@@ -34,7 +34,7 @@ use self::replica_consensus::ReplicaConsensus;
 use crate::bft::consensus::replica_consensus::ReplicaPreparingPollStatus;
 use super::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
-use crate::bft::msg_log::decided_log::{DecidedLog};
+use crate::bft::msg_log::decided_log::{Log};
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
 use crate::bft::msg_log::decisions::{DecisionLog, Proof};
 use crate::bft::msg_log::Info;
@@ -257,7 +257,7 @@ pub enum ConsensusStatus<D> where D: SharedData {
     /// And therefore the entire batch digest
     /// THe second Vec<Digest> is a vec with digests of the requests contained in the batch
     /// The third is the messages that should be persisted for this batch to be considered persisted
-    Decided(CompletedBatch<D>),
+    Decided(CompletedBatch<D::Request>),
 }
 
 /// An abstract consensus trait.
@@ -279,9 +279,6 @@ pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static
     node_id: NodeId,
     phase: ProtoPhase,
     tbo: TboQueue<D::Request>,
-
-    // The information about the log that is currently being processed
-    deciding_log: DecidingLog<D>,
 
     // The handle for the executor
     executor_handle: ExecutorHandle<D>,
@@ -358,7 +355,6 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
             node_id,
             phase: ProtoPhase::Init,
             tbo: TboQueue::new(next_seq_num),
-            deciding_log: DecidingLog::new(node_id),
             executor_handle,
             accessory: ConsensusAccessory::Replica(ReplicaConsensus::new(
                 view,
@@ -374,7 +370,6 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
             node_id,
             phase: ProtoPhase::Init,
             tbo: TboQueue::new(next_seq_num),
-            deciding_log: DecidingLog::new(node_id),
 
             executor_handle,
             accessory: ConsensusAccessory::Follower,
@@ -504,7 +499,6 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
         //Move back to the init phase and prepare to process all of the
         //Pending messages so we can quickly catch up
         self.phase = ProtoPhase::Init;
-        self.deciding_log.reset();
         // FIXME: do we need to clear the missing requests buffers?
 
         match &mut self.accessory {
@@ -529,8 +523,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
     }
 
     /// Starts a new consensus instance.
-    pub fn next_instance(&mut self) {
-        self.deciding_log.reset();
+    pub fn next_instance(&mut self, log: &mut Log<D>) {
+        log.mut_deciding_log().reset();
 
         let _prev_seq = self.curr_seq.clone();
 
@@ -566,11 +560,11 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
     pub fn catch_up_to_quorum(&mut self,
                               seq: SeqNo,
                               proof: Proof<D::Request>,
-                              dec_log: &mut DecidedLog<D>) -> Result<()> {
+                              log: &mut Log<D>) -> Result<()> {
 
         // If this is successful, it means that we are all caught up and can now start executing the
         // batch
-        let should_execute = dec_log.install_proof(seq, proof)?;
+        let should_execute = log.install_proof(seq, proof)?;
 
         if let Some(to_execute) = should_execute {
             let (info, update, _) = to_execute.into();
@@ -586,7 +580,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
         }
 
         // Move to the next instance as this one has been finalized
-        self.next_instance();
+        self.next_instance(log);
 
         Ok(())
     }
@@ -596,7 +590,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
         (header, message): (Header, ConsensusMessage<D::Request>),
         synchronizer: &Synchronizer<D>,
         timeouts: &Timeouts,
-        log: &mut DecidedLog<D>,
+        log: &mut Log<D>,
         node: &NT,
     ) where NT: Node<PBFT<D, ST>> {
         match &mut self.accessory {
@@ -606,7 +600,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
             }
         }
 
-        self.deciding_log.reset();
+        log.mut_deciding_log().reset();
 
         //Prepare the algorithm as we are already entering this phase
 
@@ -626,7 +620,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
         message: ConsensusMessage<D::Request>,
         synchronizer: &Synchronizer<D>,
         timeouts: &Timeouts,
-        log: &mut DecidedLog<D>,
+        log: &mut Log<D>,
         node: &NT,
     ) -> ConsensusStatus<D>
         where NT: Node<PBFT<D, ST>> {
@@ -712,7 +706,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
 
                 if i == 1 {
                     //If this is the first pre prepare message we have received.
-                    self.deciding_log.processing_new_round(&view);
+                    log.mut_deciding_log().processing_new_round(&view, self.curr_seq);
                 }
 
                 //We know that from here on out we will never need to own the message again, so
@@ -725,28 +719,25 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
                     &stored_msg,
                     timeouts,
                     synchronizer,
-                    &self.deciding_log,
+                    log.deciding_log(),
                 );
 
                 //Store the currently deciding batch in the deciding log.
                 //Also update the rest of the fields to reflect this
-                let current_digest = self.deciding_log.processing_batch_request(
+                let batch_metadata = log.mut_deciding_log().process_pre_prepare(
                     stored_msg.clone(),
                     stored_msg.header().digest().clone(),
                     digests,
                 );
 
-                if let Err(err) = &current_digest {
+                if let Err(err) = &batch_metadata {
                     //There was an error when analysing the batch of requests, so it won't be counted
                     panic!("Failed to analyse request batch {:?}", err);
 
                     return ConsensusStatus::Deciding;
                 }
 
-                let current_digest = current_digest.unwrap();
-
-                // add message to the log
-                log.insert_consensus(stored_msg.clone());
+                let batch_metadata = batch_metadata.unwrap();
 
                 self.phase = if i == view.leader_set().len() {
 
@@ -754,19 +745,21 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
                     //We are now ready to broadcast our prepare message and move to the next phase
                     {
                         //Update batch meta
-                        let mut meta_guard = self.deciding_log.batch_meta().lock().unwrap();
+                        let mut meta_guard = log.deciding_log().batch_meta().lock().unwrap();
 
                         meta_guard.prepare_sent_time = Utc::now();
                         meta_guard.pre_prepare_received_time = pre_prepare_received_time;
                     }
 
                     let seq_no = self.sequence_number();
-                    let (current_digest, pre_prepare_ordering) =
-                        current_digest.expect("Received all messages but still can't calculate batch digest?");
+                    let metadata =
+                        batch_metadata.expect("Received all messages but still can't calculate batch digest?");
+
+                    let current_digest = metadata.batch_digest();
 
                     // Register that all of the batches have been received
                     // The digest of the batch and the order of the batches
-                    log.all_batches_received(current_digest, pre_prepare_ordering);
+                    log.all_batches_received(metadata);
 
                     match &mut self.accessory {
                         ConsensusAccessory::Follower => {}
@@ -854,10 +847,10 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
 
                             return ConsensusStatus::Deciding;
                         }
-                    ConsensusMessageKind::Prepare(d) if *d != self.deciding_log.current_digest().unwrap() => {
+                    ConsensusMessageKind::Prepare(d) if *d != log.deciding_log().current_digest().unwrap() => {
                         // drop msg with different digest from proposed value
                         debug!("{:?} // Dropped prepare message {:?} because of digest {:?} vs {:?} (ours)",
-                            self.node_id, d, d, self.deciding_log.current_digest());
+                            self.node_id, d, d, log.deciding_log().current_digest());
                         return ConsensusStatus::Deciding;
                     }
                     ConsensusMessageKind::Prepare(d)
@@ -886,26 +879,24 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
 
                 //Add the message to the messages that must be saved before 
                 //We are able to execute the consensus instance
-                self.deciding_log.register_consensus_message(stored_msg.header().digest().clone());
-
-                // add message to the log
                 log.insert_consensus(stored_msg.clone());
 
                 // check if we have gathered enough votes,
                 // and transition to a new phase
                 self.phase = if i == curr_view.params().quorum() {
-                    self.deciding_log.batch_meta().lock().unwrap().commit_sent_time = Utc::now();
+                    log.deciding_log().batch_meta().lock().unwrap().commit_sent_time = Utc::now();
 
                     let seq_no = self.sequence_number();
-                    let current_digest = self.deciding_log.current_digest().unwrap();
+                    let current_digest = log.deciding_log().current_digest().unwrap();
 
                     match &mut self.accessory {
                         ConsensusAccessory::Follower => {}
                         ConsensusAccessory::Replica(rep) => {
                             rep.handle_preparing_quorum(seq_no,
                                                         current_digest,
-                                                        curr_view, stored_msg,
-                                                        &self.deciding_log, node);
+                                                        curr_view,
+                                                        stored_msg,
+                                                        log.deciding_log(), node);
                         }
                     }
 
@@ -959,10 +950,10 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
 
                             return ConsensusStatus::Deciding;
                         }
-                    ConsensusMessageKind::Commit(d) if *d != self.deciding_log.current_digest().unwrap() => {
+                    ConsensusMessageKind::Commit(d) if *d != log.deciding_log().current_digest().unwrap() => {
                         // drop msg with different digest from proposed value
                         debug!("{:?} // Dropped commit message {:?} because of digest {:?} vs {:?} (ours)",
-                            self.node_id, d, d, self.deciding_log.current_digest());
+                            self.node_id, d, d, log.deciding_log().current_digest());
 
                         return ConsensusStatus::Deciding;
                     }
@@ -986,11 +977,10 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
 
                 //Add the message to the messages that must be saved before 
                 //We are able to execute the consensus instance
-                self.deciding_log.register_consensus_message(stored_message.header().digest().clone());
 
                 if i == 1 {
                     //Log the first received commit message
-                    self.deciding_log.batch_meta().lock().unwrap().first_commit_received = Utc::now();
+                    log.deciding_log().batch_meta().lock().unwrap().first_commit_received = Utc::now();
                 }
 
                 log.insert_consensus(stored_message.clone());
@@ -1002,7 +992,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
                     // notify core protocol
                     self.phase = ProtoPhase::Init;
 
-                    self.deciding_log.batch_meta().lock().unwrap().consensus_decision_time = Utc::now();
+                    log.deciding_log().batch_meta().lock().unwrap().consensus_decision_time = Utc::now();
 
                     let seq_no = self.sequence_number();
 
@@ -1013,7 +1003,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
                         }
                     }
 
-                    let processed_batch = self.deciding_log.finish_processing_batch().unwrap();
+                    let processed_batch = log.mut_deciding_log().finish_processing_batch().unwrap();
 
                     debug!("{:?} // Decided consensus phase with all commits Seq {:?}", node.id(), self.sequence_number());
 
@@ -1064,7 +1054,7 @@ fn request_batch_received<D>(
     pre_prepare: &StoredMessage<ConsensusMessage<D::Request>>,
     timeouts: &Timeouts,
     synchronizer: &Synchronizer<D>,
-    log: &DecidingLog<D>,
+    log: &DecidingLog<D::Request>,
 ) -> Vec<Digest>
     where
         D: SharedData + 'static

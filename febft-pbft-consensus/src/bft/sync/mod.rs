@@ -29,7 +29,7 @@ use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::{ClientRqInfo, Timeouts};
 use crate::bft::consensus::Consensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
-use crate::bft::msg_log::decided_log::DecidedLog;
+use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::{CollectData, Proof, ViewDecisionPair};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::PBFT;
@@ -485,7 +485,7 @@ impl<D> Synchronizer<D>
         header: Header,
         message: ViewChangeMessage<D::Request>,
         timeouts: &Timeouts,
-        log: &mut DecidedLog<D>,
+        log: &mut Log<D>,
         pending_rq_log: &PendingRequestLog<D>,
         consensus: &mut Consensus<D, ST>,
         node: &NT,
@@ -922,7 +922,7 @@ impl<D> Synchronizer<D>
     /// Resume the view change protocol after running the CST protocol.
     pub fn resume_view_change<ST, NT>(
         &self,
-        log: &mut DecidedLog<D>,
+        log: &mut Log<D>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<D, ST>,
         node: &NT,
@@ -959,7 +959,7 @@ impl<D> Synchronizer<D>
         timed_out: Option<Vec<StoredMessage<RequestMessage<D::Request>>>>,
         node: &NT,
         timeouts: &Timeouts,
-        _log: &DecidedLog<D>,
+        _log: &Log<D>,
     )
         where ST: StateTransferMessage + 'static,
               NT: Node<PBFT<D, ST>>
@@ -1008,7 +1008,7 @@ impl<D> Synchronizer<D>
         state: FinalizeState<D::Request>,
         _proof: Option<&Proof<D::Request>>,
         _normalized_collects: Vec<Option<&CollectData<D::Request>>>,
-        log: &DecidedLog<D>,
+        log: &Log<D>,
     ) -> FinalizeStatus<D::Request>
     {
         //If we are more than one operation behind the most recent consensus id,
@@ -1036,7 +1036,7 @@ impl<D> Synchronizer<D>
     fn finalize<ST, NT>(
         &self,
         state: FinalizeState<D::Request>,
-        log: &mut DecidedLog<D>,
+        log: &mut Log<D>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<D, ST>,
         node: &NT,

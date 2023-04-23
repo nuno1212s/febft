@@ -26,7 +26,7 @@ use febft_messages::timeouts::{ClientRqInfo, Timeouts};
 
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
-use crate::bft::msg_log::decided_log::DecidedLog;
+use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::PBFT;
@@ -65,7 +65,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         &self,
         base_sync: &Synchronizer<D>,
         previous_view: ViewInfo,
-        log: &DecidedLog<D>,
+        log: &Log<D>,
         pending_rq_log: &PendingRequestLog<D>,
         timeouts: &Timeouts,
         node: &NT,
@@ -84,7 +84,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         let current_view_seq = base_sync.view().sequence_number();
         let current_leader = base_sync.view().leader();
 
-        let collect = log.decision_log()
+        let collect = log
             //we use the previous views' f because the new view could have changed
             //The N of the network (With reconfigurable views)
             .collect_data(previous_view.params().f());

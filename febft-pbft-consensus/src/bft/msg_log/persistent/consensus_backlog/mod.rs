@@ -18,7 +18,7 @@ use crate::bft::msg_log::persistent::{ResponseMessage, ResponseMsg};
 /// It holds update batches that are yet to be executed since they are still waiting for the confirmation of the persistent log
 /// This is only needed (and only instantiated) when the persistency mode is strict
 pub struct ConsensusBacklog<D: SharedData> {
-    rx: ChannelSyncRx<BacklogMessage<D>>,
+    rx: ChannelSyncRx<BacklogMessage<D::Request>>,
 
     //Receives messages from the persistent log
     logger_rx: ChannelSyncRx<ResponseMsg>,
@@ -30,21 +30,21 @@ pub struct ConsensusBacklog<D: SharedData> {
     //Even if we already persisted the consensus instance that came after it (for some reason)
     // We can only deliver it when all the previous ones have been delivered,
     // As it must be ordered
-    currently_waiting_for: Option<AwaitingPersistence<D>>,
+    currently_waiting_for: Option<AwaitingPersistence<D::Request>>,
 
     //Message confirmations that we have already received but pertain to a further ahead consensus instance
     messages_received_ahead: BTreeMap<SeqNo, Vec<ResponseMessage>>,
 }
 
-type BacklogMessage<D> = BacklogMsg<D>;
+type BacklogMessage<O> = BacklogMsg<O>;
 
-enum BacklogMsg<D: SharedData> {
-    Batch(BatchExecutionInfo<D>),
-    Proof(BatchExecutionInfo<D>),
+enum BacklogMsg<O> {
+    Batch(BatchExecutionInfo<O>),
+    Proof(BatchExecutionInfo<O>),
 }
 
-struct AwaitingPersistence<D: SharedData> {
-    info: BatchExecutionInfo<D>,
+struct AwaitingPersistence<O> {
+    info: BatchExecutionInfo<O>,
     pending_rq: PendingRq,
 }
 
@@ -59,19 +59,19 @@ enum PendingRq {
 
 ///A detachable handle so we deliver work to the
 /// consensus back log thread
-pub struct ConsensusBackLogHandle<D: SharedData> {
-    rq_tx: ChannelSyncTx<BacklogMessage<D>>,
+pub struct ConsensusBackLogHandle<O> {
+    rq_tx: ChannelSyncTx<BacklogMessage<O>>,
     logger_tx: ChannelSyncTx<ResponseMsg>,
 }
 
-impl<D: SharedData> ConsensusBackLogHandle<D> {
+impl<O> ConsensusBackLogHandle<O> {
     pub fn logger_tx(&self) -> ChannelSyncTx<ResponseMsg> {
         self.logger_tx.clone()
     }
 
     /// Queue a normal processed batch, where we received all messages individually and persisted
     /// them individually
-    pub fn queue_batch(&self, batch: BatchExecutionInfo<D>) -> Result<()> {
+    pub fn queue_batch(&self, batch: BatchExecutionInfo<O>) -> Result<()> {
         if let Err(err) = self.rq_tx.send(BacklogMsg::Batch(batch)) {
             Err(Error::simple_with_msg(ErrorKind::MsgLogPersistent, format!("{:?}", err).as_str()))
         } else {
@@ -81,7 +81,7 @@ impl<D: SharedData> ConsensusBackLogHandle<D> {
 
     /// Queue a batch that we received via a proof and therefore only need to wait for the persistence
     /// of the entire proof, instead of the individual messages
-    pub fn queue_batch_proof(&self, batch: BatchExecutionInfo<D>) -> Result<()> {
+    pub fn queue_batch_proof(&self, batch: BatchExecutionInfo<O>) -> Result<()> {
         if let Err(err) = self.rq_tx.send(BacklogMsg::Proof(batch)) {
             Err(Error::simple_with_msg(ErrorKind::MsgLogPersistent, format!("{:?}", err).as_str()))
         } else {
@@ -90,7 +90,7 @@ impl<D: SharedData> ConsensusBackLogHandle<D> {
     }
 }
 
-impl<D: SharedData> Clone for ConsensusBackLogHandle<D> {
+impl<O> Clone for ConsensusBackLogHandle<O> {
     fn clone(&self) -> Self {
         Self {
             rq_tx: self.rq_tx.clone(),
@@ -105,7 +105,7 @@ const CHANNEL_SIZE: usize = 1024;
 
 impl<D: SharedData + 'static> ConsensusBacklog<D> {
     ///Initialize the consensus backlog
-    pub fn init_backlog(executor: ExecutorHandle<D>) -> ConsensusBackLogHandle<D> {
+    pub fn init_backlog(executor: ExecutorHandle<D>) -> ConsensusBackLogHandle<D::Request> {
         let (logger_tx, logger_rx) = channel::new_bounded_sync(CHANNEL_SIZE);
 
         let (batch_tx, batch_rx) = channel::new_bounded_sync(CHANNEL_SIZE);
@@ -198,7 +198,7 @@ impl<D: SharedData + 'static> ConsensusBacklog<D> {
         }
     }
 
-    fn process_pending_messages_for_current(&mut self, awaiting: &mut AwaitingPersistence<D>) {
+    fn process_pending_messages_for_current(&mut self, awaiting: &mut AwaitingPersistence<D::Request>) {
         let seq_num = awaiting.info().update_batch().sequence_number();
 
         //Remove the messages that we have already received
@@ -211,7 +211,7 @@ impl<D: SharedData + 'static> ConsensusBacklog<D> {
         }
     }
 
-    fn dispatch_batch(&self, batch: BatchExecutionInfo<D>) {
+    fn dispatch_batch(&self, batch: BatchExecutionInfo<D::Request>) {
         let (info, requests, batch) = batch.into();
 
         let checkpoint = match info {
@@ -234,7 +234,7 @@ impl<D: SharedData + 'static> ConsensusBacklog<D> {
         }
     }
 
-    fn process_incoming_message(awaiting: &mut AwaitingPersistence<D>, msg: ResponseMessage) {
+    fn process_incoming_message(awaiting: &mut AwaitingPersistence<D::Request>, msg: ResponseMessage) {
         let result = awaiting.handle_incoming_message(msg);
 
         match result {
@@ -250,9 +250,9 @@ impl<D: SharedData + 'static> ConsensusBacklog<D> {
     }
 }
 
-impl<D> From<BacklogMessage<D>> for AwaitingPersistence<D> where D: SharedData
+impl<O> From<BacklogMessage<O>> for AwaitingPersistence<O>
 {
-    fn from(value: BacklogMessage<D>) -> Self {
+    fn from(value: BacklogMessage<O>) -> Self {
         let pending_rq = match &value {
             BacklogMsg::Batch(info) => {
                 // We can unwrap the completed batch as this was received here
@@ -273,14 +273,14 @@ impl<D> From<BacklogMessage<D>> for AwaitingPersistence<D> where D: SharedData
     }
 }
 
-impl<D> Into<BatchExecutionInfo<D>> for AwaitingPersistence<D> where D: SharedData {
-    fn into(self) -> BatchExecutionInfo<D> {
+impl<O> Into<BatchExecutionInfo<O>> for AwaitingPersistence<O> {
+    fn into(self) -> BatchExecutionInfo<O> {
         self.info
     }
 }
 
-impl<D> Into<BatchExecutionInfo<D>> for BacklogMsg<D> where D: SharedData {
-    fn into(self) -> BatchExecutionInfo<D> {
+impl<O> Into<BatchExecutionInfo<O>> for BacklogMsg<O> {
+    fn into(self) -> BatchExecutionInfo<O> {
         match self {
             BacklogMsg::Batch(info) => {
                 info
@@ -292,8 +292,8 @@ impl<D> Into<BatchExecutionInfo<D>> for BacklogMsg<D> where D: SharedData {
     }
 }
 
-impl<D> AwaitingPersistence<D> where D: SharedData {
-    pub fn info(&self) -> &BatchExecutionInfo<D> {
+impl<O> AwaitingPersistence<O> {
+    pub fn info(&self) -> &BatchExecutionInfo<O> {
         &self.info
     }
 

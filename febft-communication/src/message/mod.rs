@@ -52,7 +52,6 @@ impl<M> SerializedMessage<M> {
 /// Convenience type to allow to store messages more directly, instead of having
 /// the entire network message wrapper (with type of message, etc)
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
 pub struct StoredMessage<M> {
     header: Header,
     message: M,
@@ -86,6 +85,11 @@ impl<M> Orderable for StoredMessage<M> where M: Orderable {
     }
 }
 
+impl<M> Clone for StoredMessage<M> where M: Clone {
+    fn clone(&self) -> Self {
+        Self { header: self.header.clone(), message: self.message.clone() }
+    }
+}
 
 ///
 /// The messages that are going to be sent over the network
