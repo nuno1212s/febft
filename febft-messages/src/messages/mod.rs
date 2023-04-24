@@ -356,3 +356,9 @@ impl<P> ForwardedProtocolMessage<P> {
         self.message
     }
 }
+
+impl<O> Debug for RequestMessage<O> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Session: {:?} Seq No: {:?}", self.session_id, self.sequence_number())
+    }
+}

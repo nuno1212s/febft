@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use futures_timer::Delay;
 
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 use febft_common::{channel, threadpool};
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 
@@ -187,7 +187,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                 ReplicaPhase::OrderingProtocol => {
                     let poll_res = self.ordering_protocol.poll();
 
-                    debug!("{:?} // Polling ordering protocol with result {:?}", self.node.id(), poll_res);
+                    trace!("{:?} // Polling ordering protocol with result {:?}", self.node.id(), poll_res);
 
                     match poll_res {
                         OrderProtocolPoll::RePoll => {

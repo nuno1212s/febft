@@ -64,8 +64,8 @@ macro_rules! extract_msg {
 }
 
 macro_rules! stop_status {
-    ($self:expr, $i:expr) => {{
-        let f = $self.view().params().f();
+    ($i:expr, $view:expr) => {{
+        let f = $view.params().f();
         if $i > f {
             SynchronizerStatus::Running
         } else {
@@ -305,6 +305,7 @@ pub(super) enum ProtoPhase {
 }
 
 // TODO: finish statuses returned from `process_message`
+#[derive(Debug)]
 pub enum SynchronizerStatus {
     /// We are not running the view change protocol.
     Nil,
@@ -544,36 +545,40 @@ impl<D> Synchronizer<D>
 
                         guard.queue_stop(header, message);
 
-                        return stop_status!(self, i);
+                        return stop_status!(i, &current_view);
                     }
                     ViewChangeMessageKind::Stop(_)
                     if self.stopped.borrow().contains_key(header.from().into()) =>
                         {
                             // drop attempts to vote twice
-                            return stop_status!(self, i);
+                            return stop_status!(i, &current_view);
                         }
                     ViewChangeMessageKind::Stop(_) => i + 1,
                     ViewChangeMessageKind::StopData(_) => {
                         match &self.accessory {
                             SynchronizerAccessory::Follower(_) => {
                                 //Ignore stop data messages as followers can never reach this state
-                                return stop_status!(self, i);
+                                return stop_status!(i, &current_view);
                             }
                             SynchronizerAccessory::Replica(_) => {
-                                let mut guard = self.tbo.lock().unwrap();
+                                {
+                                    let mut guard = self.tbo.lock().unwrap();
 
-                                guard.queue_stop_data(header, message);
+                                    guard.queue_stop_data(header, message);
+                                }
 
-                                return stop_status!(self, i);
+                                return stop_status!(i, &current_view);
                             }
                         }
                     }
                     ViewChangeMessageKind::Sync(_) => {
-                        let mut guard = self.tbo.lock().unwrap();
+                        {
+                            let mut guard = self.tbo.lock().unwrap();
 
-                        guard.queue_sync(header, message);
+                            guard.queue_sync(header, message);
+                        }
 
-                        return stop_status!(self, i);
+                        return stop_status!(i, &current_view);
                     }
                 };
 
@@ -656,9 +661,11 @@ impl<D> Synchronizer<D>
 
                         let i = match message.kind() {
                             ViewChangeMessageKind::Stop(_) => {
-                                let mut guard = self.tbo.lock().unwrap();
+                                {
+                                    let mut guard = self.tbo.lock().unwrap();
 
-                                guard.queue_stop(header, message);
+                                    guard.queue_stop(header, message);
+                                }
 
                                 return SynchronizerStatus::Running;
                             }
@@ -673,9 +680,11 @@ impl<D> Synchronizer<D>
                                     //If we are the leader of the view the message is in,
                                     //Then we want to accept the message, but since it is not the current
                                     //View, then it cannot be processed atm
-                                    let mut guard = self.tbo.lock().unwrap();
+                                    {
+                                        let mut guard = self.tbo.lock().unwrap();
 
-                                    guard.queue_stop_data(header, message);
+                                        guard.queue_stop_data(header, message);
+                                    }
                                 }
 
                                 return SynchronizerStatus::Running;
@@ -703,10 +712,12 @@ impl<D> Synchronizer<D>
                                 i + 1
                             }
                             ViewChangeMessageKind::Sync(_) => {
-                                let mut guard = self.tbo.lock().unwrap();
-                                //Since we are the current leader and are waiting for stop data,
-                                //This must be related to another view.
-                                guard.queue_sync(header, message);
+                                {
+                                    let mut guard = self.tbo.lock().unwrap();
+                                    //Since we are the current leader and are waiting for stop data,
+                                    //This must be related to another view.
+                                    guard.queue_sync(header, message);
+                                }
 
                                 return SynchronizerStatus::Running;
                             }
@@ -778,7 +789,12 @@ impl<D> Synchronizer<D>
                             let (header, message) = {
                                 let mut buf = Vec::new();
 
-                                let forged_pre_prepare = NetworkMessageKind::from(consensus.forge_propose(p.clone(), self));
+                                info!("{:?} // Forged pre-prepare: {} {:?}", node.id(),
+                                    p.len(), p);
+
+                                let forged_pre_prepare = consensus.forge_propose(p, self);
+
+                                let forged_pre_prepare = NetworkMessageKind::from(forged_pre_prepare);
 
                                 let digest = serialize::serialize_digest::<Vec<u8>, PBFT<D, ST>>(
                                     &forged_pre_prepare,
@@ -821,6 +837,7 @@ impl<D> Synchronizer<D>
                                 }),
                             ));
 
+
                             let node_id = node.id();
                             let targets = NodeId::targets(0..current_view.params().n())
                                 .filter(move |&id| id != node_id);
@@ -856,14 +873,13 @@ impl<D> Synchronizer<D>
                 // reject SYNC messages if these were not sent by the leader
                 let (proposed, collects) = match message.kind() {
                     ViewChangeMessageKind::Stop(_) => {
-                        let mut guard = self.tbo.lock().unwrap();
+                        {
+                            let mut guard = self.tbo.lock().unwrap();
 
-                        guard.queue_stop(header, message);
+                            guard.queue_stop(header, message);
+                        }
 
                         return SynchronizerStatus::Running;
-                    }
-                    ViewChangeMessageKind::StopData(_) if msg_seq != seq => {
-                        todo!()
                     }
                     ViewChangeMessageKind::StopData(_) => {
                         match &self.accessory {
@@ -872,18 +888,25 @@ impl<D> Synchronizer<D>
                                 return SynchronizerStatus::Running;
                             }
                             SynchronizerAccessory::Replica(_) => {
-                                let mut guard = self.tbo.lock().unwrap();
+                                //FIXME: We are not the leader of this view so we can't receive stop data messages
+                                // For this view. The only possibility is that we are the leader of the view
+                                // This stop data message is for
+                                {
+                                    let mut guard = self.tbo.lock().unwrap();
 
-                                guard.queue_stop_data(header, message);
+                                    guard.queue_stop_data(header, message);
+                                }
 
                                 return SynchronizerStatus::Running;
                             }
                         }
                     }
                     ViewChangeMessageKind::Sync(_) if msg_seq != seq => {
-                        let mut guard = self.tbo.lock().unwrap();
+                        {
+                            let mut guard = self.tbo.lock().unwrap();
 
-                        guard.queue_sync(header, message);
+                            guard.queue_sync(header, message);
+                        }
 
                         return SynchronizerStatus::Running;
                     }

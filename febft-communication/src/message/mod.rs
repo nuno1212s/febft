@@ -91,6 +91,12 @@ impl<M> Clone for StoredMessage<M> where M: Clone {
     }
 }
 
+impl<M> Debug for StoredMessage<M> where M: Debug {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "StoredMessage {{ header: {:?}, message: {:?} }}", self.header, self.message)
+    }
+}
+
 ///
 /// The messages that are going to be sent over the network
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]

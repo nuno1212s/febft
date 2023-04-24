@@ -8,6 +8,8 @@ use febft_communication::message::{Header, StoredMessage};
 use febft_execution::app::{Request, Service};
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::RequestMessage;
+use crate::bft::message::ConsensusMessageKind;
+use crate::bft::msg_log::deciding_log::CompletedBatch;
 use crate::bft::msg_log::operation_key;
 
 /// The log for requests that have been received but not yet decided by the system
@@ -50,14 +52,11 @@ impl<D> PendingRequestLog<D> where D: SharedData {
 
     /// Register a batch of requests that have been sent to us by other replicas in STOP rqs
     pub fn register_stopped_requests(&self, rqs: &Vec<StoredMessage<RequestMessage<D::Request>>>) {
-
         rqs.iter().for_each(|rq| {
-
             let header = rq.header();
 
             self.pending_requests.insert(header.unique_digest(), Arc::new(ReadOnly::new(rq.clone())));
         });
-
     }
 
     /// Insert a forwarded request vec into the log
@@ -174,6 +173,20 @@ impl<D> PendingRequestLog<D> where D: SharedData {
     pub fn delete_pending_requests(&self, messages: &[Digest]) {
         for digest in messages {
             self.pending_requests.remove(digest);
+        }
+    }
+
+    /// Delete all requests that are in the completed batch from the pending request pool
+    pub fn delete_requests_in_batch(&self, batch: &CompletedBatch<D::Request>) {
+        for pre_prepare in batch.pre_prepare_messages() {
+            match pre_prepare.message().kind() {
+                ConsensusMessageKind::PrePrepare(requests) => {
+                    for user_rq in requests {
+                        self.pending_requests.remove(&user_rq.header().unique_digest());
+                    }
+                }
+                _ => unreachable!()
+            }
         }
     }
 }

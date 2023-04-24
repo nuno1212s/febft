@@ -67,6 +67,7 @@ pub enum ConsensusPhase {
 }
 
 /// The result of advancing the sync phase
+#[derive(Debug)]
 pub enum SyncPhaseRes {
     SyncProtocolNotNeeded,
     RunSyncProtocol,
@@ -228,6 +229,8 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
             }
         }
 
+        info!("Execution has changed to {} with our current phase being {:?}", is_executing, self.phase);
+
         Ok(())
     }
 
@@ -325,7 +328,8 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         // check if we have STOP messages to be processed,
         // and update our phase when we start installing
         // the new view
-        if self.synchronizer.can_process_stops() {
+        // Consume them until we reached a point where no new messages can be processed
+        while self.synchronizer.can_process_stops() {
             let sync_protocol = self.poll_sync_phase();
 
             if let OrderProtocolPoll::Exec(message) = sync_protocol {
@@ -350,7 +354,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
                 } else {
                     // The synchronizer should never return anything other than a view
                     // change message
-                    unreachable!()
+                    unreachable!("Synchronizer returned a message other than a view change message");
                 }
             }
         }
@@ -476,10 +480,13 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             // FIXME: execution layer needs to receive the id
             // attributed by the consensus layer to each op,
             // to execute in order
-            ConsensusStatus::Decided(batch_digest) => {
+            ConsensusStatus::Decided(completed_batch) => {
+                // Clear the requests from the pending request log
+                self.pending_request_log.delete_requests_in_batch(&completed_batch);
+
                 if let Some(exec_info) =
                     //Should the execution be scheduled here or will it be scheduled by the persistent log?
-                    self.message_log.finalize_batch(seq, batch_digest)? {
+                    self.message_log.finalize_batch(seq, completed_batch)? {
                     let (info, batch, completed_batch) = exec_info.into();
 
                     match info {
@@ -513,6 +520,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
     /// Advance the sync phase of the algorithm
     fn adv_sync(&mut self, header: Header,
                 message: ViewChangeMessage<D::Request>) -> SyncPhaseRes {
+
         let status = self.synchronizer.process_message(
             header,
             message,
@@ -575,7 +583,7 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
                      view_info: View<Self::Serialization>,
                      dec_log: DecLog<Self::StateSerialization>) -> Result<(D::State, Vec<D::Request>)> {
         info!("{:?} // Installing state with Seq No {:?} and View {:?}", self.node.id(),
-                state.sequence_number(), view_info.sequence_number());
+                state.sequence_number(), view_info);
 
         let last_exec = if let Some(last_exec) = dec_log.last_execution() {
             last_exec

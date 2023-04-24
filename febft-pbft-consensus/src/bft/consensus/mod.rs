@@ -566,6 +566,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Consensus<D, S
         // batch
         let should_execute = log.install_proof(seq, proof)?;
 
+        //TODO: Should we remove the requests that are in the proof from the pending request log?
+
         if let Some(to_execute) = should_execute {
             let (info, update, _) = to_execute.into();
 

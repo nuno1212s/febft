@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use std::time::{Duration, Instant};
-use log::{debug, error};
+use log::{debug, error, info};
 use febft_common::collections;
 use febft_common::collections::ConcurrentHashMap;
 use febft_common::crypto::hash::Digest;
@@ -120,6 +120,9 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         let current_view = base_sync.view();
 
         //TODO: Timeout this request and keep sending it until we have achieved a new regency
+
+        info!("{:?} // Beginning a view change from view {:?} to next view with stopped rqs {:?}",
+            node.id(), current_view, requests);
 
         let message = PBFTMessage::ViewChange(ViewChangeMessage::new(
             current_view.sequence_number().next(),
@@ -391,7 +394,6 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
                     }
                 }
             });
-
         }
 
         SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
