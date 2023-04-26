@@ -1,31 +1,16 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
-use std::iter::zip;
 use std::sync::{Arc, Mutex};
-use futures::StreamExt;
-use log::error;
-use febft_common::crypto::hash::{Context, Digest};
-
-use febft_common::error::*;
+use febft_common::crypto::hash::Digest;
 use febft_common::globals::ReadOnly;
+use febft_common::error::*;
 use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
-use febft_communication::message::StoredMessage;
-use febft_execution::app::{Request, Service};
-use febft_execution::serialize::SharedData;
 use febft_metrics::benchmarks::BatchMeta;
-
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
-use crate::bft::msg_log::decisions::{IncompleteProof, Proof, ProofMetadata, StoredConsensusMessage, ViewDecisionPair, WriteSet};
-use crate::bft::msg_log::persistent::PersistentLog;
+use crate::bft::message::ConsensusMessageKind;
+use crate::bft::msg_log::decisions::{IncompleteProof, ProofMetadata, StoredConsensusMessage, ViewDecisionPair, WriteSet};
 use crate::bft::sync::view::ViewInfo;
-
-
-/// The type that composes a processed batch
-/// Contains the pre-prepare message and the Vec of messages that contains all messages
-/// to be persisted pertaining to this consensus instance
-pub type ProcessedBatch<O> = CompletedBatch<O>;
 
 /// A batch that has been decided by the consensus instance and is now ready to be delivered to the
 /// Executor for execution.
@@ -57,16 +42,8 @@ pub struct CompletedBatch<O> {
     batch_meta: BatchMeta,
 }
 
-/// The log for the current consensus decision
-/// Stores the pre prepare that is being decided along with
-/// Digests of all of the requests, digest of the entire batch and
-/// the messages that should be persisted in order to consider this execution unit
-/// persisted.
-/// Basically some utility information about the current batch.
-/// The actual consensus messages are handled by the decided log
 pub struct DecidingLog<O> {
     node_id: NodeId,
-
     seq_no: SeqNo,
 
     // The set of leaders that is currently in vigour for this consensus decision
@@ -107,65 +84,35 @@ pub struct OnGoingDecision<O> {
     commit_messages: Vec<StoredConsensusMessage<O>>,
 }
 
-/// The complete batch digest, the order of the batch messages,
-/// the prepare messages,
-/// messages to persist, the meta of the batch
-pub type CompletedConsensus<O> = (Digest, Vec<Digest>, Vec<StoredConsensusMessage<O>>,
-                                  Vec<Digest>, BatchMeta);
-
 /// Information about a full batch
 pub type FullBatch = ProofMetadata;
 
-impl<O> Into<CompletedConsensus<O>> for CompletedBatch<O> {
-    fn into(self) -> CompletedConsensus<O> {
-        (self.batch_digest, self.pre_prepare_ordering, self.pre_prepare_messages,
-         self.messages_to_persist, self.batch_meta)
-    }
-}
-
 impl<O> DecidingLog<O> {
-    pub fn new(node_id: NodeId) -> Self {
-        Self
-        {
+
+    pub fn new(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo) -> Self {
+        Self {
             node_id,
-            seq_no: SeqNo::ZERO,
-            leader_set: vec![],
+            seq_no,
+            leader_set: view.leader_set().clone(),
             current_digest: None,
             current_received_pre_prepares: 0,
-            ongoing_decision: OnGoingDecision::initialize(4),
+            ongoing_decision: OnGoingDecision::initialize(view.leader_set().len()),
             received_leader_messages: Default::default(),
-            request_space_slices: Default::default(),
+            request_space_slices: view.hash_space_division().clone(),
             current_batch_size: 0,
-            current_messages_to_persist: Vec::with_capacity(1000),
+            current_messages_to_persist: vec![],
             batch_meta: Arc::new(Mutex::new(BatchMeta::new())),
         }
     }
 
+    // Getter for batch_meta
     pub fn batch_meta(&self) -> &Arc<Mutex<BatchMeta>> {
         &self.batch_meta
     }
 
-    /// Inform this log that we are now processing a new round within the given view
-    /// and with the given sequence number
-    pub fn processing_new_round(&mut self,
-                                view: &ViewInfo,
-                                seq: SeqNo) {
-        self.leader_set = view.leader_set().clone();
-        self.received_leader_messages.clear();
-        self.seq_no = seq;
-
-        self.request_space_slices.clear();
-
-        for (id, section) in view.hash_space_division() {
-            self.request_space_slices.insert(id.clone(), section.clone());
-        }
-
-        self.ongoing_decision.assert_length(self.leader_set.len());
-    }
-
     ///Inform the log that we are now processing a new batch of operations
     pub fn process_pre_prepare(&mut self,
-                               request_batch: Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>,
+                               request_batch: StoredConsensusMessage<O>,
                                digest: Digest,
                                mut batch_rq_digests: Vec<Digest>) -> Result<Option<FullBatch>> {
         let sending_leader = request_batch.header().from();
@@ -219,61 +166,30 @@ impl<O> DecidingLog<O> {
         })
     }
 
-    /// Calculate the instance of a completed consensus pre prepare phase with
-    /// all the batches received
-    fn calculate_instance_digest(&self) -> Option<(Digest, Vec<Digest>)> {
-        let mut ctx = Context::new();
+    /// Get the current decision
+    pub fn deciding(&self, f: usize) -> IncompleteProof {
+        let in_exec = self.seq_no;
 
-        let mut batch_ordered_digests = Vec::with_capacity(self.ongoing_decision.pre_prepare_digests.len());
-
-        for order_digest in &self.ongoing_decision.pre_prepare_digests {
-            if let Some(digest) = order_digest.clone() {
-                ctx.update(digest.as_ref());
-                batch_ordered_digests.push(digest);
-            } else {
-                return None;
-            }
-        }
-
-        Some((ctx.finish(), batch_ordered_digests))
-    }
-
-    /// Register a message that is important to this consensus instance and
-    /// therefore must be saved
-    pub fn register_message_to_save(&mut self, message_digest: Digest) {
-        self.current_messages_to_persist.push(message_digest)
-    }
-
-    /// Register a consensus message that is relevant to this consensus instance
-    pub fn register_consensus_message(&mut self, message: StoredConsensusMessage<O>) {
-        let digest = message.header().digest().clone();
-
-        self.ongoing_decision.insert_message(message);
-
-        self.register_message_to_save(digest);
+        self.ongoing_decision.deciding(in_exec, f)
     }
 
     /// Indicate that the batch is finished processing and
     /// return the relevant information for it
-    pub fn finish_processing_batch(&mut self) -> Option<ProcessedBatch<O>> {
-        let (pre_prepare_ordering, pre_prepare_messages,
-            prepare_messages, commit_messages) = self.ongoing_decision.take_messages();
+    pub fn finish_processing_batch(self) -> Option<CompletedBatch<O>> {
+        let OnGoingDecision {
+            pre_prepare_digests,
+            pre_prepare_messages,
+            prepare_messages,
+            commit_messages
+        } = self.ongoing_decision;
 
         let current_digest = self.current_digest?;
 
-        let msg_to_persist_size = self.current_messages_to_persist.len();
-
-        let messages_to_persist = std::mem::replace(
-            &mut self.current_messages_to_persist,
-            Vec::with_capacity(msg_to_persist_size),
-        );
+        let pre_prepare_ordering = pre_prepare_digests.into_iter().map(|elem| elem?).collect();
+        let pre_prepare_messages = pre_prepare_messages.into_iter().map(|elem| elem?).collect();
 
         let new_meta = BatchMeta::new();
         let batch_meta = std::mem::replace(&mut *self.batch_meta().lock().unwrap(), new_meta);
-
-        //TODO: Do I even need this here since reset is always called
-        self.received_leader_messages.clear();
-        self.request_space_slices.clear();
 
         Some(CompletedBatch {
             batch_digest: current_digest,
@@ -288,188 +204,6 @@ impl<O> DecidingLog<O> {
         })
     }
 
-    /// Get the current decision
-    pub fn deciding(&self, f: usize) -> IncompleteProof {
-        let in_exec = self.seq_no;
-
-        self.ongoing_decision.deciding(in_exec, f)
-    }
-
-    /// Clear incomplete proofs from the log, which match the consensus
-    /// with sequence number `in_exec`.
-    ///
-    /// If `value` is `Some(v)`, then a `PRE-PREPARE` message will be
-    /// returned matching the digest `v`.
-    pub fn clear_last_occurrences(
-        &mut self,
-        in_exec: SeqNo,
-        value: Option<&Digest>,
-    ) -> Option<StoredConsensusMessage<O>> {
-        // let mut scratch = Vec::with_capacity(8);
-
-        if self.seq_no == in_exec {
-            if let Some(value) = value {
-                let mut pre_prepare = None;
-
-                for stored in self.ongoing_decision.pre_prepare_messages.iter() {
-                    if let Some(stored) = stored.as_ref() {
-                        if *stored.header().digest() == *value {
-                            pre_prepare = Some(stored.clone());
-                            break;
-                        }
-                    }
-                }
-
-                if let Some(pre_prepare) = pre_prepare {
-                    return Some(pre_prepare);
-                }
-            }
-
-            self.reset();
-
-            None
-        } else {
-            error!("Attempted to clear last occurrences of a different instance {:?} vs {:?} (ours)", in_exec, self.seq_no);
-
-            None
-        }
-    }
-
-
-    /// Reset the batch that is currently being processed
-    pub fn reset(&mut self) {
-        self.leader_set.clear();
-        self.ongoing_decision.reset();
-        self.received_leader_messages.clear();
-        self.request_space_slices.clear();
-        self.current_digest = None;
-        self.current_received_pre_prepares = 0;
-        self.current_messages_to_persist.clear();
-    }
-
-    /// Are we currently processing a batch
-    pub fn is_currently_processing(&self) -> bool {
-        self.current_received_pre_prepares > 0
-    }
-
-    /// The digest of the batch that is currently being processed
-    pub fn current_digest(&self) -> Option<Digest> {
-        self.current_digest
-    }
-
-    /// The current request list for the batch that is being processed
-    // pub fn current_requests(&self) -> &Vec<Digest> {
-    //     &self.current_requests
-    // }
-
-    /// The size of the batch that is currently being processed
-    pub fn current_batch_size(&self) -> Option<usize> {
-        if self.is_currently_processing() {
-            Some(self.current_batch_size)
-        } else {
-            None
-        }
-    }
-
-    /// The current messages that should be persisted for the current consensus instance to be
-    /// considered executable
-    pub fn current_messages(&self) -> &Vec<Digest> {
-        &self.current_messages_to_persist
-    }
-
-    pub fn pre_prepare_ordering(&self) -> &Vec<Option<Digest>> {
-        &self.ongoing_decision.pre_prepare_digests
-    }
-
-    pub fn pre_prepare_messages(&self) -> &Vec<Option<StoredConsensusMessage<O>>> {
-        &self.ongoing_decision.pre_prepare_messages
-    }
-
-    pub fn prepare_messages(&self) -> &Vec<StoredConsensusMessage<O>> {
-        &self.ongoing_decision.prepare_messages
-    }
-
-    pub fn commit_messages(&self) -> &Vec<StoredConsensusMessage<O>> {
-        &self.ongoing_decision.commit_messages
-    }
-
-    pub fn received_leader_messages(&self) -> &BTreeSet<NodeId> {
-        &self.received_leader_messages
-    }
-}
-
-impl<O> Orderable for DecidingLog<O> {
-    fn sequence_number(&self) -> SeqNo {
-        self.seq_no
-    }
-}
-
-impl<O> CompletedBatch<O> {
-    pub fn batch_digest(&self) -> Digest {
-        self.batch_digest
-    }
-    pub fn pre_prepare_ordering(&self) -> &Vec<Digest> {
-        &self.pre_prepare_ordering
-    }
-    pub fn pre_prepare_messages(&self) -> &Vec<StoredConsensusMessage<O>> {
-        &self.pre_prepare_messages
-    }
-
-    pub fn messages_to_persist(&self) -> &Vec<Digest> {
-        &self.messages_to_persist
-    }
-    pub fn batch_meta(&self) -> &BatchMeta {
-        &self.batch_meta
-    }
-    pub fn request_count(&self) -> usize {
-        self.request_count
-    }
-
-    /// Create a proof from the completed batch
-    pub fn proof(&self, quorum: Option<usize>) -> Result<Proof<O>> {
-        let (leader_count, order) = (self.pre_prepare_ordering.len(), &self.pre_prepare_ordering);
-
-        if self.pre_prepare_messages.len() != leader_count {
-            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
-                                              format!("Failed to create a proof, pre_prepares do not match up to the leader count {} leader count {} preprepares",
-                                                      leader_count, self.prepare_messages.len()).as_str()));
-        }
-
-        let mut ordered_pre_prepares = Vec::with_capacity(leader_count);
-
-        for digest in order {
-            for i in 0..self.pre_prepare_messages.len() {
-                let message = &self.pre_prepare_messages[i];
-
-                if *message.header().digest() == *digest {
-                    ordered_pre_prepares.push(self.pre_prepare_messages[i].clone());
-
-                    break;
-                }
-            }
-        }
-
-        if let Some(quorum) = quorum {
-            if self.prepare_messages.len() < quorum {
-                return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
-                                                  "Failed to create a proof, prepares do not match up to the 2*f+1"));
-            }
-
-            if self.commit_messages.len() < quorum {
-                return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
-                                                  "Failed to create a proof, commits do not match up to the 2*f+1"));
-            }
-        }
-
-        let metadata = ProofMetadata::new(self.seq_no,
-                                          self.batch_digest.clone(),
-                                          order.clone());
-
-        Ok(Proof::new(metadata,
-                      ordered_pre_prepares,
-                      self.prepare_messages.clone(),
-                      self.commit_messages.clone()))
-    }
 }
 
 impl<O> OnGoingDecision<O> {
@@ -488,22 +222,6 @@ impl<O> OnGoingDecision<O> {
             pre_prepare_messages: iter::repeat(None).take(leader_count).collect(),
             prepare_messages: Vec::new(),
             commit_messages: Vec::new(),
-        }
-    }
-
-    /// Assert that the length of the pre prepare messages and pre prepare digests match the amount
-    /// of leaders in the system
-    fn assert_length(&mut self, leader_count: usize) {
-        if self.pre_prepare_digests.len() < leader_count {
-            self.pre_prepare_digests.extend(iter::repeat(None).take(leader_count - self.pre_prepare_digests.len()));
-        } else if self.pre_prepare_digests.len() > leader_count {
-            self.pre_prepare_digests.truncate(leader_count);
-        }
-
-        if self.pre_prepare_messages.len() < leader_count {
-            self.pre_prepare_messages.extend(iter::repeat(None).take(leader_count - self.pre_prepare_messages.len()));
-        } else if self.pre_prepare_messages.len() > leader_count {
-            self.pre_prepare_messages.truncate(leader_count);
         }
     }
 
@@ -547,39 +265,6 @@ impl<O> OnGoingDecision<O> {
 
         Ok(())
     }
-
-    fn reset(&mut self) {
-        self.pre_prepare_digests.clear();
-        self.pre_prepare_messages.clear();
-        self.prepare_messages.clear();
-        self.commit_messages.clear();
-    }
-
-    /// Take the messages that are currently in this on going decision
-    fn take_messages(&mut self) -> (Vec<Digest>, Vec<StoredConsensusMessage<O>>,
-                                    Vec<StoredConsensusMessage<O>>,
-                                    Vec<StoredConsensusMessage<O>>) {
-        let pre_prepare_len = self.pre_prepare_digests.len();
-        let prepare_len = self.prepare_messages.len();
-        let commit_len = self.commit_messages.len();
-
-        let digest = std::mem::replace(&mut self.pre_prepare_digests,
-                                       iter::repeat(None).take(pre_prepare_len).collect())
-            .into_iter().map(|opt| opt.unwrap()).collect();
-
-        let pre_prepare_messages = std::mem::replace(&mut self.pre_prepare_messages,
-                                                     iter::repeat(None).take(pre_prepare_len).collect())
-            .into_iter().map(|opt| opt.unwrap()).collect();
-
-        let prepare_messages = std::mem::replace(&mut self.prepare_messages,
-                                                 Vec::with_capacity(prepare_len));
-
-        let commit_messages = std::mem::replace(&mut self.commit_messages,
-                                                Vec::with_capacity(commit_len));
-
-        (digest, pre_prepare_messages, prepare_messages, commit_messages)
-    }
-
 
     /// Get the current decision
     pub fn deciding(&self, in_exec: SeqNo, f: usize) -> IncompleteProof {
@@ -675,18 +360,4 @@ pub fn pre_prepare_index_of(leader_set: &Vec<NodeId>, proposer: &NodeId) -> Resu
             Ok(pos)
         }
     }
-}
-
-pub fn make_proof_from<O>(proof_meta: ProofMetadata, mut ongoing: OnGoingDecision<O>) -> Result<Proof<O>> {
-    let (digests, pre_prepares,
-        prepares, commit) = ongoing.take_messages();
-
-    for (digest, digest2) in zip(proof_meta.pre_prepare_ordering(), &digests) {
-        if digest != digest2 {
-            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
-                                              "Failed to create a proof, pre prepares do not match up to the ordering"));
-        }
-    }
-
-    Ok(Proof::new(proof_meta, pre_prepares, prepares, commit))
 }
