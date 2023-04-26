@@ -1,0 +1,24 @@
+[package]
+name = "febft-client"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+
+serialize_serde = ["febft-messages/serialize_serde", "febft-communication/serialize_serde", "febft-execution/serialize_serde",
+    "febft-common/serialize_serde"]
+serialize_capnp = ["febft-messages/serialize_capnp", "febft-execution/serialize_capnp", "febft-communication/serialize_capnp"]
+
+default = ["serialize_serde"]
+
+[dependencies]
+log = "*"
+intmap = "*"
+futures-timer = "*"
+num_cpus = "*"
+febft-communication = { path = "../febft-communication" }
+febft-execution = { path = "../febft-execution" }
+febft-common = { path = "../febft-common" }
+febft-messages = { path = "../febft-messages" }
+febft-metrics = {path = "../febft-metrics"}

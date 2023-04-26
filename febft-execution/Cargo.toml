@@ -1,0 +1,22 @@
+[package]
+name = "febft-execution"
+version = "0.1.0"
+edition = "2021"
+description = "The execution layer of the FeBFT SMR BFT"
+authors = ["Nuno Neto <up201703898@fc.up.pt>"]
+license = "MIT"
+homepage = "https://github.com/nuno1212s/febft"
+repository = "https://github.com/nuno1212s/febft"
+documentation = "https://docs.rs/febft"
+readme = "README.md"
+
+[features]
+
+serialize_capnp = []
+serialize_serde = ["serde"]
+
+[dependencies]
+febft-common = { path = "../febft-common" }
+febft-communication = { path = "../febft-communication" }
+febft-metrics = {path = "../febft-metrics"}
+serde = { version = "*", optional = true }

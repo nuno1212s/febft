@@ -1,0 +1,28 @@
+[package]
+name = "febft-messages"
+version = "0.1.0"
+edition = "2021"
+description = "The global messages relating to the BFT SMR protocol. Separated for easier exchanging of consensus!"
+authors = ["Nuno Neto <up201703898@fc.up.pt>"]
+license = "MIT"
+homepage = "https://github.com/nuno1212s/febft"
+repository = "https://github.com/nuno1212s/febft"
+documentation = "https://docs.rs/febft"
+readme = "README.md"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+
+serialize_serde = ["serde"]
+serialize_capnp = ["febft-capnp"]
+
+[dependencies]
+febft-common = { path = "../febft-common" }
+febft-communication = { path = "../febft-communication" }
+febft-execution = { path = "../febft-execution" }
+febft-capnp = { path = "../febft-capnp", optional = true }
+serde = { version = "*", optional = true }
+
+chrono = "0.4.24"
+log = "0.4.17"

@@ -1,0 +1,25 @@
+[package]
+name = "febft-state-transfer"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+
+serialize_serde = ["serde"]
+serialize_capnp = ["febft-capnp", "capnp"]
+
+default = ["serialize_serde", "febft-communication/serialize_serde", "febft-execution/serialize_serde", "febft-common/serialize_serde", "febft-messages/serialize_serde"]
+
+[dependencies]
+
+serde = { version = "*", optional = true }
+capnp = { version = "0.16.1", optional = true }
+log = "0.4.17"
+
+febft-capnp = { path = "../febft-capnp", optional = true }
+febft-execution = { path = "../febft-execution" }
+febft-common = { path = "../febft-common" }
+febft-communication = { path = "../febft-communication" }
+febft-messages = { path = "../febft-messages" }
