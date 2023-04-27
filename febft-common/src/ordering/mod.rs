@@ -99,6 +99,8 @@ impl ThreadSafeSeqNo {
 impl SeqNo {
     /// Represents the first available sequence number.
     pub const ZERO: Self = SeqNo(0);
+    pub const ONE: Self = SeqNo(1);
+
 
     /// Returns the following sequence number.
     #[inline]
