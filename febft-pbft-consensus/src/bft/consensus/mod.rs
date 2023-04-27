@@ -17,12 +17,15 @@ use febft_communication::message::{Header, StoredMessage};
 use febft_communication::Node;
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
+use febft_messages::messages::{RequestMessage, SystemMessage};
 use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::Timeouts;
+use crate::bft::msg_log::Info;
 use crate::bft::consensus::decision::{ConsensusDecision, MessageQueue};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
+use crate::bft::msg_log::decisions::Proof;
 use crate::bft::PBFT;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::sync::view::ViewInfo;
@@ -121,6 +124,15 @@ impl<O> TboQueue<O> {
         MessageQueue::from_messages(pre_prepares, prepares, commits)
     }
 
+
+    /// Advances the message queue, and updates the consensus instance id.
+    fn next_instance_queue(&mut self) {
+        self.curr_seq = self.curr_seq.next();
+        tbo_advance_message_queue(&mut self.pre_prepares);
+        tbo_advance_message_queue(&mut self.prepares);
+        tbo_advance_message_queue(&mut self.commits);
+    }
+
     /// Queues a consensus message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
     pub fn queue(&mut self, h: Header, m: ConsensusMessage<O>) {
@@ -152,6 +164,13 @@ impl<O> TboQueue<O> {
     fn queue_commit(&mut self, h: Header, m: ConsensusMessage<O>) {
         tbo_queue_message(self.base_seq(), &mut self.commits, StoredMessage::new(h, m))
     }
+
+    fn clear(&mut self) {
+        self.get_queue = false;
+        self.pre_prepares.clear();
+        self.prepares.clear();
+        self.commits.clear();
+    }
 }
 
 /// The consensus handler. Responsible for multiplexing consensus instances and keeping track
@@ -176,9 +195,7 @@ pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static
 
 impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                                    ST: StateTransferMessage + 'static {
-
     pub fn new_replica(node_id: NodeId, view: &ViewInfo, executor_handle: ExecutorHandle<D>, seq_no: SeqNo, watermark: u32) -> Self {
-
         let mut decision_deque = VecDeque::with_capacity(watermark as usize);
 
         for i in 0..watermark {
@@ -189,7 +206,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             let decision = ConsensusDecision::init_decision(
                 node_id,
                 seq_no,
-                view
+                view,
             );
 
             decision_deque.push_back(decision);
@@ -206,7 +223,6 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
     }
 
     pub fn queue(&mut self, header: Header, message: ConsensusMessage<D::Request>) {
-
         let i = match message.sequence_number().index(self.seq_no) {
             Either::Right(i) => i,
             Either::Left(_) => {
@@ -303,25 +319,190 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         let queue = self.tbo_queue.advance_queue();
 
         self.decisions.push_back(ConsensusDecision::init_with_msg_log(self.node_id,
-                                                        self.seq_no,
-                                                        view,
-                                                        queue,));
+                                                                      self.seq_no,
+                                                                      view,
+                                                                      queue, ));
 
         decision
     }
 
-    pub fn install_sequence_number(&mut self, seq_no: SeqNo) {
+    pub fn install_sequence_number(&mut self, seq_no: SeqNo, view: &ViewInfo) {
         match self.seq_no.index(seq_no) {
             Either::Left(_) => {
+                self.decisions.clear();
+
+                let mut sequence_no = seq_no;
+
+                while self.decisions.len() < self.watermark as usize {
+                    self.decisions.push_back(ConsensusDecision::init_decision(self.node_id, sequence_no, view));
+
+                    sequence_no = sequence_no + SeqNo::ONE;
+                }
+
+                self.tbo_queue.clear();
+
+                self.tbo_queue.curr_seq = seq_no;
+                self.seq_no = seq_no;
             }
             Either::Right(0) => {
                 // We are in the correct sequence number
             }
-            Either::Right(limit) => {
+            Either::Right(limit) => if limit >= self.decisions.len() {
+                // We have more skips to do than currently watermarked decisions,
+                // so we must clear all our decisions and then consume from the tbo queue
+                // Until all decisions that have already been saved to the log are discarded of
+                self.decisions.clear();
 
+                let mut sequence_no = seq_no;
+
+                let mut overflow = limit - self.decisions.len();
+
+                if overflow >= self.tbo_queue.pre_prepares.len() {
+                    // If we have more overflow than stored in the tbo queue, then
+                    // We must clear the entire tbo queue and start fresh
+                    self.tbo_queue.clear();
+
+                    self.tbo_queue.curr_seq = seq_no;
+                } else {
+                    for _ in 0..overflow {
+                        // Read the next overflow consensus instances and dispose of them
+                        // As they have already been registered to the log
+                        self.tbo_queue.next_instance_queue();
+                    }
+                }
+
+                /// Get the next few already populated message queues from the tbo queue.
+                /// This will also adjust the tbo queue sequence number to the correct one
+                while self.tbo_queue.sequence_number() < seq_no && self.decisions.len() < self.watermark as usize {
+                    let messages = self.tbo_queue.advance_queue();
+
+                    let decision = ConsensusDecision::init_with_msg_log(self.node_id, sequence_no, view, messages);
+
+                    self.decisions.push_back(decision);
+
+                    sequence_no = sequence_no + SeqNo::ONE;
+                }
+
+                /// Populate the rest of the watermark decisions with empty consensus decisions
+                while self.decisions.len() < self.watermark as usize {
+                    let decision = ConsensusDecision::init_decision(self.node_id, sequence_no, view);
+
+                    self.decisions.push_back(decision);
+
+                    sequence_no = sequence_no + SeqNo::ONE;
+                }
+
+                self.seq_no = seq_no;
+            }
+            Either::Right(limit) => {
+                for _ in 0..limit {
+                    // Pop the decisions that have already been made
+                    self.decisions.pop_front();
+                }
+
+                // The decision at the head of the list is now seq_no
+
+                // Get the last decision in the decision queue.
+                // The following new consensus decisions will have the sequence number of the last decision
+                let mut sequence_no: SeqNo = self.decisions.back().unwrap().sequence_number().next();
+
+                while self.decisions.len() < self.watermark as usize {
+                    // We advanced [`limit`] sequence numbers on the decisions,
+                    // so by advancing the tbo queue the missing decisions, we will
+                    // Also advance [`limit`] sequence numbers on the tbo queue, which is the intended
+                    // Behaviour
+                    let messages = self.tbo_queue.advance_queue();
+
+                    let decision = ConsensusDecision::init_with_msg_log(self.node_id, sequence_no,
+                                                                        view, messages);
+
+                    self.decisions.push_back(decision);
+
+                    sequence_no = sequence_no + SeqNo::ONE;
+                }
+
+                self.seq_no = seq_no;
             }
         }
 
+        self.tbo_queue.signal();
+    }
 
+    /// Catch up to the quorums latest decided consensus
+    pub fn catch_up_to_quorum(&mut self,
+                              seq: SeqNo,
+                              view: &ViewInfo,
+                              proof: Proof<D::Request>,
+                              log: &mut Log<D>) -> Result<()> {
+
+        // If this is successful, it means that we are all caught up and can now start executing the
+        // batch
+        let should_execute = log.install_proof(seq, proof)?;
+
+        //TODO: Should we remove the requests that are in the proof from the pending request log?
+
+        if let Some(to_execute) = should_execute {
+            let (info, update, _) = to_execute.into();
+
+            match info {
+                Info::Nil => {
+                    self.executor_handle.queue_update(update)
+                }
+                Info::BeginCheckpoint => {
+                    self.executor_handle.queue_update_and_get_appstate(update)
+                }
+            }.unwrap();
+        }
+
+        // Move to the next instance as this one has been finalized
+        self.next_instance(view);
+
+        Ok(())
+    }
+
+    /// Create a fake `PRE-PREPARE`. This is useful during the view
+    /// change protocol.
+    pub fn forge_propose<K>(
+        &self,
+        requests: Vec<StoredMessage<RequestMessage<D::Request>>>,
+        synchronizer: &K,
+    ) -> SysMsg<D, ST>
+        where
+            K: AbstractSynchronizer<D>,
+    {
+        SystemMessage::from_protocol_message(PBFTMessage::Consensus(ConsensusMessage::new(
+            self.sequence_number(),
+            synchronizer.view().sequence_number(),
+            ConsensusMessageKind::PrePrepare(requests),
+        )))
+    }
+
+    /// Finalize the view change protocol
+    pub fn finalize_view_change<NT>(
+        &mut self,
+        (header, message): (Header, ConsensusMessage<D::Request>),
+        synchronizer: &Synchronizer<D>,
+        timeouts: &Timeouts,
+        log: &mut Log<D>,
+        node: &NT,
+    ) where NT: Node<PBFT<D, ST>> {
+        let view = synchronizer.view();
+        //Prepare the algorithm as we are already entering this phase
+
+        self.decisions.clear();
+
+        for _ in 0..self.watermark {
+            self.decisions.push_back(ConsensusDecision::init_decision(self.node_id,
+                                                                      self.seq_no, &view));
+        }
+
+        self.tbo_queue.clear();
+
+        //TODO: when we finalize a view change, we want to treat the pre prepare request
+        // As the only pre prepare, since it already has info provided by everyone in the network.
+        // Therefore, this should go straight to the Preparing phase instead of waiting for
+        // All the view's leaders.
+
+        self.process_message(header, message, synchronizer, timeouts, log, node);
     }
 }
