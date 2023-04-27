@@ -206,7 +206,6 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                                log: &mut Log<D>,
                                node: &NT) -> ConsensusStatus
         where NT: Node<PBFT<D, ST>> {
-
         let i = match message.sequence_number().index(self.seq_no) {
             Either::Right(i) => i,
             Either::Left(_) => {
@@ -218,7 +217,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                 // we can try running the state transfer protocol
                 warn!("Message is behind our current sequence no {:?}", curr_seq, );
                 return ConsensusStatus::Deciding;
-            },
+            }
         };
 
         if i >= self.decisions.len() {
@@ -229,18 +228,27 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             return ConsensusStatus::Deciding;
         }
 
+        let decision = self.decisions.get_mut(i).unwrap();
 
-
-        ConsensusStatus::Deciding
+        decision.process_message(header, message, synchronizer, timeouts, log, node)
     }
 
-    pub fn finalize(&mut self) -> Result<Option<CompletedBatch<D::Request>>> {
+    pub fn finalize(&mut self, view: &ViewInfo) -> Result<Option<CompletedBatch<D::Request>>> {
+
+        // If the decision can't be finalized, then we can't finalize the batch
+        if let Some(decision) = self.decisions.front() {
+            if !decision.is_finalizeable() {
+                return Ok(None);
+            }
+        } else {
+            return Ok(None);
+        }
 
         //Finalize the first batch in the decision queue
         if let Some(decision) = self.decisions.pop_front() {
             let batch = decision.finalize()?;
 
-            self.next_instance();
+            self.next_instance(view);
 
             Ok(Some(batch))
         } else {
@@ -248,10 +256,18 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         }
     }
 
-    pub fn next_instance(&mut self) {
+    pub fn next_instance(&mut self, view: &ViewInfo) -> ConsensusDecision<D, ST> {
         self.seq_no = self.seq_no.next();
+
+        let decision = self.decisions.pop_front().unwrap();
 
         let queue = self.tbo_queue.advance_queue();
 
+        self.decisions.push_back(ConsensusDecision::init_with_msg_log(self.node_id,
+                                                        self.seq_no,
+                                                        view,
+                                                        queue,));
+
+        decision
     }
 }
