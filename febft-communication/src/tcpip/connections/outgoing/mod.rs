@@ -3,7 +3,7 @@ use febft_common::channel::ChannelMixedRx;
 use febft_common::socket::{SecureWriteHalf, SecureWriteHalfSync};
 use crate::serialize::Serializable;
 
-use crate::tcpip::connections::{ConnHandle, PeerConnection, SerializedMessage};
+use crate::tcpip::connections::{ConnHandle, PeerConnection, NetworkSerializedMessage};
 
 pub mod asynchronous;
 pub mod synchronous;

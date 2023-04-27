@@ -105,12 +105,17 @@ impl<O> DecidingLog<O> {
         }
     }
 
-    // Getter for batch_meta
+    /// Getter for batch_meta
     pub fn batch_meta(&self) -> &Arc<Mutex<BatchMeta>> {
         &self.batch_meta
     }
 
-    ///Inform the log that we are now processing a new batch of operations
+    /// Getter for the current digest
+    pub fn current_digest(&self) -> Option<Digest> {
+        self.current_digest.clone()
+    }
+
+    /// Inform the log that we are now processing a new batch of operations
     pub fn process_pre_prepare(&mut self,
                                request_batch: StoredConsensusMessage<O>,
                                digest: Digest,
@@ -327,6 +332,12 @@ impl<O> OnGoingDecision<O> {
         IncompleteProof::new(in_exec, write_set, quorum_writes)
     }
 
+}
+
+impl<O> Orderable for DecidingLog<O> {
+    fn sequence_number(&self) -> SeqNo {
+        self.seq_no
+    }
 }
 
 pub fn pre_prepare_index_from_digest_opt(prepare_set: &Vec<Option<Digest>>, digest: &Digest) -> Result<usize> {
