@@ -5,7 +5,7 @@ use febft_common::channel::ChannelMixedRx;
 use febft_common::socket::SecureWriteHalfSync;
 use crate::serialize::Serializable;
 
-use crate::tcpip::connections::{ConnHandle, PeerConnection, SerializedMessage};
+use crate::tcpip::connections::{ConnHandle, PeerConnection, NetworkSerializedMessage};
 
 pub(super) fn spawn_outgoing_thread<M: Serializable>(
     conn_handle: ConnHandle,

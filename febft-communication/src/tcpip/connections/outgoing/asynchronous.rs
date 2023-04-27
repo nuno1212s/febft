@@ -8,7 +8,7 @@ use febft_common::async_runtime as rt;
 use febft_common::socket::{AsyncSocket, SecureWriteHalfAsync};
 use crate::serialize::Serializable;
 
-use crate::tcpip::connections::{ConnHandle, PeerConnection, SerializedMessage};
+use crate::tcpip::connections::{ConnHandle, PeerConnection, NetworkSerializedMessage};
 
 pub(super) fn spawn_outgoing_task<M: Serializable + 'static>(
     conn_handle: ConnHandle,

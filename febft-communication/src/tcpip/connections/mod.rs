@@ -26,7 +26,7 @@ mod conn_establish;
 
 pub type Callback = Option<Box<dyn FnOnce(bool) -> () + Send>>;
 
-pub type SerializedMessage = (WireMessage, Callback);
+pub type NetworkSerializedMessage = (WireMessage, Callback);
 
 /// How many slots the outgoing queue has for messages.
 const TX_CONNECTION_QUEUE: usize = 1024;
@@ -67,10 +67,10 @@ pub struct PeerConnection<M: Serializable + 'static> {
     //A handle to the request buffer of the peer we are connected to in the client pooling module
     client: Arc<ConnectedPeer<NetworkMessage<M>>>,
     //The channel used to send serialized messages to the tasks that are meant to handle them
-    tx: ChannelMixedTx<SerializedMessage>,
+    tx: ChannelMixedTx<NetworkSerializedMessage>,
     // The RX handle corresponding to the tx channel above. This is so we can quickly associate new
 // TX connections to a given connection, as we just have to clone this handle
-    rx: ChannelMixedRx<SerializedMessage>,
+    rx: ChannelMixedRx<NetworkSerializedMessage>,
     // Counter to assign unique IDs to each of the underlying Tcp streams
     conn_id_generator: AtomicU32,
     // A map to manage the currently active connections and a cached size value to prevent
@@ -241,7 +241,7 @@ impl<M> PeerConnection<M> where M: Serializable {
     }
 
     /// Get the handle to the receiver for transmission
-    fn to_send_handle(&self) -> &ChannelMixedRx<SerializedMessage> {
+    fn to_send_handle(&self) -> &ChannelMixedRx<NetworkSerializedMessage> {
         &self.rx
     }
 }
