@@ -87,6 +87,17 @@ impl<O> MessageQueue<O> {
         }
     }
 
+    pub(super) fn from_messages(pre_prepares: VecDeque<StoredMessage<ConsensusMessage<O>>>,
+                     prepares: VecDeque<StoredMessage<ConsensusMessage<O>>>,
+                     commits: VecDeque<StoredMessage<ConsensusMessage<O>>>) -> Self {
+        Self {
+            get_queue: true,
+            pre_prepares,
+            prepares,
+            commits,
+        }
+    }
+
     fn signal(&mut self) {
         self.get_queue = true;
     }
@@ -149,7 +160,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                                    synchronizer: &Synchronizer<D>,
                                    timeouts: &Timeouts,
                                    log: &mut Log<D>,
-                                   node: &NT) -> ConsensusStatus<D>
+                                   node: &NT) -> ConsensusStatus
         where NT: Node<PBFT<D, ST>>, ST: StateTransferMessage + 'static {
         let view = synchronizer.view();
 
@@ -384,6 +395,15 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 ConsensusStatus::Decided
             }
         };
+    }
+
+    /// Check if this consensus decision can be finalized
+    pub fn is_finalizeable(&self) -> bool {
+        if let DecisionPhase::Decided = &self.phase {
+            true
+        } else {
+            false
+        }
     }
 
     pub fn finalize(self) -> Result<CompletedBatch<D::Request>> {
