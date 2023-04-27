@@ -189,7 +189,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         );
     }
 
-    ///Watch a batch of requests received from a Pre prepare message sent by the leader
+    /// Watch a batch of requests received from a Pre prepare message sent by the leader
     /// In reality we won't watch, more like the contrary, since the requests were already
     /// proposed, they won't timeout
     pub fn received_request_batch(
