@@ -88,8 +88,8 @@ impl<O> MessageQueue<O> {
     }
 
     pub(super) fn from_messages(pre_prepares: VecDeque<StoredMessage<ConsensusMessage<O>>>,
-                     prepares: VecDeque<StoredMessage<ConsensusMessage<O>>>,
-                     commits: VecDeque<StoredMessage<ConsensusMessage<O>>>) -> Self {
+                                prepares: VecDeque<StoredMessage<ConsensusMessage<O>>>,
+                                commits: VecDeque<StoredMessage<ConsensusMessage<O>>>) -> Self {
         Self {
             get_queue: true,
             pre_prepares,
@@ -127,6 +127,17 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
             seq: seq_no,
             phase: DecisionPhase::PrePreparing(0),
             message_queue: MessageQueue::new(),
+            message_log: DecidingLog::new(node_id, seq_no, view),
+            accessory: ConsensusDecisionAccessory::Replica(ReplicaAccessory::new()),
+        }
+    }
+
+    pub fn init_with_msg_log(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo,
+                             message_queue: MessageQueue<D::Request>) -> Self {
+        Self {
+            seq: seq_no,
+            phase: DecisionPhase::PrePreparing(0),
+            message_queue,
             message_log: DecidingLog::new(node_id, seq_no, view),
             accessory: ConsensusDecisionAccessory::Replica(ReplicaAccessory::new()),
         }
