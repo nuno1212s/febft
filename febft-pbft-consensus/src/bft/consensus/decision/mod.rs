@@ -143,6 +143,20 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
         }
     }
 
+    pub fn queue(&mut self, header: Header, message: ConsensusMessage<D::Request>) {
+        match message.kind() {
+            ConsensusMessageKind::PrePrepare(_) => {
+                self.message_queue.queue_pre_prepare(StoredMessage::new(header, message));
+            }
+            ConsensusMessageKind::Prepare(_) => {
+                self.message_queue.queue_prepare(StoredMessage::new(header, message));
+            }
+            ConsensusMessageKind::Commit(_) => {
+                self.message_queue.queue_commit(StoredMessage::new(header, message));
+            }
+        }
+    }
+
     pub fn poll(&mut self) -> ConsensusPollStatus<D::Request> {
         return match self.phase {
             DecisionPhase::PrePreparing(_) if self.message_queue.get_queue => {
@@ -165,6 +179,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
         };
     }
 
+    /// Process a message relating to this consensus instance
     pub fn process_message<NT, ST>(&mut self,
                                    header: Header,
                                    message: ConsensusMessage<D::Request>,
@@ -331,18 +346,20 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
 
                 self.phase = if received == view.params().quorum() {
+                    debug!("{:?} // Completed prepare phase with all prepares Seq {:?}", node.id(), self.sequence_number());
+
                     self.message_log.batch_meta().lock().unwrap().commit_sent_time = Utc::now();
 
                     let seq_no = self.sequence_number();
                     let current_digest = self.message_log.current_digest().unwrap();
 
-                    self.accessory.handle_preparing_quorum(&self.message_log, &view, stored_msg.clone(), node);
-
-                    debug!("{:?} // Completed prepare phase with all prepares Seq {:?}", node.id(), self.sequence_number());
+                    self.accessory.handle_preparing_quorum(&self.message_log, &view,
+                                                           stored_msg.clone(), node);
 
                     DecisionPhase::Committing(0)
                 } else {
-                    self.accessory.handle_preparing_no_quorum(&self.message_log, &view, stored_msg.clone(), node);
+                    self.accessory.handle_preparing_no_quorum(&self.message_log, &view,
+                                                              stored_msg.clone(), node);
 
                     DecisionPhase::Preparing(received)
                 };
@@ -382,7 +399,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     }
                 };
 
-                let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
+                let stored_msg = Arc::new(ReadOnly::new(
+                    StoredMessage::new(header, message)));
 
                 if received == view.params().quorum() {
                     self.phase = DecisionPhase::Decided;
@@ -417,6 +435,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
         }
     }
 
+    /// Finalize this consensus decision and return the information about the batch
     pub fn finalize(self) -> Result<CompletedBatch<D::Request>> {
         if let DecisionPhase::Decided = self.phase {
             self.message_log.finish_processing_batch()

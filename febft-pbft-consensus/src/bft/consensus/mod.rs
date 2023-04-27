@@ -2,6 +2,7 @@ pub mod decision;
 pub mod accessory;
 
 use std::collections::VecDeque;
+use std::iter;
 use std::sync::Arc;
 use chrono::Utc;
 use either::Either;
@@ -11,7 +12,7 @@ use febft_common::error::*;
 use febft_common::crypto::hash::Digest;
 use febft_common::globals::ReadOnly;
 use febft_common::node_id::NodeId;
-use febft_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message};
+use febft_common::ordering::{InvalidSeqNo, Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message};
 use febft_communication::message::{Header, StoredMessage};
 use febft_communication::Node;
 use febft_execution::ExecutorHandle;
@@ -58,7 +59,8 @@ pub enum ConsensusPollStatus<O> {
     TryProposeAndRecv,
     /// A new consensus message is available to be processed.
     NextMessage(Header, ConsensusMessage<O>),
-    /// This consensus instance is decided and is ready to be finalized
+    /// The first consensus instance of the consensus queue is ready to be finalized
+    /// as it has already been decided
     Decided,
 }
 
@@ -97,18 +99,13 @@ impl<O> TboQueue<O> {
     }
 
     fn base_seq(&self) -> SeqNo {
-        SeqNo::from(self.curr_seq.0 + self.watermark)
+        self.curr_seq + SeqNo::from(self.watermark)
     }
 
     /// Signal this `TboQueue` that it may be able to extract new
     /// consensus messages from its internal storage.
     pub fn signal(&mut self) {
         self.get_queue = true;
-    }
-
-    /// Returns the seqno of the next consensus instance
-    fn next_instance_no_advance(&self) -> SeqNo {
-        self.curr_seq.clone().next()
     }
 
     fn advance_queue(&mut self) -> MessageQueue<O> {
@@ -122,14 +119,6 @@ impl<O> TboQueue<O> {
             .unwrap_or_else(|| VecDeque::new());
 
         MessageQueue::from_messages(pre_prepares, prepares, commits)
-    }
-
-    /// Advances the message queue, and updates the consensus instance id.
-    fn next_instance_queue(&mut self) {
-        self.curr_seq = self.curr_seq.next();
-        tbo_advance_message_queue(&mut self.pre_prepares);
-        tbo_advance_message_queue(&mut self.prepares);
-        tbo_advance_message_queue(&mut self.commits);
     }
 
     /// Queues a consensus message for later processing, or drops it
@@ -146,7 +135,7 @@ impl<O> TboQueue<O> {
     /// immediately if it pertains to an older consensus instance.
     fn queue_pre_prepare(&mut self, h: Header, m: ConsensusMessage<O>) {
         tbo_queue_message(
-            self.curr_seq,
+            self.base_seq(),
             &mut self.pre_prepares,
             StoredMessage::new(h, m),
         )
@@ -155,13 +144,13 @@ impl<O> TboQueue<O> {
     /// Queues a `PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
     fn queue_prepare(&mut self, h: Header, m: ConsensusMessage<O>) {
-        tbo_queue_message(self.curr_seq, &mut self.prepares, StoredMessage::new(h, m))
+        tbo_queue_message(self.base_seq(), &mut self.prepares, StoredMessage::new(h, m))
     }
 
     /// Queues a `COMMIT` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
     fn queue_commit(&mut self, h: Header, m: ConsensusMessage<O>) {
-        tbo_queue_message(self.curr_seq, &mut self.commits, StoredMessage::new(h, m))
+        tbo_queue_message(self.base_seq(), &mut self.commits, StoredMessage::new(h, m))
     }
 }
 
@@ -171,11 +160,13 @@ pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static
     node_id: NodeId,
     /// The handle to the executor of the function
     executor_handle: ExecutorHandle<D>,
-    /// How many consensus instances can we currently be processing at the same time.
+    /// How many consensus instances can we overlap at the same time.
     watermark: u32,
     /// The current seq no that we are currently in
     seq_no: SeqNo,
     /// The consensus instances that are currently being processed
+    /// A given consensus instance n will only be finished when all consensus instances
+    /// j, where j < n have already been processed, in order to maintain total ordering
     decisions: VecDeque<ConsensusDecision<D, ST>>,
     /// The queue for messages that sit outside the range seq_no + watermark
     /// These messages cannot currently be processed since they sit outside the allowed
@@ -185,6 +176,54 @@ pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static
 
 impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                                    ST: StateTransferMessage + 'static {
+
+    pub fn new_replica(node_id: NodeId, view: &ViewInfo, executor_handle: ExecutorHandle<D>, seq_no: SeqNo, watermark: u32) -> Self {
+
+        let mut decision_deque = VecDeque::with_capacity(watermark as usize);
+
+        for i in 0..watermark {
+            let seq_add = SeqNo::from(i);
+
+            let seq_no = seq_no + seq_add;
+
+            let decision = ConsensusDecision::init_decision(
+                node_id,
+                seq_no,
+                view
+            );
+
+            decision_deque.push_back(decision);
+        }
+
+        Self {
+            node_id,
+            executor_handle,
+            watermark,
+            seq_no,
+            decisions: decision_deque,
+            tbo_queue: TboQueue::new(seq_no, watermark),
+        }
+    }
+
+    pub fn queue(&mut self, header: Header, message: ConsensusMessage<D::Request>) {
+
+        let i = match message.sequence_number().index(self.seq_no) {
+            Either::Right(i) => i,
+            Either::Left(_) => {
+                return;
+            }
+        };
+
+        if i >= self.decisions.len() {
+            // We are not currently processing this consensus instance
+            // so we need to queue the message
+            self.tbo_queue.queue(header, message);
+        } else {
+            // Queue the message in the corresponding pending decision
+            self.decisions.get_mut(i).unwrap().queue(header, message);
+        }
+    }
+
     pub fn poll(&mut self) -> ConsensusPollStatus<D::Request> {
         for ind in 0..self.decisions.len() {
             match self.decisions[ind].poll() {
@@ -233,6 +272,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         decision.process_message(header, message, synchronizer, timeouts, log, node)
     }
 
+    /// Finalize the next consensus instance if possible
     pub fn finalize(&mut self, view: &ViewInfo) -> Result<Option<CompletedBatch<D::Request>>> {
 
         // If the decision can't be finalized, then we can't finalize the batch
@@ -244,18 +284,17 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             return Ok(None);
         }
 
-        //Finalize the first batch in the decision queue
-        if let Some(decision) = self.decisions.pop_front() {
-            let batch = decision.finalize()?;
+        // Move to the next instance of the consensus since the current one is going to be finalized
+        let decision = self.next_instance(view);
 
-            self.next_instance(view);
+        let batch = decision.finalize()?;
 
-            Ok(Some(batch))
-        } else {
-            Ok(None)
-        }
+        Ok(Some(batch))
     }
 
+    /// Advance to the next instance of the consensus
+    /// This will also create the necessary new decision to keep the pending decisions
+    /// equal to the water mark
     pub fn next_instance(&mut self, view: &ViewInfo) -> ConsensusDecision<D, ST> {
         self.seq_no = self.seq_no.next();
 
@@ -269,5 +308,20 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                                                         queue,));
 
         decision
+    }
+
+    pub fn install_sequence_number(&mut self, seq_no: SeqNo) {
+        match self.seq_no.index(seq_no) {
+            Either::Left(_) => {
+            }
+            Either::Right(0) => {
+                // We are in the correct sequence number
+            }
+            Either::Right(limit) => {
+
+            }
+        }
+
+
     }
 }

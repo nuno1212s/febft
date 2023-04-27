@@ -144,8 +144,6 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
             PBFTMessage::Consensus(consensus) => {
                 debug!("{:?} // Received off context consensus message {:?}", self.node.id(), consensus);
                 self.consensus.queue(header, consensus);
-
-                self.consensus.signal();
             }
             PBFTMessage::ViewChange(view_change) => {
                 debug!("{:?} // Received off context view change message {:?}", self.node.id(), view_change);
@@ -260,8 +258,8 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
 
         let sync = Synchronizer::new_replica(view.clone(), timeout_dur);
 
-        let consensus = Consensus::<D, ST>::new_replica(node_id, view.clone(),
-                                                        SeqNo::ZERO, executor.clone(), follower_handle);
+        let consensus = Consensus::<D, ST>::new_replica(node_id, executor.clone(),
+                                                        SeqNo::ZERO, 30);
 
         let consensus_guard = consensus.consensus_guard().cloned().unwrap();
 
@@ -521,7 +519,6 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
     /// Advance the sync phase of the algorithm
     fn adv_sync(&mut self, header: Header,
                 message: ViewChangeMessage<D::Request>) -> SyncPhaseRes {
-
         let status = self.synchronizer.process_message(
             header,
             message,
@@ -625,7 +622,6 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT>
           ST: StateTransferMessage + 'static,
           NT: Node<PBFT<D, ST>> + 'static {
     pub(crate) fn switch_phase(&mut self, new_phase: ConsensusPhase) {
-
         info!("{:?} // Switching from phase {:?} to phase {:?}", self.node.id(), self.phase, new_phase);
 
         let old_phase = self.phase.clone();

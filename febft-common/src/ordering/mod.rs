@@ -6,6 +6,7 @@ use std::cmp::{
     Ordering,
 };
 use std::collections::VecDeque;
+use std::ops::Add;
 use std::sync::atomic::AtomicI32;
 
 use either::{
@@ -207,4 +208,12 @@ pub fn tbo_advance_message_queue_return<M>(
 pub trait Orderable {
     /// Returns the sequence number of this value.
     fn sequence_number(&self) -> SeqNo;
+}
+
+impl Add for SeqNo {
+    type Output = SeqNo;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        SeqNo(self.0 + rhs.0)
+    }
 }
