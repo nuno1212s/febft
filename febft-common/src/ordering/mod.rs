@@ -76,13 +76,12 @@ impl PartialOrd for SeqNo {
         Some(match self.index(*other) {
             Right(0) => Ordering::Equal,
             Left(InvalidSeqNo::Small) => Ordering::Less,
-             _ => Ordering::Greater,
+            _ => Ordering::Greater,
         })
     }
 }
 
 impl ThreadSafeSeqNo {
-
     pub const ZERO: Self = ThreadSafeSeqNo(AtomicI32::new(0));
 
     /// Increments the SeqNo
@@ -94,7 +93,6 @@ impl ThreadSafeSeqNo {
     pub fn to_seq_no(&self) -> SeqNo {
         SeqNo(self.0.load(std::sync::atomic::Ordering::Relaxed))
     }
-
 }
 
 impl SeqNo {
@@ -173,7 +171,7 @@ pub fn tbo_queue_message<M: Orderable>(
             // we can try running the state transfer protocol
             warn!("Message is behind our current sequence no {:?}", curr_seq, );
             return;
-        },
+        }
     };
 
     if index >= tbo.len() {
@@ -194,9 +192,15 @@ pub fn tbo_advance_message_queue<M>(
             // recycle memory
             vec.clear();
             tbo.push_back(vec);
-        },
+        }
         None => (),
     }
+}
+
+pub fn tbo_advance_message_queue_return<M>(
+    tbo: &mut VecDeque<VecDeque<M>>
+) -> Option<VecDeque<M>> {
+    tbo.pop_front()
 }
 
 /// Represents any value that can be oredered.

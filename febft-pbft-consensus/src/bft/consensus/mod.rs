@@ -7,17 +7,18 @@ use chrono::Utc;
 use either::Either;
 use log::{debug, warn};
 use socket2::Protocol;
+use febft_common::error::*;
 use febft_common::crypto::hash::Digest;
 use febft_common::globals::ReadOnly;
 use febft_common::node_id::NodeId;
-use febft_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_queue_message};
+use febft_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message};
 use febft_communication::message::{Header, StoredMessage};
 use febft_communication::Node;
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::Timeouts;
-use crate::bft::consensus::decision::ConsensusDecision;
+use crate::bft::consensus::decision::{ConsensusDecision, MessageQueue};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
@@ -108,6 +109,19 @@ impl<O> TboQueue<O> {
     /// Returns the seqno of the next consensus instance
     fn next_instance_no_advance(&self) -> SeqNo {
         self.curr_seq.clone().next()
+    }
+
+    fn advance_queue(&mut self) -> MessageQueue<O> {
+        self.curr_seq = self.curr_seq.next();
+
+        let pre_prepares = tbo_advance_message_queue_return(&mut self.pre_prepares)
+            .unwrap_or_else(|| VecDeque::new());
+        let prepares = tbo_advance_message_queue_return(&mut self.prepares)
+            .unwrap_or_else(|| VecDeque::new());
+        let commits = tbo_advance_message_queue_return(&mut self.commits)
+            .unwrap_or_else(|| VecDeque::new());
+
+        MessageQueue::from_messages(pre_prepares, prepares, commits)
     }
 
     /// Advances the message queue, and updates the consensus instance id.
@@ -220,7 +234,24 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         ConsensusStatus::Deciding
     }
 
+    pub fn finalize(&mut self) -> Result<Option<CompletedBatch<D::Request>>> {
+
+        //Finalize the first batch in the decision queue
+        if let Some(decision) = self.decisions.pop_front() {
+            let batch = decision.finalize()?;
+
+            self.next_instance();
+
+            Ok(Some(batch))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn next_instance(&mut self) {
+        self.seq_no = self.seq_no.next();
+
+        let queue = self.tbo_queue.advance_queue();
 
     }
 }
