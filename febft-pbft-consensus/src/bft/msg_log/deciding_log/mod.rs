@@ -18,12 +18,11 @@ use crate::bft::sync::view::ViewInfo;
 /// Executor for execution.
 /// Contains all of the necessary information for when we are using the strict persistency mode
 pub struct CompletedBatch<O> {
-    //The digest of the batch
-    batch_digest: Digest,
-
     // The sequence number of the batch
     seq_no: SeqNo,
 
+    //The digest of the batch
+    batch_digest: Digest,
     // The ordering of the pre prepares
     pre_prepare_ordering: Vec<Digest>,
     // The prepare message of the batch
@@ -228,6 +227,9 @@ impl<O> DecidingLog<O> {
     /// Indicate that the batch is finished processing and
     /// return the relevant information for it
     pub fn finish_processing_batch(self) -> Option<CompletedBatch<O>> {
+        let new_meta = BatchMeta::new();
+        let batch_meta = std::mem::replace(&mut *self.batch_meta().lock().unwrap(), new_meta);
+
         let OnGoingDecision {
             pre_prepare_digests,
             pre_prepare_messages,
@@ -241,9 +243,6 @@ impl<O> DecidingLog<O> {
         let pre_prepare_messages = pre_prepare_messages.into_iter().map(|elem| elem.unwrap()).collect();
 
         let messages_to_persist = self.current_messages_to_persist;
-
-        let new_meta = BatchMeta::new();
-        let batch_meta = std::mem::replace(&mut *self.batch_meta().lock().unwrap(), new_meta);
 
         Some(CompletedBatch {
             batch_digest: current_digest,
@@ -418,6 +417,12 @@ impl DuplicateReplicaEvaluator {
         Ok(())
     }
 
+}
+
+impl<O> Orderable for CompletedBatch<O> {
+    fn sequence_number(&self) -> SeqNo {
+        self.seq_no
+    }
 }
 
 impl<O> CompletedBatch<O> {

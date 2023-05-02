@@ -6,7 +6,7 @@ use std::cmp::{
     Ordering,
 };
 use std::collections::VecDeque;
-use std::ops::Add;
+use std::ops::{Add, AddAssign};
 use std::sync::atomic::AtomicI32;
 
 use either::{
@@ -217,5 +217,11 @@ impl Add for SeqNo {
 
     fn add(self, rhs: Self) -> Self::Output {
         SeqNo(self.0 + rhs.0)
+    }
+}
+
+impl AddAssign for SeqNo {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 = self.0 + rhs.0;
     }
 }
