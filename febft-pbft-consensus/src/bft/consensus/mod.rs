@@ -3,8 +3,8 @@ pub mod accessory;
 
 use std::collections::VecDeque;
 use std::iter;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::Utc;
 use either::Either;
 use log::{debug, warn};
@@ -192,13 +192,6 @@ pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static
     /// These messages cannot currently be processed since they sit outside the allowed
     /// zone but they will be processed once the seq no moves forward enough to include them
     tbo_queue: TboQueue<D::Request>,
-}
-
-/// The consensus guard for handling when the proposer should propose and to which consensus instance
-pub struct ConsensusGuard {
-
-    guard: AtomicBool,
-
 }
 
 impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
@@ -580,4 +573,22 @@ impl<D, ST> Orderable for Consensus<D, ST> where D: SharedData + 'static, ST: St
     fn sequence_number(&self) -> SeqNo {
         self.seq_no
     }
+}
+
+/// The consensus guard for handling when the proposer should propose and to which consensus instance
+pub struct ConsensusGuard {
+    can_propose: AtomicBool,
+    seq_no_queue: Mutex<VecDeque<SeqNo>>
+}
+
+impl ConsensusGuard {
+
+    pub fn can_propose(&self) -> bool {
+        self.can_propose.load(Ordering::Relaxed)
+    }
+
+    pub fn next_seq_no(&self) -> Option<SeqNo> {
+        self.seq_no_queue.lock().unwrap().pop_front()
+    }
+    
 }
