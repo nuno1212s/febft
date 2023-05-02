@@ -23,10 +23,12 @@ use febft_execution::serialize::SharedData;
 use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
 use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::{ClientRqInfo, Timeouts};
+use crate::bft::consensus::Consensus;
 
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::msg_log::decided_log::Log;
+use crate::bft::msg_log::decisions::CollectData;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::PBFT;
@@ -65,6 +67,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         &self,
         base_sync: &Synchronizer<D>,
         previous_view: ViewInfo,
+        consensus: &Consensus<D, ST>,
         log: &Log<D>,
         pending_rq_log: &PendingRequestLog<D>,
         timeouts: &Timeouts,
@@ -86,10 +89,17 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         let current_view_seq = view_info.sequence_number();
         let current_leader = view_info.leader();
 
-        let collect = log
+        let last_proof = log
             //we use the previous views' f because the new view could have changed
             //The N of the network (With reconfigurable views)
-            .collect_data(previous_view.params().f());
+            .last_proof(previous_view.params().f());
+
+        let incomplete_proof = consensus.collect_incomplete_proof(previous_view.params().f());
+
+        let collect = CollectData {
+            incomplete_proof,
+            last_proof,
+        };
 
         let message = PBFTMessage::ViewChange(ViewChangeMessage::new(
             current_view_seq,

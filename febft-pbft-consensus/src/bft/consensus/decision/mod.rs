@@ -12,11 +12,12 @@ use febft_communication::Node;
 use febft_execution::serialize::SharedData;
 use febft_messages::serialize::{NetworkView, StateTransferMessage};
 use febft_messages::timeouts::Timeouts;
-use crate::bft::consensus::accessory::ConsensusDecisionAccessory;
+use crate::bft::consensus::accessory::{AccessoryConsensus, ConsensusDecisionAccessory};
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
+use crate::bft::msg_log::decisions::IncompleteProof;
 use crate::bft::PBFT;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::sync::view::ViewInfo;
@@ -61,6 +62,7 @@ pub struct MessageQueue<O> {
 
 /// The information needed to make a decision on a batch of requests.
 pub struct ConsensusDecision<D: SharedData + 'static, ST: StateTransferMessage + 'static> {
+    node_id: NodeId,
     /// The sequence number of this consensus decision
     seq: SeqNo,
     /// The current phase of this decision
@@ -124,6 +126,7 @@ impl<O> MessageQueue<O> {
 impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecision<D, ST> {
     pub fn init_decision(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo) -> Self {
         Self {
+            node_id,
             seq: seq_no,
             phase: DecisionPhase::PrePreparing(0),
             message_queue: MessageQueue::new(),
@@ -135,6 +138,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
     pub fn init_with_msg_log(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo,
                              message_queue: MessageQueue<D::Request>) -> Self {
         Self {
+            node_id,
             seq: seq_no,
             phase: DecisionPhase::PrePreparing(0),
             message_queue,
@@ -142,6 +146,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
             accessory: ConsensusDecisionAccessory::Replica(ReplicaAccessory::new()),
         }
     }
+
+
 
     pub fn queue(&mut self, header: Header, message: ConsensusMessage<D::Request>) {
         match message.kind() {
@@ -180,14 +186,14 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
     }
 
     /// Process a message relating to this consensus instance
-    pub fn process_message<NT, ST>(&mut self,
+    pub fn process_message<NT>(&mut self,
                                    header: Header,
                                    message: ConsensusMessage<D::Request>,
                                    synchronizer: &Synchronizer<D>,
                                    timeouts: &Timeouts,
                                    log: &mut Log<D>,
-                                   node: &NT) -> ConsensusStatus
-        where NT: Node<PBFT<D, ST>>, ST: StateTransferMessage + 'static {
+                                   node: &NT) -> Result<ConsensusStatus>
+        where NT: Node<PBFT<D, ST>> {
         let view = synchronizer.view();
 
         return match self.phase {
@@ -199,7 +205,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                         debug!("{:?} // Dropped pre prepare message because of view {:?} vs {:?} (ours)",
                             self.node_id, message.view(), synchronizer.view().sequence_number());
 
-                        return ConsensusStatus::Deciding;
+                        return Ok(ConsensusStatus::Deciding);
                     }
                     ConsensusMessageKind::PrePrepare(_)
                     if !view.leader_set().contains(&header.from()) => {
@@ -207,7 +213,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                         debug!("{:?} // Dropped pre prepare message because the sender was not the leader {:?} vs {:?} (ours)",
                         self.node_id, header.from(), view.leader());
 
-                        return ConsensusStatus::Deciding;
+                        return Ok(ConsensusStatus::Deciding);
                     }
                     ConsensusMessageKind::PrePrepare(_)
                     if message.sequence_number() != self.seq => {
@@ -215,7 +221,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                         warn!("{:?} // Dropped pre prepare message because the sequence number was not the same {:?} vs {:?} (ours)",
                             self.node_id, message.sequence_number(), self.seq);
 
-                        return ConsensusStatus::Deciding;
+                        return Ok(ConsensusStatus::Deciding);
                     }
                     ConsensusMessageKind::Prepare(d) => {
                         debug!("{:?} // Received prepare message {:?} from {:?} while in prepreparing ",
@@ -223,7 +229,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
 
                         self.message_queue.queue_prepare(StoredMessage::new(header, message));
 
-                        return ConsensusStatus::Deciding;
+                        return Ok(ConsensusStatus::Deciding);
                     }
                     ConsensusMessageKind::Commit(d) => {
                         debug!("{:?} // Received commit message {:?} from {:?} while in pre preparing",
@@ -231,13 +237,15 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
 
                         self.message_queue.queue_commit(StoredMessage::new(header, message));
 
-                        return ConsensusStatus::Deciding;
+                        return Ok(ConsensusStatus::Deciding);
                     }
                     ConsensusMessageKind::PrePrepare(_) => {
                         // Everything checks out, we can now process the message
                         received + 1
                     }
                 };
+
+                let pre_prepare_received_time = Utc::now();
 
                 let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
 
@@ -250,16 +258,11 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
 
                 let batch_metadata = self.message_log.process_pre_prepare(stored_msg.clone(),
                                                                           stored_msg.header().digest().clone(),
-                                                                          digests);
-
-                if let Err(err) = &batch_metadata {
-                    //There was an error when analysing the batch of requests, so it won't be counted
-                    panic!("Failed to analyse request batch {:?}", err);
-                }
+                                                                          digests)?;
 
                 let batch_metadata = batch_metadata.unwrap();
 
-                self.phase = if i == view.leader_set().len() {
+                self.phase = if received == view.leader_set().len() {
 
                     //We have received all pre prepare requests for this consensus instance
                     //We are now ready to broadcast our prepare message and move to the next phase
@@ -272,8 +275,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     }
 
                     let seq_no = self.sequence_number();
-                    let metadata = batch_metadata
-                        .expect("Received all messages but still can't calculate batch digest?");
+                    let metadata = batch_metadata;
 
                     let current_digest = metadata.batch_digest();
 
@@ -297,7 +299,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     DecisionPhase::PrePreparing(received)
                 };
 
-                ConsensusStatus::Deciding
+                Ok(ConsensusStatus::Deciding)
             }
             DecisionPhase::Preparing(received) => {
                 let received = match message.kind() {
@@ -306,36 +308,36 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                         warn!("{:?} // Dropped pre prepare message because we are in the preparing phase",
                             self.node_id);
 
-                        return ConsensusStatus::Deciding;
+                        return Ok(ConsensusStatus::Deciding);
                     }
-                    ConsensusMessageKind::Commit(_) => {
+                    ConsensusMessageKind::Commit(d) => {
                         debug!("{:?} // Received commit message {:?} from {:?} while in preparing phase",
                             self.node_id, d, header.from());
 
                         self.message_queue.queue_commit(StoredMessage::new(header, message));
 
-                        return ConsensusStatus::Deciding;
+                        return Ok(ConsensusStatus::Deciding);
                     }
                     ConsensusMessageKind::Prepare(_) if message.view() != view.sequence_number() => {
                         // drop proposed value in a different view (from different leader)
                         warn!("{:?} // Dropped prepare message because of view {:?} vs {:?} (ours)",
                             self.node_id, message.view(), view.sequence_number());
 
-                        return ConsensusStatus::Deciding;
+                        return Ok(ConsensusStatus::Deciding);
                     }
                     ConsensusMessageKind::Prepare(_) if message.sequence_number() != self.seq => {
                         // drop proposed value in a different view (from different leader)
                         warn!("{:?} // Dropped prepare message because of seq no {:?} vs {:?} (Ours)",
                             self.node_id, message.sequence_number(), self.seq);
 
-                        return ConsensusStatus::Deciding;
+                        return Ok(ConsensusStatus::Deciding);
                     }
                     ConsensusMessageKind::Prepare(d) if *d != self.message_log.current_digest().unwrap() => {
                         // drop msg with different digest from proposed value
                         warn!("{:?} // Dropped prepare message {:?} from {:?} because of digest {:?} vs {:?} (ours)",
                             self.node_id, message.sequence_number(), header.from(), d, self.message_log.current_digest());
 
-                        return ConsensusStatus::Deciding;
+                        return Ok(ConsensusStatus::Deciding);
                     }
                     ConsensusMessageKind::Prepare(_) => {
                         // Everything checks out, we can now process the message
@@ -344,6 +346,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 };
 
                 let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
+
+                self.message_log.process_message(stored_msg.clone())?;
 
                 self.phase = if received == view.params().quorum() {
                     debug!("{:?} // Completed prepare phase with all prepares Seq {:?}", node.id(), self.sequence_number());
@@ -364,7 +368,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     DecisionPhase::Preparing(received)
                 };
 
-                ConsensusStatus::Deciding
+                Ok(ConsensusStatus::Deciding)
             }
             DecisionPhase::Committing(received) => {
                 let received = match message.kind() {
@@ -373,21 +377,21 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                         warn!("{:?} // Dropped commit message because of seq no {:?} vs {:?} (Ours)",
                             self.node_id, message.sequence_number(), self.seq);
 
-                        return ConsensusStatus::Deciding;
+                        return Ok(ConsensusStatus::Deciding);
                     }
                     ConsensusMessageKind::Commit(_) if message.view() != view.sequence_number() => {
                         // drop proposed value in a different view (from different leader)
                         warn!("{:?} // Dropped commit message because of view {:?} vs {:?} (ours)",
                             self.node_id, message.view(), view.sequence_number());
 
-                        return ConsensusStatus::Deciding;
+                        return Ok(ConsensusStatus::Deciding);
                     }
                     ConsensusMessageKind::Commit(d) if *d != self.message_log.current_digest().unwrap() => {
                         // drop msg with different digest from proposed value
                         warn!("{:?} // Dropped commit message {:?} from {:?} because of digest {:?} vs {:?} (ours)",
                             self.node_id, message.sequence_number(), header.from(), d, self.message_log.current_digest());
 
-                        return ConsensusStatus::Deciding;
+                        return Ok(ConsensusStatus::Deciding);
                     }
                     ConsensusMessageKind::Commit(_) => {
                         received + 1
@@ -395,14 +399,16 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     _ => {
                         // Any message relating to any other phase other than commit is not accepted
 
-                        return ConsensusStatus::Deciding;
+                        return Ok(ConsensusStatus::Deciding);
                     }
                 };
 
                 let stored_msg = Arc::new(ReadOnly::new(
                     StoredMessage::new(header, message)));
 
-                if received == view.params().quorum() {
+                self.message_log.process_message(stored_msg.clone())?;
+
+                return if received == view.params().quorum() {
                     self.phase = DecisionPhase::Decided;
 
                     self.message_log.batch_meta().lock().unwrap().consensus_decision_time = Utc::now();
@@ -410,18 +416,19 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     self.accessory.handle_committing_quorum(&self.message_log, &view,
                                                             stored_msg.clone(), node);
 
-                    ConsensusStatus::Decided
+                    Ok(ConsensusStatus::Decided)
                 } else {
                     self.phase = DecisionPhase::Committing(received);
 
                     self.accessory.handle_committing_no_quorum(&self.message_log, &view,
                                                                stored_msg.clone(), node);
 
-                    ConsensusStatus::Deciding
+                    Ok(ConsensusStatus::Deciding)
                 };
             }
             DecisionPhase::Decided => {
-                ConsensusStatus::Decided
+                //Drop unneeded messages
+                Ok(ConsensusStatus::Decided)
             }
         };
     }
@@ -443,6 +450,14 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
         } else {
             Err(Error::simple_with_msg(ErrorKind::Consensus, "Cannot finalize batch that is not decided"))
         }
+    }
+
+    pub fn deciding(&self, f: usize) -> IncompleteProof {
+        self.message_log.deciding(f)
+    }
+
+    pub fn message_log(&self) -> &DecidingLog<D::Request> {
+        &self.message_log
     }
 }
 

@@ -130,9 +130,7 @@ pub trait StatefulOrderProtocol<D: SharedData + 'static, NT>: OrderingProtocol<D
     fn initialize_with_initial_state(config: Self::Config, executor: ExecutorHandle<D>,
                                      timeouts: Timeouts, node: Arc<NT>, initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where
         Self: Sized;
-
-
-    fn view(&self) -> View<Self::Serialization>;
+    
 
     /// Install a state received from other replicas in the system
     /// Should only alter the necessary things within its own state and

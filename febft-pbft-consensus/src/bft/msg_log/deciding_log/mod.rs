@@ -1,15 +1,17 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
+use std::iter::zip;
 use std::sync::{Arc, Mutex};
-use febft_common::crypto::hash::Digest;
+use febft_common::crypto::hash::{Context, Digest};
 use febft_common::globals::ReadOnly;
 use febft_common::error::*;
 use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
+use febft_communication::message::StoredMessage;
 use febft_metrics::benchmarks::BatchMeta;
-use crate::bft::message::ConsensusMessageKind;
-use crate::bft::msg_log::decisions::{IncompleteProof, ProofMetadata, StoredConsensusMessage, ViewDecisionPair, WriteSet};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
+use crate::bft::msg_log::decisions::{IncompleteProof, Proof, ProofMetadata, StoredConsensusMessage, ViewDecisionPair, WriteSet};
 use crate::bft::sync::view::ViewInfo;
 
 /// A batch that has been decided by the consensus instance and is now ready to be delivered to the
@@ -49,6 +51,8 @@ pub struct DecidingLog<O> {
     // The set of leaders that is currently in vigour for this consensus decision
     leader_set: Vec<NodeId>,
 
+    duplicate_detection: DuplicateReplicaEvaluator,
+
     //The digest of the entire batch that is currently being processed
     // This will only be calculated when we receive all of the requests necessary
     // As this digest requires the knowledge of all of them
@@ -57,8 +61,6 @@ pub struct DecidingLog<O> {
     current_received_pre_prepares: usize,
     // The message log of the current ongoing decision
     ongoing_decision: OnGoingDecision<O>,
-    // Received messages from these leaders
-    received_leader_messages: BTreeSet<NodeId>,
     // Which hash space should each leader be responsible for
     request_space_slices: BTreeMap<NodeId, (Vec<u8>, Vec<u8>)>,
 
@@ -72,6 +74,20 @@ pub struct DecidingLog<O> {
 
     // Some logging information about metadata
     batch_meta: Arc<Mutex<BatchMeta>>,
+}
+
+/// Checks to make sure replicas aren't providing more than one vote for the
+/// Same consensus decision
+#[derive(Default)]
+pub struct DuplicateReplicaEvaluator {
+    // The set of leaders that is currently in vigour for this consensus decision
+    leader_set: Vec<NodeId>,
+    // The set of leaders that have already sent a pre prepare message
+    received_pre_prepare_messages: BTreeSet<NodeId>,
+    // The set of leaders that have already sent a prepare message
+    received_prepare_messages: BTreeSet<NodeId>,
+    // The set of leaders that have already sent a commit message
+    received_commit_messages: BTreeSet<NodeId>,
 }
 
 /// Store the messages corresponding to a given ongoing consensus decision
@@ -88,16 +104,15 @@ pub struct OnGoingDecision<O> {
 pub type FullBatch = ProofMetadata;
 
 impl<O> DecidingLog<O> {
-
     pub fn new(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo) -> Self {
         Self {
             node_id,
             seq_no,
             leader_set: view.leader_set().clone(),
+            duplicate_detection: Default::default(),
             current_digest: None,
             current_received_pre_prepares: 0,
             ongoing_decision: OnGoingDecision::initialize(view.leader_set().len()),
-            received_leader_messages: Default::default(),
             request_space_slices: view.hash_space_division().clone(),
             current_batch_size: 0,
             current_messages_to_persist: vec![],
@@ -137,11 +152,7 @@ impl<O> DecidingLog<O> {
             }
         }
 
-        // Check if we have already received messages from this leader
-        if !self.received_leader_messages.insert(sending_leader.clone()) {
-            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
-                                              "We have already received a message from that leader."));
-        }
+        self.duplicate_detection.insert_pre_prepare_received(sending_leader)?;
 
         // Get the correct index for this batch
         let leader_index = pre_prepare_index_of(&self.leader_set, &sending_leader)?;
@@ -171,6 +182,42 @@ impl<O> DecidingLog<O> {
         })
     }
 
+    /// Calculate the instance of a completed consensus pre prepare phase with
+    /// all the batches received
+    fn calculate_instance_digest(&self) -> Option<(Digest, Vec<Digest>)> {
+        let mut ctx = Context::new();
+
+        let mut batch_ordered_digests = Vec::with_capacity(self.ongoing_decision.pre_prepare_digests.len());
+
+        for order_digest in &self.ongoing_decision.pre_prepare_digests {
+            if let Some(digest) = order_digest.clone() {
+                ctx.update(digest.as_ref());
+                batch_ordered_digests.push(digest);
+            } else {
+                return None;
+            }
+        }
+
+        Some((ctx.finish(), batch_ordered_digests))
+    }
+
+    /// Process the message received
+    pub(crate) fn process_message(&mut self, message: StoredConsensusMessage<O>) -> Result<()>{
+        match message.message().kind() {
+            ConsensusMessageKind::Prepare(_) => {
+                self.duplicate_detection.insert_prepare_received(message.header().from())?;
+            }
+            ConsensusMessageKind::Commit(_) => {
+                self.duplicate_detection.insert_commit_received(message.header().from())?;
+            }
+            _ => unreachable!()
+        }
+
+        self.ongoing_decision.insert_message(message);
+
+        Ok(())
+    }
+
     /// Get the current decision
     pub fn deciding(&self, f: usize) -> IncompleteProof {
         let in_exec = self.seq_no;
@@ -190,8 +237,10 @@ impl<O> DecidingLog<O> {
 
         let current_digest = self.current_digest?;
 
-        let pre_prepare_ordering = pre_prepare_digests.into_iter().map(|elem| elem?).collect();
-        let pre_prepare_messages = pre_prepare_messages.into_iter().map(|elem| elem?).collect();
+        let pre_prepare_ordering = pre_prepare_digests.into_iter().map(|elem| elem.unwrap()).collect();
+        let pre_prepare_messages = pre_prepare_messages.into_iter().map(|elem| elem.unwrap()).collect();
+
+        let messages_to_persist = self.current_messages_to_persist;
 
         let new_meta = BatchMeta::new();
         let batch_meta = std::mem::replace(&mut *self.batch_meta().lock().unwrap(), new_meta);
@@ -209,6 +258,9 @@ impl<O> DecidingLog<O> {
         })
     }
 
+    fn register_message_to_save(&mut self, message: Digest) {
+        self.current_messages_to_persist.push(message);
+    }
 }
 
 impl<O> OnGoingDecision<O> {
@@ -256,7 +308,7 @@ impl<O> OnGoingDecision<O> {
     }
 
     /// Insert a message from the stored message into this on going decision
-    pub fn insert_stored_msg(&mut self, message: StoredConsensusMessage<O>) -> Result<()> {
+    pub fn insert_persisted_msg(&mut self, message: StoredConsensusMessage<O>) -> Result<()> {
         match message.message().kind() {
             ConsensusMessageKind::PrePrepare(_) => {
                 let index = pre_prepare_index_from_digest_opt(&self.pre_prepare_digests, message.header().digest())?;
@@ -331,12 +383,108 @@ impl<O> OnGoingDecision<O> {
 
         IncompleteProof::new(in_exec, write_set, quorum_writes)
     }
-
 }
 
 impl<O> Orderable for DecidingLog<O> {
     fn sequence_number(&self) -> SeqNo {
         self.seq_no
+    }
+}
+
+impl DuplicateReplicaEvaluator {
+
+    fn insert_pre_prepare_received(&mut self, node_id: NodeId) -> Result<()> {
+        if !self.received_pre_prepare_messages.insert(node_id) {
+            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
+                                              "We have already received a message from that leader."));
+        }
+
+        Ok(())
+    }
+    fn insert_prepare_received(&mut self, node_id: NodeId) -> Result<()> {
+        if !self.received_prepare_messages.insert(node_id) {
+            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
+                                              "We have already received a message from that leader."));
+        }
+
+        Ok(())
+    }
+    fn insert_commit_received(&mut self, node_id: NodeId) -> Result<()> {
+        if !self.received_commit_messages.insert(node_id) {
+            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
+                                              "We have already received a message from that leader."));
+        }
+
+        Ok(())
+    }
+
+}
+
+impl<O> CompletedBatch<O> {
+    pub fn batch_digest(&self) -> Digest {
+        self.batch_digest
+    }
+    pub fn pre_prepare_ordering(&self) -> &Vec<Digest> {
+        &self.pre_prepare_ordering
+    }
+    pub fn pre_prepare_messages(&self) -> &Vec<StoredConsensusMessage<O>> {
+        &self.pre_prepare_messages
+    }
+
+    pub fn messages_to_persist(&self) -> &Vec<Digest> {
+        &self.messages_to_persist
+    }
+    pub fn batch_meta(&self) -> &BatchMeta {
+        &self.batch_meta
+    }
+    pub fn request_count(&self) -> usize {
+        self.request_count
+    }
+
+    /// Create a proof from the completed batch
+    pub fn proof(&self, quorum: Option<usize>) -> Result<Proof<O>> {
+        let (leader_count, order) = (self.pre_prepare_ordering.len(), &self.pre_prepare_ordering);
+
+        if self.pre_prepare_messages.len() != leader_count {
+            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
+                                              format!("Failed to create a proof, pre_prepares do not match up to the leader count {} leader count {} preprepares",
+                                                      leader_count, self.prepare_messages.len()).as_str()));
+        }
+
+        let mut ordered_pre_prepares = Vec::with_capacity(leader_count);
+
+        for digest in order {
+            for i in 0..self.pre_prepare_messages.len() {
+                let message = &self.pre_prepare_messages[i];
+
+                if *message.header().digest() == *digest {
+                    ordered_pre_prepares.push(self.pre_prepare_messages[i].clone());
+
+                    break;
+                }
+            }
+        }
+
+        if let Some(quorum) = quorum {
+            if self.prepare_messages.len() < quorum {
+                return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
+                                                  "Failed to create a proof, prepares do not match up to the 2*f+1"));
+            }
+
+            if self.commit_messages.len() < quorum {
+                return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
+                                                  "Failed to create a proof, commits do not match up to the 2*f+1"));
+            }
+        }
+
+        let metadata = ProofMetadata::new(self.seq_no,
+                                          self.batch_digest.clone(),
+                                          order.clone());
+
+        Ok(Proof::new(metadata,
+                      ordered_pre_prepares,
+                      self.prepare_messages.clone(),
+                      self.commit_messages.clone()))
     }
 }
 
@@ -371,4 +519,29 @@ pub fn pre_prepare_index_of(leader_set: &Vec<NodeId>, proposer: &NodeId) -> Resu
             Ok(pos)
         }
     }
+}
+
+pub fn make_proof_from<O>(proof_meta: ProofMetadata, mut ongoing: OnGoingDecision<O>) -> Result<Proof<O>> {
+    let OnGoingDecision {
+        pre_prepare_digests,
+        pre_prepare_messages,
+        prepare_messages,
+        commit_messages
+    } = ongoing;
+
+    let pre_prepare_messages: Vec<StoredConsensusMessage<O>> = pre_prepare_messages.into_iter()
+        .map(|elem| {
+            elem.unwrap()
+        }).collect();
+
+    for (digest, digest2) in zip(proof_meta.pre_prepare_ordering(), &pre_prepare_digests) {
+        let digest2 = digest2.as_ref().ok_or(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog, "Failed to create a proof, pre prepare messages are missing"))?;
+
+        if digest != digest2 {
+            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
+                                              "Failed to create a proof, pre prepares do not match up to the ordering"));
+        }
+    }
+
+    Ok(Proof::new(proof_meta, pre_prepare_messages, prepare_messages, commit_messages))
 }
