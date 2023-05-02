@@ -624,7 +624,7 @@ impl<D> Synchronizer<D>
 
                     match &self.accessory {
                         SynchronizerAccessory::Replica(rep) => {
-                            rep.handle_stopping_quorum(self, previous_view, log,
+                            rep.handle_stopping_quorum(self, previous_view, consensus, log,
                                                        pending_rq_log, timeouts, node)
                         }
                         SynchronizerAccessory::Follower(_) => {}
@@ -1103,6 +1103,8 @@ impl<D> Synchronizer<D>
             last_proof
         } = state;
 
+        let view = self.view();
+
         warn!("{:?} // Finalizing view change to CID {:?}", node.id(), curr_cid);
 
         // we will get some value to be proposed because of the
@@ -1121,7 +1123,7 @@ impl<D> Synchronizer<D>
             // We are missing the last decision, which should be included in the collect data
             // sent by the leader in the SYNC message
             if let Some(last_proof) = last_proof {
-                consensus.catch_up_to_quorum(last_proof.seq_no(), last_proof, log)
+                consensus.catch_up_to_quorum(last_proof.seq_no(), &view, last_proof, log)
                     .expect("Failed to catch up to quorum");
             } else {
                 // This maybe happens when a checkpoint is done and the first execution after it

@@ -4,6 +4,7 @@ pub mod accessory;
 use std::collections::VecDeque;
 use std::iter;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use chrono::Utc;
 use either::Either;
 use log::{debug, warn};
@@ -22,11 +23,11 @@ use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::Timeouts;
 use crate::bft::msg_log::Info;
 use crate::bft::consensus::decision::{ConsensusDecision, MessageQueue};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
-use crate::bft::msg_log::decisions::Proof;
-use crate::bft::PBFT;
+use crate::bft::msg_log::decisions::{DecisionLog, IncompleteProof, Proof};
+use crate::bft::{PBFT, SysMsg};
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::sync::view::ViewInfo;
 
@@ -193,6 +194,13 @@ pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static
     tbo_queue: TboQueue<D::Request>,
 }
 
+/// The consensus guard for handling when the proposer should propose and to which consensus instance
+pub struct ConsensusGuard {
+
+    guard: AtomicBool,
+
+}
+
 impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                                    ST: StateTransferMessage + 'static {
     pub fn new_replica(node_id: NodeId, view: &ViewInfo, executor_handle: ExecutorHandle<D>, seq_no: SeqNo, watermark: u32) -> Self {
@@ -259,7 +267,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                                synchronizer: &Synchronizer<D>,
                                timeouts: &Timeouts,
                                log: &mut Log<D>,
-                               node: &NT) -> ConsensusStatus
+                               node: &NT) -> Result<ConsensusStatus>
         where NT: Node<PBFT<D, ST>> {
         let i = match message.sequence_number().index(self.seq_no) {
             Either::Right(i) => i,
@@ -270,8 +278,8 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                 //
                 // NOTE: alternatively, if this seq no pertains to consensus,
                 // we can try running the state transfer protocol
-                warn!("Message is behind our current sequence no {:?}", curr_seq, );
-                return ConsensusStatus::Deciding;
+                warn!("Message is behind our current sequence no {:?}", self.seq_no, );
+                return Ok(ConsensusStatus::Deciding);
             }
         };
 
@@ -280,12 +288,18 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             // so we need to queue the message
             self.tbo_queue.queue(header, message);
 
-            return ConsensusStatus::Deciding;
+            return Ok(ConsensusStatus::Deciding);
         }
 
+        // Get the correct consensus instance for this message
         let decision = self.decisions.get_mut(i).unwrap();
 
         decision.process_message(header, message, synchronizer, timeouts, log, node)
+    }
+
+    /// Are we able to finalize the next consensus instance on the queue?
+    pub fn can_finalize(&self) -> bool {
+        self.decisions.front().map(|d| d.is_finalizeable()).unwrap_or(false)
     }
 
     /// Finalize the next consensus instance if possible
@@ -297,6 +311,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                 return Ok(None);
             }
         } else {
+            // This should never happen?
             return Ok(None);
         }
 
@@ -316,14 +331,60 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
 
         let decision = self.decisions.pop_front().unwrap();
 
+        //Get the next message queue from the tbo queue. If there are no messages present
+        // (expected during normal operations, then we will create a new message queue)
         let queue = self.tbo_queue.advance_queue();
 
+        // Create the decision to keep the queue populated
         self.decisions.push_back(ConsensusDecision::init_with_msg_log(self.node_id,
                                                                       self.seq_no,
                                                                       view,
                                                                       queue, ));
 
         decision
+    }
+
+    /// Install the received state into the consensus
+    pub fn install_state(&mut self, state: D::State,
+                         view_info: ViewInfo,
+                         dec_log: &DecisionLog<D::Request>) -> Result<(D::State, Vec<D::Request>)> {
+        // get the latest seq no
+        let seq_no = {
+            let last_exec = dec_log.last_execution();
+            if last_exec.is_none() {
+                self.sequence_number()
+            } else {
+                last_exec.unwrap()
+            }
+        };
+
+        // skip old messages
+        self.install_sequence_number(seq_no.next(), &view_info);
+
+        let mut reqs = Vec::with_capacity(dec_log.proofs().len());
+
+        for proof in dec_log.proofs() {
+            if !proof.are_pre_prepares_ordered()? {
+                unreachable!()
+            }
+
+            for pre_prepare in proof.pre_prepares() {
+                let x: &ConsensusMessage<D::Request> = pre_prepare.message();
+
+                match x.kind() {
+                    ConsensusMessageKind::PrePrepare(pre_prepare_reqs) => {
+                        for req in pre_prepare_reqs {
+                            let rq_msg: &RequestMessage<D::Request> = req.message();
+
+                            reqs.push(rq_msg.operation().clone());
+                        }
+                    }
+                    _ => { unreachable!() }
+                }
+            }
+        }
+
+        Ok((state, reqs))
     }
 
     pub fn install_sequence_number(&mut self, seq_no: SeqNo, view: &ViewInfo) {
@@ -490,19 +551,33 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         //Prepare the algorithm as we are already entering this phase
 
         self.decisions.clear();
+        self.tbo_queue.clear();
 
         for _ in 0..self.watermark {
             self.decisions.push_back(ConsensusDecision::init_decision(self.node_id,
                                                                       self.seq_no, &view));
         }
 
-        self.tbo_queue.clear();
-
         //TODO: when we finalize a view change, we want to treat the pre prepare request
         // As the only pre prepare, since it already has info provided by everyone in the network.
         // Therefore, this should go straight to the Preparing phase instead of waiting for
         // All the view's leaders.
 
-        self.process_message(header, message, synchronizer, timeouts, log, node);
+        self.process_message(header, message, synchronizer, timeouts, log, node).unwrap();
+    }
+
+    /// Collect the incomplete proof that is currently being decided
+    pub fn collect_incomplete_proof(&self, f: usize) -> IncompleteProof {
+        if let Some(decision) = self.decisions.front() {
+            decision.deciding(f)
+        } else {
+            unreachable!()
+        }
+    }
+}
+
+impl<D, ST> Orderable for Consensus<D, ST> where D: SharedData + 'static, ST: StateTransferMessage + 'static {
+    fn sequence_number(&self) -> SeqNo {
+        self.seq_no
     }
 }

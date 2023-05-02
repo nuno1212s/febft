@@ -246,8 +246,8 @@ impl IncompleteProof {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct CollectData<O> {
-    incomplete_proof: IncompleteProof,
-    last_proof: Option<Proof<O>>,
+    pub(crate) incomplete_proof: IncompleteProof,
+    pub(crate) last_proof: Option<Proof<O>>,
 }
 
 impl<O> CollectData<O> {

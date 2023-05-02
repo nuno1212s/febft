@@ -27,7 +27,6 @@ pub mod decisions;
 pub mod deciding_log;
 pub mod decided_log;
 pub mod pending_decision;
-pub mod deciding_log;
 
 /// Checkpoint period.
 ///
@@ -65,12 +64,6 @@ pub fn initialize_decided_log<D: SharedData + 'static>(node_id: NodeId, persiste
 
 pub fn initialize_pending_request_log<D: SharedData + 'static>() -> Result<PendingRequestLog<D>> {
     Ok(PendingRequestLog::new())
-}
-
-
-pub(crate) fn initialize_deciding_log<D: SharedData + 'static>(node_id: NodeId) -> Result<DecidingLog<D>> {
-    Ok(DecidingLog::new(node_id))
-
 }
 
 #[inline]

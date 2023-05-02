@@ -26,6 +26,9 @@ pub trait OrderingProtocol<D, NT>: Orderable where D: SharedData + 'static {
                   timeouts: Timeouts, node: Arc<NT>) -> Result<Self> where
         Self: Sized;
 
+    /// Get the current view of the ordering protocol
+    fn view(&self) -> View<Self::Serialization>;
+
     /// Handle a protocol message that was received while we are executing another protocol
     fn handle_off_ctx_message(&mut self, message: StoredMessage<Protocol<ProtocolMessage<Self::Serialization>>>);
 

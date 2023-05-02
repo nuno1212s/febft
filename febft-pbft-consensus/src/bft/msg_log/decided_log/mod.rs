@@ -46,9 +46,6 @@ pub struct Log<D> where D: SharedData + 'static {
     //NOTE: THIS IS NOT THE CURR_SEQ NUMBER IN THE CONSENSUS
     curr_seq: SeqNo,
 
-    // The log for the consensus instance that is currently being decided
-    deciding_log: DecidingLog<D::Request>,
-
     // The log for all of the already decided consensus instances
     dec_log: DecisionLog<D::Request>,
 
@@ -87,7 +84,6 @@ impl<D> Log<D> where D: SharedData + 'static {
 
         Self {
             curr_seq: SeqNo::ZERO,
-            deciding_log: DecidingLog::new(node_id),
             dec_log,
             checkpoint,
 
@@ -103,14 +99,6 @@ impl<D> Log<D> where D: SharedData + 'static {
 
     pub fn mut_decision_log(&mut self) -> &mut DecisionLog<D::Request> {
         &mut self.dec_log
-    }
-
-    pub fn deciding_log(&self) -> &DecidingLog<D::Request> {
-        &self.deciding_log
-    }
-
-    pub fn mut_deciding_log(&mut self) -> &mut DecidingLog<D::Request> {
-        &mut self.deciding_log
     }
 
     /// Read the current state, if existent, from the persistent storage
@@ -151,8 +139,6 @@ impl<D> Log<D> where D: SharedData + 'static {
         &mut self,
         consensus_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
     ) {
-        self.deciding_log.register_consensus_message(consensus_msg.clone());
-
         if let Err(err) = self
             .persistent_log
             .write_message(WriteMode::NonBlockingSync(None), consensus_msg)
@@ -191,17 +177,8 @@ impl<D> Log<D> where D: SharedData + 'static {
 
     /// Clear the occurrences of a seq no from the decision log
     pub fn clear_last_occurrence(&mut self, seq: SeqNo) {
-        self.mut_deciding_log().clear_last_occurrences(seq, None);
-
         if let Err(err) = self.persistent_log.write_invalidate(WriteMode::NonBlockingSync(None), seq) {
             error!("Failed to invalidate last occurrence {:?}", err);
-        }
-    }
-
-    /// Install a sequence number into the log.
-    pub fn install_sequence_number(&mut self, seq: SeqNo) {
-        if self.deciding_log.sequence_number() != seq {
-            self.deciding_log.reset();
         }
     }
 
@@ -216,8 +193,6 @@ impl<D> Log<D> where D: SharedData + 'static {
         // self.decided = rs.requests;
         self.checkpoint = CheckpointState::Complete(checkpoint.clone());
         self.curr_seq = last_seq.clone();
-
-        self.deciding_log.reset();
 
         if let Err(err) = self.persistent_log
             .write_install_state(WriteMode::NonBlockingSync(None),
@@ -382,11 +357,8 @@ impl<D> Log<D> where D: SharedData + 'static {
     /// Accepts the f for the view that it is looking for
     /// It must accept this f as the reconfiguration of the network
     /// can alter the f from one seq no to the next
-    pub fn collect_data(&self, f: usize) -> CollectData<D::Request> {
-        CollectData::new(
-            self.deciding_log.deciding(f),
-            self.dec_log.last_decision(),
-        )
+    pub fn last_proof(&self, f: usize) -> Option<Proof<D::Request>> {
+        self.dec_log.last_decision()
     }
 }
 

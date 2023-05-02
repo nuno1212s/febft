@@ -1008,7 +1008,7 @@ fn read_all_present_proofs<D: SharedData>(db: &KVDB) -> Result<DecisionLog<D::Re
 
         let decision = final_decisions.get_mut(&seq_no).unwrap();
 
-        decision.insert_stored_msg(wrapped_msg)?;
+        decision.insert_persisted_msg(wrapped_msg)?;
     }
 
     // When we are done reading all of the messages, we must create the decision log

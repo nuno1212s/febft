@@ -10,7 +10,6 @@ pub mod msg_log;
 pub mod config;
 pub mod message;
 pub mod observer;
-pub mod consensus;
 
 use std::ops::Drop;
 use std::sync::Arc;
@@ -137,6 +136,10 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
         Self::initialize_protocol(config, executor, timeouts, node, None)
     }
 
+    fn view(&self) -> View<Self::Serialization> {
+        self.synchronizer.view()
+    }
+    
     fn handle_off_ctx_message(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>) {
         let (header, message) = message.into_inner();
 
@@ -258,7 +261,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
 
         let sync = Synchronizer::new_replica(view.clone(), timeout_dur);
 
-        let consensus = Consensus::<D, ST>::new_replica(node_id, executor.clone(),
+        let consensus = Consensus::<D, ST>::new_replica(node_id, &sync.view(), executor.clone(),
                                                         SeqNo::ZERO, 30);
 
         let consensus_guard = consensus.consensus_guard().cloned().unwrap();
@@ -362,7 +365,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         //
         // the order of the next consensus message is guaranteed by
         // `TboQueue`, in the consensus module.
-        let polled_message = self.consensus.poll(&self.pending_request_log);
+        let polled_message = self.consensus.poll();
 
         match polled_message {
             ConsensusPollStatus::Recv => OrderProtocolPoll::ReceiveFromReplicas,
@@ -460,6 +463,8 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
 
         // let start = Instant::now();
 
+        let view = self.synchronizer.view();
+
         let status = self.consensus.process_message(
             header,
             message,
@@ -467,7 +472,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             &self.timeouts,
             &mut self.message_log,
             &*self.node,
-        );
+        )?;
 
         match status {
             // if deciding, nothing to do
@@ -479,31 +484,33 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             // FIXME: execution layer needs to receive the id
             // attributed by the consensus layer to each op,
             // to execute in order
-            ConsensusStatus::Decided(completed_batch) => {
-                // Clear the requests from the pending request log
-                self.pending_request_log.delete_requests_in_batch(&completed_batch);
+            ConsensusStatus::Decided => {
+                while self.consensus.can_finalize() {
+                    // This will automatically move the consensus machine to the next state
+                    let completed_batch = self.consensus.finalize(&view)?.unwrap();
 
-                if let Some(exec_info) =
-                    //Should the execution be scheduled here or will it be scheduled by the persistent log?
-                    self.message_log.finalize_batch(seq, completed_batch)? {
-                    let (info, batch, completed_batch) = exec_info.into();
 
-                    match info {
-                        Info::Nil => self.executor.queue_update(batch),
-                        // execute and begin local checkpoint
-                        Info::BeginCheckpoint => {
-                            self.executor.queue_update_and_get_appstate(batch)
-                        }
-                    }.unwrap();
+                    // Clear the requests from the pending request log
+                    self.pending_request_log.delete_requests_in_batch(&completed_batch);
+
+                    if let Some(exec_info) =
+                        //Should the execution be scheduled here or will it be scheduled by the persistent log?
+                        self.message_log.finalize_batch(seq, completed_batch)? {
+                        let (info, batch, completed_batch) = exec_info.into();
+
+                        match info {
+                            Info::Nil => self.executor.queue_update(batch),
+                            // execute and begin local checkpoint
+                            Info::BeginCheckpoint => {
+                                self.executor.queue_update_and_get_appstate(batch)
+                            }
+                        }.unwrap();
+                    }
                 }
 
-                self.consensus.next_instance(&mut self.message_log);
+                // When we can no longer finalize then
             }
         }
-
-        // we processed a consensus message,
-        // signal the consensus layer of this event
-        self.consensus.signal();
 
         //
         // debug!(
@@ -573,10 +580,6 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
         Self::initialize_protocol(config, executor, timeouts, node, Some(initial_state))
     }
 
-    fn view(&self) -> View<Self::Serialization> {
-        self.synchronizer.view()
-    }
-
     fn install_state(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>,
                      view_info: View<Self::Serialization>,
                      dec_log: DecLog<Self::StateSerialization>) -> Result<(D::State, Vec<D::Request>)> {
@@ -601,9 +604,7 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     }
 
     fn install_seq_no(&mut self, seq_no: SeqNo) -> Result<()> {
-        self.consensus.install_sequence_number(seq_no);
-
-        self.message_log.install_sequence_number(seq_no);
+        self.consensus.install_sequence_number(seq_no, &self.synchronizer.view());
 
         Ok(())
     }
