@@ -20,7 +20,7 @@ use febft_messages::messages::{RequestMessage, SystemMessage};
 use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::Timeouts;
 use crate::bft::config::ProposerConfig;
-use crate::bft::consensus::ConsensusGuard;
+use crate::bft::consensus::ProposerConsensusGuard;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, PBFTMessage};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::observer::{ConnState, MessageType, ObserverHandle};
@@ -40,7 +40,7 @@ pub struct Proposer<D, NT>
     timeouts: Timeouts,
     /// The log of pending requests
     pending_decision_log: Arc<PendingRequestLog<D>>,
-    consensus_guard: ConsensusGuard,
+    consensus_guard: Arc<ProposerConsensusGuard>,
     // Should we shut down?
     cancelled: AtomicBool,
 
@@ -84,7 +84,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
         pending_decision_log: Arc<PendingRequestLog<D>>,
         timeouts: Timeouts,
         executor_handle: ExecutorHandle<D>,
-        consensus_guard: ConsensusGuard,
+        consensus_guard: Arc<ProposerConsensusGuard>,
         proposer_config: ProposerConfig,
     ) -> Arc<Self> {
         let ProposerConfig {
@@ -127,8 +127,6 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                 let mut ordered_propose = ProposeBuilder::new(self.target_global_batch_size);
 
                 let mut unordered_propose = ProposeBuilder::new(self.target_global_batch_size);
-
-                let mut last_seq = None;
 
                 loop {
                     if self.cancelled.load(Ordering::Relaxed) {
@@ -230,7 +228,6 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
 
                     self.propose_ordered(is_leader,
                                          &mut ordered_propose,
-                                         &mut last_seq,
                                          &mut debug_stats);
 
                     if !discovered_requests {
@@ -314,7 +311,6 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
     fn propose_ordered<ST>(&self,
                            is_leader: bool,
                            propose: &mut ProposeBuilder<D>,
-                           last_seq: &mut Option<SeqNo>,
                            debug: &mut DebugStats)
         where ST: StateTransferMessage + 'static,
               NT: Node<PBFT<D, ST>> {
@@ -333,29 +329,12 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                 }
             }
 
-            //Attempt to propose new batch
-            match self.consensus_guard.attempt_to_propose_message() {
-                Ok(_) => {
+            if self.consensus_guard.can_propose() {
+
+                if let Some((seq, view)) = self.consensus_guard.next_seq_no() {
                     propose.last_proposal = Instant::now();
 
                     debug.batches_made += 1;
-
-                    let guard = self.consensus_guard.consensus_info().lock().unwrap();
-
-                    let (seq, view) = &*guard;
-
-                    match last_seq {
-                        None => {}
-                        Some(last_exec) => {
-                            if *last_exec >= *seq {
-                                //We are still in the same consensus instance,
-                                //Don't produce more pre prepares
-                                return;
-                            }
-                        }
-                    }
-
-                    *last_seq = Some(*seq);
 
                     let next_batch = if propose.currently_accumulated.len() > self.max_batch_size {
 
@@ -375,7 +354,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                                                           next_batch.unwrap_or(Vec::with_capacity(self.max_batch_size * 2)));
 
 
-                    self.propose(*seq, view, current_batch);
+                    self.propose(seq, &view, current_batch);
 
                     //Stats
                     if debug.batches_made % 10000 == 0 {
@@ -391,7 +370,6 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                         debug.collected_per_batch_total = 0;
                     }
                 }
-                Err(_) => {}
             }
         }
     }

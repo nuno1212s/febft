@@ -40,7 +40,7 @@ use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransf
 use febft_messages::state_transfer::{Checkpoint, DecLog, StatefulOrderProtocol};
 use febft_messages::timeouts::{ClientRqInfo, Timeout, TimeoutKind, Timeouts};
 use crate::bft::config::PBFTConfig;
-use crate::bft::consensus::{AbstractConsensus, Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
+use crate::bft::consensus::{Consensus, ProposerConsensusGuard, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::message::{ConsensusMessage, ObserveEventKind, PBFTMessage, ViewChangeMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::Log;
@@ -93,10 +93,8 @@ pub struct PBFTOrderProtocol<D, ST, NT>
     // A reference to the timeouts layer
     timeouts: Timeouts,
 
-    //The guard for the consensus.
-    //Set to true when there is a consensus running, false when it's ready to receive
-    //A new pre-prepare message
-    consensus_guard: ConsensusGuard,
+    //The proposer guard
+    consensus_guard: Arc<ProposerConsensusGuard>,
     // Check if unordered requests can be proposed.
     // This can only occur when we are in the normal phase of the state machine
     unordered_rq_guard: Arc<AtomicBool>,
@@ -216,16 +214,11 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
 
     fn handle_execution_changed(&mut self, is_executing: bool) -> Result<()> {
         if !is_executing {
-            if let Some(consensus_guard) = self.consensus.consensus_guard() {
-                consensus_guard.lock_consensus();
-            }
+            self.consensus_guard.lock_consensus();
         } else {
             match self.phase {
                 ConsensusPhase::NormalPhase => {
-                    //TODO: Is this feasible? Do we know whether this is ready for a new batch?
-                    if let Some(consensus_guard) = self.consensus.consensus_guard() {
-                        consensus_guard.unlock_consensus();
-                    }
+                    self.consensus_guard.unlock_consensus();
                 }
                 ConsensusPhase::SyncPhase => {}
             }
@@ -259,12 +252,14 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             proposer_config, _phantom_data
         } = config;
 
+        let watermark = 30;
+
         let sync = Synchronizer::new_replica(view.clone(), timeout_dur);
 
-        let consensus = Consensus::<D, ST>::new_replica(node_id, &sync.view(), executor.clone(),
-                                                        SeqNo::ZERO, 30);
+        let consensus_guard = ProposerConsensusGuard::new(view.clone(), watermark);
 
-        let consensus_guard = consensus.consensus_guard().cloned().unwrap();
+        let consensus = Consensus::<D, ST>::new_replica(node_id, &sync.view(), executor.clone(),
+                                                        SeqNo::ZERO, watermark, consensus_guard.clone());
 
         let pending_rq_log = Arc::new(initialize_pending_request_log()?);
 
@@ -372,11 +367,10 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             ConsensusPollStatus::NextMessage(h, m) => {
                 OrderProtocolPoll::Exec(StoredMessage::new(h, Protocol::new(PBFTMessage::Consensus(m))))
             }
-            ConsensusPollStatus::TryProposeAndRecv => {
-                self.consensus.advance_init_phase();
+            ConsensusPollStatus::Decided => {
+                self.finalize_all_possible().expect("Failed to finalize all possible decided instances");
 
-                //Receive the PrePrepare message from the client rq handler thread
-                OrderProtocolPoll::ReceiveFromReplicas
+                OrderProtocolPoll::RePoll
             }
         }
     }
@@ -463,7 +457,6 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
 
         // let start = Instant::now();
 
-        let view = self.synchronizer.view();
 
         let status = self.consensus.process_message(
             header,
@@ -485,28 +478,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             // attributed by the consensus layer to each op,
             // to execute in order
             ConsensusStatus::Decided => {
-                while self.consensus.can_finalize() {
-                    // This will automatically move the consensus machine to the next state
-                    let completed_batch = self.consensus.finalize(&view)?.unwrap();
-
-
-                    // Clear the requests from the pending request log
-                    self.pending_request_log.delete_requests_in_batch(&completed_batch);
-
-                    if let Some(exec_info) =
-                        //Should the execution be scheduled here or will it be scheduled by the persistent log?
-                        self.message_log.finalize_batch(seq, completed_batch)? {
-                        let (info, batch, completed_batch) = exec_info.into();
-
-                        match info {
-                            Info::Nil => self.executor.queue_update(batch),
-                            // execute and begin local checkpoint
-                            Info::BeginCheckpoint => {
-                                self.executor.queue_update_and_get_appstate(batch)
-                            }
-                        }.unwrap();
-                    }
-                }
+                self.finalize_all_possible()?;
 
                 // When we can no longer finalize then
             }
@@ -520,6 +492,37 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         // );
 
         Ok(OrderProtocolExecResult::Success)
+    }
+
+    /// Finalize all possible consensus instances
+    fn finalize_all_possible(&mut self) -> Result<()>{
+        let view = self.synchronizer.view();
+
+        while self.consensus.can_finalize() {
+            // This will automatically move the consensus machine to the next state
+            let completed_batch = self.consensus.finalize(&view)?.unwrap();
+
+            let seq = completed_batch.sequence_number();
+
+            // Clear the requests from the pending request log
+            self.pending_request_log.delete_requests_in_batch(&completed_batch);
+
+            if let Some(exec_info) =
+                //Should the execution be scheduled here or will it be scheduled by the persistent log?
+                self.message_log.finalize_batch(seq, completed_batch)? {
+                let (info, batch, completed_batch) = exec_info.into();
+
+                match info {
+                    Info::Nil => self.executor.queue_update(batch),
+                    // execute and begin local checkpoint
+                    Info::BeginCheckpoint => {
+                        self.executor.queue_update_and_get_appstate(batch)
+                    }
+                }.unwrap();
+            }
+        }
+
+        Ok(())
     }
 
 
