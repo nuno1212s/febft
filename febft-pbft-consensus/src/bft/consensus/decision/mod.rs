@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 use chrono::Utc;
-use log::{debug, warn};
+use log::{debug, trace, warn};
 use febft_common::crypto::hash::Digest;
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
@@ -310,8 +310,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
 
                 self.phase = if received == view.leader_set().len() {
 
-                    debug!("{:?} // Completed pre prepare phase with all pre prepares Seq {:?}",
-                        node.id(), self.sequence_number());
+                    debug!("{:?} // Completed pre prepare phase with all pre prepares Seq {:?}. Batch size {:?}",
+                        node.id(), self.sequence_number(), self.message_log.current_batch_size());
 
                     //We have received all pre prepare requests for this consensus instance
                     //We are now ready to broadcast our prepare message and move to the next phase
@@ -413,13 +413,16 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     result = DecisionStatus::Transitioned;
                     DecisionPhase::Committing(0)
                 } else {
+                    debug!("{:?} // Received prepare message {:?} from {:?}. Current count {}",
+                        self.node_id, stored_msg.message().sequence_number(), header.from(), received);
+
                     self.accessory.handle_preparing_no_quorum(&self.message_log, &view,
                                                               stored_msg.clone(), node);
 
                     DecisionPhase::Preparing(received)
                 };
 
-                Ok(DecisionStatus::Deciding)
+                Ok(result)
             }
             DecisionPhase::Committing(received) => {
                 let received = match message.kind() {
@@ -472,6 +475,9 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
 
                     Ok(DecisionStatus::Decided)
                 } else {
+                    trace!("{:?} // Received commit message {:?} from {:?}. Current count {}",
+                        self.node_id, stored_msg.message().sequence_number(), header.from(), received);
+
                     self.phase = DecisionPhase::Committing(received);
 
                     self.accessory.handle_committing_no_quorum(&self.message_log, &view,
