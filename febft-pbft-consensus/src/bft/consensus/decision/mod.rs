@@ -39,7 +39,7 @@ macro_rules! extract_msg {
     };
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// What phase are we in the current decision phase
 pub enum DecisionPhase {
     Initialize,
@@ -231,6 +231,11 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
         self.phase = DecisionPhase::PrePreparing(0);
     }
 
+    /// Update the current view of this consensus instance
+    pub fn update_current_view(&mut self, view: &ViewInfo) {
+        self.message_log.update_current_view(view);
+    }
+
     /// Process a message relating to this consensus instance
     pub fn process_message<NT>(&mut self,
                                header: Header,
@@ -320,7 +325,6 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 let mut result = DecisionStatus::Deciding;
 
                 self.phase = if received == view.leader_set().len() {
-
                     debug!("{:?} // Completed pre prepare phase with all pre prepares Seq {:?}. Batch size {:?}",
                         node.id(), self.sequence_number(), self.message_log.current_batch_size());
 
@@ -478,7 +482,6 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 self.message_log.process_message(stored_msg.clone())?;
 
                 return if received == view.params().quorum() {
-
                     debug!("{:?} // Completed commit phase with all prepares Seq {:?}", node.id(), self.sequence_number());
 
                     self.phase = DecisionPhase::Decided;
@@ -534,6 +537,10 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
     pub fn message_log(&self) -> &DecidingLog<D::Request> {
         &self.message_log
     }
+
+    pub fn phase(&self) -> &DecisionPhase {
+        &self.phase
+    }
 }
 
 impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Orderable for ConsensusDecision<D, ST> {
@@ -574,7 +581,8 @@ impl<O> Debug for DecisionPollStatus<O> {
                 write!(f, "Try Propose")
             }
             DecisionPollStatus::Recv => {
-                write!(f, "Recv")}
+                write!(f, "Recv")
+            }
             DecisionPollStatus::NextMessage(_, msg) => {
                 write!(f, "Next Message {:?}", msg)
             }

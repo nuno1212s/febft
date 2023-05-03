@@ -597,11 +597,11 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
 
         info!("{:?} // Installing decision log with last execution {:?}", self.node.id(),last_exec);
 
-        let res = self.consensus.install_state(state.state().clone(), view_info.clone(), &dec_log)?;
+        self.synchronizer.install_view(view_info.clone());
+
+        let res = self.consensus.install_state(state.state().clone(), view_info, &dec_log)?;
 
         self.message_log.install_state(state, dec_log);
-
-        self.synchronizer.install_view(view_info);
 
         Ok(res)
     }

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::Utc;
 use either::Either;
-use log::{debug, error, trace, warn};
+use log::{debug, error, info, trace, warn};
 use serde::de::Unexpected::Seq;
 use socket2::Protocol;
 use febft_common::error::*;
@@ -25,7 +25,7 @@ use febft_messages::messages::{RequestMessage, SystemMessage};
 use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::Timeouts;
 use crate::bft::msg_log::Info;
-use crate::bft::consensus::decision::{ConsensusDecision, DecisionPollStatus, DecisionStatus, MessageQueue};
+use crate::bft::consensus::decision::{ConsensusDecision, DecisionPhase, DecisionPollStatus, DecisionStatus, MessageQueue};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
@@ -256,26 +256,24 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
 
         if i >= self.decisions.len() {
             debug!("{:?} // Queueing message out of context msg {:?} received from {:?} into tbo queue",
-                self.node_id, message_seq, header.from());
+                self.node_id, message, header.from());
 
             // We are not currently processing this consensus instance
             // so we need to queue the message
             self.tbo_queue.queue(header, message);
         } else {
             debug!("{:?} // Queueing message out of context msg {:?} received from {:?} into the corresponding decision {}",
-                self.node_id, message_seq, header.from(), i);
+                self.node_id, message, header.from(), i);
             // Queue the message in the corresponding pending decision
             self.decisions.get_mut(i).unwrap().queue(header, message);
 
             // Signal that we are ready to receive messages
             self.signalled.push_signalled(message_seq);
         }
-
     }
 
     /// Poll the given consensus
     pub fn poll(&mut self) -> ConsensusPollStatus<D::Request> {
-
         debug!("Current signal queue: {:?}", self.signalled);
 
         while let Some(seq_no) = self.signalled.pop_signalled() {
@@ -452,6 +450,9 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         // skip old messages
         self.install_sequence_number(seq_no.next(), &view_info);
 
+        // Update the decisions with the new view information
+        self.install_view(&view_info);
+
         let mut reqs = Vec::with_capacity(dec_log.proofs().len());
 
         for proof in dec_log.proofs() {
@@ -479,8 +480,12 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
     }
 
     pub fn install_sequence_number(&mut self, seq_no: SeqNo, view: &ViewInfo) {
+        info!("{:?} // Installing sequence number {:?} vs current {:?}", self.node_id, seq_no, self.seq_no);
+
         match seq_no.index(self.seq_no) {
             Either::Left(_) => {
+                debug!("{:?} // Installed sequence number is left of the current on. Clearing all queues", self.node_id);
+
                 self.clear_all_queues();
 
                 let mut sequence_no = seq_no;
@@ -498,8 +503,11 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             }
             Either::Right(0) => {
                 // We are in the correct sequence number
+                debug!("{:?} // Installed sequence number is the same as the current one. No action required", self.node_id);
             }
-            Either::Right(limit) => if limit >= self.decisions.len() {
+            Either::Right(limit) if limit >= self.decisions.len() => {
+                debug!("{:?} // Installed sequence number is right of the current one and is larger than the decisions we have stored. Clearing stored decisions.", self.node_id);
+
                 // We have more skips to do than currently watermarked decisions,
                 // so we must clear all our decisions and then consume from the tbo queue
                 // Until all decisions that have already been saved to the log are discarded of
@@ -549,12 +557,13 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                 self.seq_no = seq_no;
             }
             Either::Right(limit) => {
+                debug!("{:?} // Installed sequence number is right of the current one and is smaller than the decisions we have stored. Removing decided decisions.", self.node_id);
+
                 for _ in 0..limit {
                     // Pop the decisions that have already been made and dispose of them
                     self.decisions.pop_front();
                 }
 
-                self.consensus_guard.install_seq_no(seq_no);
                 // The decision at the head of the list is now seq_no
 
                 // Get the last decision in the decision queue.
@@ -580,8 +589,11 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             }
         }
 
+        self.consensus_guard.install_seq_no(seq_no);
         self.tbo_queue.signal();
+        // A couple of assertions to make sure we are good
         assert_eq!(self.tbo_queue.sequence_number(), self.seq_no);
+        assert_eq!(self.decisions.front().unwrap().sequence_number(), self.seq_no);
     }
 
     /// Catch up to the quorums latest decided consensus
@@ -633,6 +645,15 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         )))
     }
 
+    /// Install a given view into the current consensus decisions.
+    pub fn install_view(&mut self, view: &ViewInfo) {
+        self.consensus_guard.install_view(view.clone());
+
+        for decision in &mut self.decisions {
+            decision.update_current_view(&view);
+        }
+    }
+
     /// Finalize the view change protocol
     pub fn finalize_view_change<NT>(
         &mut self,
@@ -645,27 +666,32 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         let view = synchronizer.view();
         //Prepare the algorithm as we are already entering this phase
 
-        self.clear_all_queues();
-
-        self.consensus_guard.install_view(view.clone());
         // Consensus is ready to be proposed to
         self.consensus_guard.unlock_consensus();
-
-        let mut seq_no = self.seq_no;
-
-        for _ in 0..self.watermark {
-            let decision = ConsensusDecision::init_decision(self.node_id,
-                                                            seq_no, &view);
-
-            self.enqueue_decision(decision);
-
-            seq_no += SeqNo::ONE;
-        }
 
         //TODO: when we finalize a view change, we want to treat the pre prepare request
         // As the only pre prepare, since it already has info provided by everyone in the network.
         // Therefore, this should go straight to the Preparing phase instead of waiting for
         // All the view's leaders.
+
+        if *self.decisions[0].phase() != DecisionPhase::Initialize {
+            error!("We should be in the initialize phase of the current decision. Clearing all queues.");
+
+            self.clear_all_queues();
+
+            let mut seq_no = self.seq_no;
+
+            for _ in 0..self.watermark {
+                let decision = ConsensusDecision::init_decision(self.node_id,
+                                                                seq_no, &view);
+
+                self.enqueue_decision(decision);
+
+                seq_no += SeqNo::ONE;
+            }
+        }
+
+        self.install_view(&view);
 
         // Advance the initialization phase of the first decision, which is the current decision
         // So the proposer won't try to propose anything to this decision
