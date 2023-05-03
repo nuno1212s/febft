@@ -71,6 +71,8 @@ pub enum DecisionStatus {
     /// A `febft` quorum still hasn't made a decision
     /// on a client request to be executed.
     Deciding,
+    /// Transitioned to another next phase of the consensus decision
+    Transitioned,
     /// The message has been queued for later execution
     /// As such this consensus decision should be signaled
     Queued,
@@ -304,7 +306,12 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
 
                 let batch_metadata = batch_metadata.unwrap();
 
+                let mut result = DecisionStatus::Deciding;
+
                 self.phase = if received == view.leader_set().len() {
+
+                    debug!("{:?} // Completed pre prepare phase with all pre prepares Seq {:?}",
+                        node.id(), self.sequence_number());
 
                     //We have received all pre prepare requests for this consensus instance
                     //We are now ready to broadcast our prepare message and move to the next phase
@@ -328,8 +335,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     self.accessory.handle_pre_prepare_phase_completed(&self.message_log,
                                                                       &view, stored_msg.clone(), node);
 
-                    debug!("{:?} // Completed pre prepare phase with all pre prepares Seq {:?}",
-                        node.id(), self.sequence_number());
+                    result = DecisionStatus::Transitioned;
 
                     // We no longer start the count at 1 since all leaders must also send the prepare
                     // message with the digest of the entire batch
@@ -341,7 +347,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     DecisionPhase::PrePreparing(received)
                 };
 
-                Ok(DecisionStatus::Deciding)
+                Ok(result)
             }
             DecisionPhase::Preparing(received) => {
                 let received = match message.kind() {
@@ -391,6 +397,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
 
                 self.message_log.process_message(stored_msg.clone())?;
 
+                let mut result = DecisionStatus::Deciding;
+
                 self.phase = if received == view.params().quorum() {
                     debug!("{:?} // Completed prepare phase with all prepares Seq {:?}", node.id(), self.sequence_number());
 
@@ -402,6 +410,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     self.accessory.handle_preparing_quorum(&self.message_log, &view,
                                                            stored_msg.clone(), node);
 
+                    result = DecisionStatus::Transitioned;
                     DecisionPhase::Committing(0)
                 } else {
                     self.accessory.handle_preparing_no_quorum(&self.message_log, &view,
@@ -451,6 +460,9 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 self.message_log.process_message(stored_msg.clone())?;
 
                 return if received == view.params().quorum() {
+
+                    debug!("{:?} // Completed commit phase with all prepares Seq {:?}", node.id(), self.sequence_number());
+
                     self.phase = DecisionPhase::Decided;
 
                     self.message_log.batch_meta().lock().unwrap().consensus_decision_time = Utc::now();

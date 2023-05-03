@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::Utc;
 use either::Either;
-use log::{debug, error, warn};
+use log::{debug, error, trace, warn};
 use socket2::Protocol;
 use febft_common::error::*;
 use febft_common::crypto::hash::Digest;
@@ -172,6 +172,7 @@ impl<O> TboQueue<O> {
 /// A data structure to keep track of any consensus instances that have been signalled
 ///
 /// A consensus instance being signalled means it should be polled.
+#[derive(Debug)]
 pub struct Signals {
     // Prevent duplicates efficiently
     signaled_nos: BTreeSet<SeqNo>,
@@ -266,8 +267,11 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
 
     /// Poll the given consensus
     pub fn poll(&mut self) -> ConsensusPollStatus<D::Request> {
+
+        trace!("Current signal queue: {:?}", self.signalled);
+
         while let Some(seq_no) = self.signalled.pop_signalled() {
-            let index = self.seq_no.index(seq_no);
+            let index = seq_no.index(self.seq_no);
 
             if let Either::Right(index) = index {
                 match self.decisions[index].poll() {
@@ -290,7 +294,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                     }
                     _ => {}
                 }
-            } else { error!("Cannot possibly poll sequence number that is in the past") }
+            } else { error!("Cannot possibly poll sequence number that is in the past {:?} vs current {:?}", seq_no, self.seq_no) }
         }
 
         // If the first decision in the queue is decided, then we must finalize it
@@ -313,7 +317,6 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                                log: &mut Log<D>,
                                node: &NT) -> Result<ConsensusStatus>
         where NT: Node<PBFT<D, ST>> {
-
         let message_seq = message.sequence_number();
 
         let i = match message_seq.index(self.seq_no) {
@@ -325,7 +328,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                 //
                 // NOTE: alternatively, if this seq no pertains to consensus,
                 // we can try running the state transfer protocol
-                warn!("Message is behind our current sequence no {:?}", self.seq_no, );
+                warn!("Message {:?} is behind our current sequence no {:?}", message, self.seq_no, );
 
                 return Ok(ConsensusStatus::Deciding);
             }
@@ -334,6 +337,8 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         if i >= self.decisions.len() {
             // We are not currently processing this consensus instance
             // so we need to queue the message
+            debug!("{:?} // Queueing message {:?} for seq no {:?}", self.node_id, message, message_seq);
+
             self.tbo_queue.queue(header, message);
 
             return Ok(ConsensusStatus::Deciding);
@@ -351,7 +356,9 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             DecisionStatus::Deciding => {
                 ConsensusStatus::Deciding
             }
-            DecisionStatus::Queued => {
+            DecisionStatus::Queued | DecisionStatus::Transitioned => {
+                //When we transition phases, we may discover new messages
+                // That were in the queue, so we must be signalled again
                 self.signalled.push_signalled(message_seq);
 
                 ConsensusStatus::Deciding
@@ -380,6 +387,8 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             return Ok(None);
         }
 
+        debug!("{:?} // Finalizing consensus instance {:?}", self.node_id, self.seq_no);
+
         // Move to the next instance of the consensus since the current one is going to be finalized
         let decision = self.next_instance(view);
 
@@ -407,9 +416,9 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
 
         // Create the decision to keep the queue populated
         let novel_decision = ConsensusDecision::init_with_msg_log(self.node_id,
-                                                             new_seq_no,
-                                                             view,
-                                                             queue, );
+                                                                  new_seq_no,
+                                                                  view,
+                                                                  queue, );
 
         self.enqueue_decision(novel_decision);
 
@@ -460,7 +469,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
     }
 
     pub fn install_sequence_number(&mut self, seq_no: SeqNo, view: &ViewInfo) {
-        match self.seq_no.index(seq_no) {
+        match seq_no.index(self.seq_no) {
             Either::Left(_) => {
                 self.clear_all_queues();
 
@@ -528,7 +537,6 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                 }
 
                 self.seq_no = seq_no;
-
             }
             Either::Right(limit) => {
                 for _ in 0..limit {
