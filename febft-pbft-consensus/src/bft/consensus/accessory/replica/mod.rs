@@ -112,7 +112,7 @@ impl<D, ST> AccessoryConsensus<D, ST> for ReplicaAccessory<D, ST>
 
         let targets = NodeId::targets(0..view.params().n());
 
-        node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets).unwrap();
+        node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
     }
 
     fn handle_preparing_no_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
@@ -149,7 +149,7 @@ impl<D, ST> AccessoryConsensus<D, ST> for ReplicaAccessory<D, ST>
 
             let targets = NodeId::targets(0..view.params().n());
 
-            node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets).unwrap();
+            node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
         }
 
         deciding_log.batch_meta().lock().unwrap().commit_sent_time = Utc::now();

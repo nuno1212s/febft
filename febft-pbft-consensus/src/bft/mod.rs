@@ -648,12 +648,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT>
                     //Other operations.
                     self.consensus_guard.lock_consensus();
                 }
-                (ConsensusPhase::SyncPhase, ConsensusPhase::NormalPhase) => {
-                    // When changing from the sync phase to the normal phase
-                    // The phase starts with a SYNC phase, so we don't want to allow
-                    // The proposer to propose anything
-                    self.consensus_guard.lock_consensus();
-                }
+                (ConsensusPhase::SyncPhase, ConsensusPhase::NormalPhase) => {}
                 (_, _) => {}
             }
 

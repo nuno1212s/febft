@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::Utc;
 use either::Either;
 use log::{debug, error, trace, warn};
+use serde::de::Unexpected::Seq;
 use socket2::Protocol;
 use febft_common::error::*;
 use febft_common::crypto::hash::Digest;
@@ -161,6 +162,7 @@ impl<O> TboQueue<O> {
         tbo_queue_message(self.base_seq(), &mut self.commits, StoredMessage::new(h, m))
     }
 
+    /// Clear this queue
     fn clear(&mut self) {
         self.get_queue = false;
         self.pre_prepares.clear();
@@ -253,28 +255,36 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         };
 
         if i >= self.decisions.len() {
+            debug!("{:?} // Queueing message out of context msg {:?} received from {:?} into tbo queue",
+                self.node_id, message_seq, header.from());
+
             // We are not currently processing this consensus instance
             // so we need to queue the message
             self.tbo_queue.queue(header, message);
         } else {
+            debug!("{:?} // Queueing message out of context msg {:?} received from {:?} into the corresponding decision {}",
+                self.node_id, message_seq, header.from(), i);
             // Queue the message in the corresponding pending decision
             self.decisions.get_mut(i).unwrap().queue(header, message);
+
+            // Signal that we are ready to receive messages
+            self.signalled.push_signalled(message_seq);
         }
 
-        // Signal that we are ready to receive messages
-        self.signalled.push_signalled(message_seq);
     }
 
     /// Poll the given consensus
     pub fn poll(&mut self) -> ConsensusPollStatus<D::Request> {
 
-        trace!("Current signal queue: {:?}", self.signalled);
+        debug!("Current signal queue: {:?}", self.signalled);
 
         while let Some(seq_no) = self.signalled.pop_signalled() {
             let index = seq_no.index(self.seq_no);
 
             if let Either::Right(index) = index {
-                match self.decisions[index].poll() {
+                let poll_result = self.decisions[index].poll();
+
+                match poll_result {
                     DecisionPollStatus::NextMessage(header, message) => {
                         // We had a message pending, so it's possible that there are more messages
                         // Pending
@@ -637,17 +647,29 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
 
         self.clear_all_queues();
 
+        self.consensus_guard.install_view(view.clone());
+        // Consensus is ready to be proposed to
+        self.consensus_guard.unlock_consensus();
+
+        let mut seq_no = self.seq_no;
+
         for _ in 0..self.watermark {
             let decision = ConsensusDecision::init_decision(self.node_id,
-                                                            self.seq_no, &view);
+                                                            seq_no, &view);
 
             self.enqueue_decision(decision);
+
+            seq_no += SeqNo::ONE;
         }
 
         //TODO: when we finalize a view change, we want to treat the pre prepare request
         // As the only pre prepare, since it already has info provided by everyone in the network.
         // Therefore, this should go straight to the Preparing phase instead of waiting for
         // All the view's leaders.
+
+        // Advance the initialization phase of the first decision, which is the current decision
+        // So the proposer won't try to propose anything to this decision
+        self.decisions[0].skip_init_phase();
 
         self.process_message(header, message, synchronizer, timeouts, log, node).unwrap();
     }
@@ -726,6 +748,8 @@ impl ProposerConsensusGuard {
 
     /// Mark a given consensus sequence number as available to be proposed to
     pub fn make_seq_available(&self, seq: SeqNo) {
+        debug!("Making sequence number {:?} available for the proposer", seq);
+
         let mut guard = self.seq_no_queue.lock().unwrap();
 
         guard.0.push(Reverse(seq));
