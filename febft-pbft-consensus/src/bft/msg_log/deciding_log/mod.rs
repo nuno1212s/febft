@@ -129,6 +129,8 @@ impl<O> DecidingLog<O> {
         self.current_digest.clone()
     }
 
+    pub fn current_batch_size(&self) -> usize { self.current_batch_size }
+
     /// Inform the log that we are now processing a new batch of operations
     pub fn process_pre_prepare(&mut self,
                                request_batch: StoredConsensusMessage<O>,
@@ -201,7 +203,7 @@ impl<O> DecidingLog<O> {
     }
 
     /// Process the message received
-    pub(crate) fn process_message(&mut self, message: StoredConsensusMessage<O>) -> Result<()>{
+    pub(crate) fn process_message(&mut self, message: StoredConsensusMessage<O>) -> Result<()> {
         match message.message().kind() {
             ConsensusMessageKind::Prepare(_) => {
                 self.duplicate_detection.insert_prepare_received(message.header().from())?;
@@ -391,7 +393,6 @@ impl<O> Orderable for DecidingLog<O> {
 }
 
 impl DuplicateReplicaEvaluator {
-
     fn insert_pre_prepare_received(&mut self, node_id: NodeId) -> Result<()> {
         if !self.received_pre_prepare_messages.insert(node_id) {
             return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
@@ -416,7 +417,6 @@ impl DuplicateReplicaEvaluator {
 
         Ok(())
     }
-
 }
 
 impl<O> Orderable for CompletedBatch<O> {

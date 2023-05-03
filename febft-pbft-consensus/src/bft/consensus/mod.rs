@@ -328,7 +328,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                 //
                 // NOTE: alternatively, if this seq no pertains to consensus,
                 // we can try running the state transfer protocol
-                warn!("Message {:?} is behind our current sequence no {:?}", message, self.seq_no, );
+                warn!("Message {:?} is behind our current sequence no {:?}. Ignoring", message, self.seq_no, );
 
                 return Ok(ConsensusStatus::Deciding);
             }
