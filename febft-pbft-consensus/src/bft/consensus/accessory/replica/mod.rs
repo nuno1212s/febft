@@ -95,6 +95,8 @@ impl<D, ST> AccessoryConsensus<D, ST> for ReplicaAccessory<D, ST>
             }
         });
 
+        debug!("{:?} // Broadcasting prepare messages to quorum {:?}",
+               my_id, seq);
 
         // Vote for the received batch.
         // Leaders in this protocol must vote as they need to ack all
@@ -110,7 +112,7 @@ impl<D, ST> AccessoryConsensus<D, ST> for ReplicaAccessory<D, ST>
 
         let targets = NodeId::targets(0..view.params().n());
 
-        node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
+        node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets).unwrap();
     }
 
     fn handle_preparing_no_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
@@ -147,7 +149,7 @@ impl<D, ST> AccessoryConsensus<D, ST> for ReplicaAccessory<D, ST>
 
             let targets = NodeId::targets(0..view.params().n());
 
-            node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
+            node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets).unwrap();
         }
 
         deciding_log.batch_meta().lock().unwrap().commit_sent_time = Utc::now();

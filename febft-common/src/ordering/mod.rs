@@ -109,7 +109,9 @@ impl SeqNo {
         SeqNo(if overflow { 0 } else { next })
     }
 
-    /// Return an appropriate value to index the `TboQueue`.
+    /// Returns the difference between two sequence numbers.
+    /// Returns an index that is to the right or to the left of self, as if they were both placed
+    /// on a straight line.
     #[inline]
     pub fn index(self, other: SeqNo) -> Either<InvalidSeqNo, usize> {
         // TODO: add config param for these consts
