@@ -47,24 +47,23 @@ pub struct DecidingLog<O> {
     node_id: NodeId,
     seq_no: SeqNo,
 
-    // The set of leaders that is currently in vigour for this consensus decision
-    leader_set: Vec<NodeId>,
-
+    // Detect duplicate requests sent by replicas
     duplicate_detection: DuplicateReplicaEvaluator,
-
     //The digest of the entire batch that is currently being processed
     // This will only be calculated when we receive all of the requests necessary
     // As this digest requires the knowledge of all of them
     current_digest: Option<Digest>,
     // How many pre prepares have we received
     current_received_pre_prepares: usize,
-    // The message log of the current ongoing decision
-    ongoing_decision: OnGoingDecision<O>,
-    // Which hash space should each leader be responsible for
-    request_space_slices: BTreeMap<NodeId, (Vec<u8>, Vec<u8>)>,
-
     //The size of batch that is currently being processed. Increases as we receive more pre prepares
     current_batch_size: usize,
+    // The message log of the current ongoing decision
+    ongoing_decision: OnGoingDecision<O>,
+
+    // The set of leaders that is currently in vigour for this consensus decision
+    leader_set: Vec<NodeId>,
+    // Which hash space should each leader be responsible for
+    request_space_slices: BTreeMap<NodeId, (Vec<u8>, Vec<u8>)>,
 
     //A list of digests of all consensus related messages pertaining to this
     //Consensus instance. Used to keep track of if the persistent log has saved the messages already
@@ -107,16 +106,22 @@ impl<O> DecidingLog<O> {
         Self {
             node_id,
             seq_no,
-            leader_set: view.leader_set().clone(),
             duplicate_detection: Default::default(),
             current_digest: None,
             current_received_pre_prepares: 0,
             ongoing_decision: OnGoingDecision::initialize(view.leader_set().len()),
+            leader_set: view.leader_set().clone(),
             request_space_slices: view.hash_space_division().clone(),
             current_batch_size: 0,
             current_messages_to_persist: vec![],
             batch_meta: Arc::new(Mutex::new(BatchMeta::new())),
         }
+    }
+
+    /// Update our log to reflect the new views
+    pub fn update_current_view(&mut self, view: &ViewInfo) {
+        self.leader_set = view.leader_set().clone();
+        self.request_space_slices = view.hash_space_division().clone();
     }
 
     /// Getter for batch_meta
@@ -129,6 +134,7 @@ impl<O> DecidingLog<O> {
         self.current_digest.clone()
     }
 
+    /// Get the current batch size in this consensus decision
     pub fn current_batch_size(&self) -> usize { self.current_batch_size }
 
     /// Inform the log that we are now processing a new batch of operations
@@ -140,9 +146,10 @@ impl<O> DecidingLog<O> {
 
         let slice = self.request_space_slices.get(&sending_leader)
             .ok_or(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
-                                          format!("Failed to get request space for leader {:?}. Len: {:?}",
+                                          format!("Failed to get request space for leader {:?}. Len: {:?}. {:?}",
                                                   sending_leader,
-                                                  self.request_space_slices.len()).as_str()))?;
+                                                  self.request_space_slices.len(),
+                                                  self.request_space_slices).as_str()))?;
 
         if request_batch.header().from() != self.node_id {
             for request in &batch_rq_digests {
