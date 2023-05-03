@@ -611,14 +611,14 @@ impl<D> Synchronizer<D>
                 if i == current_view.params().quorum() {
                     let next_view = current_view.next_view();
 
-                    warn!("{:?} // Stopping quorum reached, moving to next view {:?}", node.id(), next_view);
-
                     let previous_view = current_view.clone();
 
                     //We have received the necessary amount of stopping requests
                     //To now that we should move to the next view
 
                     let next_leader = next_view.leader();
+
+                    warn!("{:?} // Stopping quorum reached, moving to next view {:?}. ", node.id(), next_view);
 
                     self.install_view(next_view);
 
@@ -631,6 +631,9 @@ impl<D> Synchronizer<D>
                     }
 
                     if next_leader == node.id() {
+
+                        warn!("{:?} // I am the new leader, moving to the stopping data phase.", node.id());
+
                         //Move to the stopping data phase as we are the new leader
                         self.phase.replace(ProtoPhase::StoppingData(0));
                     } else {

@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use chrono::Utc;
 use log::{debug, trace, warn};
@@ -38,6 +39,7 @@ macro_rules! extract_msg {
     };
 }
 
+#[derive(Debug, Clone)]
 /// What phase are we in the current decision phase
 pub enum DecisionPhase {
     Initialize,
@@ -51,8 +53,8 @@ pub enum DecisionPhase {
     Decided,
 }
 
-#[derive(Debug, Clone)]
 /// Poll result of a given consensus decision
+#[derive(Clone)]
 pub enum DecisionPollStatus<O> {
     // List this consensus decision as proposeable
     TryPropose,
@@ -222,6 +224,13 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
         };
     }
 
+    /// Allows us to skip the initialization phase of this consensus instance
+    /// This is useful when we don't want the proposer to receive authorization
+    /// To propose into this consensus instance.
+    pub fn skip_init_phase(&mut self) {
+        self.phase = DecisionPhase::PrePreparing(0);
+    }
+
     /// Process a message relating to this consensus instance
     pub fn process_message<NT>(&mut self,
                                header: Header,
@@ -237,6 +246,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
             DecisionPhase::Initialize => {
                 // The initialize phase will only be skipped by polling
                 // This consensus instance.
+                warn!("{:?} // Queueing message {:?} as we are in the initialize phase", self.node_id, message);
+
                 self.queue(header, message);
 
                 return Ok(DecisionStatus::Queued);
@@ -268,16 +279,16 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                         return Ok(DecisionStatus::Deciding);
                     }
                     ConsensusMessageKind::Prepare(d) => {
-                        debug!("{:?} // Received prepare message {:?} from {:?} while in prepreparing ",
-                            self.node_id, d, header.from());
+                        debug!("{:?} // Received {:?} from {:?} while in prepreparing ",
+                            self.node_id, message, header.from());
 
                         self.message_queue.queue_prepare(StoredMessage::new(header, message));
 
                         return Ok(DecisionStatus::Queued);
                     }
                     ConsensusMessageKind::Commit(d) => {
-                        debug!("{:?} // Received commit message {:?} from {:?} while in pre preparing",
-                            self.node_id, d, header.from());
+                        debug!("{:?} // Received {:?} from {:?} while in pre preparing",
+                            self.node_id, message, header.from());
 
                         self.message_queue.queue_commit(StoredMessage::new(header, message));
 
@@ -335,6 +346,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     self.accessory.handle_pre_prepare_phase_completed(&self.message_log,
                                                                       &view, stored_msg.clone(), node);
 
+                    self.message_queue.signal();
+
                     result = DecisionStatus::Transitioned;
 
                     // We no longer start the count at 1 since all leaders must also send the prepare
@@ -359,8 +372,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                         return Ok(DecisionStatus::Deciding);
                     }
                     ConsensusMessageKind::Commit(d) => {
-                        debug!("{:?} // Received commit message {:?} from {:?} while in preparing phase",
-                            self.node_id, d, header.from());
+                        debug!("{:?} // Received {:?} from {:?} while in preparing phase",
+                            self.node_id, message, header.from());
 
                         self.message_queue.queue_commit(StoredMessage::new(header, message));
 
@@ -410,7 +423,9 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     self.accessory.handle_preparing_quorum(&self.message_log, &view,
                                                            stored_msg.clone(), node);
 
+                    self.message_queue.signal();
                     result = DecisionStatus::Transitioned;
+
                     DecisionPhase::Committing(0)
                 } else {
                     debug!("{:?} // Received prepare message {:?} from {:?}. Current count {}",
@@ -475,7 +490,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
 
                     Ok(DecisionStatus::Decided)
                 } else {
-                    trace!("{:?} // Received commit message {:?} from {:?}. Current count {}",
+                    debug!("{:?} // Received commit message {:?} from {:?}. Current count {}",
                         self.node_id, stored_msg.message().sequence_number(), header.from(), received);
 
                     self.phase = DecisionPhase::Committing(received);
@@ -550,4 +565,22 @@ fn request_batch_received<D>(
 
     // Notify the synchronizer that a batch has been received
     synchronizer.request_batch_received(pre_prepare, timeouts)
+}
+
+impl<O> Debug for DecisionPollStatus<O> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DecisionPollStatus::TryPropose => {
+                write!(f, "Try Propose")
+            }
+            DecisionPollStatus::Recv => {
+                write!(f, "Recv")}
+            DecisionPollStatus::NextMessage(_, msg) => {
+                write!(f, "Next Message {:?}", msg)
+            }
+            DecisionPollStatus::Decided => {
+                write!(f, "Decided")
+            }
+        }
+    }
 }

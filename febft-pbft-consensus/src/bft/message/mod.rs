@@ -140,17 +140,17 @@ pub struct ConsensusMessage<O> {
 
 impl<O> Debug for ConsensusMessage<O> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?} Seq {:?} View ", self.seq, self.view)?;
+        write!(f, "Seq: {:?} View: {:?} ", self.seq, self.view)?;
 
-        match self.kind {
-            ConsensusMessageKind::PrePrepare(_) => {
-                write!(f, "View Pre prepare message")
+        match &self.kind {
+            ConsensusMessageKind::PrePrepare(d) => {
+                write!(f, "Pre prepare message with {} rqs", d.len())
             }
-            ConsensusMessageKind::Prepare(_) => {
-                write!(f, "Prepare message")
+            ConsensusMessageKind::Prepare(d) => {
+                write!(f, "Prepare message {:?}", d)
             }
-            ConsensusMessageKind::Commit(_) => {
-                write!(f, "Commit message")
+            ConsensusMessageKind::Commit(d) => {
+                write!(f, "Commit message {:?}", d)
             }
         }
     }
