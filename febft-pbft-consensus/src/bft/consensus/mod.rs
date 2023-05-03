@@ -274,7 +274,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
 
     /// Poll the given consensus
     pub fn poll(&mut self) -> ConsensusPollStatus<D::Request> {
-        debug!("Current signal queue: {:?}", self.signalled);
+        trace!("Current signal queue: {:?}", self.signalled);
 
         while let Some(seq_no) = self.signalled.pop_signalled() {
             let index = seq_no.index(self.seq_no);
