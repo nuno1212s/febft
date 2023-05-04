@@ -81,7 +81,7 @@ pub enum SystemMessage<D: SharedData, P, ST> {
     ///A protocol message that has been forwarded by another peer
     ForwardedProtocolMessage(ForwardedProtocolMessage<P>),
     ///A state transfer protocol message
-    StateTransferMessage(StateTransfer<ST>)
+    StateTransferMessage(StateTransfer<ST>),
 }
 
 impl<D, P, ST> SystemMessage<D, P, ST> where D: SharedData {
@@ -92,7 +92,7 @@ impl<D, P, ST> SystemMessage<D, P, ST> where D: SharedData {
     pub fn from_state_transfer_message(msg: ST) -> Self {
         SystemMessage::StateTransferMessage(StateTransfer::new(msg))
     }
-    
+
     pub fn from_fwd_protocol_message(msg: StoredMessage<Protocol<P>>) -> Self {
         SystemMessage::ForwardedProtocolMessage(ForwardedProtocolMessage::new(msg))
     }
@@ -113,7 +113,7 @@ impl<D, P, ST> SystemMessage<D, P, ST> where D: SharedData {
             SystemMessage::StateTransferMessage(s) => {
                 s.into_inner()
             }
-            _ => {unreachable!()}
+            _ => { unreachable!() }
         }
     }
 }
@@ -149,7 +149,7 @@ impl<D, P, ST> Clone for SystemMessage<D, P, ST> where D: SharedData, P: Clone, 
     }
 }
 
-impl<D, P, ST> Debug for SystemMessage<D, P, ST> where D:SharedData, P: Clone, ST:Clone {
+impl<D, P, ST> Debug for SystemMessage<D, P, ST> where D: SharedData, P: Clone, ST: Clone {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             SystemMessage::OrderedRequest(_) => {
@@ -323,6 +323,8 @@ impl<O> ForwardedRequestsMessage<O> {
     }
 
     pub fn requests(&self) -> &Vec<StoredMessage<RequestMessage<O>>> { &self.inner }
+
+    pub fn mut_requests(&mut self) -> &mut Vec<StoredMessage<RequestMessage<O>>> { &mut self.inner }
 
     /// Returns the client requests contained in this `ForwardedRequestsMessage`.
     pub fn into_inner(self) -> Vec<StoredMessage<RequestMessage<O>>> {

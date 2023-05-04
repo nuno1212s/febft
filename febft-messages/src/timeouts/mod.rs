@@ -25,6 +25,7 @@ pub struct ClientRqInfo {
     //The digest of the request in question
     pub digest: Digest,
 
+    pub sender: NodeId,
     pub seqno: SeqNo,
     pub session: SeqNo,
 }
@@ -117,10 +118,10 @@ impl Timeouts {
     }
 
     /// Start a timeout request on the list of digests that have been provided
-    pub fn timeout_client_requests(&self, timeout: Duration, requests: Vec<(Digest, SeqNo, SeqNo)>) {
+    pub fn timeout_client_requests(&self, timeout: Duration, requests: Vec<(Digest, NodeId, SeqNo, SeqNo)>) {
         let requests: Vec<TimeoutKind> = requests.into_iter()
-            .map(|(req, seq, session)|
-                TimeoutKind::ClientRequestTimeout(ClientRqInfo::new(req, seq, session)))
+            .map(|(req, sender, seq, session)|
+                TimeoutKind::ClientRequestTimeout(ClientRqInfo::new(req, sender, seq, session)))
             .collect();
 
         self.handle.send(TimeoutMessage::TimeoutRequest(RqTimeoutMessage {
@@ -408,9 +409,10 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
 }
 
 impl ClientRqInfo {
-    pub fn new(digest: Digest, seqno: SeqNo, session: SeqNo) -> Self {
+    pub fn new(digest: Digest, sender: NodeId, seqno: SeqNo, session: SeqNo) -> Self {
         Self {
             digest,
+            sender,
             seqno,
             session,
         }

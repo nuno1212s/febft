@@ -179,6 +179,7 @@ impl<S, NT> Executor<S, NT>
                     match exec_req {
                         ExecutionRequest::InstallState(checkpoint, after) => {
                             exec.state = checkpoint;
+                            
                             for req in after {
                                 exec.service.update(&mut exec.state, req);
                             }
