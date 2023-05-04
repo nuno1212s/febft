@@ -355,7 +355,7 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
                 if !ids.is_empty() {
                     // This means we have not yet seen these requests (in the proposer).\
                     // As soon as we see them, they will be skipped over
-                    warn!("{:?} // Received requests but did not have a timeout for them: {:?}, {:?}.", self.my_id, node, ids);
+                    warn!("{:?} // Received requests but did not have a timeout for them: {:?}, {:?}.", self.my_id, node, ids.len());
 
                     for rq_id in ids {
                         self.done_requests.entry(rq_id.digest).or_insert_with(|| {

@@ -162,7 +162,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
             let unique_digest = header.unique_digest();
 
-            digests.push((unique_digest.clone(), request.message().sequence_number(), request.message().session_id()));
+            digests.push((unique_digest.clone(), header.from(), request.message().sequence_number(), request.message().session_id()));
 
             if let Some(mut req) = self.watching.get_mut(&unique_digest) {
                 match req.value() {
@@ -189,7 +189,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     ) {
         let phase = TimeoutPhase::Init(Instant::now());
 
-        for (req, seq, session) in &requests {
+        for (req, from, seq, session) in &requests {
             self.watching.insert(req.clone(), phase.clone());
         }
 
@@ -273,17 +273,18 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         &self,
         _phase: TimeoutPhase,
         digest: Digest,
+        from: NodeId,
         seq: SeqNo,
         session: SeqNo,
         timeouts: &Timeouts,
     ) {
-        timeouts.timeout_client_requests(self.timeout_dur.get(), vec![(digest, seq, session)]);
+        timeouts.timeout_client_requests(self.timeout_dur.get(), vec![(digest, from, seq, session)]);
     }
 
     /// Watch a client request with the digest `digest`.
-    pub fn watch_request(&self, digest: Digest, seq: SeqNo, session: SeqNo, timeouts: &Timeouts) {
+    pub fn watch_request(&self, digest: Digest, from: NodeId, seq: SeqNo, session: SeqNo, timeouts: &Timeouts) {
         let phase = TimeoutPhase::Init(Instant::now());
-        self.watch_request_impl(phase, digest, seq, session, timeouts);
+        self.watch_request_impl(phase, digest, from, seq, session, timeouts);
     }
 
     /// Remove a client request with digest `digest` from the watched list
@@ -316,7 +317,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
             *curr_phase = phase;
 
-            digests.push((rq_digest, SeqNo::ZERO, SeqNo::ZERO));
+            digests.push((rq_digest, NodeId::from(1000u32), SeqNo::ZERO, SeqNo::ZERO));
         });
 
         timeouts.timeout_client_requests(self.timeout_dur.get(), digests);

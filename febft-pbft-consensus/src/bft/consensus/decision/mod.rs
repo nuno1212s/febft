@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use chrono::Utc;
-use log::{debug, trace, warn};
+use log::{debug, info, trace, warn};
 use febft_common::crypto::hash::Digest;
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
@@ -325,7 +325,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 let mut result = DecisionStatus::Deciding;
 
                 self.phase = if received == view.leader_set().len() {
-                    debug!("{:?} // Completed pre prepare phase with all pre prepares Seq {:?}. Batch size {:?}",
+                    info!("{:?} // Completed pre prepare phase with all pre prepares Seq {:?}. Batch size {:?}",
                         node.id(), self.sequence_number(), self.message_log.current_batch_size());
 
                     //We have received all pre prepare requests for this consensus instance
@@ -417,7 +417,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 let mut result = DecisionStatus::Deciding;
 
                 self.phase = if received == view.params().quorum() {
-                    debug!("{:?} // Completed prepare phase with all prepares Seq {:?}", node.id(), self.sequence_number());
+                    info!("{:?} // Completed prepare phase with all prepares Seq {:?}", node.id(), self.sequence_number());
 
                     self.message_log.batch_meta().lock().unwrap().commit_sent_time = Utc::now();
 
@@ -482,7 +482,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 self.message_log.process_message(stored_msg.clone())?;
 
                 return if received == view.params().quorum() {
-                    debug!("{:?} // Completed commit phase with all prepares Seq {:?}", node.id(), self.sequence_number());
+                    info!("{:?} // Completed commit phase with all prepares Seq {:?}", node.id(), self.sequence_number());
 
                     self.phase = DecisionPhase::Decided;
 
