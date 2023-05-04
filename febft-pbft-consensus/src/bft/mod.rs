@@ -179,12 +179,10 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     }
 
     fn handle_timeout(&mut self, timeout: Vec<ClientRqInfo>) -> Result<OrderProtocolExecResult> {
-        
-        
-        
+
         let status = self.synchronizer
             .client_requests_timed_out(self.node.id(), &timeout);
-        
+
         match status {
             SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
                 if forwarded.len() > 0 {
@@ -239,7 +237,7 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
 
         self.pending_request_log.filter_rqs(requests.mut_requests());
 
-        info!("{:?} // Received forwarded requests {:?}, after filtering: {:?}", self.node.id(), init_req_count, requests.requests().len());
+        info!("{:?} // Received forwarded requests {:?} from {:?}, after filtering: {:?}", self.node.id(), init_req_count, _header.from(), requests.requests().len());
 
         if requests.requests().is_empty() {
             return Ok(()); // nothing to do

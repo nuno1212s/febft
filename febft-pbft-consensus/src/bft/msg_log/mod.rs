@@ -57,10 +57,10 @@ pub fn initialize_persistent_log<D, K, T>(executor: ExecutorHandle<D>, db_path: 
     PersistentLog::init_log::<K, T>(executor, db_path)
 }
 
-pub fn initialize_decided_log<D: SharedData + 'static>(node_id: NodeId, persistent_log: PersistentLog<D>, state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<Log<D>> {
-
+pub fn initialize_decided_log<D: SharedData + 'static>(node_id: NodeId,
+                                                       persistent_log: PersistentLog<D>,
+                                                       state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<Log<D>> {
     Ok(Log::init_decided_log(node_id, persistent_log, state))
-
 }
 
 pub fn initialize_pending_request_log<D: SharedData + 'static>() -> Result<PendingRequestLog<D>> {
@@ -69,11 +69,11 @@ pub fn initialize_pending_request_log<D: SharedData + 'static>() -> Result<Pendi
 
 #[inline]
 pub fn operation_key<O>(header: &Header, message: &RequestMessage<O>) -> u64 {
-    operation_key_raw(header.from(), message.session())
+    operation_key_raw(header.from(), message.session_id())
 }
 
 #[inline]
-pub fn operation_key_raw<O>(from: NodeId, session: SeqNo) -> u64 {
+pub fn operation_key_raw(from: NodeId, session: SeqNo) -> u64 {
     // both of these values are 32-bit in width
     let client_id: u64 = from.into();
     let session_id: u64 = session.into();

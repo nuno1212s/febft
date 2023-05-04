@@ -390,7 +390,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
             to_propose.push((message.header().from(), message.message().session_id(), message.sequence_number(), message.header().unique_digest()));
         }
 
-        info!("{:?} // Proposing new batch with {} request count {:?} ({:?})", self.node_ref.id(), currently_accumulated.len(), seq, to_propose);
+        info!("{:?} // Proposing new batch with {} request count {:?}", self.node_ref.id(), currently_accumulated.len(), seq);
 
         let message = PBFTMessage::Consensus(ConsensusMessage::new(
             seq,

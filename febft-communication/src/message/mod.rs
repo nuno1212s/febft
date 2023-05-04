@@ -223,7 +223,7 @@ impl<M: Clone> From<M> for System<M> {
 /// A fixed amount of `Header::LENGTH` bytes are read before
 /// a message is read. Contains the protocol version, message
 /// length, as well as other metadata.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(C, packed)]
 pub struct Header {
     // manually align memory for cross platform compat
@@ -610,6 +610,23 @@ impl WireMessage {
         } else {
             None
         }
+    }
+}
+
+impl Debug for Header {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+
+        let version = self.version;
+        let length = self.length;
+        let signature = self.signature;
+        let digest = self.digest;
+        let nonce = self.nonce;
+        let from = self.from;
+        let to = self.to;
+
+        write!(f, "Header {{ version: {}, length: {}, signature: {:x?}, digest: {:x?}, nonce: {}, from: {}, to: {} }}",
+            version, length, signature, digest, nonce, from, to
+        )
     }
 }
 

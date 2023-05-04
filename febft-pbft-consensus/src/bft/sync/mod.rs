@@ -1195,10 +1195,10 @@ impl<D> Synchronizer<D>
     }
 
     /// Watch a client request with the digest `digest`.
-    pub fn watch_request(&self, digest: Digest, seq: SeqNo, session: SeqNo, timeouts: &Timeouts) {
+    pub fn watch_request(&self, digest: Digest, from: NodeId, seq: SeqNo, session: SeqNo, timeouts: &Timeouts) {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) =>
-                rep.watch_request(digest, seq, session, timeouts),
+                rep.watch_request(digest, from, seq, session, timeouts),
             _ => {}
         }
     }

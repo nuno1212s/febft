@@ -230,7 +230,7 @@ impl<D> PendingRequestLog<D> where D: SharedData {
             let key = operation_key_raw(timeout.sender, timeout.session);
 
             let result = if let Some(seq_no) = latest_op_guard.get(key) {
-                *seq_no < timeout.message().sequence_number()
+                *seq_no < timeout.seqno
             } else {
                 true
             };

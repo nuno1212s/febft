@@ -58,7 +58,7 @@ pub struct Replica<S, OP, ST, NT> where S: Service {
     node: Arc<NT>,
     // THe handle to the execution and timeouts handler
     execution_rx: ChannelSyncRx<Message<S::Data>>,
-    execution_tx: ChannelSyncTx<Message<S::Data>>
+    execution_tx: ChannelSyncTx<Message<S::Data>>,
 }
 
 impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
@@ -133,28 +133,24 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             connections.push((node_id, connection_results));
         }
 
-        ///FIXME: Protect against a slow loris attack by only requiring connections to a quorum of nodes
-        /// and not wait with a for loop like this where we can spend a long time waiting for each connection
-        rt::spawn(async move {
-            'outer: for (peer_id, conn_result) in connections {
-                for conn in conn_result {
-                    match conn.await {
-                        Ok(result) => {
-                            if let Err(err) = result {
-                                error!("{:?} // Failed to connect to {:?} for {:?}", log_node_id, peer_id, err);
-                                continue 'outer;
-                            }
-                        }
-                        Err(error) => {
-                            error!("Failed to connect to the given node. {:?}", error);
+        'outer: for (peer_id, conn_result) in connections {
+            for conn in conn_result {
+                match conn.await {
+                    Ok(result) => {
+                        if let Err(err) = result {
+                            error!("{:?} // Failed to connect to {:?} for {:?}", log_node_id, peer_id, err);
                             continue 'outer;
                         }
                     }
+                    Err(error) => {
+                        error!("Failed to connect to the given node. {:?}", error);
+                        continue 'outer;
+                    }
                 }
-
-                info!("{:?} // Established a new connection to node {:?}.", log_node_id, peer_id);
             }
-        });
+
+            info!("{:?} // Established a new connection to node {:?}.", log_node_id, peer_id);
+        }
 
         info!("{:?} // Connected to all other replicas.", log_node_id);
 
@@ -407,7 +403,6 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                     error!("Failed to serialize and digest application state: {:?}", error)
                 }
             }
-
         });
 
         Ok(())

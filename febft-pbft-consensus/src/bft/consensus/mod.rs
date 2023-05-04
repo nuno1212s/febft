@@ -247,8 +247,8 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             Either::Left(_) => {
                 // The message pertains to older consensus instances
 
-                warn!("{:?} // Ignoring old consensus message {:?} received from {:?} as we are already in seq no {:?}",
-                    self.node_id, message_seq, header.from(), self.seq_no);
+                warn!("{:?} // Ignoring consensus message {:?} received from {:?} as we are already in seq no {:?}",
+                    self.node_id, message, header.from(), self.seq_no);
 
                 return;
             }
@@ -330,13 +330,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         let i = match message_seq.index(self.seq_no) {
             Either::Right(i) => i,
             Either::Left(_) => {
-                // FIXME: maybe notify peers if we detect a message
-                // with an invalid (too large) seq no? return the
-                // `NodeId` of the offending node.
-                //
-                // NOTE: alternatively, if this seq no pertains to consensus,
-                // we can try running the state transfer protocol
-                warn!("Message {:?} is behind our current sequence no {:?}. Ignoring", message, self.seq_no, );
+                warn!("Message {:?} from {:?} is behind our current sequence no {:?}. Ignoring", message, header.from(), self.seq_no, );
 
                 return Ok(ConsensusStatus::Deciding);
             }
@@ -395,7 +389,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             return Ok(None);
         }
 
-        debug!("{:?} // Finalizing consensus instance {:?}", self.node_id, self.seq_no);
+        info!("{:?} // Finalizing consensus instance {:?}", self.node_id, self.seq_no);
 
         // Move to the next instance of the consensus since the current one is going to be finalized
         let decision = self.next_instance(view);
