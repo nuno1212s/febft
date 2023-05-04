@@ -41,7 +41,7 @@ use febft_messages::state_transfer::{Checkpoint, DecLog, StatefulOrderProtocol};
 use febft_messages::timeouts::{ClientRqInfo, Timeout, TimeoutKind, Timeouts};
 use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{Consensus, ProposerConsensusGuard, ConsensusPollStatus, ConsensusStatus};
-use crate::bft::message::{ConsensusMessage, ObserveEventKind, PBFTMessage, ViewChangeMessage};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage, ViewChangeMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::{Info, initialize_decided_log, initialize_pending_request_log, initialize_persistent_log};
@@ -137,7 +137,7 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     fn view(&self) -> View<Self::Serialization> {
         self.synchronizer.view()
     }
-    
+
     fn handle_off_ctx_message(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>) {
         let (header, message) = message.into_inner();
 
@@ -179,9 +179,12 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     }
 
     fn handle_timeout(&mut self, timeout: Vec<ClientRqInfo>) -> Result<OrderProtocolExecResult> {
+        
+        
+        
         let status = self.synchronizer
             .client_requests_timed_out(self.node.id(), &timeout);
-
+        
         match status {
             SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
                 if forwarded.len() > 0 {
@@ -230,7 +233,17 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     }
 
     fn handle_forwarded_requests(&mut self, requests: StoredMessage<ForwardedRequestsMessage<D::Request>>) -> Result<()> {
-        let (_header, requests) = requests.into_inner();
+        let (_header, mut requests) = requests.into_inner();
+
+        let init_req_count = requests.requests().len();
+
+        self.pending_request_log.filter_rqs(requests.mut_requests());
+
+        info!("{:?} // Received forwarded requests {:?}, after filtering: {:?}", self.node.id(), init_req_count, requests.requests().len());
+
+        if requests.requests().is_empty() {
+            return Ok(()); // nothing to do
+        }
 
         self.synchronizer.watch_forwarded_requests(&requests, &self.timeouts);
 
@@ -495,7 +508,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
     }
 
     /// Finalize all possible consensus instances
-    fn finalize_all_possible(&mut self) -> Result<()>{
+    fn finalize_all_possible(&mut self) -> Result<()> {
         let view = self.synchronizer.view();
 
         while self.consensus.can_finalize() {
@@ -507,8 +520,11 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             // Clear the requests from the pending request log
             self.pending_request_log.delete_requests_in_batch(&completed_batch);
 
+            // Update the latest ops in the pending request log so we don't repeat requests
+            self.pending_request_log.insert_latest_ops_from_batch(&completed_batch);
+
+            //Should the execution be scheduled here or will it be scheduled by the persistent log?
             if let Some(exec_info) =
-                //Should the execution be scheduled here or will it be scheduled by the persistent log?
                 self.message_log.finalize_batch(seq, completed_batch)? {
                 let (info, batch, completed_batch) = exec_info.into();
 

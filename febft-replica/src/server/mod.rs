@@ -334,7 +334,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
         }
 
         if !client_rq.is_empty() {
-            debug!("{:?} // Received client request timeouts: {}", self.node.id(), client_rq.len());
+            debug!("{:?} // Received client request timeouts: {} {:?}", self.node.id(), client_rq.len(), client_rq);
+
             match self.ordering_protocol.handle_timeout(client_rq)? {
                 OrderProtocolExecResult::RunCst => {
                     self.run_state_transfer_protocol()?;

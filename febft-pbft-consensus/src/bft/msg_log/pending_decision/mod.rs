@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use futures::StreamExt;
 use intmap::IntMap;
 use febft_common::collections::ConcurrentHashMap;
 use febft_common::crypto::hash::Digest;
@@ -8,9 +9,10 @@ use febft_communication::message::{Header, StoredMessage};
 use febft_execution::app::{Request, Service};
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::RequestMessage;
+use febft_messages::timeouts::ClientRqInfo;
 use crate::bft::message::ConsensusMessageKind;
 use crate::bft::msg_log::deciding_log::CompletedBatch;
-use crate::bft::msg_log::operation_key;
+use crate::bft::msg_log::{operation_key, operation_key_raw};
 
 /// The log for requests that have been received but not yet decided by the system
 pub struct PendingRequestLog<D> where D: SharedData {
@@ -50,6 +52,26 @@ impl<D> PendingRequestLog<D> where D: SharedData {
         pending_messages
     }
 
+    /// Filter out requests that we have already processed from a given request list.
+    /// This can either be stopped or forwarded requests
+    pub fn filter_rqs(&self, messages: &mut Vec<StoredMessage<RequestMessage<D::Request>>>) {
+        let latest_op = self.latest_op.lock().unwrap();
+
+        messages.retain(|message| {
+            let key = operation_key::<D::Request>(message.header(), message.message());
+
+            let result = if let Some(seq_no) = latest_op.get(key) {
+                // We want to keep the message if we have not seen a more recent message from the
+                // Given client session combo
+                *seq_no < message.message().sequence_number()
+            } else {
+                true
+            };
+
+            result
+        });
+    }
+
     /// Register a batch of requests that have been sent to us by other replicas in STOP rqs
     pub fn register_stopped_requests(&self, rqs: &Vec<StoredMessage<RequestMessage<D::Request>>>) {
         rqs.iter().for_each(|rq| {
@@ -63,6 +85,7 @@ impl<D> PendingRequestLog<D> where D: SharedData {
     pub fn insert_forwarded(&self, mut messages: Vec<StoredMessage<RequestMessage<D::Request>>>) {
         self.forwarded_requests.lock().unwrap().append(&mut messages);
     }
+
 
     /// Delete forwarded requests from the forwarded request pool
     pub fn take_forwarded_requests(&self, mut replacement: Option<Vec<StoredMessage<RequestMessage<D::Request>>>>)
@@ -176,6 +199,15 @@ impl<D> PendingRequestLog<D> where D: SharedData {
         }
     }
 
+    /// Insert the operations contained in this batch into this log so we don't repeat them
+    pub fn insert_latest_ops_from_batch(&self, batch: &CompletedBatch<D::Request>) {
+        batch.pre_prepare_messages().iter().for_each(|msg| {
+            if let ConsensusMessageKind::PrePrepare(reqs) = msg.message().kind() {
+                self.insert_latest_ops(reqs);
+            }
+        });
+    }
+
     /// Delete all requests that are in the completed batch from the pending request pool
     pub fn delete_requests_in_batch(&self, batch: &CompletedBatch<D::Request>) {
         for pre_prepare in batch.pre_prepare_messages() {
@@ -188,5 +220,22 @@ impl<D> PendingRequestLog<D> where D: SharedData {
                 _ => unreachable!()
             }
         }
+    }
+
+    /// Filter the timeouts to make sure we only send timeouts for the most recent messages
+    pub fn filter_timeouts(&self, timeouts: &mut Vec<ClientRqInfo>) {
+        let latest_op_guard = self.latest_op.lock().unwrap();
+
+        timeouts.retain(|timeout| {
+            let key = operation_key_raw(timeout.sender, timeout.session);
+
+            let result = if let Some(seq_no) = latest_op_guard.get(key) {
+                *seq_no < timeout.message().sequence_number()
+            } else {
+                true
+            };
+
+            result
+        })
     }
 }

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
 use febft_common::node_id::NodeId;
+use febft_common::ordering::SeqNo;
 use febft_communication::message::{Header, StoredMessage};
 use febft_execution::app::Service;
 use febft_execution::ExecutorHandle;
@@ -68,9 +69,14 @@ pub fn initialize_pending_request_log<D: SharedData + 'static>() -> Result<Pendi
 
 #[inline]
 pub fn operation_key<O>(header: &Header, message: &RequestMessage<O>) -> u64 {
+    operation_key_raw(header.from(), message.session())
+}
+
+#[inline]
+pub fn operation_key_raw<O>(from: NodeId, session: SeqNo) -> u64 {
     // both of these values are 32-bit in width
-    let client_id: u64 = header.from().into();
-    let session_id: u64 = message.session_id().into();
+    let client_id: u64 = from.into();
+    let session_id: u64 = session.into();
 
     // therefore this is safe, and will not delete any bits
     client_id | (session_id << 32)

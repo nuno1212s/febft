@@ -184,7 +184,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     /// Watch a vector of requests received
     pub fn watch_received_requests(
         &self,
-        requests: Vec<(Digest, SeqNo, SeqNo)>,
+        requests: Vec<(Digest, NodeId, SeqNo, SeqNo)>,
         timeouts: &Timeouts,
     ) {
         let phase = TimeoutPhase::Init(Instant::now());
@@ -234,7 +234,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             self.watching.remove(&digest);
 
             digests.push(digest.clone());
-            timeout_info.push(ClientRqInfo::new(digest, seq_no, session));
+            timeout_info.push(ClientRqInfo::new(digest, header.from(), seq_no, session));
         }
 
         //Notify the timeouts that we have received the following requests

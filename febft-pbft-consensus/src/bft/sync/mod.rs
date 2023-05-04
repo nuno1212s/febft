@@ -583,10 +583,20 @@ impl<D> Synchronizer<D>
                 };
 
                 // store pending requests from this STOP
-                let stopped = match message.into_kind() {
+                let mut stopped = match message.into_kind() {
                     ViewChangeMessageKind::Stop(stopped) => stopped,
                     _ => unreachable!(),
                 };
+
+                // Filter rqs that we have already seen
+                pending_rq_log.filter_rqs(&mut stopped);
+
+                if stopped.is_empty() {
+                    debug!("{:?} // No pending requests in STOP message from {:?}",
+                           node.id(),
+                           header.from());
+                    return SynchronizerStatus::Nil;
+                }
 
                 // Register these requests into the pending request log so we
                 // Can later use it to retrieve all pending messages when sending
@@ -1108,7 +1118,7 @@ impl<D> Synchronizer<D>
 
         let view = self.view();
 
-        warn!("{:?} // Finalizing view change to CID {:?}", node.id(), curr_cid);
+        warn!("{:?} // Finalizing view change to view {:?} and consensus ID {:?}", node.id(), view, curr_cid);
 
         // we will get some value to be proposed because of the
         // check we did in `pre_finalize()`, guarding against no values
@@ -1175,7 +1185,7 @@ impl<D> Synchronizer<D>
 
     /// Watch requests that have been received from other replicas
     ///
-    pub fn watch_received_requests(&self, digest: Vec<(Digest, SeqNo, SeqNo)>, timeouts: &Timeouts) {
+    pub fn watch_received_requests(&self, digest: Vec<(Digest, NodeId, SeqNo, SeqNo)>, timeouts: &Timeouts) {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
                 rep.watch_received_requests(digest, timeouts);
