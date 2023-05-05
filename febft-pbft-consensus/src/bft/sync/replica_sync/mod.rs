@@ -122,7 +122,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         //TODO: Timeout this request and keep sending it until we have achieved a new regency
 
         info!("{:?} // Beginning a view change from view {:?} to next view with stopped rqs {:?}",
-            node.id(), current_view, requests);
+            node.id(), current_view, requests.len());
 
         let message = PBFTMessage::ViewChange(ViewChangeMessage::new(
             current_view.sequence_number().next(),
