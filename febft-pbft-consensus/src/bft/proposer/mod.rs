@@ -19,9 +19,11 @@ use febft_execution::serialize::SharedData;
 use febft_messages::messages::{RequestMessage, SystemMessage};
 use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::Timeouts;
+use febft_metrics::metrics::{metric_duration, metric_increment, metric_local_duration_end, metric_local_duration_start};
 use crate::bft::config::ProposerConfig;
 use crate::bft::consensus::ProposerConsensusGuard;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, PBFTMessage};
+use crate::bft::metric::{PROPOSER_BATCHES_MADE_ID, PROPOSER_FWD_REQUESTS_ID, PROPOSER_REQUEST_FILTER_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUESTS_COLLECTED_ID};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::PBFT;
@@ -56,12 +58,6 @@ pub struct Proposer<D, NT>
 }
 
 const TIMEOUT: Duration = Duration::from_micros(10);
-
-struct DebugStats {
-    collected_per_batch_total: u64,
-    collections: u32,
-    batches_made: u32,
-}
 
 struct ProposeBuilder<D> where D: SharedData {
     currently_accumulated: Vec<StoredMessage<RequestMessage<D::Request>>>,
@@ -113,16 +109,6 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
             .name(format!("Proposer thread"))
             .spawn(move || {
 
-                //DEBUGGING
-
-                let mut debug_stats = DebugStats {
-                    collected_per_batch_total: 0,
-                    collections: 0,
-                    batches_made: 0,
-                };
-
-                //END DEBUGGING
-
                 //The currently accumulated requests, accumulated while we wait for the next batch to propose
                 let mut ordered_propose = ProposeBuilder::new(self.target_global_batch_size);
 
@@ -173,13 +159,16 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                         }
                     };
 
+
                     let discovered_requests = opt_msgs.is_some() &&
                         opt_msgs.as_ref().map(|msg| !msg.is_empty()).unwrap_or(false);
 
                     if let Some(messages) = opt_msgs {
-                        debug_stats.collected_per_batch_total += messages.len() as u64;
-                        debug_stats.collections += 1;
 
+                        metric_increment(PROPOSER_REQUESTS_COLLECTED_ID, Some(messages.len() as u64));
+
+                        let start_time = Instant::now();
+                        
                         let mut digest_vec = Vec::with_capacity(messages.len());
 
                         for message in messages {
@@ -216,6 +205,8 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                         }
 
                         self.synchronizer.watch_received_requests(digest_vec, &self.timeouts);
+                        
+                        metric_duration(PROPOSER_REQUEST_PROCESSING_TIME_ID, start_time.elapsed());
                     }
 
                     // Check if we have any forwarded requests that we need to propose
@@ -227,8 +218,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                     self.propose_unordered(&mut unordered_propose);
 
                     self.propose_ordered(is_leader,
-                                         &mut ordered_propose,
-                                         &mut debug_stats);
+                                         &mut ordered_propose);
 
                     if !discovered_requests {
                         //Yield to prevent active waiting
@@ -310,8 +300,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
     /// attempt to propose the ordered requests that we have collected
     fn propose_ordered<ST>(&self,
                            is_leader: bool,
-                           propose: &mut ProposeBuilder<D>,
-                           debug: &mut DebugStats)
+                           propose: &mut ProposeBuilder<D>,)
         where ST: StateTransferMessage + 'static,
               NT: Node<PBFT<D, ST>> {
 
@@ -334,8 +323,6 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                 if let Some((seq, view)) = self.consensus_guard.next_seq_no() {
                     propose.last_proposal = Instant::now();
 
-                    debug.batches_made += 1;
-
                     let next_batch = if propose.currently_accumulated.len() > self.max_batch_size {
 
                         //This now contains target_global_size requests. We want this to be our next batch
@@ -355,20 +342,6 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
 
 
                     self.propose(seq, &view, current_batch);
-
-                    //Stats
-                    if debug.batches_made % 10000 == 0 {
-                        //let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-
-                        /*println!("{:?} // {:?} // {}: batches made {}: message collections {}: total requests collected.",
-                                 self.node_ref.id(), duration, debug.batches_made,
-                                 debug.collections, debug.collected_per_batch_total);*/
-
-
-                        debug.batches_made = 0;
-                        debug.collections = 0;
-                        debug.collected_per_batch_total = 0;
-                    }
                 }
             }
         }
@@ -382,8 +355,13 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
         view: &ViewInfo,
         currently_accumulated: Vec<StoredMessage<RequestMessage<D::Request>>>,
     ) where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
+
+        let dur_start = metric_local_duration_start();
+        
         let currently_accumulated = self.pending_decision_log.filter_and_update_more_recent(currently_accumulated);
 
+        metric_local_duration_end(PROPOSER_REQUEST_FILTER_TIME_ID, dur_start);
+        
         info!("{:?} // Proposing new batch with {} request count {:?}", self.node_ref.id(), currently_accumulated.len(), seq);
 
         let message = PBFTMessage::Consensus(ConsensusMessage::new(
@@ -395,6 +373,8 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
         let targets = view.quorum_members().iter().copied();
 
         self.node_ref.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
+
+        metric_increment(PROPOSER_BATCHES_MADE_ID, Some(1));
     }
 
     /// Check if we have received forwarded requests. If so, then
@@ -402,6 +382,8 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
     fn handle_forwarded_requests(&self, is_leader: bool,
                                  our_slice: Option<&(Vec<u8>, Vec<u8>)>,
                                  ordered_propose_builder: &mut ProposeBuilder<D>) {
+        let dur_start = metric_local_duration_start();
+
         let fwd_rqs = self.pending_decision_log.take_forwarded_requests(None);
 
         if let Some(fwd_rqs) = fwd_rqs {
@@ -419,6 +401,8 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                 }
             }
         }
+
+        metric_local_duration_end(PROPOSER_FWD_REQUESTS_ID, dur_start);
     }
 
     pub fn cancel(&self) {

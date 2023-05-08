@@ -10,6 +10,7 @@ pub mod msg_log;
 pub mod config;
 pub mod message;
 pub mod observer;
+pub mod metric;
 
 use std::ops::Drop;
 use std::sync::Arc;

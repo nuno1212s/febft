@@ -16,6 +16,7 @@ use febft_messages::timeouts::Timeouts;
 use crate::bft::consensus::accessory::{AccessoryConsensus, ConsensusDecisionAccessory};
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
+use crate::bft::metric::ConsensusMetrics;
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
 use crate::bft::msg_log::decisions::IncompleteProof;
@@ -108,7 +109,8 @@ pub struct ConsensusDecision<D: SharedData + 'static, ST: StateTransferMessage +
     message_log: DecidingLog<D::Request>,
     /// Accessory to the base consensus state machine
     accessory: ConsensusDecisionAccessory<D, ST>,
-
+    // Metrics about the consensus instance
+    consensus_metrics: ConsensusMetrics
     //TODO: Store things directly into the persistent log as well as delete them when
     // Things go wrong
 }
@@ -169,6 +171,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
             message_queue: MessageQueue::new(),
             message_log: DecidingLog::new(node_id, seq_no, view),
             accessory: ConsensusDecisionAccessory::Replica(ReplicaAccessory::new()),
+            consensus_metrics: ConsensusMetrics::new(),
         }
     }
 
@@ -181,6 +184,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
             message_queue,
             message_log: DecidingLog::new(node_id, seq_no, view),
             accessory: ConsensusDecisionAccessory::Replica(ReplicaAccessory::new()),
+            consensus_metrics: ConsensusMetrics::new(),
         }
     }
 
@@ -202,6 +206,9 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
         return match self.phase {
             DecisionPhase::Initialize => {
                 self.phase = DecisionPhase::PrePreparing(0);
+
+                self.consensus_metrics.consensus_started();
+
                 DecisionPollStatus::TryPropose
             }
             DecisionPhase::PrePreparing(_) if self.message_queue.get_queue => {
@@ -305,6 +312,10 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     }
                 };
 
+                if received == 1 {
+                    self.consensus_metrics.first_pre_prepare_recvd();
+                }
+
                 let pre_prepare_received_time = Utc::now();
 
                 let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
@@ -338,6 +349,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                         meta_guard.pre_prepare_received_time = pre_prepare_received_time;
                     }
 
+                    self.consensus_metrics.all_pre_prepares_recvd();
+
                     let seq_no = self.sequence_number();
                     let metadata = batch_metadata;
 
@@ -358,6 +371,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     // message with the digest of the entire batch
                     DecisionPhase::Preparing(0)
                 } else {
+
                     self.accessory.handle_partial_pre_prepare(&self.message_log,
                                                               &view, stored_msg.clone(), node);
 
@@ -410,6 +424,10 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     }
                 };
 
+                if received == 1 {
+                    self.consensus_metrics.first_prepare_recvd();
+                }
+
                 let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
 
                 self.message_log.process_message(stored_msg.clone())?;
@@ -420,6 +438,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     info!("{:?} // Completed prepare phase with all prepares Seq {:?}", node.id(), self.sequence_number());
 
                     self.message_log.batch_meta().lock().unwrap().commit_sent_time = Utc::now();
+                    self.consensus_metrics.prepare_quorum_recvd();
 
                     let seq_no = self.sequence_number();
                     let current_digest = self.message_log.current_digest().unwrap();
@@ -476,6 +495,10 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     }
                 };
 
+                if received == 1 {
+                    self.consensus_metrics.first_commit_recvd();
+                }
+
                 let stored_msg = Arc::new(ReadOnly::new(
                     StoredMessage::new(header, message)));
 
@@ -487,6 +510,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     self.phase = DecisionPhase::Decided;
 
                     self.message_log.batch_meta().lock().unwrap().consensus_decision_time = Utc::now();
+
+                    self.consensus_metrics.commit_quorum_recvd();
 
                     self.accessory.handle_committing_quorum(&self.message_log, &view,
                                                             stored_msg.clone(), node);
