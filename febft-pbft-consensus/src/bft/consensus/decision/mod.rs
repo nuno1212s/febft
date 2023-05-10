@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+use std::time::Instant;
 use chrono::Utc;
 use log::{debug, info, trace, warn};
 use febft_common::crypto::hash::Digest;
@@ -13,10 +14,11 @@ use febft_communication::Node;
 use febft_execution::serialize::SharedData;
 use febft_messages::serialize::{NetworkView, StateTransferMessage};
 use febft_messages::timeouts::Timeouts;
+use febft_metrics::metrics::{metric_duration, metric_duration_start};
 use crate::bft::consensus::accessory::{AccessoryConsensus, ConsensusDecisionAccessory};
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
-use crate::bft::metric::ConsensusMetrics;
+use crate::bft::metric::{ConsensusMetrics, PRE_PREPARE_ANALYSIS_ID};
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
 use crate::bft::msg_log::decisions::IncompleteProof;
@@ -349,7 +351,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                         meta_guard.pre_prepare_received_time = pre_prepare_received_time;
                     }
 
-                    self.consensus_metrics.all_pre_prepares_recvd();
+                    self.consensus_metrics.all_pre_prepares_recvd(self.message_log.current_batch_size());
 
                     let seq_no = self.sequence_number();
                     let metadata = batch_metadata;
@@ -584,6 +586,8 @@ fn request_batch_received<D>(
     where
         D: SharedData + 'static
 {
+    let start = Instant::now();
+
     let mut batch_guard = log.batch_meta().lock().unwrap();
 
     batch_guard.batch_size += match pre_prepare.message().kind() {
@@ -596,7 +600,11 @@ fn request_batch_received<D>(
     batch_guard.reception_time = Utc::now();
 
     // Notify the synchronizer that a batch has been received
-    synchronizer.request_batch_received(pre_prepare, timeouts)
+    let digests = synchronizer.request_batch_received(pre_prepare, timeouts);
+
+    metric_duration(PRE_PREPARE_ANALYSIS_ID, start.elapsed());
+
+    digests
 }
 
 impl<O> Debug for DecisionPollStatus<O> {

@@ -20,11 +20,12 @@ pub struct InfluxDBArgs {
     pub user: String,
     pub password: String,
     pub node_id: NodeId,
+    pub extra: Option<String>
 }
 
 impl InfluxDBArgs {
-    pub fn new(ip: String, db_name: String, user: String, password: String, node_id: NodeId) -> Self {
-        Self { ip, db_name, user, password, node_id }
+    pub fn new(ip: String, db_name: String, user: String, password: String, node_id: NodeId, extra: Option<String>) -> Self {
+        Self { ip, db_name, user, password, node_id, extra }
     }
 }
 

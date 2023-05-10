@@ -1,17 +1,20 @@
-use std::io::read_to_string;
 use std::time::Duration;
+
 use chrono::{DateTime, Utc};
-use febft_common::async_runtime as rt;
 use influxdb::InfluxDbWriteable;
 use log::info;
-use crate::metrics::{collect_all_measurements, MetricData};
+
+use febft_common::async_runtime as rt;
 use febft_common::node_id::NodeId;
+
 use crate::InfluxDBArgs;
+use crate::metrics::{collect_all_measurements, MetricData};
 
 #[derive(InfluxDbWriteable)]
-pub struct MetricCountReading {
+pub struct MetricCounterReading {
     time: DateTime<Utc>,
     #[influxdb(tag)] host: String,
+    #[influxdb(tag)] extra: String,
     value: i64,
 }
 
@@ -19,6 +22,15 @@ pub struct MetricCountReading {
 pub struct MetricDurationReading {
     time: DateTime<Utc>,
     #[influxdb(tag)] host: String,
+    #[influxdb(tag)] extra: String,
+    value: f64,
+}
+
+#[derive(InfluxDbWriteable)]
+pub struct MetricCountReading {
+    time: DateTime<Utc>,
+    #[influxdb(tag)] host: String,
+    #[influxdb(tag)] extra: String,
     value: f64,
 }
 
@@ -31,14 +43,16 @@ pub fn launch_metrics(influx_args: InfluxDBArgs) {
 /// The metrics thread. Collects all values from the
 pub fn metric_thread_loop(influx_args: InfluxDBArgs) {
     let InfluxDBArgs {
-        ip, db_name, user, password, node_id
+        ip, db_name, user, password, node_id, extra
     } = influx_args;
 
-    let mut client = influxdb::Client::new(format!("http://{}", ip), db_name);
+    let mut client = influxdb::Client::new(format!("{}", ip), db_name);
 
     client = client.with_auth(user, password);
 
     let host_name = format!("{:?}", node_id);
+
+    let extra = extra.unwrap_or(String::from("None"));
 
     loop {
         let measurements = collect_all_measurements();
@@ -59,16 +73,33 @@ pub fn metric_thread_loop(influx_args: InfluxDBArgs) {
                     MetricDurationReading {
                         time,
                         host: host_name.clone(),
+                        extra: extra.clone(),
                         value: duration_avg,
                     }.into_query(metric_name)
                 }
                 MetricData::Counter(count) => {
 
+                    MetricCounterReading {
+                        time,
+                        host: host_name.clone(),
+                        extra: extra.clone(),
+                        // Could lose some information, but the driver did NOT like u64
+                        value: count as i64,
+                    }.into_query(metric_name)
+                }
+                MetricData::Count(counts) => {
+
+                    if counts.is_empty() {
+                        continue;
+                    }
+
+                    let count_avg = counts.iter().sum::<usize>() as f64 / counts.len() as f64;
+
                     MetricCountReading {
                         time,
                         host: host_name.clone(),
-                        // Could lose some information, but the driver did NOT like u64
-                        value: count as i64,
+                        extra: extra.clone(),
+                        value: count_avg,
                     }.into_query(metric_name)
                 }
             };

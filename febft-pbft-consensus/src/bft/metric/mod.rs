@@ -1,5 +1,5 @@
 use std::time::Instant;
-use febft_metrics::metrics::{metric_duration, metric_duration_end, MetricKind};
+use febft_metrics::metrics::{metric_duration, metric_duration_end, metric_store_count, MetricKind};
 
 /// Consensus will take the ID range 1XX, for now
 ///
@@ -36,7 +36,14 @@ pub const CONSENSUS_COMMIT_LATENCY_ID: usize = 113;
 pub const BATCH_SIZE: &str = "BATCH_SIZE";
 pub const BATCH_SIZE_ID: usize = 114;
 
+pub const PRE_PREPARE_ANALYSIS : &str = "PRE_PREPARE_RQ_ANALYSIS";
+pub const PRE_PREPARE_ANALYSIS_ID: usize = 115;
 
+pub const PRE_PREPARE_LOG_ANALYSIS : &str = "PRE_PREPARE_LOG_ANALYSIS";
+pub const PRE_PREPARE_LOG_ANALYSIS_ID: usize = 116;
+
+pub const OPERATIONS_PROCESSED: &str = "OPS_PER_SECOND";
+pub const OPERATIONS_PROCESSED_ID: usize = 117;
 
 pub fn metrics() -> Vec<(usize, String, MetricKind)> {
     
@@ -51,7 +58,10 @@ pub fn metrics() -> Vec<(usize, String, MetricKind)> {
         (CONSENSUS_PRE_PREPARE_LATENCY_ID, CONSENSUS_PRE_PREPARE_LATENCY.to_string(), MetricKind::Duration),
         (CONSENSUS_PREPARE_LATENCY_ID, CONSENSUS_PREPARE_LATENCY.to_string(), MetricKind::Duration),
         (CONSENSUS_COMMIT_LATENCY_ID, CONSENSUS_COMMIT_LATENCY.to_string(), MetricKind::Duration),
-        (BATCH_SIZE_ID, BATCH_SIZE.to_string(), MetricKind::Count)
+        (BATCH_SIZE_ID, BATCH_SIZE.to_string(), MetricKind::Count),
+        (PRE_PREPARE_ANALYSIS_ID, PRE_PREPARE_ANALYSIS.to_string(), MetricKind::Duration),
+        (PRE_PREPARE_LOG_ANALYSIS_ID, PRE_PREPARE_LOG_ANALYSIS.to_string(), MetricKind::Duration),
+        (OPERATIONS_PROCESSED_ID, OPERATIONS_PROCESSED.to_string(), MetricKind::Count),
     ]
     
 }
@@ -99,11 +109,12 @@ impl ConsensusMetrics {
                         self.consensus_start_time.elapsed());
     }
 
-    pub fn all_pre_prepares_recvd(&mut self) {
+    pub fn all_pre_prepares_recvd(&mut self, batch_size: usize) {
         self.pre_prepare_recvd_time = Instant::now();
 
         metric_duration(CONSENSUS_PRE_PREPARE_LATENCY_ID,
                         self.first_pre_prepare_time.elapsed());
+        metric_store_count(BATCH_SIZE_ID, batch_size);
     }
 
     pub fn first_prepare_recvd(&mut self) {

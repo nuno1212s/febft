@@ -1,13 +1,15 @@
-pub mod metrics_thread;
-
 use std::cell::Cell;
 use std::iter;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
 use log::{error, info};
 use rand::Rng;
 use thread_local::ThreadLocal;
+
 use febft_common::globals::Global;
+
+pub mod metrics_thread;
 
 static mut METRICS: Global<Metrics> = Global::new();
 
@@ -49,7 +51,9 @@ pub enum AdditionalMetricData {
 #[derive(Debug)]
 pub enum MetricKind {
     Duration,
+    /// A counter is a metric that is incremented by X every time it is called and in the end is combined
     Counter,
+    /// A count is to be used to store various independent counts and then average them together
     Count
 }
 
@@ -140,6 +144,9 @@ impl Metric {
                     MetricData::Counter(_) => {
                         MetricData::Counter(0)
                     }
+                    MetricData::Count(vals) => {
+                        MetricData::Count(Vec::with_capacity(vals.len()))
+                    }
                 };
                 std::mem::replace(&mut *value, mt)
             };
@@ -179,7 +186,7 @@ fn get_current_round_robin(metric: &Metric) -> usize {
 
     let result = current.get();
 
-    current.set(current_val + 1);
+    current.set(result + 1);
 
     result
 }
