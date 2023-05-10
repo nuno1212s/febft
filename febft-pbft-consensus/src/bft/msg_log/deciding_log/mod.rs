@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 use std::iter::zip;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use febft_common::crypto::hash::{Context, Digest};
 use febft_common::globals::ReadOnly;
 use febft_common::error::*;
@@ -10,7 +11,9 @@ use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::StoredMessage;
 use febft_metrics::benchmarks::BatchMeta;
+use febft_metrics::metrics::metric_duration;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
+use crate::bft::metric::PRE_PREPARE_LOG_ANALYSIS_ID;
 use crate::bft::msg_log::decisions::{IncompleteProof, Proof, ProofMetadata, StoredConsensusMessage, ViewDecisionPair, WriteSet};
 use crate::bft::sync::view::ViewInfo;
 
@@ -142,6 +145,8 @@ impl<O> DecidingLog<O> {
                                request_batch: StoredConsensusMessage<O>,
                                digest: Digest,
                                mut batch_rq_digests: Vec<Digest>) -> Result<Option<FullBatch>> {
+        let start = Instant::now();
+
         let sending_leader = request_batch.header().from();
 
         let slice = self.request_space_slices.get(&sending_leader)
@@ -173,6 +178,8 @@ impl<O> DecidingLog<O> {
 
         // Register this new batch as one that must be persisted for this batch to be executed
         self.register_message_to_save(digest);
+
+        metric_duration(PRE_PREPARE_LOG_ANALYSIS_ID, start.elapsed());
 
         // if we have received all of the messages in the set, calculate the digest.
         Ok(if self.current_received_pre_prepares == self.leader_set.len() {
@@ -449,6 +456,7 @@ impl<O> CompletedBatch<O> {
     pub fn batch_meta(&self) -> &BatchMeta {
         &self.batch_meta
     }
+    
     pub fn request_count(&self) -> usize {
         self.request_count
     }

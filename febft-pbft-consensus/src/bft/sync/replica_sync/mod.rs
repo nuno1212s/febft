@@ -23,10 +23,12 @@ use febft_execution::serialize::SharedData;
 use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
 use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::{ClientRqInfo, Timeouts};
+use febft_metrics::metrics::{metric_duration, metric_increment};
 use crate::bft::consensus::Consensus;
 
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
+use crate::bft::metric::{SYNC_BATCH_RECEIVED_ID, SYNC_FORWARDED_COUNT_ID, SYNC_FORWARDED_REQUESTS_ID, SYNC_STOPPED_COUNT_ID, SYNC_STOPPED_REQUESTS_ID, SYNC_WATCH_REQUESTS_ID};
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::CollectData;
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
@@ -153,9 +155,13 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         requests: &ForwardedRequestsMessage<D::Request>,
         timeouts: &Timeouts,
     ) {
+        let start_time = Instant::now();
+
         let phase = TimeoutPhase::TimedOutOnce(Instant::now());
 
         let mut digests = Vec::with_capacity(requests.requests().len());
+
+        let rq_count = requests.requests().len();
 
         for request in requests.requests() {
             let header = request.header();
@@ -179,6 +185,9 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         }
 
         timeouts.timeout_client_requests(self.timeout_dur.get(), digests);
+
+        metric_duration(SYNC_FORWARDED_REQUESTS_ID, start_time.elapsed());
+        metric_increment(SYNC_FORWARDED_COUNT_ID, Some(rq_count));
     }
 
     /// Watch a vector of requests received
@@ -187,6 +196,8 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         requests: Vec<(Digest, NodeId, SeqNo, SeqNo)>,
         timeouts: &Timeouts,
     ) {
+        let start_time = Instant::now();
+
         let phase = TimeoutPhase::Init(Instant::now());
 
         for (req, from, seq, session) in &requests {
@@ -197,6 +208,8 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             self.timeout_dur.get(),
             requests,
         );
+
+        metric_duration(SYNC_WATCH_REQUESTS_ID, start_time.elapsed());
     }
 
     /// Watch a batch of requests received from a Pre prepare message sent by the leader
@@ -207,6 +220,8 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         pre_prepare: &StoredMessage<ConsensusMessage<D::Request>>,
         timeouts: &Timeouts,
     ) -> Vec<Digest> {
+        let start_time = Instant::now();
+
         let requests = match pre_prepare.message().kind() {
             ConsensusMessageKind::PrePrepare(req) => { req }
             _ => {
@@ -250,6 +265,8 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         //not, so we could only tolerate f-1 faults for clients that are in that situation)
         //log.insert_batched(pre_prepare);
 
+        metric_duration(SYNC_BATCH_RECEIVED_ID, start_time.elapsed());
+
         digests
     }
 
@@ -258,15 +275,22 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
 
+        let start_time = Instant::now();
+
         let requests = self
             .drain_stopped_request(base_sync)
             .into_iter()
             .map(|stopped| stopped.into_inner());
 
+        let count = requests.len();
+
         for (header, request) in requests {
             self.watching
                 .insert(header.unique_digest(), TimeoutPhase::TimedOut);
         }
+
+        metric_increment(SYNC_STOPPED_COUNT_ID, Some(count as u64));
+        metric_duration(SYNC_STOPPED_REQUESTS_ID, start_time.elapsed());
     }
 
     fn watch_request_impl(

@@ -24,6 +24,7 @@ use febft_execution::serialize::SharedData;
 use febft_messages::messages::{RequestMessage, SystemMessage};
 use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::Timeouts;
+use febft_metrics::metrics::metric_increment;
 use crate::bft::msg_log::Info;
 use crate::bft::consensus::decision::{ConsensusDecision, DecisionPhase, DecisionPollStatus, DecisionStatus, MessageQueue};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
@@ -31,6 +32,7 @@ use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
 use crate::bft::msg_log::decisions::{DecisionLog, IncompleteProof, Proof};
 use crate::bft::{PBFT, SysMsg};
+use crate::bft::metric::OPERATIONS_PROCESSED_ID;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::sync::view::ViewInfo;
 
@@ -389,12 +391,14 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             return Ok(None);
         }
 
-        info!("{:?} // Finalizing consensus instance {:?}", self.node_id, self.seq_no);
-
         // Move to the next instance of the consensus since the current one is going to be finalized
         let decision = self.next_instance(view);
 
         let batch = decision.finalize()?;
+
+        info!("{:?} // Finalizing consensus instance {:?} with {:?} rqs", self.node_id, batch.sequence_number(), batch.request_count());
+
+        metric_increment(OPERATIONS_PROCESSED_ID, Some(batch.request_count() as u64));
 
         Ok(Some(batch))
     }

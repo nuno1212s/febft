@@ -45,6 +45,25 @@ pub const PRE_PREPARE_LOG_ANALYSIS_ID: usize = 116;
 pub const OPERATIONS_PROCESSED: &str = "OPS_PER_SECOND";
 pub const OPERATIONS_PROCESSED_ID: usize = 117;
 
+/// 120-129: Synchronizer
+pub const SYNC_WATCH_REQUESTS: &str = "SYNC_WATCH_REQUESTS";
+pub const SYNC_WATCH_REQUESTS_ID: usize = 120;
+
+pub const SYNC_BATCH_RECEIVED : &str = "SYNC_BATCH_RECEIVED";
+pub const SYNC_BATCH_RECEIVED_ID: usize = 121;
+
+pub const SYNC_STOPPED_REQUESTS : &str = "SYNC_STOPPED_REQUESTS";
+pub const SYNC_STOPPED_REQUESTS_ID: usize = 122;
+
+pub const SYNC_STOPPED_COUNT : &str = "SYNC_REQUESTS_COUNT";
+pub const SYNC_STOPPED_COUNT_ID: usize = 123;
+
+pub const SYNC_FORWARDED_REQUESTS : &str = "SYNC_FORWARDED_REQUESTS";
+pub const SYNC_FORWARDED_REQUESTS_ID: usize = 124;
+
+pub const SYNC_FORWARDED_COUNT : &str = "SYNC_FORWARDED_COUNT";
+pub const SYNC_FORWARDED_COUNT_ID: usize = 125;
+
 pub fn metrics() -> Vec<(usize, String, MetricKind)> {
     
     vec![
@@ -62,6 +81,12 @@ pub fn metrics() -> Vec<(usize, String, MetricKind)> {
         (PRE_PREPARE_ANALYSIS_ID, PRE_PREPARE_ANALYSIS.to_string(), MetricKind::Duration),
         (PRE_PREPARE_LOG_ANALYSIS_ID, PRE_PREPARE_LOG_ANALYSIS.to_string(), MetricKind::Duration),
         (OPERATIONS_PROCESSED_ID, OPERATIONS_PROCESSED.to_string(), MetricKind::Count),
+        (SYNC_WATCH_REQUESTS_ID, SYNC_WATCH_REQUESTS.to_string(), MetricKind::Duration),
+        (SYNC_BATCH_RECEIVED_ID, SYNC_BATCH_RECEIVED.to_string(), MetricKind::Duration),
+        (SYNC_STOPPED_REQUESTS_ID, SYNC_STOPPED_REQUESTS.to_string(), MetricKind::Duration),
+        (SYNC_STOPPED_COUNT_ID, SYNC_STOPPED_COUNT.to_string(), MetricKind::Counter),
+        (SYNC_FORWARDED_REQUESTS_ID, SYNC_FORWARDED_REQUESTS.to_string(), MetricKind::Duration),
+        (SYNC_FORWARDED_COUNT_ID, SYNC_FORWARDED_COUNT.to_string(), MetricKind::Counter),
     ]
     
 }
