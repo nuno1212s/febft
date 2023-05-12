@@ -85,8 +85,7 @@ impl<D> PendingRequestLog<D> where D: SharedData {
     pub fn insert_forwarded(&self, mut messages: Vec<StoredMessage<RequestMessage<D::Request>>>) {
         self.forwarded_requests.lock().unwrap().append(&mut messages);
     }
-
-
+    
     /// Delete forwarded requests from the forwarded request pool
     pub fn take_forwarded_requests(&self, mut replacement: Option<Vec<StoredMessage<RequestMessage<D::Request>>>>)
                                    -> Option<Vec<StoredMessage<RequestMessage<D::Request>>>> {

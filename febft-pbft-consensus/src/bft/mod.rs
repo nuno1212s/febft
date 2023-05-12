@@ -37,6 +37,7 @@ use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{ForwardedRequestsMessage, Protocol, SystemMessage};
 use febft_messages::ordering_protocol::{OrderingProtocol, OrderProtocolExecResult, OrderProtocolPoll, View};
+use febft_messages::request_pre_processing::BatchOutput;
 use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
 use febft_messages::state_transfer::{Checkpoint, DecLog, StatefulOrderProtocol};
 use febft_messages::timeouts::{ClientRqInfo, Timeout, TimeoutKind, Timeouts};
@@ -108,7 +109,7 @@ pub struct PBFTOrderProtocol<D, ST, NT>
     // Require any synchronization
     message_log: Log<D>,
     // The proposer of this replica
-    proposer: Arc<Proposer<D, NT>>,
+    proposer: Arc<Proposer<D>>,
     // The networking layer for a Node in the network (either Client or Replica)
     node: Arc<NT>,
 
@@ -129,10 +130,10 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     type Config = PBFTConfig<D, ST>;
 
     fn initialize(config: PBFTConfig<D, ST>, executor: ExecutorHandle<D>,
-                  timeouts: Timeouts, node: Arc<NT>) -> Result<Self> where
+                  timeouts: Timeouts, batch_input: BatchOutput<D::Request>, node: Arc<NT>) -> Result<Self> where
         Self: Sized,
     {
-        Self::initialize_protocol(config, executor, timeouts, node, None)
+        Self::initialize_protocol(config, executor, timeouts, batch_input, node, None)
     }
 
     fn view(&self) -> View<Self::Serialization> {
@@ -180,7 +181,6 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     }
 
     fn handle_timeout(&mut self, timeout: Vec<ClientRqInfo>) -> Result<OrderProtocolExecResult> {
-
         let status = self.synchronizer
             .client_requests_timed_out(self.node.id(), &timeout);
 
@@ -256,7 +256,8 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
                                                    ST: StateTransferMessage + 'static,
                                                    NT: Node<PBFT<D, ST>> + 'static {
     fn initialize_protocol(config: PBFTConfig<D, ST>, executor: ExecutorHandle<D>,
-                           timeouts: Timeouts, node: Arc<NT>, initial_state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<Self> {
+                           timeouts: Timeouts, batch_input: BatchOutput<D::Request>,
+                           node: Arc<NT>, initial_state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<Self> {
         let PBFTConfig {
             node_id,
             follower_handle,
@@ -279,10 +280,10 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
 
         let dec_log = initialize_decided_log::<D>(node_id, persistent_log, initial_state)?;
 
-        let proposer = Proposer::<D, NT>::new(node.clone(), sync.clone(),
-                                              pending_rq_log.clone(), timeouts.clone(),
-                                              executor.clone(), consensus_guard.clone(),
-                                              proposer_config);
+        let proposer = Proposer::<D>::new(batch_input, sync.clone(),
+                                          pending_rq_log.clone(), timeouts.clone(),
+                                          executor.clone(), consensus_guard.clone(),
+                                          proposer_config);
 
         let replica = Self {
             phase: ConsensusPhase::NormalPhase,
@@ -594,8 +595,10 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     type StateSerialization = PBFTConsensus<D>;
 
 
-    fn initialize_with_initial_state(config: Self::Config, executor: ExecutorHandle<D>, timeouts: Timeouts, node: Arc<NT>, initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where Self: Sized {
-        Self::initialize_protocol(config, executor, timeouts, node, Some(initial_state))
+    fn initialize_with_initial_state(config: Self::Config, executor: ExecutorHandle<D>, timeouts: Timeouts,
+                                     batch_input: BatchOutput<D::Request>, node: Arc<NT>,
+                                     initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where Self: Sized {
+        Self::initialize_protocol(config, executor, timeouts, batch_input, node, Some(initial_state))
     }
 
     fn install_state(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>,

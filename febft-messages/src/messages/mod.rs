@@ -180,6 +180,8 @@ impl<D, P, ST> Debug for SystemMessage<D, P, ST> where D: SharedData, P: Clone, 
     }
 }
 
+pub type StoredRequestMessage<O> = Arc<ReadOnly<StoredMessage<RequestMessage<O>>>>;
+
 /// Represents a request from a client.
 ///
 /// The `O` type argument symbolizes the client operation to be performed

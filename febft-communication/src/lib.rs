@@ -122,6 +122,7 @@ pub trait Node<M: Serializable + 'static> : Send + Sync {
 
     /// Receive messages from the clients we are connected to
     /// Blocks if there are no pending requests to collect.
+    /// If timeout is reached without requests, returns an empty vector
     fn receive_from_clients(
         &self,
         timeout: Option<Duration>,

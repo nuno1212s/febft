@@ -9,6 +9,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use febft_common::channel::{ChannelSyncRx, TryRecvError};
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_common::threadpool;
 use febft_communication::message::{NetworkMessage, NetworkMessageKind, StoredMessage};
@@ -16,14 +17,15 @@ use febft_communication::Node;
 use febft_execution::app::{Request, Service, UnorderedBatch};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
-use febft_messages::messages::{RequestMessage, SystemMessage};
+use febft_messages::messages::{RequestMessage, StoredRequestMessage, SystemMessage};
+use febft_messages::request_pre_processing::{BatchOutput, PreProcessorMessage, PreProcessorOutputMessage};
 use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::Timeouts;
-use febft_metrics::metrics::{metric_duration, metric_increment, metric_local_duration_end, metric_local_duration_start};
+use febft_metrics::metrics::{metric_duration, metric_increment, metric_local_duration_end, metric_local_duration_start, metric_store_count};
 use crate::bft::config::ProposerConfig;
 use crate::bft::consensus::ProposerConsensusGuard;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, PBFTMessage};
-use crate::bft::metric::{PROPOSER_BATCHES_MADE_ID, PROPOSER_FWD_REQUESTS_ID, PROPOSER_REQUEST_FILTER_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUESTS_COLLECTED_ID};
+use crate::bft::metric::{CLIENT_POOL_BATCH_SIZE_ID, PROPOSER_BATCHES_MADE_ID, PROPOSER_FWD_REQUESTS_ID, PROPOSER_REQUEST_FILTER_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUESTS_COLLECTED_ID};
 use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::PBFT;
@@ -37,11 +39,12 @@ pub type BatchType<R> = Vec<StoredMessage<RequestMessage<R>>>;
 ///Another thread will then take from this channel and propose the requests
 pub struct Proposer<D, NT>
     where D: SharedData + 'static {
+    /// Channel for the reception of batches from the pre processing module
+    batch_reception: BatchOutput<D::Request>,
+    /// Network Node
     node_ref: Arc<NT>,
     synchronizer: Arc<Synchronizer<D>>,
     timeouts: Timeouts,
-    /// The log of pending requests
-    pending_decision_log: Arc<PendingRequestLog<D>>,
     consensus_guard: Arc<ProposerConsensusGuard>,
     // Should we shut down?
     cancelled: AtomicBool,
@@ -60,7 +63,7 @@ pub struct Proposer<D, NT>
 const TIMEOUT: Duration = Duration::from_micros(10);
 
 struct ProposeBuilder<D> where D: SharedData {
-    currently_accumulated: Vec<StoredMessage<RequestMessage<D::Request>>>,
+    currently_accumulated: Vec<StoredRequestMessage<D::Request>>,
     last_proposal: Instant,
 }
 
@@ -73,11 +76,11 @@ impl<D> ProposeBuilder<D> where D: SharedData {
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
 
-impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
+impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
     pub fn new(
         node: Arc<NT>,
+        batch_input: BatchOutput<D::Request>,
         sync: Arc<Synchronizer<D>>,
-        pending_decision_log: Arc<PendingRequestLog<D>>,
         timeouts: Timeouts,
         executor_handle: ExecutorHandle<D>,
         consensus_guard: Arc<ProposerConsensusGuard>,
@@ -88,6 +91,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
         } = proposer_config;
 
         Arc::new(Self {
+            batch_reception: batch_input,
             node_ref: node,
             synchronizer: sync,
             timeouts,
@@ -96,15 +100,13 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
             target_global_batch_size: target_batch_size as usize,
             global_batch_time_limit: batch_timeout as u128,
             executor_handle,
-            pending_decision_log,
             max_batch_size: max_batch_size as usize,
         })
     }
 
     ///Start this work
     pub fn start<ST>(self: Arc<Self>) -> JoinHandle<()>
-        where ST: StateTransferMessage + 'static,
-              NT: Node<PBFT<D, ST>> {
+        where ST: StateTransferMessage + 'static {
         std::thread::Builder::new()
             .name(format!("Proposer thread"))
             .spawn(move || {
@@ -137,76 +139,74 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                     //We don't need to do this for non leader replicas, as that would cause unnecessary strain as the
                     //Thread is in an infinite loop
                     // Receive the requests from the clients and process them
-                    let opt_msgs = if is_leader {
-                        match self.node_ref.try_recv_from_clients() {
-                            Ok(msg) => msg,
+                    let opt_msgs: Option<PreProcessorOutputMessage<D::Request>> = if is_leader {
+                        match self.batch_reception.try_recv() {
+                            Ok(res) => { res }
                             Err(err) => {
-                                error!("{:?} // Failed to receive requests from clients because {:?}", self.node_ref.id(), err);
-
-                                continue;
+                                match err {
+                                    TryRecvError::Disconnected => {
+                                        error!("{:?} // Failed to receive requests from pre processing module because {:?}", self.node_ref.id(), err);
+                                        break;
+                                    }
+                                    _ => {
+                                        None
+                                    }
+                                }
                             }
                         }
                     } else {
-                        match self.node_ref.receive_from_clients(Some(Duration::from_micros(self.global_batch_time_limit as u64))) {
-                            Ok(msgs) => {
-                                Some(msgs)
-                            }
+                        match self.batch_reception.recv_timeout(Duration::from_micros(self.global_batch_time_limit as u64)) {
+                            Ok(res) => { Some(res) }
                             Err(err) => {
-                                error!("{:?} // Failed to receive requests from clients because {:?}", self.node_ref.id(), err);
-
-                                continue;
+                                match err {
+                                    TryRecvError::Timeout | TryRecvError::ChannelEmpty => {
+                                        None
+                                    }
+                                    TryRecvError::ChannelDc => {
+                                        error!("{:?} // Failed to receive requests from pre processing module because {:?}", self.node_ref.id(), err);
+                                        break;
+                                    }
+                                }
                             }
                         }
                     };
 
-
-                    let discovered_requests = opt_msgs.is_some() &&
-                        opt_msgs.as_ref().map(|msg| !msg.is_empty()).unwrap_or(false);
+                    let discovered_requests;
 
                     if let Some(messages) = opt_msgs {
-
                         metric_increment(PROPOSER_REQUESTS_COLLECTED_ID, Some(messages.len() as u64));
+                        metric_store_count(CLIENT_POOL_BATCH_SIZE_ID, messages.len());
 
                         let start_time = Instant::now();
-                        
+
                         let mut digest_vec = Vec::with_capacity(messages.len());
 
-                        for message in messages {
-                            let NetworkMessage { header, message } = message;
-
-                            let sysmsg = message.into();
-
-                            match sysmsg {
-                                SystemMessage::OrderedRequest(req) => {
-                                    let rq_digest = header.unique_digest();
+                        match messages {
+                            PreProcessorOutputMessage::DeDupedOrderedRequests(messages) => {
+                                for message in messages {
+                                    let digest = message.header().unique_digest();
 
                                     if is_leader && is_request_in_hash_space(&rq_digest,
                                                                              our_slice.as_ref().unwrap()) {
 
                                         // we know that these operations will always be proposed since we are a
                                         // Correct replica. We can therefore just add them to the latest op log
-                                        let stored_message = StoredMessage::new(header, req);
-
-                                        ordered_propose.currently_accumulated.push(stored_message);
-                                    } else {
-                                        digest_vec.push((rq_digest, header.from(), req.sequence_number(), req.session_id()));
-
-                                        // TODO: Maybe this should be handled by another thread in blocks?
-                                        self.pending_decision_log.insert(header, req);
+                                        ordered_propose.currently_accumulated.push(message);
                                     }
                                 }
-                                SystemMessage::UnorderedRequest(req) => {
-                                    let stored_message = StoredMessage::new(header, req);
-
-                                    unordered_propose.currently_accumulated.push(stored_message);
-                                }
-                                _ => {}
+                            }
+                            PreProcessorOutputMessage::DeDupedUnorderedRequests(mut messages) => {
+                                unordered_propose.currently_accumulated.append(&mut messages);
                             }
                         }
 
                         self.synchronizer.watch_received_requests(digest_vec, &self.timeouts);
-                        
+
                         metric_duration(PROPOSER_REQUEST_PROCESSING_TIME_ID, start_time.elapsed());
+
+                        discovered_requests = true;
+                    } else {
+                        discovered_requests = false;
                     }
 
                     // Check if we have any forwarded requests that we need to propose
@@ -223,7 +223,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
                     if !discovered_requests {
                         //Yield to prevent active waiting
 
-                        std::thread::sleep(Duration::from_millis(5));
+                        std::thread::yield_now();
                     }
                 }
             }).unwrap()
@@ -300,7 +300,7 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
     /// attempt to propose the ordered requests that we have collected
     fn propose_ordered<ST>(&self,
                            is_leader: bool,
-                           propose: &mut ProposeBuilder<D>,)
+                           propose: &mut ProposeBuilder<D>, )
         where ST: StateTransferMessage + 'static,
               NT: Node<PBFT<D, ST>> {
 
@@ -319,7 +319,6 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
             }
 
             if self.consensus_guard.can_propose() {
-
                 if let Some((seq, view)) = self.consensus_guard.next_seq_no() {
                     propose.last_proposal = Instant::now();
 
@@ -354,14 +353,8 @@ impl<D, NT: 'static> Proposer<D, NT> where D: SharedData + 'static {
         seq: SeqNo,
         view: &ViewInfo,
         currently_accumulated: Vec<StoredMessage<RequestMessage<D::Request>>>,
-    ) where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
-
-        let dur_start = metric_local_duration_start();
-        
-        let currently_accumulated = self.pending_decision_log.filter_and_update_more_recent(currently_accumulated);
-
-        metric_local_duration_end(PROPOSER_REQUEST_FILTER_TIME_ID, dur_start);
-        
+    ) where ST: StateTransferMessage + 'static,
+            NT: Node<PBFT<D, ST>> {
         info!("{:?} // Proposing new batch with {} request count {:?}", self.node_ref.id(), currently_accumulated.len(), seq);
 
         let message = PBFTMessage::Consensus(ConsensusMessage::new(

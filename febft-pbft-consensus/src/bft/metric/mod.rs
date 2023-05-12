@@ -19,6 +19,9 @@ pub const PROPOSER_REQUEST_FILTER_TIME_ID: usize = 103;
 pub const PROPOSER_FWD_REQUESTS : &str = "FWD_REQUEST_HANDLING";
 pub const PROPOSER_FWD_REQUESTS_ID : usize = 104;
 
+pub const CLIENT_POOL_BATCH_SIZE: &str = "CLIENT_POOL_BATCH_SIZE";
+pub const CLIENT_POOL_BATCH_SIZE_ID: usize = 105;
+
 /// 110-119: Consensus
 
 pub const PROPOSE_LATENCY: &str = "PROPOSE_LATENCY";
@@ -72,6 +75,7 @@ pub fn metrics() -> Vec<(usize, String, MetricKind)> {
         (PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME.to_string(), MetricKind::Duration),
         (PROPOSER_REQUEST_FILTER_TIME_ID, PROPOSER_REQUEST_FILTER_TIME.to_string(), MetricKind::Duration),
         (PROPOSER_FWD_REQUESTS_ID, PROPOSER_FWD_REQUESTS.to_string(), MetricKind::Duration),
+        (CLIENT_POOL_BATCH_SIZE_ID, CLIENT_POOL_BATCH_SIZE.to_string(), MetricKind::Count),
         (CONSENSUS_PRE_PREPARE_LATENCY_ID, CONSENSUS_PRE_PREPARE_LATENCY.to_string(), MetricKind::Duration),
         (PROPOSE_LATENCY_ID, PROPOSE_LATENCY.to_string(), MetricKind::Duration),
         (CONSENSUS_PRE_PREPARE_LATENCY_ID, CONSENSUS_PRE_PREPARE_LATENCY.to_string(), MetricKind::Duration),

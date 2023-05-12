@@ -12,7 +12,7 @@ use febft_common::node_id::NodeId;
 use febft_common::ordering::SeqNo;
 use febft_execution::app::Service;
 use febft_execution::serialize::SharedData;
-use crate::messages::Message;
+use crate::messages::{Message, StoredRequestMessage};
 use crate::serialize::OrderingProtocolMessage;
 
 const CHANNEL_SIZE: usize = 1024;
@@ -408,17 +408,6 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
     }
 }
 
-impl ClientRqInfo {
-    pub fn new(digest: Digest, sender: NodeId, seqno: SeqNo, session: SeqNo) -> Self {
-        Self {
-            digest,
-            sender,
-            seqno,
-            session,
-        }
-    }
-}
-
 impl TimeoutRequest {
     fn is_disabled(&self) -> bool {
         return self.notifications_needed <= self.notifications_received.len() as u32;
@@ -443,6 +432,36 @@ impl PartialEq for TimeoutKind {
             (_, _) => {
                 false
             }
+        }
+    }
+}
+
+
+impl ClientRqInfo {
+    pub fn new(digest: Digest, sender: NodeId, seqno: SeqNo, session: SeqNo) -> Self {
+        Self {
+            digest,
+            sender,
+            seqno,
+            session,
+        }
+    }
+}
+
+impl<O> From<StoredRequestMessage<O>> for ClientRqInfo {
+    fn from(message: StoredRequestMessage<O>) -> Self {
+
+        let digest = message.header().unique_digest();
+        let sender = message.header().from();
+
+        let session = message.message().session_number();
+        let seq_no = message.message().sequence_number();
+
+        Self {
+            digest,
+            sender,
+            seqno: seq_no,
+            session,
         }
     }
 }

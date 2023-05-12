@@ -8,6 +8,7 @@ use febft_communication::Node;
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use crate::messages::{ForwardedRequestsMessage, Protocol, SystemMessage};
+use crate::request_pre_processing::BatchOutput;
 use crate::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg, NetworkView};
 use crate::timeouts::{ClientRqInfo, Timeout, Timeouts};
 
@@ -23,7 +24,7 @@ pub trait OrderingProtocol<D, NT>: Orderable where D: SharedData + 'static {
 
     /// Initialize this ordering protocol with the given configuration, executor, timeouts and node
     fn initialize(config: Self::Config, executor: ExecutorHandle<D>,
-                  timeouts: Timeouts, node: Arc<NT>) -> Result<Self> where
+                  timeouts: Timeouts, batch_input: BatchOutput<D::Request>, node: Arc<NT>) -> Result<Self> where
         Self: Sized;
 
     /// Get the current view of the ordering protocol

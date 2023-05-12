@@ -29,6 +29,8 @@ impl InfluxDBArgs {
     }
 }
 
+pub type MetricRegistry = (usize, String, MetricKind);
+
 fn default_metrics_args() -> MetricsArgs {
     MetricsArgs {
         metrics_registers: Vec::new(),

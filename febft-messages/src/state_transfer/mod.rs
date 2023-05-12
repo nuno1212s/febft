@@ -13,6 +13,7 @@ use crate::timeouts::Timeouts;
 use serde::{Serialize, Deserialize};
 use febft_common::crypto::hash::Digest;
 use febft_execution::ExecutorHandle;
+use crate::request_pre_processing::BatchOutput;
 
 
 /// Represents a local checkpoint.
@@ -128,7 +129,8 @@ pub trait StatefulOrderProtocol<D: SharedData + 'static, NT>: OrderingProtocol<D
     type StateSerialization: StatefulOrderProtocolMessage + 'static;
 
     fn initialize_with_initial_state(config: Self::Config, executor: ExecutorHandle<D>,
-                                     timeouts: Timeouts, node: Arc<NT>, initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where
+                                     timeouts: Timeouts, batch_input: BatchOutput<D::Request>,
+                                     node: Arc<NT>, initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where
         Self: Sized;
     
 

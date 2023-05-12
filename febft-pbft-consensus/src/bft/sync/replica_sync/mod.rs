@@ -187,7 +187,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         timeouts.timeout_client_requests(self.timeout_dur.get(), digests);
 
         metric_duration(SYNC_FORWARDED_REQUESTS_ID, start_time.elapsed());
-        metric_increment(SYNC_FORWARDED_COUNT_ID, Some(rq_count));
+        metric_increment(SYNC_FORWARDED_COUNT_ID, Some(rq_count as u64));
     }
 
     /// Watch a vector of requests received
