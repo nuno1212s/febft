@@ -1,5 +1,6 @@
 use std::iter;
 use std::marker::PhantomData;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use febft_common::channel;
@@ -11,14 +12,14 @@ use febft_communication::message::{Header, NetworkMessage, StoredMessage};
 use febft_communication::Node;
 use febft_execution::serialize::SharedData;
 use febft_metrics::metrics::{metric_duration, metric_increment};
-use crate::messages::{RequestMessage, StoredRequestMessage, SystemMessage};
+use crate::messages::{ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
 use crate::metric::{RQ_PP_CLIENT_COUNT_ID, RQ_PP_CLIENT_MSG_ID, RQ_PP_COLLECT_PENDING_ID, RQ_PP_DECIDED_RQS_ID, RQ_PP_FWD_RQS_ID, RQ_PP_TIMEOUT_RQS_ID};
 use crate::request_pre_processing::worker::{PreProcessorWorkMessage, RequestPreProcessingWorker};
 use crate::serialize::{OrderingProtocolMessage, StateTransferMessage};
-use crate::timeouts::ClientRqInfo;
+use crate::timeouts::{ClientRqInfo, RqTimeout, TimeoutKind};
 
 mod worker;
-mod work_dividers;
+pub mod work_dividers;
 
 const ORCHESTRATOR_RCV_TIMEOUT: Option<Duration> = Some(Duration::from_millis(1));
 const PROPOSER_QUEUE_SIZE: usize = 1024;
@@ -37,15 +38,16 @@ pub trait WorkPartitioner<O> {
     fn get_worker_for_processed(rq_info: &ClientRqInfo, worker_count: usize) -> usize;
 }
 
-pub type RequestPreProcessor<O> = ChannelSyncTx<PreProcessorMessage<O>>;
 pub type BatchOutput<O> = ChannelSyncRx<PreProcessorOutputMessage<O>>;
 
 /// Message to the request pre processor
 pub enum PreProcessorMessage<O> {
     /// We have received forwarded requests from other replicas.
-    ForwardedRequests(Vec<StoredRequestMessage<O>>),
+    ForwardedRequests(StoredMessage<ForwardedRequestsMessage<O>>),
+    /// We have received requests that are already decided by the system
+    StoppedRequests(Vec<StoredRequestMessage<O>>),
     /// Analyse timeout requests. Returns only timeouts that have not yet been executed
-    TimeoutsReceived(Vec<ClientRqInfo>, OneShotTx<Vec<ClientRqInfo>>),
+    TimeoutsReceived(Vec<RqTimeout>, OneShotTx<Vec<RqTimeout>>),
     /// A batch of requests that has been decided by the system
     DecidedBatch(Vec<ClientRqInfo>),
     /// Collect all pending messages from all workers.
@@ -60,7 +62,11 @@ pub enum PreProcessorOutputMessage<O> {
     DeDupedUnorderedRequests(Vec<StoredRequestMessage<O>>),
 }
 
+/// Request pre processor handle
+pub struct RequestPreProcessor<O>(ChannelSyncTx<PreProcessorMessage<O>>);
 
+/// The orchestrator for all of the request pre processing.
+/// Decides which workers will get which requests and then handles the logic necessary
 struct RequestPreProcessingOrchestrator<WD, O, NT> {
     /// How many workers should we have
     thread_count: usize,
@@ -88,7 +94,6 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D::Request, NT> where D: Sh
                                                    OP: OrderingProtocolMessage,
                                                    ST: StateTransferMessage,
                                                    WD: WorkPartitioner<D::Request> {
-
         let messages = match self.network_node.receive_from_clients(ORCHESTRATOR_RCV_TIMEOUT) {
             Ok(message) => {
                 message
@@ -200,19 +205,21 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D::Request, NT> where D: Sh
         metric_duration(RQ_PP_DECIDED_RQS_ID, start.elapsed());
     }
 
-    fn process_timeouts(&self, timeouts: Vec<ClientRqInfo>, responder: OneShotTx<Vec<ClientRqInfo>>)
+    fn process_timeouts(&self, timeouts: Vec<RqTimeout>, responder: OneShotTx<Vec<RqTimeout>>)
         where WD: WorkPartitioner<D::Request> {
         let start = Instant::now();
 
         let timeout_count = timeouts.len();
-        let mut worker_messages = init_worker_vecs::<ClientRqInfo>(self.thread_count, timeouts.len());
+        let mut worker_messages = init_worker_vecs(self.thread_count, timeouts.len());
 
         let returners = init_for_workers(self.thread_count, || channel::new_oneshot_channel());
 
         for timeout in timeouts {
-            let worker = WD::get_worker_for_processed(&timeout, self.thread_count);
+            if let TimeoutKind::ClientRequestTimeout(rq) = timeout.timeout_kind() {
+                let worker = WD::get_worker_for_processed(&rq, self.thread_count);
 
-            worker_messages[worker % self.thread_count].push(timeout);
+                worker_messages[worker % self.thread_count].push(timeout);
+            }
         }
 
         let mut rxs = Vec::with_capacity(self.thread_count);
@@ -264,7 +271,21 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D::Request, NT> where D: Sh
     }
 }
 
-pub fn initialize_request_pre_processor<WD, O, NT>(concurrency: usize, node: Arc<NT>) -> RequestPreProcessor<O> {
+impl<O> RequestPreProcessor<O> {
+
+
+
+}
+
+impl<O> Deref for RequestPreProcessor<O> {
+    type Target = ChannelSyncTx<PreProcessorMessage<O>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+pub fn initialize_request_pre_processor<WD, O, NT>(concurrency: usize, node: Arc<NT>) -> (RequestPreProcessor<O>, BatchOutput<O>) {
     let (batch_tx, receiver) = new_bounded_sync(PROPOSER_QUEUE_SIZE);
 
     let (work_sender, work_rcvr) = new_bounded_sync(PROPOSER_QUEUE_SIZE);
@@ -287,7 +308,7 @@ pub fn initialize_request_pre_processor<WD, O, NT>(concurrency: usize, node: Arc
 
     launch_orchestrator_thread(orchestrator);
 
-    work_sender
+    (RequestPreProcessor(work_sender), receiver)
 }
 
 fn init_for_workers<V>(thread_count: usize, init: fn() -> V) -> Vec<V> {

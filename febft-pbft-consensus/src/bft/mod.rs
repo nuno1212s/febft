@@ -37,17 +37,16 @@ use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{ForwardedRequestsMessage, Protocol, SystemMessage};
 use febft_messages::ordering_protocol::{OrderingProtocol, OrderProtocolExecResult, OrderProtocolPoll, View};
-use febft_messages::request_pre_processing::BatchOutput;
+use febft_messages::request_pre_processing::{BatchOutput, RequestPreProcessor};
 use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
 use febft_messages::state_transfer::{Checkpoint, DecLog, StatefulOrderProtocol};
-use febft_messages::timeouts::{ClientRqInfo, Timeout, TimeoutKind, Timeouts};
+use febft_messages::timeouts::{ClientRqInfo, RqTimeout, Timeout, TimeoutKind, Timeouts};
 use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{Consensus, ProposerConsensusGuard, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage, ViewChangeMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::{Info, initialize_decided_log, initialize_pending_request_log, initialize_persistent_log};
-use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::{NoPersistentLog, PersistentLogModeTrait};
 use crate::bft::observer::{MessageType, ObserverHandle};
 use crate::bft::proposer::Proposer;
@@ -92,6 +91,7 @@ pub struct PBFTOrderProtocol<D, ST, NT>
     /// The synchronizer state machine
     synchronizer: Arc<Synchronizer<D>>,
 
+    pre_processor: RequestPreProcessor<D::Request>,
     // A reference to the timeouts layer
     timeouts: Timeouts,
 
@@ -100,16 +100,12 @@ pub struct PBFTOrderProtocol<D, ST, NT>
     // Check if unordered requests can be proposed.
     // This can only occur when we are in the normal phase of the state machine
     unordered_rq_guard: Arc<AtomicBool>,
-
-    // The pending request log. Handles requests received by this replica
-    // Or forwarded by others that have not yet made it into a consensus instance
-    pending_request_log: Arc<PendingRequestLog<D>>,
     // The log of the decided consensus messages
     // This is completely owned by the server thread and therefore does not
     // Require any synchronization
     message_log: Log<D>,
     // The proposer of this replica
-    proposer: Arc<Proposer<D>>,
+    proposer: Arc<Proposer<D, NT>>,
     // The networking layer for a Node in the network (either Client or Replica)
     node: Arc<NT>,
 
@@ -180,7 +176,7 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
         }
     }
 
-    fn handle_timeout(&mut self, timeout: Vec<ClientRqInfo>) -> Result<OrderProtocolExecResult> {
+    fn handle_timeout(&mut self, timeout: Vec<RqTimeout>) -> Result<OrderProtocolExecResult> {
         let status = self.synchronizer
             .client_requests_timed_out(self.node.id(), &timeout);
 
@@ -192,7 +188,6 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
                     self.synchronizer.forward_requests(
                         requests,
                         &*self.node,
-                        &self.pending_request_log,
                     );
                 }
 
@@ -236,8 +231,6 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
 
         let init_req_count = requests.requests().len();
 
-        self.pending_request_log.filter_rqs(requests.mut_requests());
-
         info!("{:?} // Received forwarded requests {:?} from {:?}, after filtering: {:?}", self.node.id(), init_req_count, _header.from(), requests.requests().len());
 
         if requests.requests().is_empty() {
@@ -245,8 +238,6 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
         }
 
         self.synchronizer.watch_forwarded_requests(&requests, &self.timeouts);
-
-        self.pending_request_log.insert_forwarded(requests.into_inner());
 
         Ok(())
     }
@@ -280,8 +271,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
 
         let dec_log = initialize_decided_log::<D>(node_id, persistent_log, initial_state)?;
 
-        let proposer = Proposer::<D>::new(batch_input, sync.clone(),
-                                          pending_rq_log.clone(), timeouts.clone(),
+        let proposer = Proposer::<D, NT>::new(node.clone(), batch_input, sync.clone(), timeouts.clone(),
                                           executor.clone(), consensus_guard.clone(),
                                           proposer_config);
 
@@ -468,9 +458,6 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         //     message
         // );
 
-        // let start = Instant::now();
-
-
         let status = self.consensus.process_message(
             header,
             message,
@@ -512,7 +499,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         let view = self.synchronizer.view();
 
         while self.consensus.can_finalize() {
-            // This will automatically move the consensus machine to the next state
+            // This will automatically move the consensus machine to the next consensus instance
             let completed_batch = self.consensus.finalize(&view)?.unwrap();
 
             let seq = completed_batch.sequence_number();

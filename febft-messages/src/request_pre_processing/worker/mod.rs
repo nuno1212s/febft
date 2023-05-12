@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use futures::{SinkExt, StreamExt};
+use std::time::Instant;
 use intmap::IntMap;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, OneShotTx};
 use febft_common::collections::HashMap;
@@ -11,7 +11,7 @@ use febft_communication::message::{Header, StoredMessage};
 use febft_execution::serialize::SharedData;
 use crate::messages::{RequestMessage, StoredRequestMessage};
 use crate::request_pre_processing::{operation_key, operation_key_raw, PreProcessorOutputMessage};
-use crate::timeouts::ClientRqInfo;
+use crate::timeouts::{ClientRqInfo, RqTimeout, TimeoutPhase};
 
 const WORKER_QUEUE_SIZE: usize = 124;
 const WORKER_THREAD_NAME: &str = "RQ-PRE-PROCESSING-WORKER-{}";
@@ -25,17 +25,17 @@ pub enum PreProcessorWorkMessage<O> {
     /// Received requests that were forwarded from other replicas
     ForwardedRequestsReceived(Vec<StoredRequestMessage<O>>),
     /// Analyse timeout requests. Returns only timeouts that have not yet been executed
-    TimeoutsReceived(Vec<ClientRqInfo>, OneShotTx<Vec<ClientRqInfo>>),
+    TimeoutsReceived(Vec<RqTimeout>, OneShotTx<Vec<RqTimeout>>),
     /// A batch of requests has been decided by the system
     DecidedBatch(Vec<ClientRqInfo>),
     /// Collect all pending messages from the given worker
     CollectPendingMessages(OneShotTx<Vec<StoredRequestMessage<O>>>),
     /// Remove all requests associated with this client (due to a disconnection, for example)
-    CleanClient(NodeId)
+    CleanClient(NodeId),
 }
 
 /// Each worker will be assigned a given set of clients
-pub struct RequestPreProcessingWorker<O>  {
+pub struct RequestPreProcessingWorker<O> {
     /// Receive work
     message_rx: ChannelSyncRx<PreProcessorWorkMessage<O>>,
 
@@ -47,7 +47,7 @@ pub struct RequestPreProcessingWorker<O>  {
     /// we can use this to filter out duplicates.
     latest_ops: IntMap<SeqNo>,
     /// The requests that have not been added to a batch yet.
-    pending_requests: HashMap<Digest, StoredRequestMessage<O>>
+    pending_requests: HashMap<Digest, StoredRequestMessage<O>>,
 }
 
 
@@ -58,6 +58,7 @@ impl<O> RequestPreProcessingWorker<O> {
             batch_production,
             latest_ops: Default::default(),
             pending_requests: Default::default(),
+            watched_requests: Default::default(),
         }
     }
 
@@ -66,21 +67,21 @@ impl<O> RequestPreProcessingWorker<O> {
             match self.message_rx.recv() {
                 PreProcessorWorkMessage::ClientPoolRequestsReceived(requests) => {
                     self.process_ordered_client_pool_requests(requests);
-                },
+                }
                 PreProcessorWorkMessage::ForwardedRequestsReceived(requests) => {
                     self.process_forwarded_requests(requests);
-                },
+                }
                 PreProcessorWorkMessage::TimeoutsReceived(requests, tx) => {
                     self.process_timeouts(requests, tx);
-                },
+                }
                 PreProcessorWorkMessage::DecidedBatch(requests) => {
                     self.process_decided_batch(requests);
-                },
+                }
                 PreProcessorWorkMessage::CollectPendingMessages(tx) => {
                     let reqs = self.collect_pending_requests();
 
                     tx.send(reqs).expect("Failed to send pending requests");
-                },
+                }
                 PreProcessorWorkMessage::CleanClient(client) => {
                     self.clean_client(client);
                 }
@@ -117,9 +118,10 @@ impl<O> RequestPreProcessingWorker<O> {
             }
 
             let digest = header.unique_digest();
-            let stored = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
+            let stored = StoredMessage::new(header, message);
 
-            self.pending_requests.insert(digest, stored);
+            self.pending_requests.insert(digest.clone(), stored);
+
             return false;
         }).collect();
 
@@ -141,15 +143,17 @@ impl<O> RequestPreProcessingWorker<O> {
 
     /// Process the forwarded requests
     fn process_forwarded_requests(&mut self, requests: Vec<StoredRequestMessage<O>>) {
+        let timeout_phase = TimeoutPhase::TimedOutOnce(Instant::now());
+
         let requests = requests.into_iter().filter(|request| {
             if self.has_received_more_recent_and_update(request.header(), request.message()) {
                 return true;
             }
 
             let digest = header.unique_digest();
-            let stored = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
+            let stored = StoredMessage::new(header, message);
 
-            self.pending_requests.insert(digest, stored);
+            self.pending_requests.insert(digest.clone(), stored);
 
             return false;
         }).collect();
@@ -158,28 +162,44 @@ impl<O> RequestPreProcessingWorker<O> {
     }
 
     /// Process the timeouts
-    fn process_timeouts(&mut self, mut timeouts:  Vec<ClientRqInfo>, tx: OneShotTx<Vec<ClientRqInfo>>) {
-        timeouts.retain(|timeout| {
+    fn process_timeouts(&mut self, mut timeouts: Vec<RqTimeout>, tx: OneShotTx<Vec<RqTimeout>>) {
+        let mut returned_timeouts = Vec::with_capacity(timeouts.len());
+
+        for timeout in timeouts {
             let key = operation_key_raw(timeout.sender, timeout.session);
 
-            let result = if let Some(seq_no) = latest_op_guard.get(key) {
+            let result = if let Some(seq_no) = self.latest_ops.get(key) {
                 *seq_no < timeout.seqno
             } else {
                 true
             };
 
-            result
-        });
+            if result {
+                let watched_request = self.watched_requests.entry(timeout.digest.clone())
+                    .or_insert_with(|| TimeoutPhase::Init(Instant::now()));
 
-        tx.send(timeouts);
+                returned_timeouts.push(ClientRqTimeout::new(timeout, *watched_request));
+
+                match watched_request {
+                    TimeoutPhase::Init(_) => {
+                        *watched_request = TimeoutPhase::TimedOutOnce(Instant::now());
+                    }
+                    TimeoutPhase::TimedOutOnce(_) => {
+                        *watched_request = TimeoutPhase::TimedOut;
+                    }
+                    TimeoutPhase::TimedOut => {}
+                }
+            }
+        }
+
+        tx.send(returned_timeouts).expect("Failed to send timeouts to client");
     }
 
     /// Process a decided batch
     fn process_decided_batch(&mut self, requests: Vec<ClientRqInfo>) {
         requests.into_iter().for_each(|request| {
-
             self.pending_requests.remove(&request.digest);
-
+            self.watched_requests.remove(&request.digest);
         });
     }
 
@@ -188,11 +208,9 @@ impl<O> RequestPreProcessingWorker<O> {
         std::mem::replace(&mut self.pending_requests, Default::default())
             .into_iter().map(|(_, request)| request).collect()
     }
-
 }
 
 pub(super) fn spawn_worker<O>(worker_id: usize, batch_tx: ChannelSyncTx<PreProcessorOutputMessage<O>>) -> ChannelSyncTx<PreProcessorWorkMessage<O>> {
-
     let (worker_tx, worker_rx) = febft_common::channel::new_bounded_sync(WORKER_QUEUE_SIZE);
 
     let worker = RequestPreProcessingWorker::new(worker_rx, batch_tx);

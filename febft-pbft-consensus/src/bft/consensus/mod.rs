@@ -630,7 +630,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
     /// change protocol.
     pub fn forge_propose<K>(
         &self,
-        requests: Vec<StoredMessage<RequestMessage<D::Request>>>,
+        requests: Vec<StoredRequestMessage<D::Request>>>,
         synchronizer: &K,
     ) -> SysMsg<D, ST>
         where

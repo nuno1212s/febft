@@ -1,4 +1,5 @@
 use std::fmt::{Debug, Formatter};
+use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::sync::Arc;
 use febft_common::ordering::{Orderable, SeqNo};
@@ -9,9 +10,11 @@ use crate::serialize::{OrderingProtocolMessage, ServiceMsg};
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
+use febft_common::crypto::hash::Digest;
 use febft_common::globals::ReadOnly;
+use febft_common::node_id::NodeId;
 use crate::state_transfer::Checkpoint;
-use crate::timeouts::Timeout;
+use crate::timeouts::{TimedOut, Timeout};
 
 
 /// The `Message` type encompasses all the messages traded between different
@@ -25,7 +28,7 @@ pub enum Message<D> where D: SharedData {
     ExecutionFinishedWithAppstate((SeqNo, D::State)),
     DigestedAppState(Arc<ReadOnly<Checkpoint<D::State>>>),
     /// We received a timeout from the timeouts layer.
-    Timeout(Timeout),
+    Timeout(TimedOut),
 }
 
 impl<D> Debug for Message<D> where D: SharedData {
@@ -180,7 +183,18 @@ impl<D, P, ST> Debug for SystemMessage<D, P, ST> where D: SharedData, P: Clone, 
     }
 }
 
-pub type StoredRequestMessage<O> = Arc<ReadOnly<StoredMessage<RequestMessage<O>>>>;
+#[derive(Eq, PartialEq, Ord, Clone, PartialOrd, Debug)]
+pub struct ClientRqInfo {
+    //The UNIQUE digest of the request in question
+    pub digest: Digest,
+
+    // The sender, sequence number and session number
+    pub sender: NodeId,
+    pub seqno: SeqNo,
+    pub session: SeqNo,
+}
+
+pub type StoredRequestMessage<O> = StoredMessage<RequestMessage<O>>;
 
 /// Represents a request from a client.
 ///
@@ -315,21 +329,21 @@ impl<P> Deref for StateTransfer<P> {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct ForwardedRequestsMessage<O> {
-    inner: Vec<StoredMessage<RequestMessage<O>>>,
+    inner: Vec<StoredRequestMessage<O>>,
 }
 
 impl<O> ForwardedRequestsMessage<O> {
     /// Creates a new `ForwardedRequestsMessage`, containing the given client requests.
-    pub fn new(inner: Vec<StoredMessage<RequestMessage<O>>>) -> Self {
+    pub fn new(inner: Vec<StoredRequestMessage<O>>) -> Self {
         Self { inner }
     }
 
-    pub fn requests(&self) -> &Vec<StoredMessage<RequestMessage<O>>> { &self.inner }
+    pub fn requests(&self) -> &Vec<StoredRequestMessage<O>> { &self.inner }
 
-    pub fn mut_requests(&mut self) -> &mut Vec<StoredMessage<RequestMessage<O>>> { &mut self.inner }
+    pub fn mut_requests(&mut self) -> &mut Vec<StoredRequestMessage<O>> { &mut self.inner }
 
     /// Returns the client requests contained in this `ForwardedRequestsMessage`.
-    pub fn into_inner(self) -> Vec<StoredMessage<RequestMessage<O>>> {
+    pub fn into_inner(self) -> Vec<StoredRequestMessage<O>> {
         self.inner
     }
 }
@@ -364,5 +378,46 @@ impl<P> ForwardedProtocolMessage<P> {
 impl<O> Debug for RequestMessage<O> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Session: {:?} Seq No: {:?}", self.session_id, self.sequence_number())
+    }
+}
+
+impl Orderable for ClientRqInfo {
+    fn sequence_number(&self) -> SeqNo {
+        self.seqno
+    }
+}
+
+impl ClientRqInfo {
+    pub fn new(digest: Digest, sender: NodeId, seqno: SeqNo, session: SeqNo) -> Self {
+        Self {
+            digest,
+            sender,
+            seqno,
+            session,
+        }
+    }
+}
+
+impl<O> From<StoredRequestMessage<O>> for ClientRqInfo {
+    fn from(message: StoredRequestMessage<O>) -> Self {
+
+        let digest = message.header().unique_digest();
+        let sender = message.header().from();
+
+        let session = message.message().session_number();
+        let seq_no = message.message().sequence_number();
+
+        Self {
+            digest,
+            sender,
+            seqno: seq_no,
+            session,
+        }
+    }
+}
+
+impl Hash for ClientRqInfo {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.digest.hash(state);
     }
 }

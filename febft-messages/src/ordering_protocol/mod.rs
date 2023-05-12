@@ -7,10 +7,10 @@ use febft_common::ordering::Orderable;
 use febft_communication::Node;
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
-use crate::messages::{ForwardedRequestsMessage, Protocol, SystemMessage};
+use crate::messages::{ForwardedRequestsMessage, Protocol, StoredRequestMessage, SystemMessage};
 use crate::request_pre_processing::BatchOutput;
 use crate::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg, NetworkView};
-use crate::timeouts::{ClientRqInfo, Timeout, Timeouts};
+use crate::timeouts::{ClientRqInfo, RqTimeout, Timeout, Timeouts};
 
 pub type View<OP> = <OP as OrderingProtocolMessage>::ViewInfo;
 
@@ -45,10 +45,10 @@ pub trait OrderingProtocol<D, NT>: Orderable where D: SharedData + 'static {
     fn process_message(&mut self, message: StoredMessage<Protocol<ProtocolMessage<Self::Serialization>>>) -> Result<OrderProtocolExecResult>;
 
     /// Handle a timeout received from the timeouts layer
-    fn handle_timeout(&mut self, timeout: Vec<ClientRqInfo>) -> Result<OrderProtocolExecResult>;
+    fn handle_timeout(&mut self, timeout: Vec<RqTimeout>) -> Result<OrderProtocolExecResult>;
 
     /// Handle having received a forwarded requests message from another node
-    fn handle_forwarded_requests(&mut self, requests: StoredMessage<ForwardedRequestsMessage<D::Request>>) -> Result<()>;
+    fn handle_forwarded_requests(&mut self, requests: Vec<StoredRequestMessage<D::Request>>) -> Result<()>;
 
 }
 

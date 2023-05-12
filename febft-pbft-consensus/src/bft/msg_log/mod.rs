@@ -18,7 +18,6 @@ use crate::bft::message::ConsensusMessage;
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::deciding_log::{DecidingLog};
 use crate::bft::msg_log::decisions::{ DecisionLog};
-use crate::bft::msg_log::pending_decision::PendingRequestLog;
 
 use self::persistent::{PersistentLog};
 use self::persistent::{PersistentLogModeTrait};
@@ -61,10 +60,6 @@ pub fn initialize_decided_log<D: SharedData + 'static>(node_id: NodeId,
                                                        persistent_log: PersistentLog<D>,
                                                        state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<Log<D>> {
     Ok(Log::init_decided_log(node_id, persistent_log, state))
-}
-
-pub fn initialize_pending_request_log<D: SharedData + 'static>() -> Result<PendingRequestLog<D>> {
-    Ok(PendingRequestLog::new())
 }
 
 #[inline]

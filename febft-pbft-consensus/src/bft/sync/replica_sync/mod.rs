@@ -20,9 +20,10 @@ use febft_communication::message::{NetworkMessageKind, StoredMessage, System};
 use febft_communication::{Node};
 use febft_execution::app::{Request, Service};
 use febft_execution::serialize::SharedData;
-use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
+use febft_messages::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
+use febft_messages::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use febft_messages::serialize::StateTransferMessage;
-use febft_messages::timeouts::{ClientRqInfo, Timeouts};
+use febft_messages::timeouts::{ClientRqInfo, RqTimeout, TimeoutKind, TimeoutPhase, Timeouts};
 use febft_metrics::metrics::{metric_duration, metric_increment};
 use crate::bft::consensus::Consensus;
 
@@ -31,7 +32,6 @@ use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, V
 use crate::bft::metric::{SYNC_BATCH_RECEIVED_ID, SYNC_FORWARDED_COUNT_ID, SYNC_FORWARDED_REQUESTS_ID, SYNC_STOPPED_COUNT_ID, SYNC_STOPPED_REQUESTS_ID, SYNC_WATCH_REQUESTS_ID};
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::CollectData;
-use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::PBFT;
 use crate::bft::sync::view::ViewInfo;
@@ -45,7 +45,6 @@ use super::{AbstractSynchronizer, Synchronizer, SynchronizerStatus, TimeoutPhase
 
 pub struct ReplicaSynchronizer<D: SharedData> {
     timeout_dur: Cell<Duration>,
-    watching: ConcurrentHashMap<Digest, TimeoutPhase>,
     _phantom: PhantomData<D>,
 }
 
@@ -53,7 +52,6 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     pub fn new(timeout_dur: Duration) -> Self {
         Self {
             timeout_dur: Cell::new(timeout_dur),
-            watching: collections::concurrent_hash_map(),
             _phantom: Default::default(),
         }
     }
@@ -71,7 +69,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         previous_view: ViewInfo,
         consensus: &Consensus<D, ST>,
         log: &Log<D>,
-        pending_rq_log: &PendingRequestLog<D>,
+        pre_processor: &RequestPreProcessor<D::Request>,
         timeouts: &Timeouts,
         node: &NT,
     )
@@ -83,7 +81,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         // - reset the timers of the requests in the STOP
         //   messages with TimeoutPhase::Init(_)
         // - send STOP-DATA message
-        self.add_stopped_requests(base_sync, pending_rq_log);
+        self.take_stopped_requests_and_register_them(base_sync, pre_processor, timeouts);
         self.watch_all_requests(timeouts);
 
         let view_info = base_sync.view();
@@ -119,7 +117,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         base_sync: &Synchronizer<D>,
         timeouts: &Timeouts,
         node: &NT,
-        timed_out: Option<Vec<StoredMessage<RequestMessage<D::Request>>>>,
+        timed_out: Option<Vec<StoredRequestMessage<D::Request>>>,
     ) where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
         // stop all timers
         self.unwatch_all_requests(timeouts);
@@ -157,31 +155,14 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     ) {
         let start_time = Instant::now();
 
-        let phase = TimeoutPhase::TimedOutOnce(Instant::now());
-
         let mut digests = Vec::with_capacity(requests.requests().len());
 
         let rq_count = requests.requests().len();
 
         for request in requests.requests() {
-            let header = request.header();
+            let client_rq_info = ClientRqInfo::from(&request);
 
-            let unique_digest = header.unique_digest();
-
-            digests.push((unique_digest.clone(), header.from(), request.message().sequence_number(), request.message().session_id()));
-
-            if let Some(mut req) = self.watching.get_mut(&unique_digest) {
-                match req.value() {
-                    TimeoutPhase::Init(_) => {
-                        *req.value_mut() = phase;
-                    }
-                    _ => {
-                        // we have already skipped this step
-                    }
-                }
-            } else {
-                self.watching.insert(unique_digest, phase);
-            }
+            digests.push(client_rq_info);
         }
 
         timeouts.timeout_client_requests(self.timeout_dur.get(), digests);
@@ -193,16 +174,10 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     /// Watch a vector of requests received
     pub fn watch_received_requests(
         &self,
-        requests: Vec<(Digest, NodeId, SeqNo, SeqNo)>,
+        requests: Vec<ClientRqInfo>,
         timeouts: &Timeouts,
     ) {
         let start_time = Instant::now();
-
-        let phase = TimeoutPhase::Init(Instant::now());
-
-        for (req, from, seq, session) in &requests {
-            self.watching.insert(req.clone(), phase.clone());
-        }
 
         timeouts.timeout_client_requests(
             self.timeout_dur.get(),
@@ -245,11 +220,8 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
             //let request_digest = header.digest().clone();
 
-            //remove the request from the requests we are currently watching
-            self.watching.remove(&digest);
-
             digests.push(digest.clone());
-            timeout_info.push(ClientRqInfo::new(digest, header.from(), seq_no, session));
+            timeout_info.push(ClientRqInfo::from(&x));
         }
 
         //Notify the timeouts that we have received the following requests
@@ -271,23 +243,25 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     }
 
     /// Register all of the requests that are missing from the view change
-    fn add_stopped_requests(&self, base_sync: &Synchronizer<D>, log: &PendingRequestLog<D>) {
+    fn take_stopped_requests_and_register_them(&self, base_sync: &Synchronizer<D>,
+                                               pre_processor: &RequestPreProcessor<D>,
+                                               timeouts: &Timeouts) {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
 
         let start_time = Instant::now();
 
-        let requests = self
-            .drain_stopped_request(base_sync)
-            .into_iter()
-            .map(|stopped| stopped.into_inner());
+        let requests = self.drain_stopped_request(base_sync);
+
+        let rq_info = requests.iter().map(|rq| {
+            ClientRqInfo::from(rq)
+        }).collect();
 
         let count = requests.len();
 
-        for (header, request) in requests {
-            self.watching
-                .insert(header.unique_digest(), TimeoutPhase::TimedOut);
-        }
+        pre_processor.send(PreProcessorMessage::StoppedRequests(requests)).unwrap();
+
+        timeouts.timeout_client_requests(self.timeout_dur.get(), rq_info);
 
         metric_increment(SYNC_STOPPED_COUNT_ID, Some(count as u64));
         metric_duration(SYNC_STOPPED_REQUESTS_ID, start_time.elapsed());
@@ -295,34 +269,25 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
     fn watch_request_impl(
         &self,
-        _phase: TimeoutPhase,
-        digest: Digest,
-        from: NodeId,
-        seq: SeqNo,
-        session: SeqNo,
+        client_rq: ClientRqInfo,
         timeouts: &Timeouts,
     ) {
-        timeouts.timeout_client_requests(self.timeout_dur.get(), vec![(digest, from, seq, session)]);
+        timeouts.timeout_client_requests(self.timeout_dur.get(), vec![client_rq]);
     }
 
     /// Watch a client request with the digest `digest`.
-    pub fn watch_request(&self, digest: Digest, from: NodeId, seq: SeqNo, session: SeqNo, timeouts: &Timeouts) {
-        let phase = TimeoutPhase::Init(Instant::now());
-        self.watch_request_impl(phase, digest, from, seq, session, timeouts);
+    pub fn watch_request(&self, client: ClientRqInfo, timeouts: &Timeouts) {
+        self.watch_request_impl( client, timeouts);
     }
 
     /// Remove a client request with digest `digest` from the watched list
     /// of requests.
     pub fn unwatch_request(&self, digest: &Digest, timeouts: &Timeouts) {
-        self.watching.remove(digest);
-
         timeouts.cancel_client_rq_timeouts(Some(vec![digest.clone()]));
     }
 
     /// Stop watching all pending client requests.
     pub fn unwatch_all_requests(&self, timeouts: &Timeouts) {
-        self.watching.clear();
-
         timeouts.cancel_client_rq_timeouts(None);
     }
 
@@ -330,21 +295,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     /// This happens when a new leader has been elected and
     /// We must now give him some time to propose all of the requests
     pub fn watch_all_requests(&self, timeouts: &Timeouts) {
-        let mut digests = Vec::with_capacity(self.watching.len());
-
-        let phase = TimeoutPhase::Init(Instant::now());
-
-        self.watching.iter_mut().for_each(|mut digest| {
-            let rq_digest = digest.key().clone();
-
-            let curr_phase = digest.value_mut();
-
-            *curr_phase = phase;
-
-            digests.push((rq_digest, NodeId::from(1000u32), SeqNo::ZERO, SeqNo::ZERO));
-        });
-
-        timeouts.timeout_client_requests(self.timeout_dur.get(), digests);
+        timeouts.reset_all_client_rq_timeouts(self.timeout_dur.get());
     }
 
     /// Handle a timeout received from the timeouts layer.
@@ -358,8 +309,9 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     //
     pub fn client_requests_timed_out(
         &self,
+        base_sync: &Synchronizer<D>,
         my_id: NodeId,
-        timed_out_rqs: &Vec<ClientRqInfo>,
+        timed_out_rqs: &Vec<RqTimeout>,
     ) -> SynchronizerStatus {
 
         //// iterate over list of watched pending requests,
@@ -381,30 +333,23 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             timed_out_rqs.len());
 
         for timed_out_rq in timed_out_rqs {
-            let watching_request = self.watching.get_mut(&timed_out_rq.digest);
+            match timed_out_rq.timeout_phase() {
+                TimeoutPhase::TimedOut(id, time) => {
+                    let timeout: TimeoutKind = timed_out_rq.timeout_kind();
 
-            if let Some(mut watched_request) = watching_request {
-                let digest = watched_request.key().clone();
+                    let rq_info = match timeout {
+                        TimeoutKind::ClientRequestTimeout(rq) => {
+                            rq
+                        }
+                        _ => unreachable!("Only client requests should be timed out at the synchronizer")
+                    };
 
-                let mut timeout_phase = watched_request.value_mut();
-
-                match timeout_phase {
-                    TimeoutPhase::Init(instant)
-                    if now.duration_since(*instant) >= self.timeout_dur.get() => {
-                        forwarded.push(digest);
-                        // NOTE: we don't update the timeout phase here, because this is
-                        // done with the message we receive locally containing the forwarded
-                        // requests, on `watch_forwarded_requests`
-                        // The timer will also be set there
+                    if id == 0 {
+                        forwarded.push(rq_info.digest.clone());
+                    } else if id == 1 {
+                        // The second timeout generates a stopped request
+                        stopped.push(rq_info.digest.clone());
                     }
-
-                    TimeoutPhase::TimedOutOnce(instant)
-                    if now.duration_since(*instant) >= self.timeout_dur.get() => {
-                        stopped.push(digest.clone());
-
-                        *timeout_phase = TimeoutPhase::TimedOut;
-                    }
-                    _ => {}
                 }
             }
         }
@@ -416,19 +361,16 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
         debug!("{:?} // Replying requests time out forwarded {}, stopped {}", my_id, forwarded.len(), stopped.len());
 
-        if !stopped.is_empty() {
+        if !stopped.is_empty() || !base_sync.stopped.borrow().is_empty() {
+            let known_stops = self.stopped_request_digests(base_sync, None);
 
-            // Always include all our known stopped requests in all messages
-            self.watching.iter().for_each(|watched| {
-                let digest = watched.key();
-                let phase = watched.value();
-
-                if let TimeoutPhase::TimedOut = phase {
-                    if !stopped.contains(digest) {
-                        stopped.push(digest.clone());
-                    }
+            for stopped_rq in known_stops {
+                if stopped.contains(&stopped_rq) {
+                    continue;
                 }
-            });
+
+                stopped.push(stopped_rq);
+            }
         }
 
         SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
@@ -439,9 +381,8 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     pub fn forward_requests<ST, NT>(
         &self,
         base_sync: &Synchronizer<D>,
-        timed_out: Vec<StoredMessage<RequestMessage<D::Request>>>,
+        timed_out: Vec<StoredRequestMessage<D::Request>>,
         node: &NT,
-        _log: &PendingRequestLog<D>,
     ) where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
         let message = SystemMessage::ForwardedRequestMessage(ForwardedRequestsMessage::new(timed_out));
         let targets = NodeId::targets(0..base_sync.view().params().n());
@@ -450,11 +391,13 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
     /// Obtain the requests that we know have timed out so we can send out a stop message
     /// to other nodes
+    ///
+    /// Clones all the nodes in the `stopped` list
     fn stopped_requests(
         &self,
         base_sync: &Synchronizer<D>,
-        requests: Option<Vec<StoredMessage<RequestMessage<D::Request>>>>,
-    ) -> Vec<StoredMessage<RequestMessage<D::Request>>> {
+        requests: Option<Vec<StoredRequestMessage<D::Request>>>,
+    ) -> Vec<StoredRequestMessage<D::Request>> {
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
         let mut all_reqs = collections::hash_map();
 
@@ -479,9 +422,37 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         all_reqs.drain().map(|(_, stop)| stop).collect()
     }
 
+    fn stopped_request_digests(
+        &self,
+        base_sync: &Synchronizer<D>,
+        requests: Option<Vec<StoredRequestMessage<D::Request>>>,
+    ) -> Vec<Digest> {
+
+        // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
+        let mut all_reqs = collections::hash_set();
+
+        // Include the requests that we have timed out
+        if let Some(requests) = requests {
+            for r in requests {
+                all_reqs.insert(r.header().unique_digest());
+            }
+        }
+
+        // TODO: optimize this; we are including every STOP we have
+        // received thus far for the new view in our own STOP, plus
+        // the requests that timed out on us
+        for (_, stopped) in base_sync.stopped.borrow().iter() {
+            for r in stopped {
+                all_reqs.insert(r.header().unique_digest())
+            }
+        }
+
+        all_reqs.drain().map(|(_, stop)| stop).collect()
+    }
+
     /// Drain our current received stopped messages
     fn drain_stopped_request(&self, base_sync: &Synchronizer<D>) ->
-    Vec<StoredMessage<RequestMessage<D::Request>>> {
+    Vec<StoredRequestMessage<D::Request>> {
 
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
         let mut all_reqs = collections::hash_map();

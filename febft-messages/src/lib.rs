@@ -1,4 +1,5 @@
 #![feature(associated_type_defaults)]
+#![feature(drain_filter)]
 
 pub mod serialize;
 pub mod messages;

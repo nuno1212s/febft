@@ -8,6 +8,7 @@ use std::{
 use std::cell::Cell;
 use std::sync::MutexGuard;
 use bytes::BytesMut;
+use futures::SinkExt;
 
 use self::{follower_sync::FollowerSynchronizer, replica_sync::ReplicaSynchronizer};
 
@@ -25,14 +26,14 @@ use febft_communication::{Node, NodePK, serialize};
 use febft_communication::serialize::Buf;
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::serialize::SharedData;
-use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
+use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
+use febft_messages::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use febft_messages::serialize::StateTransferMessage;
-use febft_messages::timeouts::{ClientRqInfo, Timeouts};
+use febft_messages::timeouts::{ClientRqInfo, RqTimeout, Timeouts};
 use crate::bft::consensus::Consensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::{CollectData, Proof, ViewDecisionPair};
-use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::PBFT;
 
 use crate::bft::sync::view::ViewInfo;
@@ -266,18 +267,6 @@ impl<O> TboQueue<O> {
     }
 }
 
-#[derive(Copy, Clone)]
-pub(super) enum TimeoutPhase {
-    // we have never received a timeout
-    Init(Instant),
-    // we received a second timeout for the same request;
-    // start view change protocol
-    TimedOutOnce(Instant),
-    // keep requests that timed out stored in memory,
-    // for efficiency
-    TimedOut,
-}
-
 #[derive(Copy, Clone, Debug)]
 pub(super) enum ProtoPhase {
     // the view change protocol isn't running;
@@ -363,7 +352,7 @@ pub struct Synchronizer<D: SharedData> {
     //Tbo queue, keeps track of the current view and keeps messages arriving in order
     tbo: Mutex<TboQueue<D::Request>>,
     //Stores currently received requests from other nodes
-    stopped: RefCell<IntMap<Vec<StoredMessage<RequestMessage<D::Request>>>>>,
+    stopped: RefCell<IntMap<Vec<StoredRequestMessage<D::Request>>>>,
     //TODO: This does not require a Mutex I believe since it's only accessed when
     // Processing messages (which is always done in the replica thread)
     collects: Mutex<CollectsType<D>>,
@@ -488,7 +477,7 @@ impl<D> Synchronizer<D>
         message: ViewChangeMessage<D::Request>,
         timeouts: &Timeouts,
         log: &mut Log<D>,
-        pending_rq_log: &PendingRequestLog<D>,
+        rq_pre_processor: &RequestPreProcessor<D::Request>,
         consensus: &mut Consensus<D, ST>,
         node: &NT,
     ) -> SynchronizerStatus
@@ -588,20 +577,7 @@ impl<D> Synchronizer<D>
                     _ => unreachable!(),
                 };
 
-                // Filter rqs that we have already seen
-                pending_rq_log.filter_rqs(&mut stopped);
-
-                if stopped.is_empty() {
-                    debug!("{:?} // No pending requests in STOP message from {:?}",
-                           node.id(),
-                           header.from());
-                    return SynchronizerStatus::Nil;
-                }
-
-                // Register these requests into the pending request log so we
-                // Can later use it to retrieve all pending messages when sending
-                // Our stop data message
-                pending_rq_log.register_stopped_requests(&stopped);
+                // FIXME: Check if we have already seen the messages in the stop quorum
 
                 self.stopped
                     .borrow_mut()
@@ -634,14 +610,13 @@ impl<D> Synchronizer<D>
 
                     match &self.accessory {
                         SynchronizerAccessory::Replica(rep) => {
-                            rep.handle_stopping_quorum(self, previous_view, consensus, log,
-                                                       pending_rq_log, timeouts, node)
+                            rep.handle_stopping_quorum(self, previous_view, consensus,
+                                                       log, rq_pre_processor, timeouts, node)
                         }
                         SynchronizerAccessory::Follower(_) => {}
                     }
 
                     if next_leader == node.id() {
-
                         warn!("{:?} // I am the new leader, moving to the stopping data phase.", node.id());
 
                         //Move to the stopping data phase as we are the new leader
@@ -1020,7 +995,7 @@ impl<D> Synchronizer<D>
     /// originated in the other replicas.
     pub fn begin_view_change<ST, NT>(
         &self,
-        timed_out: Option<Vec<StoredMessage<RequestMessage<D::Request>>>>,
+        timed_out: Option<Vec<StoredRequestMessage<D::Request>>>,
         node: &NT,
         timeouts: &Timeouts,
         _log: &Log<D>,
@@ -1174,7 +1149,8 @@ impl<D> Synchronizer<D>
     }
 
     /// Watch requests that have been forwarded to us
-    pub fn watch_forwarded_requests(&self, requests: &ForwardedRequestsMessage<D::Request>, timeouts: &Timeouts) {
+    pub fn watch_forwarded_requests(&self, requests: &ForwardedRequestsMessage<D::Request>,
+                                    timeouts: &Timeouts) {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
                 rep.watch_forwarded_requests(requests, timeouts)
@@ -1185,7 +1161,7 @@ impl<D> Synchronizer<D>
 
     /// Watch requests that have been received from other replicas
     ///
-    pub fn watch_received_requests(&self, digest: Vec<(Digest, NodeId, SeqNo, SeqNo)>, timeouts: &Timeouts) {
+    pub fn watch_received_requests(&self, digest: Vec<ClientRqInfo>, timeouts: &Timeouts) {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
                 rep.watch_received_requests(digest, timeouts);
@@ -1195,10 +1171,10 @@ impl<D> Synchronizer<D>
     }
 
     /// Watch a client request with the digest `digest`.
-    pub fn watch_request(&self, digest: Digest, from: NodeId, seq: SeqNo, session: SeqNo, timeouts: &Timeouts) {
+    pub fn watch_request(&self, rq_info: ClientRqInfo, timeouts: &Timeouts) {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) =>
-                rep.watch_request(digest, from, seq, session, timeouts),
+                rep.watch_request(rq_info, timeouts),
             _ => {}
         }
     }
@@ -1207,14 +1183,13 @@ impl<D> Synchronizer<D>
     /// So that everyone knows about (including a leader that could still be correct, but
     /// Has not received the requests from the client)
     pub fn forward_requests<ST, NT>(&self,
-                                    timed_out: Vec<StoredMessage<RequestMessage<D::Request>>>,
-                                    node: &NT,
-                                    log: &PendingRequestLog<D>)
+                                    timed_out: Vec<StoredRequestMessage<D::Request>>,
+                                    node: &NT)
         where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {}
             SynchronizerAccessory::Replica(rep) => {
-                rep.forward_requests(self, timed_out, node, log);
+                rep.forward_requests(self, timed_out, node);
             }
         }
     }
@@ -1224,7 +1199,7 @@ impl<D> Synchronizer<D>
     pub fn client_requests_timed_out(
         &self,
         my_id: NodeId,
-        seq: &Vec<ClientRqInfo>,
+        seq: &Vec<RqTimeout>,
     ) -> SynchronizerStatus {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {

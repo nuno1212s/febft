@@ -26,13 +26,12 @@ use crate::bft::config::ProposerConfig;
 use crate::bft::consensus::ProposerConsensusGuard;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, PBFTMessage};
 use crate::bft::metric::{CLIENT_POOL_BATCH_SIZE_ID, PROPOSER_BATCHES_MADE_ID, PROPOSER_FWD_REQUESTS_ID, PROPOSER_REQUEST_FILTER_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUESTS_COLLECTED_ID};
-use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::PBFT;
 use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
 use super::sync::{Synchronizer, AbstractSynchronizer};
 
-pub type BatchType<R> = Vec<StoredMessage<RequestMessage<R>>>;
+pub type BatchType<R> = Vec<StoredRequestMessage<R>>>;
 
 ///Handles taking requests from the client pools and storing the requests in the log,
 ///as well as creating new batches and delivering them to the batch_channel
@@ -352,7 +351,7 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
         &self,
         seq: SeqNo,
         view: &ViewInfo,
-        currently_accumulated: Vec<StoredMessage<RequestMessage<D::Request>>>,
+        currently_accumulated: Vec<StoredRequestMessage<D::Request>>>,
     ) where ST: StateTransferMessage + 'static,
             NT: Node<PBFT<D, ST>> {
         info!("{:?} // Proposing new batch with {} request count {:?}", self.node_ref.id(), currently_accumulated.len(), seq);
@@ -405,6 +404,6 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
     fn requests_received(
         &self,
         _t: DateTime<Utc>,
-        reqs: Vec<StoredMessage<RequestMessage<D::Request>>>,
+        reqs: Vec<StoredRequestMessage<D::Request>>>,
     ) {}
 }

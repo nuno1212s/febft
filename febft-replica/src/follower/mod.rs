@@ -66,8 +66,6 @@ pub struct Follower<S: Service + 'static, NT: Node<PBFT<S::Data>> + 'static> {
     //The log of messages
     decided_log: DecidedLog<S::Data>,
 
-    pending_rq_log: Arc<PendingRequestLog<S::Data>>,
-
     execution_rx: ChannelSyncRx<Message<S::Data>>,
 
     node: Arc<NT>,

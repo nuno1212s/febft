@@ -3,9 +3,9 @@ use crate::messages::RequestMessage;
 use crate::request_pre_processing::{operation_key_raw, WorkPartitioner};
 use crate::timeouts::ClientRqInfo;
 
-pub struct RoundRobin;
+pub struct WDRoundRobin;
 
-impl<O> WorkPartitioner<O> for RoundRobin {
+impl<O> WorkPartitioner<O> for WDRoundRobin {
     fn get_worker_for(rq_info: &Header, message: &RequestMessage<O>, worker_count: usize) -> usize {
         let op_key = operation_key_raw(rq_info.from(), message.session_id());
 
