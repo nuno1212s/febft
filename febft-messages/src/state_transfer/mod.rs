@@ -8,7 +8,7 @@ use febft_communication::Node;
 use crate::messages::{Protocol, StateTransfer};
 use crate::ordering_protocol::{OrderingProtocol, OrderingProtocolArgs, View};
 use crate::serialize::{NetworkView, OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage};
-use crate::timeouts::Timeouts;
+use crate::timeouts::{RqTimeout, Timeouts};
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 use febft_common::crypto::hash::Digest;
@@ -117,7 +117,7 @@ pub trait StateTransferProtocol<D, OP, NT> where
         where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>;
 
     /// Handle a timeout being received from the timeout layer
-    fn handle_timeout(&mut self, order_protocol: &mut OP, timeout: Vec<SeqNo>) -> Result<STTimeoutResult>
+    fn handle_timeout(&mut self, order_protocol: &mut OP, timeout: Vec<RqTimeout>) -> Result<STTimeoutResult>
         where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>;
 }
 

@@ -30,7 +30,7 @@ use febft_messages::messages::{StateTransfer, SystemMessage};
 use febft_messages::ordering_protocol::{OrderingProtocol, View};
 use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage, NetworkView};
 use febft_messages::state_transfer::{Checkpoint, CstM, DecLog, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
-use febft_messages::timeouts::Timeouts;
+use febft_messages::timeouts::{RqTimeout, TimeoutKind, Timeouts};
 use crate::config::StateTransferConfig;
 
 use crate::message::{CstMessage, CstMessageKind};
@@ -402,12 +402,16 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
         Ok(())
     }
 
-    fn handle_timeout(&mut self, order_protocol: &mut OP, timeout: Vec<SeqNo>) -> Result<STTimeoutResult>
+    fn handle_timeout(&mut self, order_protocol: &mut OP, timeout: Vec<RqTimeout>) -> Result<STTimeoutResult>
         where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> {
+
         for cst_seq in timeout {
-            if self.cst_request_timed_out(cst_seq, order_protocol) {
-                return Ok(STTimeoutResult::RunCst);
+            if let TimeoutKind::Cst(cst_seq) = cst_seq {
+                if self.cst_request_timed_out(cst_seq, order_protocol) {
+                    return Ok(STTimeoutResult::RunCst);
+                }
             }
+
         }
 
         Ok(STTimeoutResult::CstNotNeeded)

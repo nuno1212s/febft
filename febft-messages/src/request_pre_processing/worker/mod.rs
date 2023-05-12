@@ -9,9 +9,9 @@ use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, StoredMessage};
 use febft_execution::serialize::SharedData;
-use crate::messages::{RequestMessage, StoredRequestMessage};
+use crate::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage};
 use crate::request_pre_processing::{operation_key, operation_key_raw, PreProcessorOutputMessage};
-use crate::timeouts::{ClientRqInfo, RqTimeout, TimeoutPhase};
+use crate::timeouts::{RqTimeout, TimeoutKind, TimeoutPhase};
 
 const WORKER_QUEUE_SIZE: usize = 124;
 const WORKER_THREAD_NAME: &str = "RQ-PRE-PROCESSING-WORKER-{}";
@@ -51,22 +51,24 @@ pub struct RequestPreProcessingWorker<O> {
 }
 
 
-impl<O> RequestPreProcessingWorker<O> {
+impl<O> RequestPreProcessingWorker<O> where O: Clone {
     pub fn new(message_rx: ChannelSyncRx<PreProcessorWorkMessage<O>>, batch_production: ChannelSyncTx<PreProcessorOutputMessage<O>>) -> Self {
         Self {
             message_rx,
             batch_production,
             latest_ops: Default::default(),
             pending_requests: Default::default(),
-            watched_requests: Default::default(),
         }
     }
 
     pub(crate) fn run(mut self) {
         loop {
-            match self.message_rx.recv() {
-                PreProcessorWorkMessage::ClientPoolRequestsReceived(requests) => {
+            match self.message_rx.recv().unwrap() {
+                PreProcessorWorkMessage::ClientPoolOrderedRequestsReceived(requests) => {
                     self.process_ordered_client_pool_requests(requests);
+                }
+                PreProcessorWorkMessage::ClientPoolUnorderedRequestsReceived(requests) => {
+                    self.process_unordered_client_pool_rqs(requests);
                 }
                 PreProcessorWorkMessage::ForwardedRequestsReceived(requests) => {
                     self.process_forwarded_requests(requests);
@@ -117,10 +119,9 @@ impl<O> RequestPreProcessingWorker<O> {
                 return true;
             }
 
-            let digest = header.unique_digest();
-            let stored = StoredMessage::new(header, message);
+            let digest = request.header().unique_digest();
 
-            self.pending_requests.insert(digest.clone(), stored);
+            self.pending_requests.insert(digest.clone(), request.clone());
 
             return false;
         }).collect();
@@ -143,17 +144,14 @@ impl<O> RequestPreProcessingWorker<O> {
 
     /// Process the forwarded requests
     fn process_forwarded_requests(&mut self, requests: Vec<StoredRequestMessage<O>>) {
-        let timeout_phase = TimeoutPhase::TimedOutOnce(Instant::now());
-
         let requests = requests.into_iter().filter(|request| {
             if self.has_received_more_recent_and_update(request.header(), request.message()) {
                 return true;
             }
 
-            let digest = header.unique_digest();
-            let stored = StoredMessage::new(header, message);
+            let digest = request.header().unique_digest();
 
-            self.pending_requests.insert(digest.clone(), stored);
+            self.pending_requests.insert(digest.clone(), request.clone());
 
             return false;
         }).collect();
@@ -166,29 +164,20 @@ impl<O> RequestPreProcessingWorker<O> {
         let mut returned_timeouts = Vec::with_capacity(timeouts.len());
 
         for timeout in timeouts {
-            let key = operation_key_raw(timeout.sender, timeout.session);
+            let result = if let TimeoutKind::ClientRequestTimeout(rq_info) = timeout.timeout_kind() {
+                let key = operation_key_raw(rq_info.sender, rq_info.session);
 
-            let result = if let Some(seq_no) = self.latest_ops.get(key) {
-                *seq_no < timeout.seqno
+                if let Some(seq_no) = self.latest_ops.get(key) {
+                    *seq_no < rq_info.seqno
+                } else {
+                    true
+                }
             } else {
-                true
+                false
             };
 
             if result {
-                let watched_request = self.watched_requests.entry(timeout.digest.clone())
-                    .or_insert_with(|| TimeoutPhase::Init(Instant::now()));
-
-                returned_timeouts.push(ClientRqTimeout::new(timeout, *watched_request));
-
-                match watched_request {
-                    TimeoutPhase::Init(_) => {
-                        *watched_request = TimeoutPhase::TimedOutOnce(Instant::now());
-                    }
-                    TimeoutPhase::TimedOutOnce(_) => {
-                        *watched_request = TimeoutPhase::TimedOut;
-                    }
-                    TimeoutPhase::TimedOut => {}
-                }
+                returned_timeouts.push(timeout);
             }
         }
 
@@ -199,7 +188,6 @@ impl<O> RequestPreProcessingWorker<O> {
     fn process_decided_batch(&mut self, requests: Vec<ClientRqInfo>) {
         requests.into_iter().for_each(|request| {
             self.pending_requests.remove(&request.digest);
-            self.watched_requests.remove(&request.digest);
         });
     }
 
@@ -208,15 +196,20 @@ impl<O> RequestPreProcessingWorker<O> {
         std::mem::replace(&mut self.pending_requests, Default::default())
             .into_iter().map(|(_, request)| request).collect()
     }
+    
+    fn clean_client(&self, node_id: NodeId) {
+        todo!()
+    }
 }
 
-pub(super) fn spawn_worker<O>(worker_id: usize, batch_tx: ChannelSyncTx<PreProcessorOutputMessage<O>>) -> ChannelSyncTx<PreProcessorWorkMessage<O>> {
+pub(super) fn spawn_worker<O>(worker_id: usize, batch_tx: ChannelSyncTx<PreProcessorOutputMessage<O>>) -> ChannelSyncTx<PreProcessorWorkMessage<O>>
+    where O: Clone + Send + 'static {
     let (worker_tx, worker_rx) = febft_common::channel::new_bounded_sync(WORKER_QUEUE_SIZE);
 
     let worker = RequestPreProcessingWorker::new(worker_rx, batch_tx);
 
     std::thread::Builder::new()
-        .name(format!(WORKER_THREAD_NAME, worker_id))
+        .name(format!("{}{}", WORKER_THREAD_NAME, worker_id))
         .spawn(move || {
             worker.run();
         }).expect("Failed to spawn worker thread");

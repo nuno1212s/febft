@@ -39,14 +39,14 @@ pub enum TimeoutKind {
     Cst(SeqNo),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum TimeoutPhase {
     /// The given request has timed out X times, the last of which was in Y instant
     TimedOut(usize, Instant),
 }
 
 /// A timeout for a given client request
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RqTimeout {
     timeout_kind: TimeoutKind,
     timeout_phase: TimeoutPhase,
@@ -139,7 +139,7 @@ impl Timeouts {
             timeout_info: requests,
         })).expect("Failed to contact timeout thread")
     }
-    
+
     /// Set the timeout phase of all timeouts to the initial state (0 timeouts) and re call all of the timeouts
     pub fn reset_all_client_rq_timeouts(&self, duration: Duration) {
         self.handle.send(TimeoutMessage::ResetClientTimeouts(duration)).expect("Failed to contact timeout thread")

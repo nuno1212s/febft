@@ -10,16 +10,15 @@ use febft_execution::serialize::SharedData;
 use crate::messages::{ForwardedRequestsMessage, Protocol, StoredRequestMessage, SystemMessage};
 use crate::request_pre_processing::{BatchOutput, RequestPreProcessor};
 use crate::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg, NetworkView};
-use crate::timeouts::{ClientRqInfo, RqTimeout, Timeout, Timeouts};
+use crate::timeouts::{RqTimeout, Timeout, Timeouts};
 
 pub type View<OP> = <OP as OrderingProtocolMessage>::ViewInfo;
 
 pub type ProtocolMessage<OP> = <OP as OrderingProtocolMessage>::ProtocolMessage;
 
-pub struct OrderingProtocolArgs<D, NT>(ExecutorHandle<D>, Timeouts, RequestPreProcessor<D::Request>, BatchOutput<D::Request>, Arc<NT>) where D: SharedData;
+pub struct OrderingProtocolArgs<D, NT>(pub ExecutorHandle<D>, pub Timeouts, pub RequestPreProcessor<D::Request>, pub BatchOutput<D::Request>, pub Arc<NT>) where D: SharedData;
 
 pub trait OrderingProtocol<D, NT>: Orderable where D: SharedData + 'static {
-
     type Serialization: OrderingProtocolMessage + 'static;
 
     type Config;
@@ -47,7 +46,6 @@ pub trait OrderingProtocol<D, NT>: Orderable where D: SharedData + 'static {
 
     /// Handle a timeout received from the timeouts layer
     fn handle_timeout(&mut self, timeout: Vec<RqTimeout>) -> Result<OrderProtocolExecResult>;
-
 }
 
 /// result from polling the ordering protocol

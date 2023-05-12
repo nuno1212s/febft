@@ -20,14 +20,14 @@ use febft_execution::ExecutorHandle;
 use febft_execution::serialize::digest_state;
 use febft_messages::messages::Message;
 use febft_messages::messages::SystemMessage;
-use febft_messages::ordering_protocol::OrderingProtocol;
+use febft_messages::ordering_protocol::{OrderingProtocol, OrderingProtocolArgs};
 use febft_messages::ordering_protocol::OrderProtocolExecResult;
 use febft_messages::ordering_protocol::OrderProtocolPoll;
 use febft_messages::request_pre_processing::{initialize_request_pre_processor, PreProcessorMessage, RequestPreProcessor};
 use febft_messages::request_pre_processing::work_dividers::WDRoundRobin;
 use febft_messages::serialize::ServiceMsg;
 use febft_messages::state_transfer::{Checkpoint, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
-use febft_messages::timeouts::{Timeout, TimeoutKind, Timeouts};
+use febft_messages::timeouts::{TimedOut, Timeout, TimeoutKind, Timeouts};
 use crate::config::ReplicaConfig;
 use crate::executable::{Executor, ReplicaReplier};
 use crate::server::client_replier::Replier;
@@ -93,20 +93,24 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
         debug!("{:?} // Initializing timeouts", log_node_id);
 
-        let (rq_pre_processor, batch_input) = initialize_request_pre_processor::<WDRoundRobin, Request<S>, NT>(4, node.clone());
+        let (rq_pre_processor, batch_input) = initialize_request_pre_processor
+            ::<WDRoundRobin, S::Data, OP::Serialization, ST::Serialization, NT>(4, node.clone());
 
         // start timeouts handler
         let timeouts = Timeouts::new::<S::Data>(log_node_id.clone(), 500, exec_tx.clone());
 
         //Calculate the initial state of the application so we can pass it to the ordering protocol
         let init_ex_state = S::initial_state()?;
-        let digest = febft_execution::serialize::digest_state::<S::Data>(&init_ex_state)?;
+        let digest = digest_state::<S::Data>(&init_ex_state)?;
 
         let initial_state = Checkpoint::new(SeqNo::ZERO, init_ex_state, digest);
 
+        let op_args = OrderingProtocolArgs(executor.clone(), timeouts.clone(),
+                                           rq_pre_processor.clone(),
+                                           batch_input, node.clone());
+
         // Initialize the ordering protocol
-        let ordering_protocol = OP::initialize_with_initial_state(op_config, executor.clone(), timeouts.clone(),
-                                                                  batch_input, node.clone(), initial_state)?;
+        let ordering_protocol = OP::initialize_with_initial_state(op_config, op_args, initial_state)?;
 
         let state_transfer_protocol = ST::initialize(st_config, timeouts.clone(), node.clone())?;
 
@@ -220,7 +224,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                                                                             StoredMessage::new(header, state_transfer)).unwrap();
                                     }
                                     SystemMessage::ForwardedRequestMessage(fwd_reqs) => {
-                                        self.rq_pre_processor.send(PreProcessorMessage::ForwardedRequests(StoredMessage::new(header, fwd_reqs)))?;
+                                        self.rq_pre_processor.send(PreProcessorMessage::ForwardedRequests(StoredMessage::new(header, fwd_reqs))).unwrap();
                                         //self.ordering_protocol.handle_forwarded_requests(StoredMessage::new(header, fwd_reqs))?;
                                     }
                                     SystemMessage::ForwardedProtocolMessage(fwd_protocol) => {
@@ -322,17 +326,17 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
         Ok(())
     }
 
-    fn timeout_received(&mut self, timeouts: Timeout) -> Result<()> {
+    fn timeout_received(&mut self, timeouts: TimedOut) -> Result<()> {
         let mut client_rq = Vec::with_capacity(timeouts.len());
         let mut cst_rq = Vec::with_capacity(timeouts.len());
 
         for timeout in timeouts {
-            match timeout {
-                TimeoutKind::ClientRequestTimeout(rq) => {
-                    client_rq.push(rq);
+            match timeout.timeout_kind() {
+                TimeoutKind::ClientRequestTimeout(_) => {
+                    client_rq.push(timeout);
                 }
-                TimeoutKind::Cst(rq) => {
-                    cst_rq.push(rq);
+                TimeoutKind::Cst(_) => {
+                    cst_rq.push(timeout);
                 }
             }
         }

@@ -404,7 +404,7 @@ impl<O> From<StoredRequestMessage<O>> for ClientRqInfo {
         let digest = message.header().unique_digest();
         let sender = message.header().from();
 
-        let session = message.message().session_number();
+        let session = message.message().session_id();
         let seq_no = message.message().sequence_number();
 
         Self {
