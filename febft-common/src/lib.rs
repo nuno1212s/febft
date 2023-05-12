@@ -46,6 +46,7 @@ pub mod channel;
 pub mod socket;
 pub mod mem_pool;
 pub mod node_id;
+pub mod config_utils;
 
 
 static INITIALIZED: Flag = Flag::new();

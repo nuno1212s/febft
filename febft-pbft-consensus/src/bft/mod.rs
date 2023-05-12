@@ -36,8 +36,8 @@ use febft_execution::app::{Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{ForwardedRequestsMessage, Protocol, SystemMessage};
-use febft_messages::ordering_protocol::{OrderingProtocol, OrderProtocolExecResult, OrderProtocolPoll, View};
-use febft_messages::request_pre_processing::{BatchOutput, RequestPreProcessor};
+use febft_messages::ordering_protocol::{OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, View};
+use febft_messages::request_pre_processing::{BatchOutput, PreProcessorMessage, RequestPreProcessor};
 use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
 use febft_messages::state_transfer::{Checkpoint, DecLog, StatefulOrderProtocol};
 use febft_messages::timeouts::{ClientRqInfo, RqTimeout, Timeout, TimeoutKind, Timeouts};
@@ -90,7 +90,7 @@ pub struct PBFTOrderProtocol<D, ST, NT>
     consensus: Consensus<D, ST>,
     /// The synchronizer state machine
     synchronizer: Arc<Synchronizer<D>>,
-
+    /// The request pre processor
     pre_processor: RequestPreProcessor<D::Request>,
     // A reference to the timeouts layer
     timeouts: Timeouts,
@@ -125,11 +125,10 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     type Serialization = PBFTConsensus<D>;
     type Config = PBFTConfig<D, ST>;
 
-    fn initialize(config: PBFTConfig<D, ST>, executor: ExecutorHandle<D>,
-                  timeouts: Timeouts, batch_input: BatchOutput<D::Request>, node: Arc<NT>) -> Result<Self> where
+    fn initialize(config: PBFTConfig<D, ST>, args: OrderingProtocolArgs<D, NT>) -> Result<Self> where
         Self: Sized,
     {
-        Self::initialize_protocol(config, executor, timeouts, batch_input, node, None)
+        Self::initialize_protocol(config, args, None)
     }
 
     fn view(&self) -> View<Self::Serialization> {
@@ -225,38 +224,22 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
 
         Ok(())
     }
-
-    fn handle_forwarded_requests(&mut self, requests: StoredMessage<ForwardedRequestsMessage<D::Request>>) -> Result<()> {
-        let (_header, mut requests) = requests.into_inner();
-
-        let init_req_count = requests.requests().len();
-
-        info!("{:?} // Received forwarded requests {:?} from {:?}, after filtering: {:?}", self.node.id(), init_req_count, _header.from(), requests.requests().len());
-
-        if requests.requests().is_empty() {
-            return Ok(()); // nothing to do
-        }
-
-        self.synchronizer.watch_forwarded_requests(&requests, &self.timeouts);
-
-        Ok(())
-    }
 }
 
 impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
                                                    ST: StateTransferMessage + 'static,
                                                    NT: Node<PBFT<D, ST>> + 'static {
-    fn initialize_protocol(config: PBFTConfig<D, ST>, executor: ExecutorHandle<D>,
-                           timeouts: Timeouts, batch_input: BatchOutput<D::Request>,
-                           node: Arc<NT>, initial_state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<Self> {
+    fn initialize_protocol(config: PBFTConfig<D, ST>, args: OrderingProtocolArgs<D, NT>,
+                           initial_state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<Self> {
         let PBFTConfig {
             node_id,
             follower_handle,
             view, timeout_dur, db_path,
-            proposer_config, _phantom_data
+            proposer_config, watermark, _phantom_data
         } = config;
 
-        let watermark = 30;
+        let OrderingProtocolArgs(executor, timeouts,
+                                 pre_processor, batch_input, node) = args;
 
         let sync = Synchronizer::new_replica(view.clone(), timeout_dur);
 
@@ -272,18 +255,18 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         let dec_log = initialize_decided_log::<D>(node_id, persistent_log, initial_state)?;
 
         let proposer = Proposer::<D, NT>::new(node.clone(), batch_input, sync.clone(), timeouts.clone(),
-                                          executor.clone(), consensus_guard.clone(),
-                                          proposer_config);
+                                              executor.clone(), consensus_guard.clone(),
+                                              proposer_config);
 
         let replica = Self {
             phase: ConsensusPhase::NormalPhase,
             consensus,
             synchronizer: sync,
+            pre_processor,
             timeouts,
             consensus_guard,
             unordered_rq_guard: Arc::new(Default::default()),
             executor,
-            pending_request_log: pending_rq_log,
             message_log: dec_log,
             proposer,
             node,
@@ -420,7 +403,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
                     view_change,
                     &self.timeouts,
                     &mut self.message_log,
-                    &self.pending_request_log,
+                    &self.pre_processor,
                     &mut self.consensus,
                     &*self.node,
                 );
@@ -504,11 +487,17 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
 
             let seq = completed_batch.sequence_number();
 
-            // Clear the requests from the pending request log
-            self.pending_request_log.delete_requests_in_batch(&completed_batch);
+            let mut completed_rqs = Vec::with_capacity(completed_batch.request_count());
 
-            // Update the latest ops in the pending request log so we don't repeat requests
-            self.pending_request_log.insert_latest_ops_from_batch(&completed_batch);
+            completed_batch.pre_prepare_messages().iter().for_each(|m| {
+
+                if let ConsensusMessageKind::PrePrepare(rqs) = m.message_kind() {
+                    completed_rqs.extend_from_slice(&rqs[..]);
+                }
+
+            });
+
+            self.pre_processor.send(PreProcessorMessage::DecidedBatch(completed_rqs))?;
 
             //Should the execution be scheduled here or will it be scheduled by the persistent log?
             if let Some(exec_info) =
@@ -537,7 +526,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             message,
             &self.timeouts,
             &mut self.message_log,
-            &self.pending_request_log,
+            &self.pre_processo,
             &mut self.consensus,
             &*self.node,
         );
@@ -582,10 +571,9 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     type StateSerialization = PBFTConsensus<D>;
 
 
-    fn initialize_with_initial_state(config: Self::Config, executor: ExecutorHandle<D>, timeouts: Timeouts,
-                                     batch_input: BatchOutput<D::Request>, node: Arc<NT>,
+    fn initialize_with_initial_state(config: Self::Config, args: OrderingProtocolArgs<D, NT>,
                                      initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where Self: Sized {
-        Self::initialize_protocol(config, executor, timeouts, batch_input, node, Some(initial_state))
+        Self::initialize_protocol(config, args, Some(initial_state))
     }
 
     fn install_state(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>,

@@ -23,6 +23,7 @@ pub struct PBFTConfig<D: SharedData, ST> {
     pub timeout_dur: Duration,
     pub db_path: String,
     pub proposer_config: ProposerConfig,
+    pub watermark: u32,
     pub _phantom_data: PhantomData<ST>,
 }
 
@@ -40,6 +41,7 @@ impl<D: SharedData + 'static,
             timeout_dur,
             db_path,
             proposer_config,
+            watermark: 30,
             _phantom_data: Default::default(),
         }
     }

@@ -8,13 +8,15 @@ use febft_communication::Node;
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use crate::messages::{ForwardedRequestsMessage, Protocol, StoredRequestMessage, SystemMessage};
-use crate::request_pre_processing::BatchOutput;
+use crate::request_pre_processing::{BatchOutput, RequestPreProcessor};
 use crate::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg, NetworkView};
 use crate::timeouts::{ClientRqInfo, RqTimeout, Timeout, Timeouts};
 
 pub type View<OP> = <OP as OrderingProtocolMessage>::ViewInfo;
 
 pub type ProtocolMessage<OP> = <OP as OrderingProtocolMessage>::ProtocolMessage;
+
+pub struct OrderingProtocolArgs<D, NT>(ExecutorHandle<D>, Timeouts, RequestPreProcessor<D::Request>, BatchOutput<D::Request>, Arc<NT>) where D: SharedData;
 
 pub trait OrderingProtocol<D, NT>: Orderable where D: SharedData + 'static {
 
@@ -23,8 +25,7 @@ pub trait OrderingProtocol<D, NT>: Orderable where D: SharedData + 'static {
     type Config;
 
     /// Initialize this ordering protocol with the given configuration, executor, timeouts and node
-    fn initialize(config: Self::Config, executor: ExecutorHandle<D>,
-                  timeouts: Timeouts, batch_input: BatchOutput<D::Request>, node: Arc<NT>) -> Result<Self> where
+    fn initialize(config: Self::Config, args: OrderingProtocolArgs<D, NT>) -> Result<Self> where
         Self: Sized;
 
     /// Get the current view of the ordering protocol
@@ -46,9 +47,6 @@ pub trait OrderingProtocol<D, NT>: Orderable where D: SharedData + 'static {
 
     /// Handle a timeout received from the timeouts layer
     fn handle_timeout(&mut self, timeout: Vec<RqTimeout>) -> Result<OrderProtocolExecResult>;
-
-    /// Handle having received a forwarded requests message from another node
-    fn handle_forwarded_requests(&mut self, requests: Vec<StoredRequestMessage<D::Request>>) -> Result<()>;
 
 }
 

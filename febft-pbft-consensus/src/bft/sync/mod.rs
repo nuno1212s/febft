@@ -1147,18 +1147,6 @@ impl<D> Synchronizer<D>
             SynchronizerAccessory::Follower(fol) => fol.watch_request_batch(pre_prepare),
         }
     }
-
-    /// Watch requests that have been forwarded to us
-    pub fn watch_forwarded_requests(&self, requests: &ForwardedRequestsMessage<D::Request>,
-                                    timeouts: &Timeouts) {
-        match &self.accessory {
-            SynchronizerAccessory::Replica(rep) => {
-                rep.watch_forwarded_requests(requests, timeouts)
-            }
-            _ => {}
-        }
-    }
-
     /// Watch requests that have been received from other replicas
     ///
     pub fn watch_received_requests(&self, digest: Vec<ClientRqInfo>, timeouts: &Timeouts) {

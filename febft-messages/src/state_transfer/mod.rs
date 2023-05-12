@@ -6,7 +6,7 @@ use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::StoredMessage;
 use febft_communication::Node;
 use crate::messages::{Protocol, StateTransfer};
-use crate::ordering_protocol::{OrderingProtocol, View};
+use crate::ordering_protocol::{OrderingProtocol, OrderingProtocolArgs, View};
 use crate::serialize::{NetworkView, OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage};
 use crate::timeouts::Timeouts;
 #[cfg(feature = "serialize_serde")]
@@ -128,11 +128,9 @@ pub trait StatefulOrderProtocol<D: SharedData + 'static, NT>: OrderingProtocol<D
     /// The serialization abstraction for
     type StateSerialization: StatefulOrderProtocolMessage + 'static;
 
-    fn initialize_with_initial_state(config: Self::Config, executor: ExecutorHandle<D>,
-                                     timeouts: Timeouts, batch_input: BatchOutput<D::Request>,
-                                     node: Arc<NT>, initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where
+    fn initialize_with_initial_state(config: Self::Config, args: OrderingProtocolArgs<D, NT>, initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where
         Self: Sized;
-    
+
 
     /// Install a state received from other replicas in the system
     /// Should only alter the necessary things within its own state and

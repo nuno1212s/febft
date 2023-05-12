@@ -144,33 +144,6 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         node.broadcast(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
     }
 
-
-    /// Watch a group of client requests that we received from a
-    /// forwarded requests system message.
-    ///
-    pub fn watch_forwarded_requests(
-        &self,
-        requests: &ForwardedRequestsMessage<D::Request>,
-        timeouts: &Timeouts,
-    ) {
-        let start_time = Instant::now();
-
-        let mut digests = Vec::with_capacity(requests.requests().len());
-
-        let rq_count = requests.requests().len();
-
-        for request in requests.requests() {
-            let client_rq_info = ClientRqInfo::from(&request);
-
-            digests.push(client_rq_info);
-        }
-
-        timeouts.timeout_client_requests(self.timeout_dur.get(), digests);
-
-        metric_duration(SYNC_FORWARDED_REQUESTS_ID, start_time.elapsed());
-        metric_increment(SYNC_FORWARDED_COUNT_ID, Some(rq_count as u64));
-    }
-
     /// Watch a vector of requests received
     pub fn watch_received_requests(
         &self,
