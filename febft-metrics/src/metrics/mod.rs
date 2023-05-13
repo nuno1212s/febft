@@ -10,6 +10,7 @@ use thread_local::ThreadLocal;
 use febft_common::globals::Global;
 
 pub mod metrics_thread;
+pub(super) mod os_mon;
 
 static mut METRICS: Global<Metrics> = Global::new();
 

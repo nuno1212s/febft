@@ -13,7 +13,7 @@ pub struct MetricsArgs {
     pub concurrency: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InfluxDBArgs {
     pub ip: String,
     pub db_name: String,
@@ -59,6 +59,8 @@ pub fn initialize_metrics(config: Vec<MetricsArgsFunc>, influxdb: InfluxDBArgs) 
 
     metrics::init(args.metrics_registers, args.concurrency);
 
-    launch_metrics(influxdb);
+    launch_metrics(influxdb.clone());
+
+    metrics::os_mon::launch_os_mon(influxdb);
 }
 
