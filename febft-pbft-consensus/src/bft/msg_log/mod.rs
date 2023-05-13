@@ -26,7 +26,6 @@ pub mod persistent;
 pub mod decisions;
 pub mod deciding_log;
 pub mod decided_log;
-pub mod pending_decision;
 
 /// Checkpoint period.
 ///

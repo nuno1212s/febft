@@ -398,9 +398,8 @@ impl ClientRqInfo {
     }
 }
 
-impl<O> From<StoredRequestMessage<O>> for ClientRqInfo {
-    fn from(message: StoredRequestMessage<O>) -> Self {
-
+impl<O> From<&StoredRequestMessage<O>> for ClientRqInfo {
+    fn from(message: &StoredRequestMessage<O>) -> Self {
         let digest = message.header().unique_digest();
         let sender = message.header().from();
 

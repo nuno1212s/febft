@@ -13,7 +13,7 @@ use febft_communication::Node;
 use febft_execution::serialize::SharedData;
 use febft_metrics::metrics::{metric_duration, metric_increment};
 use crate::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
-use crate::metric::{RQ_PP_CLIENT_COUNT_ID, RQ_PP_CLIENT_MSG_ID, RQ_PP_COLLECT_PENDING_ID, RQ_PP_DECIDED_RQS_ID, RQ_PP_FWD_RQS_ID, RQ_PP_TIMEOUT_RQS_ID};
+use crate::metric::{RQ_PP_CLIENT_COUNT_ID, RQ_PP_CLIENT_MSG_ID, RQ_PP_CLONE_RQS_ID, RQ_PP_COLLECT_PENDING_ID, RQ_PP_DECIDED_RQS_ID, RQ_PP_FWD_RQS_ID, RQ_PP_TIMEOUT_RQS_ID};
 use crate::request_pre_processing::worker::{PreProcessorWorkMessage, RequestPreProcessingWorker};
 use crate::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
 use crate::timeouts::{RqTimeout, TimeoutKind};
@@ -52,6 +52,8 @@ pub enum PreProcessorMessage<O> {
     DecidedBatch(Vec<ClientRqInfo>),
     /// Collect all pending messages from all workers.
     CollectAllPendingMessages(OneShotTx<Vec<StoredRequestMessage<O>>>),
+    /// Clone a vec of requests to be used
+    CloneRequests(Vec<ClientRqInfo>, OneShotTx<Vec<StoredRequestMessage<O>>>),
 }
 
 /// Output messages of the preprocessor
@@ -65,6 +67,32 @@ pub enum PreProcessorOutputMessage<O> {
 /// Request pre processor handle
 #[derive(Clone)]
 pub struct RequestPreProcessor<O>(ChannelSyncTx<PreProcessorMessage<O>>);
+
+impl<O> RequestPreProcessor<O> {
+    pub fn clone_pending_rqs(&self, client_rqs: Vec<ClientRqInfo>) -> Vec<StoredRequestMessage<O>> {
+        let (tx, rx) = channel::new_oneshot_channel();
+
+        self.0.send(PreProcessorMessage::CloneRequests(client_rqs, tx)).unwrap();
+
+        rx.recv().unwrap()
+    }
+
+    pub fn collect_all_pending_rqs(&self) -> Vec<StoredRequestMessage<O>> {
+        let (tx, rx) = channel::new_oneshot_channel();
+
+        self.0.send(PreProcessorMessage::CollectAllPendingMessages(tx)).unwrap();
+
+        rx.recv().unwrap()
+    }
+}
+
+impl<O> Deref for RequestPreProcessor<O> {
+    type Target = ChannelSyncTx<PreProcessorMessage<O>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 /// The orchestrator for all of the request pre processing.
 /// Decides which workers will get which requests and then handles the logic necessary
@@ -108,44 +136,45 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData 
         let start = Instant::now();
         let msg_count = messages.len();
 
-        if messages.is_empty() { return; }
+        if !messages.is_empty() {
+            let mut worker_message = init_worker_vecs(self.thread_count, messages.len());
 
-        let mut worker_message = init_worker_vecs(self.thread_count, messages.len());
+            let mut unordered_worker_message = init_worker_vecs(self.thread_count, messages.len());
 
-        let mut unordered_worker_message = init_worker_vecs(self.thread_count, messages.len());
+            for message in messages {
+                let NetworkMessage { header, message } = message;
 
-        for message in messages {
-            let NetworkMessage { header, message } = message;
+                let sysmsg = message.into();
 
-            let sysmsg = message.into();
+                match sysmsg {
+                    SystemMessage::OrderedRequest(req) => {
+                        let worker = WD::get_worker_for(&header, &req, self.thread_count);
 
-            match sysmsg {
-                SystemMessage::OrderedRequest(req) => {
-                    let worker = WD::get_worker_for(&header, &req, self.thread_count);
+                        let stored_message = StoredMessage::new(header, req);
 
-                    let stored_message = StoredMessage::new(header, req);
+                        worker_message[worker % self.thread_count].push(stored_message);
+                    }
+                    SystemMessage::UnorderedRequest(req) => {
+                        let worker = WD::get_worker_for(&header, &req, self.thread_count);
 
-                    worker_message[worker % self.thread_count].push(stored_message);
+                        let stored_message = StoredMessage::new(header, req);
+
+                        unordered_worker_message[worker % self.thread_count].push(stored_message);
+                    }
+                    _ => {}
                 }
-                SystemMessage::UnorderedRequest(req) => {
-                    let worker = WD::get_worker_for(&header, &req, self.thread_count);
-
-                    let stored_message = StoredMessage::new(header, req);
-
-                    unordered_worker_message[worker % self.thread_count].push(stored_message);
-                }
-                _ => {}
             }
+
+            for (worker,
+                (ordered_msgs, unordered_messages))
+            in std::iter::zip(&self.work_comms, std::iter::zip(worker_message, unordered_worker_message)) {
+                worker.send(PreProcessorWorkMessage::ClientPoolOrderedRequestsReceived(ordered_msgs)).unwrap();
+                worker.send(PreProcessorWorkMessage::ClientPoolUnorderedRequestsReceived(unordered_messages)).unwrap();
+            }
+
+            metric_duration(RQ_PP_CLIENT_MSG_ID, start.elapsed());
         }
 
-        for (worker,
-            (ordered_msgs, unordered_messages))
-        in std::iter::zip(&self.work_comms, std::iter::zip(worker_message, unordered_worker_message)) {
-            worker.send(PreProcessorWorkMessage::ClientPoolOrderedRequestsReceived(ordered_msgs)).unwrap();
-            worker.send(PreProcessorWorkMessage::ClientPoolUnorderedRequestsReceived(unordered_messages)).unwrap();
-        }
-
-        metric_duration(RQ_PP_CLIENT_MSG_ID, start.elapsed());
         metric_increment(RQ_PP_CLIENT_COUNT_ID, Some(msg_count as u64));
     }
 
@@ -166,6 +195,9 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData 
                 }
                 PreProcessorMessage::StoppedRequests(stopped) => {
                     self.process_stopped_rqs(stopped);
+                }
+                PreProcessorMessage::CloneRequests(client_rqs, tx) => {
+                    self.clone_pending_rqs(client_rqs, tx);
                 }
             }
         }
@@ -283,17 +315,41 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData 
     fn process_stopped_rqs(&self, rqs: Vec<StoredRequestMessage<D::Request>>) {
         unreachable!()
     }
-}
 
-impl<O> RequestPreProcessor<O> {}
+    fn clone_pending_rqs(&self, digests: Vec<ClientRqInfo>, responder: OneShotTx<Vec<StoredRequestMessage<D::Request>>>)
+        where WD: WorkPartitioner<D::Request> {
+        let start = Instant::now();
 
-impl<O> Deref for RequestPreProcessor<O> {
-    type Target = ChannelSyncTx<PreProcessorMessage<O>>;
+        let mut pending_rqs = Vec::with_capacity(digests.len());
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
+        let mut worker_messages = init_worker_vecs(self.thread_count, digests.len());
+        let worker_responses = init_for_workers(self.thread_count, || channel::new_oneshot_channel());
+
+        for rq in digests {
+            let worker = WD::get_worker_for_processed(&rq, self.thread_count);
+
+            worker_messages[worker % self.thread_count].push(rq);
+        }
+
+        let rxs: Vec<OneShotRx<Vec<StoredRequestMessage<D::Request>>>> = iter::zip(&self.work_comms, iter::zip(worker_messages, worker_responses))
+            .map(|(worker, (messages, (tx, rx)))| {
+                worker.send(PreProcessorWorkMessage::ClonePendingRequests(messages, tx)).unwrap();
+
+                rx
+            }).collect();
+
+        for rx in rxs {
+            let rqs = rx.recv().unwrap();
+
+            pending_rqs.extend(rqs)
+        }
+
+        responder.send(pending_rqs).unwrap();
+
+        metric_duration(RQ_PP_CLONE_RQS_ID, start.elapsed());
     }
 }
+
 
 pub fn initialize_request_pre_processor<WD, D, OP, ST, NT>(concurrency: usize, node: Arc<NT>)
                                                            -> (RequestPreProcessor<D::Request>, BatchOutput<D::Request>)
@@ -302,7 +358,6 @@ pub fn initialize_request_pre_processor<WD, D, OP, ST, NT>(concurrency: usize, n
           ST: StateTransferMessage + 'static,
           NT: Node<ServiceMsg<D, OP, ST>> + 'static,
           WD: WorkPartitioner<D::Request> + 'static {
-
     let (batch_tx, receiver) = new_bounded_sync(PROPOSER_QUEUE_SIZE);
 
     let (work_sender, work_rcvr) = new_bounded_sync(PROPOSER_QUEUE_SIZE);
@@ -371,4 +426,19 @@ pub fn operation_key_raw(from: NodeId, session: SeqNo) -> u64 {
 
     // therefore this is safe, and will not delete any bits
     client_id | (session_id << 32)
+}
+
+impl<O> Deref for PreProcessorOutputMessage<O> {
+    type Target = Vec<StoredRequestMessage<O>>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            PreProcessorOutputMessage::DeDupedOrderedRequests(cls) => {
+                cls
+            }
+            PreProcessorOutputMessage::DeDupedUnorderedRequests(cls) => {
+                cls
+            }
+        }
+    }
 }

@@ -21,7 +21,7 @@ use febft_communication::message::{Header, StoredMessage};
 use febft_communication::Node;
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
-use febft_messages::messages::{RequestMessage, SystemMessage};
+use febft_messages::messages::{RequestMessage, StoredRequestMessage, SystemMessage};
 use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::Timeouts;
 use febft_metrics::metrics::metric_increment;
@@ -388,7 +388,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             }
         } else {
             // This should never happen?
-            return Ok(None);
+            panic!("What");
         }
 
         // Move to the next instance of the consensus since the current one is going to be finalized
@@ -630,7 +630,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
     /// change protocol.
     pub fn forge_propose<K>(
         &self,
-        requests: Vec<StoredRequestMessage<D::Request>>>,
+        requests: Vec<StoredRequestMessage<D::Request>>,
         synchronizer: &K,
     ) -> SysMsg<D, ST>
         where

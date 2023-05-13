@@ -31,7 +31,7 @@ use crate::bft::PBFT;
 use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
 use super::sync::{Synchronizer, AbstractSynchronizer};
 
-pub type BatchType<R> = Vec<StoredRequestMessage<R>>>;
+pub type BatchType<R> = Vec<StoredRequestMessage<R>>;
 
 ///Handles taking requests from the client pools and storing the requests in the log,
 ///as well as creating new batches and delivering them to the batch_channel
@@ -105,7 +105,8 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
 
     ///Start this work
     pub fn start<ST>(self: Arc<Self>) -> JoinHandle<()>
-        where ST: StateTransferMessage + 'static {
+        where ST: StateTransferMessage + 'static,
+              NT: Node<PBFT<D, ST>> + 'static {
         std::thread::Builder::new()
             .name(format!("Proposer thread"))
             .spawn(move || {
@@ -140,10 +141,10 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                     // Receive the requests from the clients and process them
                     let opt_msgs: Option<PreProcessorOutputMessage<D::Request>> = if is_leader {
                         match self.batch_reception.try_recv() {
-                            Ok(res) => { res }
+                            Ok(res) => { Some(res) }
                             Err(err) => {
                                 match err {
-                                    TryRecvError::Disconnected => {
+                                    TryRecvError::ChannelDc => {
                                         error!("{:?} // Failed to receive requests from pre processing module because {:?}", self.node_ref.id(), err);
                                         break;
                                     }
@@ -185,7 +186,7 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                                 for message in messages {
                                     let digest = message.header().unique_digest();
 
-                                    if is_leader && is_request_in_hash_space(&rq_digest,
+                                    if is_leader && is_request_in_hash_space(&digest,
                                                                              our_slice.as_ref().unwrap()) {
 
                                         // we know that these operations will always be proposed since we are a
@@ -207,11 +208,6 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                     } else {
                         discovered_requests = false;
                     }
-
-                    // Check if we have any forwarded requests that we need to propose
-                    self.handle_forwarded_requests(is_leader,
-                                                   our_slice.as_ref(),
-                                                   &mut ordered_propose);
 
                     //Lets first deal with unordered requests since it should be much quicker and easier
                     self.propose_unordered(&mut unordered_propose);
@@ -351,7 +347,7 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
         &self,
         seq: SeqNo,
         view: &ViewInfo,
-        currently_accumulated: Vec<StoredRequestMessage<D::Request>>>,
+        currently_accumulated: Vec<StoredRequestMessage<D::Request>>,
     ) where ST: StateTransferMessage + 'static,
             NT: Node<PBFT<D, ST>> {
         info!("{:?} // Proposing new batch with {} request count {:?}", self.node_ref.id(), currently_accumulated.len(), seq);
@@ -369,34 +365,6 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
         metric_increment(PROPOSER_BATCHES_MADE_ID, Some(1));
     }
 
-    /// Check if we have received forwarded requests. If so, then
-    /// we want to add them to the next batch we are proposing
-    fn handle_forwarded_requests(&self, is_leader: bool,
-                                 our_slice: Option<&(Vec<u8>, Vec<u8>)>,
-                                 ordered_propose_builder: &mut ProposeBuilder<D>) {
-        let dur_start = metric_local_duration_start();
-
-        let fwd_rqs = self.pending_decision_log.take_forwarded_requests(None);
-
-        if let Some(fwd_rqs) = fwd_rqs {
-            for req in fwd_rqs {
-                let rq_digest = req.header().unique_digest();
-
-                if is_leader && is_request_in_hash_space(&rq_digest, our_slice.unwrap()) {
-                    // We can safely add this request to our batch since it is in our hash space and
-                    // it will still be examined by the [`filter_and_update_more_recent`] method
-                    ordered_propose_builder.currently_accumulated.push(req);
-                } else {
-                    let (header, message) = req.into_inner();
-
-                    self.pending_decision_log.insert(header, message);
-                }
-            }
-        }
-
-        metric_local_duration_end(PROPOSER_FWD_REQUESTS_ID, dur_start);
-    }
-
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
     }
@@ -404,6 +372,6 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
     fn requests_received(
         &self,
         _t: DateTime<Utc>,
-        reqs: Vec<StoredRequestMessage<D::Request>>>,
+        reqs: Vec<StoredRequestMessage<D::Request>>,
     ) {}
 }

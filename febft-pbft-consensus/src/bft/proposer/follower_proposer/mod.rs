@@ -7,11 +7,11 @@ use febft_communication::Node;
 use febft_execution::app::Service;
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
-use febft_messages::messages::RequestMessage;
+use febft_messages::messages::{RequestMessage, StoredRequestMessage};
 use febft_messages::serialize::StateTransferMessage;
 use crate::bft::PBFT;
 
-pub type BatchType<D: SharedData> = Vec<StoredRequestMessage<D::Request>>>;
+pub type BatchType<D: SharedData> = Vec<StoredRequestMessage<D::Request>>;
 
 ///TODO:
 pub struct FollowerProposer<D, ST, NT>
@@ -53,7 +53,6 @@ impl<D, ST, NT> FollowerProposer<D, ST, NT>
 
         Arc::new(Self {
             batch_channel: (channel_tx, channel_rx),
-            log,
             executor_handle: executor,
             cancelled: AtomicBool::new(false),
             node_ref: node,

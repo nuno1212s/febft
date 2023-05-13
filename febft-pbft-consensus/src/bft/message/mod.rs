@@ -21,7 +21,7 @@ use febft_common::crypto::signature::{KeyPair, PublicKey, Signature};
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, PingMessage, StoredMessage};
 use febft_execution::serialize::SharedData;
-use febft_messages::messages::RequestMessage;
+use febft_messages::messages::{RequestMessage, StoredRequestMessage};
 
 use crate::bft::sync::LeaderCollects;
 use crate::bft::msg_log::decisions::CollectData;
@@ -121,7 +121,7 @@ impl<O> ViewChangeMessage<O> {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub enum ViewChangeMessageKind<O> {
-    Stop(Vec<StoredRequestMessage<O>>>),
+    Stop(Vec<StoredRequestMessage<O>>),
     StopData(CollectData<O>),
     Sync(LeaderCollects<O>),
 }
@@ -164,7 +164,7 @@ pub enum ConsensusMessageKind<O> {
     ///
     /// The value `Vec<Digest>` contains a batch of hash digests of the
     /// serialized client requests to be proposed.
-    PrePrepare(Vec<StoredRequestMessage<O>>>),
+    PrePrepare(Vec<StoredRequestMessage<O>>),
     /// Prepare a batch of requests.
     ///
     /// The `Digest` represents the hash of the serialized `PRE-PREPARE`,
@@ -237,7 +237,7 @@ impl<O> ConsensusMessage<O> {
 
     /// Takes the proposed client requests embedded in this consensus message,
     /// if they are available.
-    pub fn take_proposed_requests(&mut self) -> Option<Vec<StoredRequestMessage<O>>>> {
+    pub fn take_proposed_requests(&mut self) -> Option<Vec<StoredRequestMessage<O>>> {
         let kind = std::mem::replace(
             &mut self.kind,
             ConsensusMessageKind::PrePrepare(Vec::new()),

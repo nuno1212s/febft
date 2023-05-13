@@ -26,10 +26,10 @@ use febft_communication::{Node, NodePK, serialize};
 use febft_communication::serialize::Buf;
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::serialize::SharedData;
-use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
+use febft_messages::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
 use febft_messages::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use febft_messages::serialize::StateTransferMessage;
-use febft_messages::timeouts::{ClientRqInfo, RqTimeout, Timeouts};
+use febft_messages::timeouts::{RqTimeout, Timeouts};
 use crate::bft::consensus::Consensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::msg_log::decided_log::Log;
@@ -310,8 +310,8 @@ pub enum SynchronizerStatus {
     /// We need to invoke the leader change protocol if
     /// we have a non empty set of stopped messages.
     RequestsTimedOut {
-        forwarded: Vec<Digest>,
-        stopped: Vec<Digest>,
+        forwarded: Vec<ClientRqInfo>,
+        stopped: Vec<ClientRqInfo>,
     },
 }
 
@@ -768,8 +768,7 @@ impl<D> Synchronizer<D>
                                 return SynchronizerStatus::Running;
                             }
 
-                            let p = pending_rq_log.view_change_propose();
-
+                            let p = rq_pre_processor.collect_all_pending_rqs();
                             let node_sign = node.pk_crypto().sign_detached();
 
                             //We create the pre-prepare here as we are the new leader,
@@ -1186,6 +1185,7 @@ impl<D> Synchronizer<D>
     /// Requests that have timed out
     pub fn client_requests_timed_out(
         &self,
+        base_sync: &Synchronizer<D>,
         my_id: NodeId,
         seq: &Vec<RqTimeout>,
     ) -> SynchronizerStatus {
@@ -1194,7 +1194,7 @@ impl<D> Synchronizer<D>
                 SynchronizerStatus::Nil
             }
             SynchronizerAccessory::Replica(rep) => {
-                rep.client_requests_timed_out(my_id, seq)
+                rep.client_requests_timed_out(base_sync, my_id, seq)
             }
         }
     }

@@ -35,18 +35,18 @@ use febft_communication::serialize::Serializable;
 use febft_execution::app::{Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
-use febft_messages::messages::{ForwardedRequestsMessage, Protocol, SystemMessage};
+use febft_messages::messages::{ClientRqInfo, ForwardedRequestsMessage, Protocol, SystemMessage};
 use febft_messages::ordering_protocol::{OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, View};
 use febft_messages::request_pre_processing::{BatchOutput, PreProcessorMessage, RequestPreProcessor};
 use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
 use febft_messages::state_transfer::{Checkpoint, DecLog, StatefulOrderProtocol};
-use febft_messages::timeouts::{ClientRqInfo, RqTimeout, Timeout, TimeoutKind, Timeouts};
+use febft_messages::timeouts::{RqTimeout, Timeout, TimeoutKind, Timeouts};
 use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{Consensus, ProposerConsensusGuard, ConsensusPollStatus, ConsensusStatus};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage, ViewChangeMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::Log;
-use crate::bft::msg_log::{Info, initialize_decided_log, initialize_pending_request_log, initialize_persistent_log};
+use crate::bft::msg_log::{Info, initialize_decided_log, initialize_persistent_log};
 use crate::bft::msg_log::persistent::{NoPersistentLog, PersistentLogModeTrait};
 use crate::bft::observer::{MessageType, ObserverHandle};
 use crate::bft::proposer::Proposer;
@@ -177,12 +177,12 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
 
     fn handle_timeout(&mut self, timeout: Vec<RqTimeout>) -> Result<OrderProtocolExecResult> {
         let status = self.synchronizer
-            .client_requests_timed_out(self.node.id(), &timeout);
+            .client_requests_timed_out(&self.synchronizer, self.node.id(), &timeout);
 
         match status {
             SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
                 if forwarded.len() > 0 {
-                    let requests = self.pending_request_log.clone_pending_requests(&forwarded);
+                    let requests = self.pre_processor.clone_pending_rqs(forwarded);
 
                     self.synchronizer.forward_requests(
                         requests,
@@ -191,7 +191,7 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
                 }
 
                 if stopped.len() > 0 {
-                    let stopped = self.pending_request_log.clone_pending_requests(&stopped);
+                    let stopped = self.pre_processor.clone_pending_rqs(stopped);
 
                     self.synchronizer.begin_view_change(Some(stopped),
                                                         &*self.node,
@@ -247,8 +247,6 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
 
         let consensus = Consensus::<D, ST>::new_replica(node_id, &sync.view(), executor.clone(),
                                                         SeqNo::ZERO, watermark, consensus_guard.clone());
-
-        let pending_rq_log = Arc::new(initialize_pending_request_log()?);
 
         let persistent_log = initialize_persistent_log::<D, String, NoPersistentLog>(executor.clone(), db_path)?;
 
@@ -490,14 +488,12 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             let mut completed_rqs = Vec::with_capacity(completed_batch.request_count());
 
             completed_batch.pre_prepare_messages().iter().for_each(|m| {
-
-                if let ConsensusMessageKind::PrePrepare(rqs) = m.message_kind() {
-                    completed_rqs.extend_from_slice(&rqs[..]);
+                if let ConsensusMessageKind::PrePrepare(rqs) = m.message().kind() {
+                    completed_rqs.extend(rqs.iter().map(|rq| ClientRqInfo::from(rq)));
                 }
-
             });
 
-            self.pre_processor.send(PreProcessorMessage::DecidedBatch(completed_rqs))?;
+            self.pre_processor.send(PreProcessorMessage::DecidedBatch(completed_rqs)).unwrap();
 
             //Should the execution be scheduled here or will it be scheduled by the persistent log?
             if let Some(exec_info) =
@@ -526,7 +522,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             message,
             &self.timeouts,
             &mut self.message_log,
-            &self.pre_processo,
+            &self.pre_processor,
             &mut self.consensus,
             &*self.node,
         );

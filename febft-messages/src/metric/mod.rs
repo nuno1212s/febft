@@ -22,6 +22,9 @@ pub const RQ_PP_TIMEOUT_RQS_ID: usize = 004;
 pub const RQ_PP_COLLECT_PENDING: &str = "RQ_PRE_PROCESSING_COLLECT_PENDING";
 pub const RQ_PP_COLLECT_PENDING_ID: usize = 005;
 
+pub const RQ_PP_CLONE_RQS: &str = "RQ_PRE_PROCESSING_CLONE_RQS";
+pub const RQ_PP_CLONE_RQS_ID: usize = 006;
+
 pub fn metrics() -> Vec<MetricRegistry> {
     vec![
         (RQ_PP_CLIENT_MSG_ID, RQ_PP_CLIENT_MSG.to_string(), MetricKind::Duration),
@@ -30,5 +33,6 @@ pub fn metrics() -> Vec<MetricRegistry> {
         (RQ_PP_DECIDED_RQS_ID, RQ_PP_DECIDED_RQS.to_string(), MetricKind::Duration),
         (RQ_PP_TIMEOUT_RQS_ID, RQ_PP_TIMEOUT_RQS.to_string(), MetricKind::Duration),
         (RQ_PP_COLLECT_PENDING_ID, RQ_PP_COLLECT_PENDING.to_string(), MetricKind::Duration),
+        (RQ_PP_CLONE_RQS_ID, RQ_PP_CLONE_RQS.to_string(), MetricKind::Duration),
     ]
 }

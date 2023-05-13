@@ -30,6 +30,8 @@ pub enum PreProcessorWorkMessage<O> {
     DecidedBatch(Vec<ClientRqInfo>),
     /// Collect all pending messages from the given worker
     CollectPendingMessages(OneShotTx<Vec<StoredRequestMessage<O>>>),
+    /// Clone a set of given pending requests
+    ClonePendingRequests(Vec<ClientRqInfo>, OneShotTx<Vec<StoredRequestMessage<O>>>),
     /// Remove all requests associated with this client (due to a disconnection, for example)
     CleanClient(NodeId),
 }
@@ -84,6 +86,9 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
 
                     tx.send(reqs).expect("Failed to send pending requests");
                 }
+                PreProcessorWorkMessage::ClonePendingRequests(requests, tx) => {
+                    self.clone_pending_requests(requests, tx);
+                }
                 PreProcessorWorkMessage::CleanClient(client) => {
                     self.clean_client(client);
                 }
@@ -116,14 +121,14 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
     fn process_ordered_client_pool_requests(&mut self, requests: Vec<StoredRequestMessage<O>>) {
         let requests = requests.into_iter().filter(|request| {
             if self.has_received_more_recent_and_update(request.header(), request.message()) {
-                return true;
+                return false;
             }
 
             let digest = request.header().unique_digest();
 
             self.pending_requests.insert(digest.clone(), request.clone());
 
-            return false;
+            return true;
         }).collect();
 
         self.batch_production.send(PreProcessorOutputMessage::DeDupedOrderedRequests(requests)).expect("Failed to send batch to proposer");
@@ -133,10 +138,10 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
     fn process_unordered_client_pool_rqs(&mut self, requests: Vec<StoredRequestMessage<O>>) {
         let requests = requests.into_iter().filter(|request| {
             if self.has_received_more_recent_and_update(request.header(), request.message()) {
-                return true;
+                return false;
             }
 
-            return false;
+            return true;
         }).collect();
 
         self.batch_production.send(PreProcessorOutputMessage::DeDupedUnorderedRequests(requests)).expect("Failed to send batch to proposer");
@@ -191,12 +196,26 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
         });
     }
 
+    /// Clone a set of pending requests
+    fn clone_pending_requests(&self, requests: Vec<ClientRqInfo>, responder: OneShotTx<Vec<StoredRequestMessage<O>>>) {
+
+        let mut final_rqs = Vec::with_capacity(requests.len());
+
+        for rq_info in requests {
+            if let Some(request) = self.pending_requests.get(&rq_info.digest) {
+                final_rqs.push(request.clone());
+            }
+        }
+
+        responder.send(final_rqs).expect("Failed to send pending requests");
+    }
+
     /// Collect all pending requests stored in this worker
     fn collect_pending_requests(&mut self) -> Vec<StoredRequestMessage<O>> {
         std::mem::replace(&mut self.pending_requests, Default::default())
             .into_iter().map(|(_, request)| request).collect()
     }
-    
+
     fn clean_client(&self, node_id: NodeId) {
         todo!()
     }

@@ -406,8 +406,8 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
         where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> {
 
         for cst_seq in timeout {
-            if let TimeoutKind::Cst(cst_seq) = cst_seq {
-                if self.cst_request_timed_out(cst_seq, order_protocol) {
+            if let TimeoutKind::Cst(cst_seq) = cst_seq.timeout_kind() {
+                if self.cst_request_timed_out(cst_seq.clone(), order_protocol) {
                     return Ok(STTimeoutResult::RunCst);
                 }
             }

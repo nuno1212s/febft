@@ -23,7 +23,7 @@ use febft_execution::serialize::SharedData;
 use febft_messages::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
 use febft_messages::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use febft_messages::serialize::StateTransferMessage;
-use febft_messages::timeouts::{ClientRqInfo, RqTimeout, TimeoutKind, TimeoutPhase, Timeouts};
+use febft_messages::timeouts::{RqTimeout, TimeoutKind, TimeoutPhase, Timeouts};
 use febft_metrics::metrics::{metric_duration, metric_increment};
 use crate::bft::consensus::Consensus;
 
@@ -36,7 +36,7 @@ use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::PBFT;
 use crate::bft::sync::view::ViewInfo;
 
-use super::{AbstractSynchronizer, Synchronizer, SynchronizerStatus, TimeoutPhase};
+use super::{AbstractSynchronizer, Synchronizer, SynchronizerStatus};
 
 // TODO:
 // - the fields in this struct
@@ -194,7 +194,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             //let request_digest = header.digest().clone();
 
             digests.push(digest.clone());
-            timeout_info.push(ClientRqInfo::from(&x));
+            timeout_info.push(ClientRqInfo::from(x));
         }
 
         //Notify the timeouts that we have received the following requests
@@ -217,7 +217,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
     /// Register all of the requests that are missing from the view change
     fn take_stopped_requests_and_register_them(&self, base_sync: &Synchronizer<D>,
-                                               pre_processor: &RequestPreProcessor<D>,
+                                               pre_processor: &RequestPreProcessor<D::Request>,
                                                timeouts: &Timeouts) {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
@@ -308,7 +308,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         for timed_out_rq in timed_out_rqs {
             match timed_out_rq.timeout_phase() {
                 TimeoutPhase::TimedOut(id, time) => {
-                    let timeout: TimeoutKind = timed_out_rq.timeout_kind();
+                    let timeout = timed_out_rq.timeout_kind();
 
                     let rq_info = match timeout {
                         TimeoutKind::ClientRequestTimeout(rq) => {
@@ -317,11 +317,11 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
                         _ => unreachable!("Only client requests should be timed out at the synchronizer")
                     };
 
-                    if id == 0 {
-                        forwarded.push(rq_info.digest.clone());
-                    } else if id == 1 {
+                    if *id == 0 {
+                        forwarded.push(rq_info.clone());
+                    } else if *id == 1 {
                         // The second timeout generates a stopped request
-                        stopped.push(rq_info.digest.clone());
+                        stopped.push(rq_info.clone());
                     }
                 }
             }
@@ -399,7 +399,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         &self,
         base_sync: &Synchronizer<D>,
         requests: Option<Vec<StoredRequestMessage<D::Request>>>,
-    ) -> Vec<Digest> {
+    ) -> Vec<ClientRqInfo> {
 
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
         let mut all_reqs = collections::hash_set();
@@ -407,7 +407,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         // Include the requests that we have timed out
         if let Some(requests) = requests {
             for r in requests {
-                all_reqs.insert(r.header().unique_digest());
+                all_reqs.insert(ClientRqInfo::from(&r));
             }
         }
 
@@ -416,11 +416,11 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         // the requests that timed out on us
         for (_, stopped) in base_sync.stopped.borrow().iter() {
             for r in stopped {
-                all_reqs.insert(r.header().unique_digest())
+                all_reqs.insert(ClientRqInfo::from(r));
             }
         }
 
-        all_reqs.drain().map(|(_, stop)| stop).collect()
+        all_reqs.drain().collect()
     }
 
     /// Drain our current received stopped messages
