@@ -61,65 +61,67 @@ pub fn metric_thread_loop(influx_args: InfluxDBArgs) {
 
     let extra = extra.unwrap_or(String::from("None"));
 
-    let time = Utc::now();
-    let mut readings = Vec::new();
+    loop {
+        let time = Utc::now();
+        let mut readings = Vec::new();
 
-    let result = mprober_lib::cpu::get_all_cpu_utilization_in_percentage(false,
-                                                                         Duration::from_millis(250)).unwrap();
+        let result = mprober_lib::cpu::get_all_cpu_utilization_in_percentage(false,
+                                                                             Duration::from_millis(250)).unwrap();
 
-    let mut curr_cpu = 0;
+        let mut curr_cpu = 0;
 
-    for usage in result {
-        let reading = MetricCPUReading {
+        for usage in result {
+            let reading = MetricCPUReading {
+                time,
+                host: host_name.clone(),
+                extra: extra.clone(),
+                cpu: curr_cpu,
+                value: usage,
+            }.into_query(OS_CPU_USER);
+
+            readings.push(reading);
+
+            curr_cpu += 1;
+        }
+
+        let network_speed = mprober_lib::network::get_networks_with_speed(Duration::from_millis(250)).unwrap();
+
+        let mut tx_speed = 0.0;
+        let mut rx_speed = 0.0;
+
+        for (_network, speed) in network_speed {
+            //Only capture the most used one.
+            rx_speed += speed.receive;
+            tx_speed += speed.transmit;
+        }
+
+        readings.push(MetricNetworkSpeed {
             time,
             host: host_name.clone(),
             extra: extra.clone(),
-            cpu: curr_cpu,
-            value: usage,
-        }.into_query(OS_CPU_USER);
+            value: tx_speed,
+        }.into_query(OS_NETWORK_UP));
 
-        readings.push(reading);
+        readings.push(MetricNetworkSpeed {
+            time,
+            host: host_name.clone(),
+            extra: extra.clone(),
+            value: rx_speed,
+        }.into_query(OS_NETWORK_DOWN));
 
-        curr_cpu += 1;
+        let memory_stats = procinfo::pid::statm_self().unwrap();
+
+        readings.push(MetricRAMUsage {
+            time,
+            host: host_name.clone(),
+            extra: extra.clone(),
+            value: (memory_stats.data * 4096) as i64,
+        }.into_query(OS_RAM_USAGE));
+
+        let result = rt::block_on(client.query(readings)).expect("Failed to write metrics to influxdb");
+
+        std::thread::sleep(Duration::from_millis(250));
     }
-
-    let network_speed = mprober_lib::network::get_networks_with_speed(Duration::from_millis(250)).unwrap();
-
-    let mut tx_speed = 0.0;
-    let mut rx_speed = 0.0;
-
-    for (_network, speed) in network_speed {
-        //Only capture the most used one.
-        rx_speed += speed.receive;
-        tx_speed += speed.transmit;
-    }
-
-    readings.push(MetricNetworkSpeed {
-        time,
-        host: host_name.clone(),
-        extra: extra.clone(),
-        value: tx_speed,
-    }.into_query(OS_NETWORK_UP));
-
-    readings.push(MetricNetworkSpeed {
-        time,
-        host: host_name.clone(),
-        extra: extra.clone(),
-        value: rx_speed,
-    }.into_query(OS_NETWORK_DOWN));
-
-    let memory_stats = procinfo::pid::statm_self().unwrap();
-
-    readings.push(MetricRAMUsage {
-        time,
-        host: host_name.clone(),
-        extra: extra.clone(),
-        value: (memory_stats.data * 4096) as i64,
-    }.into_query(OS_RAM_USAGE));
-
-    let result = rt::block_on(client.query(readings)).expect("Failed to write metrics to influxdb");
-
-    std::thread::sleep(Duration::from_millis(250));
 }
 
 
