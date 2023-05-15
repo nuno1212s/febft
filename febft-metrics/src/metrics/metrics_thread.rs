@@ -7,7 +7,7 @@ use log::info;
 use febft_common::async_runtime as rt;
 use febft_common::node_id::NodeId;
 
-use crate::InfluxDBArgs;
+use crate::{InfluxDBArgs, MetricLevel};
 use crate::metrics::{collect_all_measurements, MetricData};
 
 #[derive(InfluxDbWriteable)]
@@ -34,14 +34,14 @@ pub struct MetricCountReading {
     value: f64,
 }
 
-pub fn launch_metrics(influx_args: InfluxDBArgs) {
+pub fn launch_metrics(influx_args: InfluxDBArgs, metric_level: MetricLevel) {
     std::thread::spawn(move || {
-        metric_thread_loop(influx_args);
+        metric_thread_loop(influx_args, metric_level);
     });
 }
 
 /// The metrics thread. Collects all values from the
-pub fn metric_thread_loop(influx_args: InfluxDBArgs) {
+pub fn metric_thread_loop(influx_args: InfluxDBArgs, metric_level: MetricLevel) {
     let InfluxDBArgs {
         ip, db_name, user, password, node_id, extra
     } = influx_args;
@@ -55,7 +55,7 @@ pub fn metric_thread_loop(influx_args: InfluxDBArgs) {
     let extra = extra.unwrap_or(String::from("None"));
 
     loop {
-        let measurements = collect_all_measurements();
+        let measurements = collect_all_measurements(&metric_level);
 
         let time = Utc::now();
 
@@ -111,6 +111,6 @@ pub fn metric_thread_loop(influx_args: InfluxDBArgs) {
 
         info!("Result of writing metrics: {:?}", result);
 
-        std::thread::sleep(Duration::from_secs(1));
+        std::thread::sleep(Duration::from_millis(250));
     }
 }

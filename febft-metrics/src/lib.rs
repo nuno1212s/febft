@@ -9,8 +9,9 @@ pub type MetricsArgsFunc = Box<dyn FnOnce(&mut MetricsArgs)>;
 
 /// Arguments to the metrics module
 pub struct MetricsArgs {
-    pub metrics_registers: Vec<(usize, String, MetricKind)>,
+    pub metrics_registers: Vec<MetricRegistry>,
     pub concurrency: usize,
+    pub metric_level: MetricLevel,
 }
 
 #[derive(Debug, Clone)]
@@ -29,16 +30,33 @@ impl InfluxDBArgs {
     }
 }
 
-pub type MetricRegistry = (usize, String, MetricKind);
+/// The levels of metrics available for this
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Ord, Eq)]
+pub enum MetricLevel {
+    Trace,
+    Debug,
+    Info
+}
+
+pub struct MetricRegistryInfo {
+    index: usize,
+    name: String,
+    kind: MetricKind,
+    level: MetricLevel,
+    concurrency_override: Option<usize>
+}
+
+pub type MetricRegistry = MetricRegistryInfo;
 
 fn default_metrics_args() -> MetricsArgs {
     MetricsArgs {
         metrics_registers: Vec::new(),
-        concurrency: 1,
+        concurrency: 2,
+        metric_level: MetricLevel::Info,
     }
 }
 
-pub fn with_metrics(mut vec: Vec<(usize, String, MetricKind)>) -> MetricsArgsFunc {
+pub fn with_metrics(mut vec: Vec<MetricRegistry>) -> MetricsArgsFunc {
     Box::new(move |args| {
         args.metrics_registers.append(&mut vec);
     })
@@ -50,6 +68,12 @@ pub fn with_concurrency(concurrency: usize) -> MetricsArgsFunc {
     })
 }
 
+pub fn with_metric_level(level: MetricLevel) -> MetricsArgsFunc {
+    Box::new(move |args| {
+        args.metric_level = level;
+    })
+}
+
 pub fn initialize_metrics(config: Vec<MetricsArgsFunc>, influxdb: InfluxDBArgs) {
     let mut args = default_metrics_args();
 
@@ -57,10 +81,47 @@ pub fn initialize_metrics(config: Vec<MetricsArgsFunc>, influxdb: InfluxDBArgs) 
         register(&mut args);
     }
 
-    metrics::init(args.metrics_registers, args.concurrency);
+    let metric_level = args.metric_level;
 
-    launch_metrics(influxdb.clone());
+    metrics::init(args.metrics_registers, args.concurrency, metric_level);
+
+    launch_metrics(influxdb.clone(), metric_level);
 
     metrics::os_mon::launch_os_mon(influxdb);
 }
 
+impl From<(usize, String, MetricKind)> for MetricRegistryInfo {
+    fn from((index, name, kind): (usize, String, MetricKind)) -> Self {
+        Self {
+            index,
+            name,
+            kind,
+            level: MetricLevel::Info,
+            concurrency_override: None
+        }
+    }
+}
+
+impl From<(usize, String, MetricKind, MetricLevel)> for MetricRegistryInfo {
+    fn from((index, name, kind, level): (usize, String, MetricKind, MetricLevel)) -> Self {
+        Self {
+            index,
+            name,
+            kind,
+            level,
+            concurrency_override: None
+        }
+    }
+}
+
+impl From<(usize, String, MetricKind, MetricLevel, usize)> for MetricRegistryInfo {
+    fn from((index, name, kind, level, concurrency_override): (usize, String, MetricKind, MetricLevel, usize)) -> Self {
+        Self {
+            index,
+            name,
+            kind,
+            level,
+            concurrency_override: Some(concurrency_override)
+        }
+    }
+}

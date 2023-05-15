@@ -1,14 +1,13 @@
 use std::sync::Arc;
-use either::Either;
-use futures::AsyncWriteExt;
-use futures::io::{BufWriter, WriteHalf};
 use log::{debug, error, info, trace, warn};
 
 use febft_common::async_runtime as rt;
-use febft_common::socket::{AsyncSocket, SecureWriteHalfAsync};
+use febft_common::socket::{SecureWriteHalfAsync};
+use febft_metrics::metrics::metric_duration;
+use crate::metric::REQUEST_SEND_TIME_ID;
 use crate::serialize::Serializable;
 
-use crate::tcpip::connections::{ConnHandle, PeerConnection, NetworkSerializedMessage};
+use crate::tcpip::connections::{ConnHandle, PeerConnection};
 
 pub(super) fn spawn_outgoing_task<M: Serializable + 'static>(
     conn_handle: ConnHandle,
@@ -18,7 +17,7 @@ pub(super) fn spawn_outgoing_task<M: Serializable + 'static>(
         let mut rx = peer.to_send_handle().clone();
 
         loop {
-            let (to_send, callback) = match rx.recv_async().await {
+            let (to_send, callback, dispatch_time) = match rx.recv_async().await {
                 Ok(message) => { message }
                 Err(error_kind) => {
                     error!("{:?} // Failed to receive message to send. {:?}", conn_handle.my_id, error_kind);
@@ -49,7 +48,8 @@ pub(super) fn spawn_outgoing_task<M: Serializable + 'static>(
 
             match to_send.write_to(&mut socket, true).await {
                 Ok(_) => {
-                    //TODO: Statistics
+
+                    metric_duration(REQUEST_SEND_TIME_ID, dispatch_time.elapsed());
 
                     if let Some(callback) = callback {
                         callback(true);

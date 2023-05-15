@@ -1,10 +1,13 @@
+use std::time::Instant;
 use bytes::{Bytes, BytesMut};
 use log::error;
 use febft_common::channel::{new_oneshot_channel, OneShotRx};
 use febft_common::crypto::hash::Digest;
 use febft_common::error::*;
 use febft_common::threadpool;
+use febft_metrics::metrics::metric_duration;
 use crate::message::{Header, NetworkMessageKind};
+use crate::metric::{COMM_DESERIALIZE_VERIFY_TIME_ID, COMM_SERIALIZE_SIGN_TIME_ID};
 use crate::serialize;
 use crate::serialize::Serializable;
 
@@ -28,6 +31,8 @@ pub(crate) fn serialize_digest_message<M: Serializable + 'static>(message: Netwo
 /// Useful if we want to re-utilize this for other things
 pub(crate) fn serialize_digest_no_threadpool<M: Serializable>(message: &NetworkMessageKind<M>) -> Result<(Bytes, Digest)> {
 
+    let start = Instant::now();
+
     // TODO: Use a memory pool here
     let mut buf = Vec::with_capacity(512);
 
@@ -42,6 +47,8 @@ pub(crate) fn serialize_digest_no_threadpool<M: Serializable>(message: &NetworkM
 
     let buf = Bytes::from(buf);
 
+    metric_duration(COMM_SERIALIZE_SIGN_TIME_ID, start.elapsed());
+
     Ok((buf, digest))
 }
 
@@ -53,6 +60,8 @@ pub(crate) fn deserialize_message<M: Serializable + 'static>(header: Header, pay
     let (tx, rx) = new_oneshot_channel();
 
     threadpool::execute(move || {
+
+        let start = Instant::now();
         //TODO: Verify signatures
 
         // deserialize payload
@@ -68,6 +77,8 @@ pub(crate) fn deserialize_message<M: Serializable + 'static>(header: Header, pay
                 return;
             }
         };
+
+        metric_duration(COMM_DESERIALIZE_VERIFY_TIME_ID, start.elapsed());
 
         tx.send(Ok((message, payload))).unwrap();
     });

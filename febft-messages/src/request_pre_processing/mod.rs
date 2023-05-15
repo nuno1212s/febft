@@ -4,7 +4,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use febft_common::channel;
-use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, new_bounded_sync, OneShotRx, OneShotTx};
+use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, new_bounded_sync, OneShotRx, OneShotTx, RecvError, TryRecvError};
 use febft_common::globals::ReadOnly;
 use febft_common::node_id::NodeId;
 use febft_common::ordering::SeqNo;
@@ -13,8 +13,8 @@ use febft_communication::Node;
 use febft_execution::serialize::SharedData;
 use febft_metrics::metrics::{metric_duration, metric_increment};
 use crate::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
-use crate::metric::{RQ_PP_CLIENT_COUNT_ID, RQ_PP_CLIENT_MSG_ID, RQ_PP_CLONE_RQS_ID, RQ_PP_COLLECT_PENDING_ID, RQ_PP_DECIDED_RQS_ID, RQ_PP_FWD_RQS_ID, RQ_PP_TIMEOUT_RQS_ID};
-use crate::request_pre_processing::worker::{PreProcessorWorkMessage, RequestPreProcessingWorker};
+use crate::metric::{RQ_PP_CLIENT_COUNT_ID, RQ_PP_CLIENT_MSG_ID, RQ_PP_CLONE_RQS_ID, RQ_PP_COLLECT_PENDING_ID, RQ_PP_DECIDED_RQS_ID, RQ_PP_FWD_RQS_ID, RQ_PP_TIMEOUT_RQS_ID, RQ_PP_WORKER_PROPOSER_PASSING_TIME_ID};
+use crate::request_pre_processing::worker::{PreProcessorWorkMessage, PreProcessorWorkMessageOuter, RequestPreProcessingWorker, RequestPreProcessingWorkerHandle};
 use crate::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
 use crate::timeouts::{RqTimeout, TimeoutKind};
 
@@ -38,7 +38,10 @@ pub trait WorkPartitioner<O>: Send {
     fn get_worker_for_processed(rq_info: &ClientRqInfo, worker_count: usize) -> usize;
 }
 
-pub type BatchOutput<O> = ChannelSyncRx<PreProcessorOutputMessage<O>>;
+type PreProcessorOutput<O> = (PreProcessorOutputMessage<O>, Instant);
+
+#[derive(Clone)]
+pub struct BatchOutput<O>(ChannelSyncRx<PreProcessorOutput<O>>);
 
 /// Message to the request pre processor
 pub enum PreProcessorMessage<O> {
@@ -100,7 +103,7 @@ struct RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData, WD: Send
     /// How many workers should we have
     thread_count: usize,
     /// Work message transmission for each worker
-    work_comms: Vec<ChannelSyncTx<PreProcessorWorkMessage<D::Request>>>,
+    work_comms: Vec<RequestPreProcessingWorkerHandle<D::Request>>,
     /// The RX end for a work channel for the request pre processor
     work_receiver: ChannelSyncRx<PreProcessorMessage<D::Request>>,
     /// The network node so we can poll messages received from the clients
@@ -168,8 +171,8 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData 
             for (worker,
                 (ordered_msgs, unordered_messages))
             in std::iter::zip(&self.work_comms, std::iter::zip(worker_message, unordered_worker_message)) {
-                worker.send(PreProcessorWorkMessage::ClientPoolOrderedRequestsReceived(ordered_msgs)).unwrap();
-                worker.send(PreProcessorWorkMessage::ClientPoolUnorderedRequestsReceived(unordered_messages)).unwrap();
+                worker.send(PreProcessorWorkMessage::ClientPoolOrderedRequestsReceived(ordered_msgs));
+                worker.send(PreProcessorWorkMessage::ClientPoolUnorderedRequestsReceived(unordered_messages));
             }
 
             metric_duration(RQ_PP_CLIENT_MSG_ID, start.elapsed());
@@ -221,7 +224,7 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData 
 
         for (worker, messages)
         in iter::zip(&self.work_comms, worker_message) {
-            worker.send(PreProcessorWorkMessage::ForwardedRequestsReceived(messages)).unwrap();
+            worker.send(PreProcessorWorkMessage::ForwardedRequestsReceived(messages));
         }
 
         metric_duration(RQ_PP_FWD_RQS_ID, start.elapsed());
@@ -241,7 +244,7 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData 
 
         for (worker, messages)
         in iter::zip(&self.work_comms, worker_messages) {
-            worker.send(PreProcessorWorkMessage::DecidedBatch(messages)).unwrap();
+            worker.send(PreProcessorWorkMessage::DecidedBatch(messages));
         }
 
         metric_duration(RQ_PP_DECIDED_RQS_ID, start.elapsed());
@@ -269,7 +272,7 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData 
         for (worker,
             (messages, (tx, rx)))
         in iter::zip(&self.work_comms, iter::zip(worker_messages, returners)) {
-            worker.send(PreProcessorWorkMessage::TimeoutsReceived(messages, tx)).unwrap();
+            worker.send(PreProcessorWorkMessage::TimeoutsReceived(messages, tx));
 
             rxs.push(rx);
         }
@@ -294,7 +297,7 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData 
 
         let rxs: Vec<OneShotRx<Vec<StoredRequestMessage<D::Request>>>> =
             worker_responses.into_iter().enumerate().map(|(worker, (tx, rx))| {
-                self.work_comms[worker].send(PreProcessorWorkMessage::CollectPendingMessages(tx)).unwrap();
+                self.work_comms[worker].send(PreProcessorWorkMessage::CollectPendingMessages(tx));
 
                 rx
             }).collect();
@@ -333,7 +336,7 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData 
 
         let rxs: Vec<OneShotRx<Vec<StoredRequestMessage<D::Request>>>> = iter::zip(&self.work_comms, iter::zip(worker_messages, worker_responses))
             .map(|(worker, (messages, (tx, rx)))| {
-                worker.send(PreProcessorWorkMessage::ClonePendingRequests(messages, tx)).unwrap();
+                worker.send(PreProcessorWorkMessage::ClonePendingRequests(messages, tx));
 
                 rx
             }).collect();
@@ -380,7 +383,7 @@ pub fn initialize_request_pre_processor<WD, D, OP, ST, NT>(concurrency: usize, n
 
     launch_orchestrator_thread(orchestrator);
 
-    (RequestPreProcessor(work_sender), receiver)
+    (RequestPreProcessor(work_sender), BatchOutput(receiver))
 }
 
 fn init_for_workers<V, F>(thread_count: usize, init: F) -> Vec<V> where F: FnMut() -> V {
@@ -413,6 +416,21 @@ fn launch_orchestrator_thread<WD, D, OP, ST, NT>(orchestrator: RequestPreProcess
         }).expect("Failed to launch orchestrator thread.");
 }
 
+impl<O> Deref for PreProcessorOutputMessage<O> {
+    type Target = Vec<StoredRequestMessage<O>>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            PreProcessorOutputMessage::DeDupedOrderedRequests(cls) => {
+                cls
+            }
+            PreProcessorOutputMessage::DeDupedUnorderedRequests(cls) => {
+                cls
+            }
+        }
+    }
+}
+
 #[inline]
 pub fn operation_key<O>(header: &Header, message: &RequestMessage<O>) -> u64 {
     operation_key_raw(header.from(), message.session_id())
@@ -428,17 +446,30 @@ pub fn operation_key_raw(from: NodeId, session: SeqNo) -> u64 {
     client_id | (session_id << 32)
 }
 
-impl<O> Deref for PreProcessorOutputMessage<O> {
-    type Target = Vec<StoredRequestMessage<O>>;
+impl<O> BatchOutput<O> {
 
-    fn deref(&self) -> &Self::Target {
-        match self {
-            PreProcessorOutputMessage::DeDupedOrderedRequests(cls) => {
-                cls
-            }
-            PreProcessorOutputMessage::DeDupedUnorderedRequests(cls) => {
-                cls
-            }
-        }
+    pub fn recv(&self) -> Result<PreProcessorOutputMessage<O>, RecvError> {
+        let (message, instant) = self.0.recv().unwrap();
+
+        metric_duration(RQ_PP_WORKER_PROPOSER_PASSING_TIME_ID, instant.elapsed());
+
+        Ok(message)
     }
+
+    pub fn try_recv(&self) -> Result<PreProcessorOutputMessage<O>, TryRecvError> {
+        let (message, instant) = self.0.try_recv()?;
+
+        metric_duration(RQ_PP_WORKER_PROPOSER_PASSING_TIME_ID, instant.elapsed());
+
+        Ok(message)
+    }
+
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<PreProcessorOutputMessage<O>, TryRecvError> {
+        let (message, instant) = self.0.recv_timeout(timeout)?;
+
+        metric_duration(RQ_PP_WORKER_PROPOSER_PASSING_TIME_ID, instant.elapsed());
+
+        Ok(message)
+    }
+
 }

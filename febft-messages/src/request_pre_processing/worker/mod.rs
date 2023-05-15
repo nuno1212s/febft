@@ -5,16 +5,21 @@ use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, OneShotTx};
 use febft_common::collections::HashMap;
 use febft_common::crypto::hash::Digest;
 use febft_common::globals::ReadOnly;
+use febft_common::error::*;
 use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, StoredMessage};
 use febft_execution::serialize::SharedData;
+use febft_metrics::metrics::{metric_duration, metric_increment};
 use crate::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage};
-use crate::request_pre_processing::{operation_key, operation_key_raw, PreProcessorOutputMessage};
+use crate::metric::{RQ_PP_ORCHESTRATOR_WORKER_PASSING_TIME_ID, RQ_PP_WORKER_DECIDED_PROCESS_TIME_ID, RQ_PP_WORKER_ORDER_PROCESS_COUNT_ID, RQ_PP_WORKER_ORDER_PROCESS_ID};
+use crate::request_pre_processing::{operation_key, operation_key_raw, PreProcessorOutput, PreProcessorOutputMessage};
 use crate::timeouts::{RqTimeout, TimeoutKind, TimeoutPhase};
 
 const WORKER_QUEUE_SIZE: usize = 124;
 const WORKER_THREAD_NAME: &str = "RQ-PRE-PROCESSING-WORKER-{}";
+
+pub type PreProcessorWorkMessageOuter<O> = (Instant, PreProcessorWorkMessage<O>);
 
 pub enum PreProcessorWorkMessage<O> {
     /// We have received requests from the clients, which need
@@ -39,10 +44,10 @@ pub enum PreProcessorWorkMessage<O> {
 /// Each worker will be assigned a given set of clients
 pub struct RequestPreProcessingWorker<O> {
     /// Receive work
-    message_rx: ChannelSyncRx<PreProcessorWorkMessage<O>>,
+    message_rx: ChannelSyncRx<PreProcessorWorkMessageOuter<O>>,
 
     /// Output for the requests that have been processed and should now be proposed
-    batch_production: ChannelSyncTx<PreProcessorOutputMessage<O>>,
+    batch_production: ChannelSyncTx<PreProcessorOutput<O>>,
 
     /// The latest operations seen by this worker.
     /// Since a given session will always be handled by the same worker,
@@ -54,7 +59,7 @@ pub struct RequestPreProcessingWorker<O> {
 
 
 impl<O> RequestPreProcessingWorker<O> where O: Clone {
-    pub fn new(message_rx: ChannelSyncRx<PreProcessorWorkMessage<O>>, batch_production: ChannelSyncTx<PreProcessorOutputMessage<O>>) -> Self {
+    pub fn new(message_rx: ChannelSyncRx<PreProcessorWorkMessageOuter<O>>, batch_production: ChannelSyncTx<PreProcessorOutput<O>>) -> Self {
         Self {
             message_rx,
             batch_production,
@@ -65,7 +70,9 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
 
     pub(crate) fn run(mut self) {
         loop {
-            match self.message_rx.recv().unwrap() {
+            let (sent_time, recvd_message) = self.message_rx.recv().unwrap();
+
+            match recvd_message {
                 PreProcessorWorkMessage::ClientPoolOrderedRequestsReceived(requests) => {
                     self.process_ordered_client_pool_requests(requests);
                 }
@@ -93,6 +100,8 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
                     self.clean_client(client);
                 }
             }
+
+            metric_duration(RQ_PP_ORCHESTRATOR_WORKER_PASSING_TIME_ID, sent_time.elapsed());
         }
     }
 
@@ -119,6 +128,11 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
 
     /// Process the ordered client pool requests
     fn process_ordered_client_pool_requests(&mut self, requests: Vec<StoredRequestMessage<O>>) {
+
+        let start = Instant::now();
+
+        let processed_rqs = requests.len();
+
         let requests = requests.into_iter().filter(|request| {
             if self.has_received_more_recent_and_update(request.header(), request.message()) {
                 return false;
@@ -131,7 +145,10 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
             return true;
         }).collect();
 
-        self.batch_production.send(PreProcessorOutputMessage::DeDupedOrderedRequests(requests)).expect("Failed to send batch to proposer");
+        self.batch_production.send((PreProcessorOutputMessage::DeDupedOrderedRequests(requests), Instant::now())).expect("Failed to send batch to proposer");
+
+        metric_duration(RQ_PP_WORKER_ORDER_PROCESS_ID, start.elapsed());
+        metric_increment(RQ_PP_WORKER_ORDER_PROCESS_COUNT_ID, Some(processed_rqs as u64));
     }
 
     /// Process the unordered client pool requests
@@ -144,7 +161,7 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
             return true;
         }).collect();
 
-        self.batch_production.send(PreProcessorOutputMessage::DeDupedUnorderedRequests(requests)).expect("Failed to send batch to proposer");
+        self.batch_production.send((PreProcessorOutputMessage::DeDupedUnorderedRequests(requests), Instant::now())).expect("Failed to send batch to proposer");
     }
 
     /// Process the forwarded requests
@@ -161,7 +178,7 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
             return false;
         }).collect();
 
-        self.batch_production.send(PreProcessorOutputMessage::DeDupedOrderedRequests(requests)).expect("Failed to send batch to proposer");
+        self.batch_production.send((PreProcessorOutputMessage::DeDupedOrderedRequests(requests), Instant::now())).expect("Failed to send batch to proposer");
     }
 
     /// Process the timeouts
@@ -191,9 +208,13 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
 
     /// Process a decided batch
     fn process_decided_batch(&mut self, requests: Vec<ClientRqInfo>) {
+        let start = Instant::now();
+
         requests.into_iter().for_each(|request| {
             self.pending_requests.remove(&request.digest);
         });
+
+        metric_duration(RQ_PP_WORKER_DECIDED_PROCESS_TIME_ID, start.elapsed());
     }
 
     /// Clone a set of pending requests
@@ -221,7 +242,7 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
     }
 }
 
-pub(super) fn spawn_worker<O>(worker_id: usize, batch_tx: ChannelSyncTx<PreProcessorOutputMessage<O>>) -> ChannelSyncTx<PreProcessorWorkMessage<O>>
+pub(super) fn spawn_worker<O>(worker_id: usize, batch_tx: ChannelSyncTx<(PreProcessorOutputMessage<O>, Instant)>) -> RequestPreProcessingWorkerHandle<O>
     where O: Clone + Send + 'static {
     let (worker_tx, worker_rx) = febft_common::channel::new_bounded_sync(WORKER_QUEUE_SIZE);
 
@@ -233,5 +254,15 @@ pub(super) fn spawn_worker<O>(worker_id: usize, batch_tx: ChannelSyncTx<PreProce
             worker.run();
         }).expect("Failed to spawn worker thread");
 
-    worker_tx
+    RequestPreProcessingWorkerHandle(worker_tx)
+}
+
+pub struct RequestPreProcessingWorkerHandle<O>(ChannelSyncTx<PreProcessorWorkMessageOuter<O>>);
+
+impl<O> RequestPreProcessingWorkerHandle<O> {
+
+    pub fn send(&self, message: PreProcessorWorkMessage<O>) {
+        self.0.send((Instant::now(), message)).unwrap()
+    }
+
 }

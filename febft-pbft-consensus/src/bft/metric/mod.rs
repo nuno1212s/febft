@@ -1,4 +1,5 @@
 use std::time::Instant;
+use febft_metrics::MetricRegistry;
 use febft_metrics::metrics::{metric_duration, metric_duration_end, metric_store_count, MetricKind};
 
 /// Consensus will take the ID range 1XX, for now
@@ -71,31 +72,31 @@ pub const SYNC_FORWARDED_REQUESTS_ID: usize = 124;
 pub const SYNC_FORWARDED_COUNT : &str = "SYNC_FORWARDED_COUNT";
 pub const SYNC_FORWARDED_COUNT_ID: usize = 125;
 
-pub fn metrics() -> Vec<(usize, String, MetricKind)> {
+pub fn metrics() -> Vec<MetricRegistry> {
     
     vec![
-        (PROPOSER_BATCHES_MADE_ID, PROPOSER_BATCHES_MADE.to_string(), MetricKind::Counter),
-        (PROPOSER_REQUESTS_COLLECTED_ID, PROPOSER_REQUESTS_COLLECTED.to_string(), MetricKind::Counter),
-        (PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME.to_string(), MetricKind::Duration),
-        (PROPOSER_REQUEST_FILTER_TIME_ID, PROPOSER_REQUEST_FILTER_TIME.to_string(), MetricKind::Duration),
-        (PROPOSER_FWD_REQUESTS_ID, PROPOSER_FWD_REQUESTS.to_string(), MetricKind::Duration),
-        (CLIENT_POOL_BATCH_SIZE_ID, CLIENT_POOL_BATCH_SIZE.to_string(), MetricKind::Count),
-        (CONSENSUS_PRE_PREPARE_LATENCY_ID, CONSENSUS_PRE_PREPARE_LATENCY.to_string(), MetricKind::Duration),
-        (PROPOSER_LATENCY_ID, PROPOSER_LATENCY.to_string(), MetricKind::Duration),
-        (PROPOSE_LATENCY_ID, PROPOSE_LATENCY.to_string(), MetricKind::Duration),
-        (CONSENSUS_PRE_PREPARE_LATENCY_ID, CONSENSUS_PRE_PREPARE_LATENCY.to_string(), MetricKind::Duration),
-        (CONSENSUS_PREPARE_LATENCY_ID, CONSENSUS_PREPARE_LATENCY.to_string(), MetricKind::Duration),
-        (CONSENSUS_COMMIT_LATENCY_ID, CONSENSUS_COMMIT_LATENCY.to_string(), MetricKind::Duration),
-        (BATCH_SIZE_ID, BATCH_SIZE.to_string(), MetricKind::Count),
-        (PRE_PREPARE_ANALYSIS_ID, PRE_PREPARE_ANALYSIS.to_string(), MetricKind::Duration),
-        (PRE_PREPARE_LOG_ANALYSIS_ID, PRE_PREPARE_LOG_ANALYSIS.to_string(), MetricKind::Duration),
-        (OPERATIONS_PROCESSED_ID, OPERATIONS_PROCESSED.to_string(), MetricKind::Count),
-        (SYNC_WATCH_REQUESTS_ID, SYNC_WATCH_REQUESTS.to_string(), MetricKind::Duration),
-        (SYNC_BATCH_RECEIVED_ID, SYNC_BATCH_RECEIVED.to_string(), MetricKind::Duration),
-        (SYNC_STOPPED_REQUESTS_ID, SYNC_STOPPED_REQUESTS.to_string(), MetricKind::Duration),
-        (SYNC_STOPPED_COUNT_ID, SYNC_STOPPED_COUNT.to_string(), MetricKind::Counter),
-        (SYNC_FORWARDED_REQUESTS_ID, SYNC_FORWARDED_REQUESTS.to_string(), MetricKind::Duration),
-        (SYNC_FORWARDED_COUNT_ID, SYNC_FORWARDED_COUNT.to_string(), MetricKind::Counter),
+        (PROPOSER_BATCHES_MADE_ID, PROPOSER_BATCHES_MADE.to_string(), MetricKind::Counter).into(),
+        (PROPOSER_REQUESTS_COLLECTED_ID, PROPOSER_REQUESTS_COLLECTED.to_string(), MetricKind::Counter).into(),
+        (PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME.to_string(), MetricKind::Duration).into(),
+        (PROPOSER_REQUEST_FILTER_TIME_ID, PROPOSER_REQUEST_FILTER_TIME.to_string(), MetricKind::Duration).into(),
+        (PROPOSER_FWD_REQUESTS_ID, PROPOSER_FWD_REQUESTS.to_string(), MetricKind::Duration).into(),
+        (CLIENT_POOL_BATCH_SIZE_ID, CLIENT_POOL_BATCH_SIZE.to_string(), MetricKind::Count).into(),
+        (CONSENSUS_PRE_PREPARE_LATENCY_ID, CONSENSUS_PRE_PREPARE_LATENCY.to_string(), MetricKind::Duration).into(),
+        (PROPOSER_LATENCY_ID, PROPOSER_LATENCY.to_string(), MetricKind::Duration).into(),
+        (PROPOSE_LATENCY_ID, PROPOSE_LATENCY.to_string(), MetricKind::Duration).into(),
+        (CONSENSUS_PRE_PREPARE_LATENCY_ID, CONSENSUS_PRE_PREPARE_LATENCY.to_string(), MetricKind::Duration).into(),
+        (CONSENSUS_PREPARE_LATENCY_ID, CONSENSUS_PREPARE_LATENCY.to_string(), MetricKind::Duration).into(),
+        (CONSENSUS_COMMIT_LATENCY_ID, CONSENSUS_COMMIT_LATENCY.to_string(), MetricKind::Duration).into(),
+        (BATCH_SIZE_ID, BATCH_SIZE.to_string(), MetricKind::Count).into(),
+        (PRE_PREPARE_ANALYSIS_ID, PRE_PREPARE_ANALYSIS.to_string(), MetricKind::Duration).into(),
+        (PRE_PREPARE_LOG_ANALYSIS_ID, PRE_PREPARE_LOG_ANALYSIS.to_string(), MetricKind::Duration).into(),
+        (OPERATIONS_PROCESSED_ID, OPERATIONS_PROCESSED.to_string(), MetricKind::Count).into(),
+        (SYNC_WATCH_REQUESTS_ID, SYNC_WATCH_REQUESTS.to_string(), MetricKind::Duration).into(),
+        (SYNC_BATCH_RECEIVED_ID, SYNC_BATCH_RECEIVED.to_string(), MetricKind::Duration).into(),
+        (SYNC_STOPPED_REQUESTS_ID, SYNC_STOPPED_REQUESTS.to_string(), MetricKind::Duration).into(),
+        (SYNC_STOPPED_COUNT_ID, SYNC_STOPPED_COUNT.to_string(), MetricKind::Counter).into(),
+        (SYNC_FORWARDED_REQUESTS_ID, SYNC_FORWARDED_REQUESTS.to_string(), MetricKind::Duration).into(),
+        (SYNC_FORWARDED_COUNT_ID, SYNC_FORWARDED_COUNT.to_string(), MetricKind::Counter).into(),
     ]
     
 }

@@ -8,6 +8,7 @@ use rand::Rng;
 use thread_local::ThreadLocal;
 
 use febft_common::globals::Global;
+use crate::{MetricLevel, MetricRegistry, MetricRegistryInfo};
 
 pub mod metrics_thread;
 pub(super) mod os_mon;
@@ -18,6 +19,7 @@ static mut METRICS: Global<Metrics> = Global::new();
 pub struct Metrics {
     live_indexes: Vec<usize>,
     metrics: Vec<Option<Metric>>,
+    current_level: MetricLevel,
 }
 
 /// A metric statistic to be used. This will be collected every X seconds and sent to InfluxDB
@@ -26,6 +28,7 @@ pub struct Metric {
     values: Vec<Mutex<MetricData>>,
     additional_data: Mutex<AdditionalMetricData>,
     round_robin: ThreadLocal<Cell<usize>>,
+    metric_level: MetricLevel,
 }
 
 /// Data for a given metric
@@ -33,7 +36,7 @@ pub struct Metric {
 enum MetricData {
     Duration(Vec<u64>),
     Counter(u64),
-    Count(Vec<usize>)
+    Count(Vec<usize>),
 }
 
 #[derive(Debug)]
@@ -45,7 +48,7 @@ pub enum AdditionalMetricData {
     Duration(Option<Instant>),
     // Counter does not need any additional data storage
     Counter,
-    Count
+    Count,
 }
 
 /// The possible kinds of metrics
@@ -55,16 +58,16 @@ pub enum MetricKind {
     /// A counter is a metric that is incremented by X every time it is called and in the end is combined
     Counter,
     /// A count is to be used to store various independent counts and then average them together
-    Count
+    Count,
 }
 
 impl Metrics {
-    fn new(registered_metrics: Vec<(usize, String, MetricKind)>, concurrency: usize) -> Self {
+    fn new(registered_metrics: Vec<MetricRegistry>, metric_level: MetricLevel, concurrency: usize) -> Self {
         let mut largest_ind = 0;
 
         // Calculate the necessary size for the vector
-        for (index, _, _) in &registered_metrics {
-            largest_ind = std::cmp::max(largest_ind, *index);
+        for info in &registered_metrics {
+            largest_ind = std::cmp::max(largest_ind, info.index);
         }
 
         let mut metrics = iter::repeat_with(|| None)
@@ -73,8 +76,12 @@ impl Metrics {
 
         let mut live_indexes = Vec::with_capacity(registered_metrics.len());
 
-        for (index, name, kind) in registered_metrics {
-            metrics[index] = Some(Metric::new(name, kind, concurrency));
+        for metric in registered_metrics {
+            let index = metric.index;
+
+            metrics[index] = Some(Metric::new(metric.name, metric.kind,
+                                              metric.level,
+                                              metric.concurrency_override.unwrap_or(concurrency)));
 
             live_indexes.push(index);
         }
@@ -82,6 +89,7 @@ impl Metrics {
         Self {
             live_indexes,
             metrics,
+            current_level: metric_level,
         }
     }
 }
@@ -117,7 +125,7 @@ impl MetricKind {
 }
 
 impl Metric {
-    fn new(name: String, kind: MetricKind, concurrency: usize) -> Self {
+    fn new(name: String, kind: MetricKind, level: MetricLevel, concurrency: usize) -> Self {
         let values = iter::repeat_with(||
             Mutex::new(kind.gen_metric_type()))
             .take(concurrency)
@@ -128,6 +136,7 @@ impl Metric {
             values,
             additional_data: Mutex::new(kind.gen_additional_data()),
             round_robin: Default::default(),
+            metric_level: level,
         }
     }
 
@@ -168,6 +177,9 @@ impl MetricData {
             (MetricData::Counter(c), MetricData::Counter(c2)) => {
                 *c += c2;
             }
+            (MetricData::Count(count), MetricData::Count(mut count2)) => {
+                count.append(&mut count2);
+            }
             _ => panic!("Can't merge metrics of different types"),
         }
     }
@@ -175,9 +187,9 @@ impl MetricData {
 
 
 /// Initialize the metrics module
-pub(super) fn init(registered_metrics: Vec<(usize, String, MetricKind)>, concurrency: usize) {
+pub(super) fn init(registered_metrics: Vec<MetricRegistryInfo>, concurrency: usize, level: MetricLevel) {
     unsafe {
-        METRICS.set(Metrics::new(registered_metrics, concurrency));
+        METRICS.set(Metrics::new(registered_metrics, level, concurrency));
     }
 }
 
@@ -272,13 +284,17 @@ fn collect_measurements(metric: &Metric) -> Vec<MetricData> {
 }
 
 /// Collect all measurements from all metrics
-fn collect_all_measurements() -> Vec<(String, MetricData)> {
+fn collect_all_measurements(level: &MetricLevel) -> Vec<(String, MetricData)> {
     match unsafe { METRICS.get() } {
         Some(ref metrics) => {
             let mut collected_metrics = Vec::with_capacity(metrics.metrics.len());
 
             for index in &metrics.live_indexes {
                 let metric = metrics.metrics[*index].as_ref().unwrap();
+
+                if metric.metric_level < *level {
+                    continue;
+                }
 
                 collected_metrics.push((metric.name.clone(), collect_measurements(metric)));
             }
@@ -330,6 +346,10 @@ pub fn metric_duration_start(metric: usize) {
         Some(ref metrics) => {
             let metric = metrics.metrics[metric].as_ref().unwrap();
 
+            if metric.metric_level < metrics.current_level {
+                return;
+            }
+
             start_duration_measurement(metric)
         }
         None => {
@@ -344,6 +364,10 @@ pub fn metric_duration_end(metric: usize) {
     match unsafe { METRICS.get() } {
         Some(ref metrics) => {
             let metric = metrics.metrics[metric].as_ref().unwrap();
+
+            if metric.metric_level < metrics.current_level {
+                return;
+            }
 
             end_duration_measurement(metric)
         }
@@ -360,6 +384,10 @@ pub fn metric_duration(metric: usize, duration: Duration) {
         Some(ref metrics) => {
             let metric = metrics.metrics[metric].as_ref().unwrap();
 
+            if metric.metric_level < metrics.current_level {
+                return;
+            }
+
             enqueue_duration_measurement(&metric, duration.as_nanos() as u64);
         }
         None => {
@@ -375,6 +403,10 @@ pub fn metric_increment(metric: usize, counter: Option<u64>) {
         Some(ref metrics) => {
             let metric = metrics.metrics[metric].as_ref().unwrap();
 
+            if metric.metric_level < metrics.current_level {
+                return;
+            }
+
             increment_counter_measurement(&metric, counter);
         }
         None => {
@@ -389,6 +421,10 @@ pub fn metric_store_count(metric: usize, amount: usize) {
     match unsafe { METRICS.get() } {
         Some(ref metrics) => {
             let metric = metrics.metrics[metric].as_ref().unwrap();
+
+            if metric.metric_level < metrics.current_level {
+                return;
+            }
 
             enqueue_counter_measurement(metric, amount);
         }

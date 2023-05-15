@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::time::Instant;
 
 use dashmap::DashMap;
 use intmap::IntMap;
@@ -26,7 +27,7 @@ mod conn_establish;
 
 pub type Callback = Option<Box<dyn FnOnce(bool) -> () + Send>>;
 
-pub type NetworkSerializedMessage = (WireMessage, Callback);
+pub type NetworkSerializedMessage = (WireMessage, Callback, Instant);
 
 /// How many slots the outgoing queue has for messages.
 const TX_CONNECTION_QUEUE: usize = 1024;
@@ -120,7 +121,7 @@ impl<M> PeerConnection<M> where M: Serializable {
         let from = msg.header().from();
         let to = msg.header().to();
 
-        if let Err(_) = self.tx.send((msg, callback)) {
+        if let Err(_) = self.tx.send((msg, callback, Instant::now())) {
             error!("{:?} // Failed to send peer message to {:?}", from,
                 to);
 
@@ -133,7 +134,7 @@ impl<M> PeerConnection<M> where M: Serializable {
     async fn peer_msg_return_async(&self, msg: WireMessage, callback: Callback) -> Result<()> {
         let send = self.tx.clone();
 
-        if let Err(_) = send.send_async((msg, callback)).await {
+        if let Err(_) = send.send_async((msg, callback, Instant::now())).await {
             return Err(Error::simple(ErrorKind::Communication));
         }
 

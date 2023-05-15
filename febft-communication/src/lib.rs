@@ -26,6 +26,7 @@ pub mod cpu_workers;
 pub mod client_pooling;
 pub mod config;
 pub mod message_signing;
+pub mod metric;
 
 /// A trait defined that indicates how the connections are managed
 /// Allows us to verify various things about our current connections as well
