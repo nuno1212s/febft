@@ -28,6 +28,8 @@ use febft_messages::messages::{ReplyMessage, SystemMessage};
 use febft_messages::serialize::{ClientMessage, ClientServiceMsg, OrderingProtocolMessage, ServiceMessage, ServiceMsg, StateTransferMessage};
 use febft_metrics::benchmarks::ClientPerf;
 use febft_metrics::{measure_ready_rq_time, measure_response_deliver_time, measure_response_rcv_time, measure_sent_rq_info, measure_target_init_time, measure_time_rq_init, start_measurement};
+use febft_metrics::metrics::{metric_duration, metric_increment};
+use crate::metric::{CLIENT_RQ_DELIVER_RESPONSE_ID, CLIENT_RQ_LATENCY_ID, CLIENT_RQ_PER_SECOND_ID, CLIENT_RQ_RECV_PER_SECOND_ID, CLIENT_RQ_RECV_TIME_ID, CLIENT_RQ_SEND_TIME_ID};
 
 use self::unordered_client::{FollowerData, UnorderedClientMode};
 
@@ -45,6 +47,8 @@ macro_rules! certain {
 }
 
 struct SentRequestInfo {
+    // The time at which this request was sent
+    sent_time: Instant,
     //The amount of replicas/followers we sent the request to
     target_count: usize,
     //The amount of responses that we need to deliver the received response to the application
@@ -228,6 +232,7 @@ pub struct ClientConfig<D: SharedData + 'static, NT: Node<ClientServiceMsg<D>>> 
 
 ///Keeps track of the replica (or follower, depending on the request mode) votes for a given request
 pub struct ReplicaVotes {
+    sent_time: Instant,
     //How many nodes did we contact in total with this request, so we can keep track if they have all responded
     contacted_nodes: usize,
     //How many votes do we need to provide a response?
@@ -340,18 +345,18 @@ impl<D, NT> Client<D, NT>
     }
 
     /// Updates the replicated state of the application running
-    /// on top of `febft`.
-    //
+    /// on top of `atlas`.
     pub async fn update<T>(&mut self, operation: D::Request) -> Result<D::Reply>
         where
             T: ClientType<D, NT>,
             NT: Node<ClientServiceMsg<D>>
     {
+        let start = Instant::now();
+
         let session_id = self.session_id;
         let operation_id = self.next_operation_id();
 
         let request_key = get_request_key(session_id, operation_id);
-
 
         let message = T::init_request(session_id, operation_id, operation);
 
@@ -362,6 +367,7 @@ impl<D, NT> Client<D, NT>
 
         {
             let sent_info = SentRequestInfo {
+                sent_time: Instant::now(),
                 target_count: target_count,
                 responses_needed: T::needed_responses(self),
             };
@@ -390,6 +396,9 @@ impl<D, NT> Client<D, NT>
             self.data.clone(),
         );
 
+        metric_duration(CLIENT_RQ_SEND_TIME_ID, start.elapsed());
+        metric_increment(CLIENT_RQ_PER_SECOND_ID, Some(1));
+
         ClientRequestFut { request_key, ready }.await
     }
 
@@ -408,6 +417,8 @@ impl<D, NT> Client<D, NT>
         T: ClientType<D, NT>,
         NT: Node<ClientServiceMsg<D>>
     {
+        let start = Instant::now();
+
         let session_id = self.session_id;
 
         let operation_id = self.next_operation_id();
@@ -437,6 +448,7 @@ impl<D, NT> Client<D, NT>
 
         {
             let sent_info = SentRequestInfo {
+                sent_time: Instant::now(),
                 target_count,
                 responses_needed: T::needed_responses(self),
             };
@@ -475,6 +487,9 @@ impl<D, NT> Client<D, NT>
             operation_id,
             self.data.clone(),
         );
+
+        metric_duration(CLIENT_RQ_SEND_TIME_ID, start.elapsed());
+        metric_increment(CLIENT_RQ_PER_SECOND_ID, Some(1));
     }
 
     fn next_operation_id(&mut self) -> SeqNo {
@@ -558,6 +573,7 @@ impl<D, NT> Client<D, NT>
             //If we have information about the request in question,
             //Utilize it
             ReplicaVotes {
+                sent_time: rq_info.sent_time,
                 contacted_nodes: rq_info.target_count,
                 needed_votes_count: rq_info.responses_needed,
                 voted: Default::default(),
@@ -566,6 +582,7 @@ impl<D, NT> Client<D, NT>
         } else {
             //If there is no stored information, take the safe road and require f + 1 votes
             ReplicaVotes {
+                sent_time: Instant::now(),
                 contacted_nodes: params.n(),
                 needed_votes_count: params.f() + 1,
                 voted: Default::default(),
@@ -578,9 +595,12 @@ impl<D, NT> Client<D, NT>
     fn deliver_response(
         node_id: NodeId,
         request_key: u64,
+        vote: ReplicaVotes,
         ready: &Mutex<IntMap<ClientAwaker<D::Reply>>>,
         message: ReplyMessage<D::Reply>,
     ) {
+        let start = Instant::now();
+
         let mut ready_lock = ready.lock().unwrap();
 
         let request = ready_lock.get_mut(request_key);
@@ -638,6 +658,10 @@ impl<D, NT> Client<D, NT>
         } else {
             error!("Failed to get awaker for request {:?}", request_key)
         }
+
+        metric_duration(CLIENT_RQ_DELIVER_RESPONSE_ID, start.elapsed());
+        metric_duration(CLIENT_RQ_LATENCY_ID, vote.sent_time.elapsed());
+        metric_increment(CLIENT_RQ_RECV_PER_SECOND_ID, Some(1));
     }
 
     ///Deliver an error response
@@ -715,6 +739,8 @@ impl<D, NT> Client<D, NT>
 
         //TODO: Maybe change this to make clients use the same timeouts service?
         while let Ok(message) = node.receive_from_replicas_no_timeout() {
+            let start = Instant::now();
+
             let NetworkMessage { header, message } = message;
 
             let sys_msg = message.into();
@@ -778,7 +804,7 @@ impl<D, NT> Client<D, NT>
                     if count >= votes.needed_votes_count {
                         start_measurement!(start_time);
 
-                        replica_votes.remove(request_key);
+                        let votes = replica_votes.remove(request_key).unwrap();
 
                         last_operation_ids.insert(session_id.into(), operation_id);
 
@@ -789,6 +815,7 @@ impl<D, NT> Client<D, NT>
                         Self::deliver_response(
                             node.id(),
                             request_key,
+                            votes,
                             ready,
                             match sys_msg {
                                 SystemMessage::OrderedReply(message)
@@ -829,6 +856,8 @@ impl<D, NT> Client<D, NT>
                 }
                 _ => {}
             }
+
+            metric_duration(CLIENT_RQ_RECV_TIME_ID, start.elapsed());
         }
     }
 }

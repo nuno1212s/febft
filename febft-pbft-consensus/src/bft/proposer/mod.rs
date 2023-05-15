@@ -17,7 +17,7 @@ use febft_communication::Node;
 use febft_execution::app::{Request, Service, UnorderedBatch};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
-use febft_messages::messages::{RequestMessage, StoredRequestMessage, SystemMessage};
+use febft_messages::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage, SystemMessage};
 use febft_messages::request_pre_processing::{BatchOutput, PreProcessorMessage, PreProcessorOutputMessage};
 use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::Timeouts;
@@ -25,7 +25,7 @@ use febft_metrics::metrics::{metric_duration, metric_increment, metric_local_dur
 use crate::bft::config::ProposerConfig;
 use crate::bft::consensus::ProposerConsensusGuard;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, PBFTMessage};
-use crate::bft::metric::{CLIENT_POOL_BATCH_SIZE_ID, PROPOSER_BATCHES_MADE_ID, PROPOSER_FWD_REQUESTS_ID, PROPOSER_REQUEST_FILTER_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUESTS_COLLECTED_ID};
+use crate::bft::metric::{CLIENT_POOL_BATCH_SIZE_ID, PROPOSER_BATCHES_MADE_ID, PROPOSER_FWD_REQUESTS_ID, PROPOSER_LATENCY_ID, PROPOSER_REQUEST_FILTER_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUESTS_COLLECTED_ID};
 use crate::bft::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::PBFT;
 use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
@@ -192,6 +192,8 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                                         // we know that these operations will always be proposed since we are a
                                         // Correct replica. We can therefore just add them to the latest op log
                                         ordered_propose.currently_accumulated.push(message);
+                                    } else {
+                                        digest_vec.push(ClientRqInfo::from(&message));
                                     }
                                 }
                             }
@@ -307,11 +309,12 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                 let micros_since_last_batch = Instant::now().duration_since(propose.last_proposal).as_micros();
 
                 if micros_since_last_batch <= self.global_batch_time_limit {
-
                     //Batch isn't large enough and time hasn't passed, don't even attempt to propose
                     return;
                 }
             }
+
+            let last_proposed_batch = propose.last_proposal.clone();
 
             if self.consensus_guard.can_propose() {
                 if let Some((seq, view)) = self.consensus_guard.next_seq_no() {
@@ -334,8 +337,9 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                     let current_batch = std::mem::replace(&mut propose.currently_accumulated,
                                                           next_batch.unwrap_or(Vec::with_capacity(self.max_batch_size * 2)));
 
-
                     self.propose(seq, &view, current_batch);
+
+                    metric_duration(PROPOSER_LATENCY_ID, last_proposed_batch.elapsed());
                 }
             }
         }

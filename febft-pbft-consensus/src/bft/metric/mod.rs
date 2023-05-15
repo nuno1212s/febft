@@ -22,6 +22,10 @@ pub const PROPOSER_FWD_REQUESTS_ID : usize = 104;
 pub const CLIENT_POOL_BATCH_SIZE: &str = "CLIENT_POOL_BATCH_SIZE";
 pub const CLIENT_POOL_BATCH_SIZE_ID: usize = 105;
 
+/// How long between proposes is being taken
+pub const PROPOSER_LATENCY: &str = "PROPOSER_LATENCY";
+pub const PROPOSER_LATENCY_ID: usize = 106;
+
 /// 110-119: Consensus
 
 pub const PROPOSE_LATENCY: &str = "PROPOSE_LATENCY";
@@ -77,6 +81,7 @@ pub fn metrics() -> Vec<(usize, String, MetricKind)> {
         (PROPOSER_FWD_REQUESTS_ID, PROPOSER_FWD_REQUESTS.to_string(), MetricKind::Duration),
         (CLIENT_POOL_BATCH_SIZE_ID, CLIENT_POOL_BATCH_SIZE.to_string(), MetricKind::Count),
         (CONSENSUS_PRE_PREPARE_LATENCY_ID, CONSENSUS_PRE_PREPARE_LATENCY.to_string(), MetricKind::Duration),
+        (PROPOSER_LATENCY_ID, PROPOSER_LATENCY.to_string(), MetricKind::Duration),
         (PROPOSE_LATENCY_ID, PROPOSE_LATENCY.to_string(), MetricKind::Duration),
         (CONSENSUS_PRE_PREPARE_LATENCY_ID, CONSENSUS_PRE_PREPARE_LATENCY.to_string(), MetricKind::Duration),
         (CONSENSUS_PREPARE_LATENCY_ID, CONSENSUS_PREPARE_LATENCY.to_string(), MetricKind::Duration),
