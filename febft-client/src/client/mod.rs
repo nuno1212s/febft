@@ -747,8 +747,6 @@ impl<D, NT> Client<D, NT>
                     let session_id = msg_info.session_id();
                     let operation_id = msg_info.sequence_number();
 
-                    start_measurement!(start_time);
-
                     //Check if we have already executed the operation
                     let last_operation_id = last_operation_ids
                         .get(session_id.into())
@@ -793,12 +791,9 @@ impl<D, NT> Client<D, NT>
                         1
                     };
 
-                    measure_response_rcv_time!(&data.stats, start_time);
-
                     // wait for the amount of votes that we require identical replies
                     // In a BFT system, this is by default f+1
                     if count >= votes.needed_votes_count {
-                        start_measurement!(start_time);
 
                         let votes = replica_votes.remove(request_key).unwrap();
 
@@ -820,7 +815,6 @@ impl<D, NT> Client<D, NT>
                             },
                         );
 
-                        measure_response_deliver_time!(&data.stats, start_time);
                     } else {
                         //If we do not have f+1 replies yet, check if it's still possible to get those
                         //Replies by taking a look at the target count and currently received replies count
@@ -848,12 +842,12 @@ impl<D, NT> Client<D, NT>
                         }
                     }
 
+                    metric_duration(CLIENT_RQ_RECV_TIME_ID, start.elapsed());
+
                     continue;
                 }
                 _ => {}
             }
-
-            metric_duration(CLIENT_RQ_RECV_TIME_ID, start.elapsed());
         }
     }
 }

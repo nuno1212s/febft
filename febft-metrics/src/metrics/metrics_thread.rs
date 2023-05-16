@@ -111,6 +111,6 @@ pub fn metric_thread_loop(influx_args: InfluxDBArgs, metric_level: MetricLevel) 
 
         info!("Result of writing metrics: {:?}", result);
 
-        std::thread::sleep(Duration::from_millis(250));
+        std::thread::sleep(Duration::from_millis(1000));
     }
 }
