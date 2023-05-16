@@ -29,7 +29,6 @@ overflow-checks = false # disable integer overflow checks.
 codegen-units = 16
 lto = true # LLVM link time optimizations
 debug = false
-debug-assertions = false
 incremental = false
 
 [profile.dev]
@@ -38,6 +37,6 @@ panic = "unwind"
 overflow-checks = true
 codegen-units = 32
 lto = false
-debug = true
+debug = false
 debug-assertions = true
 incremental = true

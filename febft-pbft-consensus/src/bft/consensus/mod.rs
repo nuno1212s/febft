@@ -387,8 +387,8 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                 return Ok(None);
             }
         } else {
-            // This should never happen?
-            panic!("What");
+            // This should never happen
+            panic!("Front of the decision queue is empty?");
         }
 
         // Move to the next instance of the consensus since the current one is going to be finalized

@@ -68,7 +68,9 @@ pub fn metric_thread_loop(influx_args: InfluxDBArgs, metric_level: MetricLevel) 
                         continue;
                     }
 
-                    let duration_avg = dur.iter().sum::<u64>() as f64 / dur.len() as f64;
+                    let duration_avg = if dur.is_empty() {
+                        0.0
+                    } else { dur.iter().sum::<u64>() as f64 / dur.len() as f64 };
 
                     MetricDurationReading {
                         time,
@@ -78,7 +80,6 @@ pub fn metric_thread_loop(influx_args: InfluxDBArgs, metric_level: MetricLevel) 
                     }.into_query(metric_name)
                 }
                 MetricData::Counter(count) => {
-
                     MetricCounterReading {
                         time,
                         host: host_name.clone(),
@@ -88,12 +89,13 @@ pub fn metric_thread_loop(influx_args: InfluxDBArgs, metric_level: MetricLevel) 
                     }.into_query(metric_name)
                 }
                 MetricData::Count(counts) => {
-
                     if counts.is_empty() {
                         continue;
                     }
 
-                    let count_avg = counts.iter().sum::<usize>() as f64 / counts.len() as f64;
+                    let count_avg = if counts.is_empty() {
+                        0.0
+                    } else { counts.iter().sum::<usize>() as f64 / counts.len() as f64 };
 
                     MetricCountReading {
                         time,

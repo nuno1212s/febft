@@ -90,7 +90,7 @@ pub fn metrics() -> Vec<MetricRegistry> {
         (BATCH_SIZE_ID, BATCH_SIZE.to_string(), MetricKind::Count).into(),
         (PRE_PREPARE_ANALYSIS_ID, PRE_PREPARE_ANALYSIS.to_string(), MetricKind::Duration).into(),
         (PRE_PREPARE_LOG_ANALYSIS_ID, PRE_PREPARE_LOG_ANALYSIS.to_string(), MetricKind::Duration).into(),
-        (OPERATIONS_PROCESSED_ID, OPERATIONS_PROCESSED.to_string(), MetricKind::Count).into(),
+        (OPERATIONS_PROCESSED_ID, OPERATIONS_PROCESSED.to_string(), MetricKind::Counter).into(),
         (SYNC_WATCH_REQUESTS_ID, SYNC_WATCH_REQUESTS.to_string(), MetricKind::Duration).into(),
         (SYNC_BATCH_RECEIVED_ID, SYNC_BATCH_RECEIVED.to_string(), MetricKind::Duration).into(),
         (SYNC_STOPPED_REQUESTS_ID, SYNC_STOPPED_REQUESTS.to_string(), MetricKind::Duration).into(),

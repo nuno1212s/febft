@@ -35,7 +35,10 @@ pub struct Metric {
 #[derive(Debug)]
 enum MetricData {
     Duration(Vec<u64>),
+    /// A counter is a metric that is incremented by X every time it is called and in the end is combined
     Counter(u64),
+    /// A vector that stores the counts of things and then averages their values to feed to influx db
+    /// This is useful for stuff like the batch size, which we don't want to add together.
     Count(Vec<usize>),
 }
 
@@ -158,6 +161,7 @@ impl Metric {
                         MetricData::Count(Vec::with_capacity(vals.len()))
                     }
                 };
+
                 std::mem::replace(&mut *value, mt)
             };
 
@@ -272,7 +276,7 @@ fn increment_counter_measurement(metric: &Metric, counter: Option<u64>) {
     let mut values = metric.values[round_robin % metric.values.len()].lock().unwrap();
 
     if let MetricData::Counter(ref mut v) = *values {
-        *v = *v + counter.unwrap_or(1);
+        *v += counter.unwrap_or(1);
     }
 }
 
@@ -303,7 +307,7 @@ fn collect_all_measurements(level: &MetricLevel) -> Vec<(String, MetricData)> {
 
             for (name, metric_data) in collected_metrics {
                 let joined_metrics = join_metrics(metric_data);
-
+  
                 final_metric_data.push((name, joined_metrics));
             }
 
@@ -322,7 +326,7 @@ fn join_metrics(mut metrics: Vec<MetricData>) -> MetricData {
     let mut first = metrics.swap_remove(0);
 
     while !metrics.is_empty() {
-        let metric = metrics.swap_remove(0);
+        let metric = metrics.pop().unwrap();
 
         first.merge(metric)
     }

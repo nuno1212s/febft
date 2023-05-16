@@ -373,12 +373,13 @@ impl<D, NT> Client<D, NT>
         //get the targets that we are supposed to broadcast the message to
         let (targets, target_count) = T::init_targets(&self);
 
+        let sent_info = SentRequestInfo {
+            sent_time: Instant::now(),
+            target_count,
+            responses_needed: T::needed_responses(self),
+        };
+
         {
-            let sent_info = SentRequestInfo {
-                sent_time: Instant::now(),
-                target_count,
-                responses_needed: T::needed_responses(self),
-            };
 
             let mut request_info_guard = request_info.lock().unwrap();
 
@@ -440,13 +441,13 @@ impl<D, NT> Client<D, NT>
 
         let request_info = get_request_info(session_id, &*self.data);
 
-        {
-            let sent_info = SentRequestInfo {
-                sent_time: Instant::now(),
-                target_count,
-                responses_needed: T::needed_responses(self),
-            };
+        let sent_info = SentRequestInfo {
+            sent_time: Instant::now(),
+            target_count,
+            responses_needed: T::needed_responses(self),
+        };
 
+        {
             let mut request_info_guard = request_info.lock().unwrap();
 
             request_info_guard.insert(request_key, sent_info);

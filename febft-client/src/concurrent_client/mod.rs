@@ -95,8 +95,10 @@ impl<D, NT> ConcurrentClient<D, NT> where D: SharedData + 'static, NT: 'static {
     /// So in the callback, we should not perform any heavy computations / blocking operations as that
     /// will hurt the performance of the client. If you wish to perform heavy operations, move them
     /// to other threads to prevent slowdowns
-    pub fn update_callback<T>(&self, request: D::Request, callback: RequestCallback<D>) -> Result<()> where T: ClientType<D, NT> + 'static,
-                                                                                                            NT: Node<ClientServiceMsg<D>> {
+    pub fn update_callback<T>(&self, request: D::Request, callback: RequestCallback<D>) -> Result<()>
+        where T: ClientType<D, NT> + 'static,
+              NT: Node<ClientServiceMsg<D>> {
+
         let mut session = self.get_session()?;
 
         let session_return = self.session_return.clone();

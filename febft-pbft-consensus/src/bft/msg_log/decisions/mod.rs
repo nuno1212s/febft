@@ -312,9 +312,8 @@ impl<O> DecisionLog<O> {
     /// Returns the proof of the last executed consensus
     /// instance registered in this `DecisionLog`.
     pub fn last_decision(&self) -> Option<Proof<O>> {
-        self.decided.get(self.decided.len() - 1).map(|p| (*p).clone())
+        self.decided.last().map(|p| (*p).clone())
     }
-
 
     /// Clear the decision log until the given sequence number
     pub(crate) fn clear_until_seq(&mut self, seq_no: SeqNo) -> usize {
