@@ -1,4 +1,4 @@
-//! Contains the server side core protocol logic of `febft`.
+ //! Contains the server side core protocol logic of `febft`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -224,8 +224,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                                                                             StoredMessage::new(header, state_transfer)).unwrap();
                                     }
                                     SystemMessage::ForwardedRequestMessage(fwd_reqs) => {
+                                        // Send the forwarded requests to be handled, filtered and then passed onto the ordering protocol
                                         self.rq_pre_processor.send(PreProcessorMessage::ForwardedRequests(StoredMessage::new(header, fwd_reqs))).unwrap();
-                                        //self.ordering_protocol.handle_forwarded_requests(StoredMessage::new(header, fwd_reqs))?;
                                     }
                                     SystemMessage::ForwardedProtocolMessage(fwd_protocol) => {
                                         match self.ordering_protocol.process_message(fwd_protocol.into_inner())? {

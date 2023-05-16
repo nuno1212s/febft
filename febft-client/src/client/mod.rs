@@ -52,7 +52,7 @@ struct SentRequestInfo {
     //The amount of replicas/followers we sent the request to
     target_count: usize,
     //The amount of responses that we need to deliver the received response to the application
-    //Delivers the response to the client when we have # of equal received responses == responses_needed
+    //Delivers the response to the client when we have # of equal received responses >= responses_needed
     responses_needed: usize,
 }
 
@@ -97,8 +97,8 @@ pub struct ClientData<D>
     //Follower data
     follower_data: FollowerData,
 
-    //Information about the requests that were sent like to how many replicas were
-    //they sent, how many responses they need, etc
+    //Information about the requests that were sent like to how many replicas
+    //they sent to, how many responses they need, etc
     request_info: Vec<Mutex<IntMap<SentRequestInfo>>>,
 
     //The ready items for requests made by this client. This is what is going to be used by the message receive task
@@ -162,7 +162,7 @@ impl<D: SharedData, NT> Clone for Client<D, NT> {
     }
 }
 
-struct ClientRequestFut<'a, P> {
+pub(super) struct ClientRequestFut<'a, P> {
     request_key: u64,
     ready: &'a Mutex<IntMap<ClientAwaker<P>>>,
 }
@@ -242,6 +242,8 @@ pub struct ReplicaVotes {
     //The different digests we have received and how many times we have seen them
     digests: BTreeMap<Digest, usize>,
 }
+
+pub type RequestCallback<D: SharedData> = Box<dyn FnOnce(Result<D::Reply>) + Send>;
 
 impl<D, NT> Client<D, NT>
     where
@@ -344,13 +346,19 @@ impl<D, NT> Client<D, NT>
         self.node.id()
     }
 
-    /// Updates the replicated state of the application running
-    /// on top of `atlas`.
-    pub async fn update<T>(&mut self, operation: D::Request) -> Result<D::Reply>
+    #[inline]
+    pub fn session_id(&self) -> SeqNo {
+        self.session_id
+    }
+
+    pub(super) fn client_data(&self) -> &Arc<ClientData<D>> {
+        &self.data
+    }
+
+    pub(super) fn update_inner<T>(&mut self, operation: D::Request) -> Result<ClientRequestFut<D::Reply>>
         where
             T: ClientType<D, NT>,
-            NT: Node<ClientServiceMsg<D>>
-    {
+            NT: Node<ClientServiceMsg<D>> {
         let start = Instant::now();
 
         let session_id = self.session_id;
@@ -368,7 +376,7 @@ impl<D, NT> Client<D, NT>
         {
             let sent_info = SentRequestInfo {
                 sent_time: Instant::now(),
-                target_count: target_count,
+                target_count,
                 responses_needed: T::needed_responses(self),
             };
 
@@ -399,39 +407,29 @@ impl<D, NT> Client<D, NT>
         metric_duration(CLIENT_RQ_SEND_TIME_ID, start.elapsed());
         metric_increment(CLIENT_RQ_PER_SECOND_ID, Some(1));
 
-        ClientRequestFut { request_key, ready }.await
+        Ok(ClientRequestFut { request_key, ready })
     }
 
-    ///Update the SMR state with the given operation
-    /// The callback should be a function to execute when we receive the response to the request.
-    ///
-    /// FIXME: This callback is going to be executed in an important thread for client performance,
-    /// So in the callback, we should not perform any heavy computations / blocking operations as that
-    /// will hurt the performance of the client. If you wish to perform heavy operations, move them
-    /// to other threads to prevent slowdowns
-    pub fn update_callback<T>(
-        &mut self,
-        operation: D::Request,
-        callback: Box<dyn FnOnce(Result<D::Reply>) + Send>,
-    ) where
-        T: ClientType<D, NT>,
-        NT: Node<ClientServiceMsg<D>>
+    /// Updates the replicated state of the application running
+    /// on top of `atlas`.
+    pub async fn update<T>(&mut self, operation: D::Request) -> Result<D::Reply>
+        where
+            T: ClientType<D, NT>,
+            NT: Node<ClientServiceMsg<D>>
     {
+        self.update_inner::<T>(operation)?.await
+    }
+
+    pub(super) fn update_callback_inner<T>(&mut self, operation: D::Request) -> u64 where
+        T: ClientType<D, NT>,
+        NT: Node<ClientServiceMsg<D>> {
         let start = Instant::now();
 
         let session_id = self.session_id;
 
         let operation_id = self.next_operation_id();
 
-        start_measurement!(init_rq);
-
         let message = T::init_request(session_id, operation_id, operation);
-
-        measure_time_rq_init!(&self.data.stats, init_rq);
-
-
-        start_measurement!(target_init);
-
 
         // await response
         let request_key = get_request_key(session_id, operation_id);
@@ -439,10 +437,6 @@ impl<D, NT> Client<D, NT>
         //We only send the message after storing the callback to prevent us receiving the result without having
         //The callback registered, therefore losing the response
         let (targets, target_count) = T::init_targets(&self);
-
-        measure_target_init_time!(&self.data.stats, target_init);
-
-        start_measurement!(rq_info_init);
 
         let request_info = get_request_info(session_id, &*self.data);
 
@@ -458,27 +452,6 @@ impl<D, NT> Client<D, NT>
             request_info_guard.insert(request_key, sent_info);
         }
 
-        measure_sent_rq_info!(&self.data.stats, rq_info_init);
-
-
-        start_measurement!(rq_ready_init);
-
-        let ready = get_ready::<D>(session_id, &*self.data);
-
-        let callback = Callback {
-            to_call: callback,
-            timed_out: AtomicBool::new(false),
-        };
-
-        //Scope the mutex operations to reduce the lifetime of the guard
-        {
-            let mut ready_callback_guard = ready.lock().unwrap();
-
-            ready_callback_guard.insert(request_key, ClientAwaker::Callback(callback));
-        }
-
-        measure_ready_rq_time!(&self.data.stats, rq_ready_init);
-
         self.node.broadcast(NetworkMessageKind::from(message), targets);
 
         Self::start_timeout(
@@ -490,6 +463,29 @@ impl<D, NT> Client<D, NT>
 
         metric_duration(CLIENT_RQ_SEND_TIME_ID, start.elapsed());
         metric_increment(CLIENT_RQ_PER_SECOND_ID, Some(1));
+
+        request_key
+    }
+
+
+    ///Update the SMR state with the given operation
+    /// The callback should be a function to execute when we receive the response to the request.
+    ///
+    /// FIXME: This callback is going to be executed in an important thread for client performance,
+    /// So in the callback, we should not perform any heavy computations / blocking operations as that
+    /// will hurt the performance of the client. If you wish to perform heavy operations, move them
+    /// to other threads to prevent slowdowns
+    pub fn update_callback<T>(
+        &mut self,
+        operation: D::Request,
+        callback: RequestCallback<D>,
+    ) where
+        T: ClientType<D, NT>,
+        NT: Node<ClientServiceMsg<D>>
+    {
+        let rq_key = self.update_callback_inner::<T>(operation);
+
+        register_callback(self.session_id, rq_key, &*self.data, callback);
     }
 
     fn next_operation_id(&mut self) -> SeqNo {
@@ -875,6 +871,26 @@ fn get_correct_vec_for<T>(session_id: SeqNo, vec: &Vec<Mutex<T>>) -> &Mutex<T> {
     let index = session_id % vec.len();
 
     &vec[index]
+}
+
+#[inline]
+pub(super) fn register_callback<D: SharedData>(session_id: SeqNo,
+                                               request_key: u64,
+                                               data: &ClientData<D>,
+                                               callback: RequestCallback<D>) {
+    let ready = get_ready::<D>(session_id, &*data);
+
+    let callback = Callback {
+        to_call: callback,
+        timed_out: AtomicBool::new(false),
+    };
+
+    //Scope the mutex operations to reduce the lifetime of the guard
+    {
+        let mut ready_callback_guard = ready.lock().unwrap();
+
+        ready_callback_guard.insert(request_key, ClientAwaker::Callback(callback));
+    }
 }
 
 #[inline]

@@ -1,10 +1,11 @@
 use std::sync::Arc;
+use std::time::Instant;
 use log::{debug, error, info, trace, warn};
 
 use febft_common::async_runtime as rt;
 use febft_common::socket::{SecureWriteHalfAsync};
 use febft_metrics::metrics::metric_duration;
-use crate::metric::REQUEST_SEND_TIME_ID;
+use crate::metric::{COMM_REQUEST_SEND_TIME_ID, COMM_RQ_SEND_PASSING_TIME_ID};
 use crate::serialize::Serializable;
 
 use crate::tcpip::connections::{ConnHandle, PeerConnection};
@@ -26,6 +27,8 @@ pub(super) fn spawn_outgoing_task<M: Serializable + 'static>(
                 }
             };
 
+            metric_duration(COMM_RQ_SEND_PASSING_TIME_ID, dispatch_time.elapsed());
+
             // If the connection has received an error, disconnect this TX part
             // (As it might have been stuck waiting for a message, and now it
             // would just get an error while trying to write)
@@ -46,10 +49,12 @@ pub(super) fn spawn_outgoing_task<M: Serializable + 'static>(
                     conn_handle.my_id, peer.peer_node_id, to_send.header().payload_length());
             }
 
+            let start = Instant::now();
+
             match to_send.write_to(&mut socket, true).await {
                 Ok(_) => {
 
-                    metric_duration(REQUEST_SEND_TIME_ID, dispatch_time.elapsed());
+                    metric_duration(COMM_REQUEST_SEND_TIME_ID, start.elapsed());
 
                     if let Some(callback) = callback {
                         callback(true);

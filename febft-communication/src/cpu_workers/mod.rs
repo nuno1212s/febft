@@ -7,7 +7,7 @@ use febft_common::error::*;
 use febft_common::threadpool;
 use febft_metrics::metrics::metric_duration;
 use crate::message::{Header, NetworkMessageKind};
-use crate::metric::{COMM_DESERIALIZE_VERIFY_TIME_ID, COMM_SERIALIZE_SIGN_TIME_ID};
+use crate::metric::{COMM_DESERIALIZE_VERIFY_TIME_ID, COMM_SERIALIZE_SIGN_TIME_ID, THREADPOOL_PASS_TIME_ID};
 use crate::serialize;
 use crate::serialize::Serializable;
 
@@ -19,7 +19,12 @@ use crate::serialize::Serializable;
 pub(crate) fn serialize_digest_message<M: Serializable + 'static>(message: NetworkMessageKind<M>) -> OneShotRx<Result<(Bytes, Digest)>> {
     let (tx, rx) = new_oneshot_channel();
 
+    let start = Instant::now();
+
     threadpool::execute(move || {
+
+        metric_duration(THREADPOOL_PASS_TIME_ID, start.elapsed());
+
         // serialize
         tx.send(serialize_digest_no_threadpool(&message)).unwrap();
     });
@@ -59,9 +64,13 @@ pub(crate) fn serialize_digest_no_threadpool<M: Serializable>(message: &NetworkM
 pub(crate) fn deserialize_message<M: Serializable + 'static>(header: Header, payload: BytesMut) -> OneShotRx<Result<(NetworkMessageKind<M>, BytesMut)>> {
     let (tx, rx) = new_oneshot_channel();
 
+    let start = Instant::now();
+
     threadpool::execute(move || {
 
+        metric_duration(THREADPOOL_PASS_TIME_ID, start.elapsed());
         let start = Instant::now();
+
         //TODO: Verify signatures
 
         // deserialize payload
