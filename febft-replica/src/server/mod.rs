@@ -1,7 +1,7 @@
  //! Contains the server side core protocol logic of `febft`.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use futures_timer::Delay;
 
 use log::{debug, error, info, trace};
@@ -28,8 +28,10 @@ use febft_messages::request_pre_processing::work_dividers::WDRoundRobin;
 use febft_messages::serialize::ServiceMsg;
 use febft_messages::state_transfer::{Checkpoint, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
 use febft_messages::timeouts::{TimedOut, Timeout, TimeoutKind, Timeouts};
+use febft_metrics::metrics::metric_duration;
 use crate::config::ReplicaConfig;
 use crate::executable::{Executor, ReplicaReplier};
+use crate::metric::{ORDERING_PROTOCOL_POLL_TIME_ID, ORDERING_PROTOCOL_PROCESS_TIME_ID, STATE_TRANSFER_PROCESS_TIME_ID, TIMEOUT_PROCESS_TIME_ID};
 use crate::server::client_replier::Replier;
 
 //pub mod observer;
@@ -192,7 +194,11 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
             match self.replica_phase {
                 ReplicaPhase::OrderingProtocol => {
+                    let start = Instant::now();
+
                     let poll_res = self.ordering_protocol.poll();
+
+                    metric_duration(ORDERING_PROTOCOL_POLL_TIME_ID, start.elapsed());
 
                     trace!("{:?} // Polling ordering protocol with result {:?}", self.node.id(), poll_res);
 
@@ -210,6 +216,9 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
                                 match message {
                                     SystemMessage::ProtocolMessage(protocol) => {
+
+                                        let start = Instant::now();
+
                                         match self.ordering_protocol.process_message(StoredMessage::new(header, protocol))? {
                                             OrderProtocolExecResult::Success => {
                                                 //Continue execution
@@ -218,6 +227,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                                 self.run_state_transfer_protocol()?;
                                             }
                                         }
+
+                                        metric_duration(ORDERING_PROTOCOL_PROCESS_TIME_ID, start.elapsed());
                                     }
                                     SystemMessage::StateTransferMessage(state_transfer) => {
                                         self.state_transfer_protocol.handle_off_ctx_message(&mut self.ordering_protocol,
@@ -228,6 +239,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                         self.rq_pre_processor.send(PreProcessorMessage::ForwardedRequests(StoredMessage::new(header, fwd_reqs))).unwrap();
                                     }
                                     SystemMessage::ForwardedProtocolMessage(fwd_protocol) => {
+                                        let start = Instant::now();
+
                                         match self.ordering_protocol.process_message(fwd_protocol.into_inner())? {
                                             OrderProtocolExecResult::Success => {
                                                 //Continue execution
@@ -236,6 +249,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                                 self.run_state_transfer_protocol()?;
                                             }
                                         }
+
+                                        metric_duration(ORDERING_PROTOCOL_PROCESS_TIME_ID, start.elapsed());
                                     }
                                     _ => {
                                         error!("{:?} // Received unsupported message {:?}", self.node.id(), message);
@@ -274,6 +289,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                 self.ordering_protocol.handle_off_ctx_message(StoredMessage::new(header, protocol));
                             }
                             SystemMessage::StateTransferMessage(state_transfer) => {
+                                let start = Instant::now();
+
                                 let result = self.state_transfer_protocol.process_message(&mut self.ordering_protocol, StoredMessage::new(header, state_transfer))?;
 
                                 match result {
@@ -292,6 +309,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                         self.run_state_transfer_protocol()?;
                                     }
                                 }
+
+                                metric_duration(STATE_TRANSFER_PROCESS_TIME_ID, start.elapsed());
                             }
                             _ => {}
                         }
@@ -327,6 +346,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
     }
 
     fn timeout_received(&mut self, timeouts: TimedOut) -> Result<()> {
+        let start = Instant::now();
+
         let mut client_rq = Vec::with_capacity(timeouts.len());
         let mut cst_rq = Vec::with_capacity(timeouts.len());
 
@@ -362,6 +383,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                 _ => {}
             };
         }
+
+        metric_duration(TIMEOUT_PROCESS_TIME_ID, start.elapsed());
 
         Ok(())
     }

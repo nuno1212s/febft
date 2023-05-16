@@ -3,6 +3,7 @@ use febft_common::error::*;
 use febft_common::node_id::NodeId;
 use crate::app::{Reply, Request, Service, State, UnorderedBatch, UpdateBatch};
 use crate::serialize::SharedData;
+use std::time::Instant;
 
 pub mod serialize;
 pub mod app;
@@ -11,11 +12,12 @@ pub mod system_params;
 pub enum ExecutionRequest<S, O> {
     // install state from state transfer protocol
     InstallState(S, Vec<O>),
+
     // update the state of the service
-    Update(UpdateBatch<O>),
+    Update((UpdateBatch<O>, Instant)),
     // same as above, and include the application state
     // in the reply, used for local checkpoints
-    UpdateAndGetAppstate(UpdateBatch<O>),
+    UpdateAndGetAppstate((UpdateBatch<O>, Instant)),
 
     //Execute an un ordered batch of requests
     ExecuteUnordered(UnorderedBatch<O>),
@@ -47,7 +49,7 @@ impl<D: SharedData> ExecutorHandle<D>
     pub fn queue_update(&self, batch: UpdateBatch<D::Request>)
                         -> Result<()> {
         self.e_tx
-            .send(ExecutionRequest::Update(batch))
+            .send(ExecutionRequest::Update((batch, Instant::now())))
             .simple(ErrorKind::Executable)
     }
 
@@ -68,7 +70,7 @@ impl<D: SharedData> ExecutorHandle<D>
         batch: UpdateBatch<D::Request>,
     ) -> Result<()> {
         self.e_tx
-            .send(ExecutionRequest::UpdateAndGetAppstate(batch))
+            .send(ExecutionRequest::UpdateAndGetAppstate((batch, Instant::now())))
             .simple(ErrorKind::Executable)
     }
 }
