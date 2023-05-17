@@ -420,3 +420,9 @@ impl Hash for ClientRqInfo {
         self.digest.hash(state);
     }
 }
+
+impl<P> Debug for Protocol<P> where P: Debug {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.payload)
+    }
+}

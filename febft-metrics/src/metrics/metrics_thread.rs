@@ -24,6 +24,7 @@ pub struct MetricDurationReading {
     #[influxdb(tag)] host: String,
     #[influxdb(tag)] extra: String,
     value: f64,
+    std_dev: f64,
 }
 
 #[derive(InfluxDbWriteable)]
@@ -32,6 +33,7 @@ pub struct MetricCountReading {
     #[influxdb(tag)] host: String,
     #[influxdb(tag)] extra: String,
     value: f64,
+    std_dev: f64,
 }
 
 pub fn launch_metrics(influx_args: InfluxDBArgs, metric_level: MetricLevel) {
@@ -40,7 +42,7 @@ pub fn launch_metrics(influx_args: InfluxDBArgs, metric_level: MetricLevel) {
     });
 }
 
-/// The metrics thread. Collects all values from the
+/// The metrics thread. Collects all values from the metrics and sends them to influx db
 pub fn metric_thread_loop(influx_args: InfluxDBArgs, metric_level: MetricLevel) {
     let InfluxDBArgs {
         ip, db_name, user, password, node_id, extra
@@ -68,15 +70,16 @@ pub fn metric_thread_loop(influx_args: InfluxDBArgs, metric_level: MetricLevel) 
                         continue;
                     }
 
-                    let duration_avg = if dur.is_empty() {
-                        0.0
-                    } else { dur.iter().sum::<u64>() as f64 / dur.len() as f64 };
+                    let duration_avg = mean(&dur[..]).unwrap_or(0.0);
+
+                    let dur = std_deviation(&dur[..]).unwrap_or(0.0);
 
                     MetricDurationReading {
                         time,
                         host: host_name.clone(),
                         extra: extra.clone(),
                         value: duration_avg,
+                        std_dev: dur,
                     }.into_query(metric_name)
                 }
                 MetricData::Counter(count) => {
@@ -93,15 +96,16 @@ pub fn metric_thread_loop(influx_args: InfluxDBArgs, metric_level: MetricLevel) 
                         continue;
                     }
 
-                    let count_avg = if counts.is_empty() {
-                        0.0
-                    } else { counts.iter().sum::<usize>() as f64 / counts.len() as f64 };
+                    let count_avg = mean_usize(&counts[..]).unwrap_or(0.0);
+
+                    let dur = std_deviation_usize(&counts[..]).unwrap_or(0.0);
 
                     MetricCountReading {
                         time,
                         host: host_name.clone(),
                         extra: extra.clone(),
                         value: count_avg,
+                        std_dev: dur,
                     }.into_query(metric_name)
                 }
             };
@@ -114,5 +118,55 @@ pub fn metric_thread_loop(influx_args: InfluxDBArgs, metric_level: MetricLevel) 
         info!("Result of writing metrics: {:?}", result);
 
         std::thread::sleep(Duration::from_millis(1000));
+    }
+}
+
+fn mean(data: &[u64]) -> Option<f64> {
+    let sum = data.iter().sum::<u64>() as f64;
+    let count = data.len();
+
+    match count {
+        positive if positive > 0 => Some(sum / count as f64),
+        _ => None,
+    }
+}
+
+fn std_deviation(data: &[u64]) -> Option<f64> {
+    match (mean(data), data.len()) {
+        (Some(data_mean), count) if count > 0 => {
+            let variance = data.iter().map(|value| {
+                let diff = data_mean - (*value as f64);
+
+                diff * diff
+            }).sum::<f64>() / count as f64;
+
+            Some(variance.sqrt())
+        },
+        _ => None
+    }
+}
+
+fn mean_usize(data: &[usize]) -> Option<f64> {
+    let sum = data.iter().sum::<usize>() as f64;
+    let count = data.len();
+
+    match count {
+        positive if positive > 0 => Some(sum / count as f64),
+        _ => None,
+    }
+}
+
+fn std_deviation_usize(data: &[usize]) -> Option<f64> {
+    match (mean_usize(data), data.len()) {
+        (Some(data_mean), count) if count > 0 => {
+            let variance = data.iter().map(|value| {
+                let diff = data_mean - (*value as f64);
+
+                diff * diff
+            }).sum::<f64>() / count as f64;
+
+            Some(variance.sqrt())
+        },
+        _ => None
     }
 }

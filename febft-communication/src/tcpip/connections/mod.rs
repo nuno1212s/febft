@@ -27,7 +27,7 @@ mod conn_establish;
 
 pub type Callback = Option<Box<dyn FnOnce(bool) -> () + Send>>;
 
-pub type NetworkSerializedMessage = (WireMessage, Callback, Instant);
+pub type NetworkSerializedMessage = (WireMessage, Callback, Instant, bool, Instant);
 
 /// How many slots the outgoing queue has for messages.
 const TX_CONNECTION_QUEUE: usize = 1024;
@@ -116,12 +116,12 @@ impl<M> PeerConnection<M> where M: Serializable {
     }
 
     /// Send a message through this connection. Only valid for peer connections
-    pub(crate) fn peer_message(&self, msg: WireMessage, callback: Callback) -> Result<()> {
+    pub(crate) fn peer_message(&self, msg: WireMessage, callback: Callback, should_flush: bool, send_rq_time: Instant) -> Result<()> {
 
         let from = msg.header().from();
         let to = msg.header().to();
 
-        if let Err(_) = self.tx.send((msg, callback, Instant::now())) {
+        if let Err(_) = self.tx.send((msg, callback, Instant::now(), should_flush, send_rq_time)) {
             error!("{:?} // Failed to send peer message to {:?}", from,
                 to);
 
@@ -131,10 +131,10 @@ impl<M> PeerConnection<M> where M: Serializable {
         Ok(())
     }
 
-    async fn peer_msg_return_async(&self, msg: WireMessage, callback: Callback) -> Result<()> {
+    async fn peer_msg_return_async(&self,to_send: NetworkSerializedMessage) -> Result<()> {
         let send = self.tx.clone();
 
-        if let Err(_) = send.send_async((msg, callback, Instant::now())).await {
+        if let Err(_) = send.send_async(to_send).await {
             return Err(Error::simple(ErrorKind::Communication));
         }
 

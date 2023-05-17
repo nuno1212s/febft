@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use febft_common::error::*;
 use febft_communication::serialize::Serializable;
@@ -31,13 +32,13 @@ pub trait OrderingProtocolMessage: Send {
     type ViewInfo: NetworkView + Send + Clone;
 
     #[cfg(feature = "serialize_serde")]
-    type ViewInfo: NetworkView + for<'a> Deserialize<'a> + Serialize + Send + Clone;
+    type ViewInfo: NetworkView + for<'a> Deserialize<'a> + Serialize + Send + Clone + Debug;
 
     #[cfg(feature = "serialize_capnp")]
     type ProtocolMessage: Send + Clone;
 
     #[cfg(feature = "serialize_serde")]
-    type ProtocolMessage: for<'a> Deserialize<'a> + Serialize + Send + Clone;
+    type ProtocolMessage: for<'a> Deserialize<'a> + Serialize + Send + Clone + Debug;
 
     #[cfg(feature = "serialize_capnp")]
     fn serialize_capnp(builder: febft_capnp::consensus_messages_capnp::protocol_message::Builder, msg: &Self::ProtocolMessage) -> Result<()>;
@@ -107,9 +108,10 @@ impl<D: SharedData, P: OrderingProtocolMessage, S: StateTransferMessage> Seriali
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
+#[derive(Debug)]
 pub struct NoProtocol;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct NoView;
 

@@ -278,6 +278,9 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         info!("{:?} // Leader count: {}, Leader set: {:?}", replica.node.id(),
         crr_view.leader_set().len(), crr_view.leader_set());
 
+        println!("{:?} // Leader count: {}, Leader set: {:?}", replica.node.id(),
+        crr_view.leader_set().len(), crr_view.leader_set());
+
         replica.proposer.clone().start();
 
         Ok(replica)

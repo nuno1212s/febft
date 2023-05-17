@@ -31,7 +31,7 @@ use febft_messages::timeouts::{TimedOut, Timeout, TimeoutKind, Timeouts};
 use febft_metrics::metrics::metric_duration;
 use crate::config::ReplicaConfig;
 use crate::executable::{Executor, ReplicaReplier};
-use crate::metric::{ORDERING_PROTOCOL_POLL_TIME_ID, ORDERING_PROTOCOL_PROCESS_TIME_ID, STATE_TRANSFER_PROCESS_TIME_ID, TIMEOUT_PROCESS_TIME_ID};
+use crate::metric::{ORDERING_PROTOCOL_POLL_TIME_ID, ORDERING_PROTOCOL_PROCESS_TIME_ID, RUN_LATENCY_TIME_ID, STATE_TRANSFER_PROCESS_TIME_ID, TIMEOUT_PROCESS_TIME_ID};
 use crate::server::client_replier::Replier;
 
 //pub mod observer;
@@ -189,6 +189,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
     }
 
     pub fn run(&mut self) -> Result<()> {
+        let mut last_loop = Instant::now();
+
         loop {
             self.receive_internal()?;
 
@@ -196,7 +198,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                 ReplicaPhase::OrderingProtocol => {
                     let poll_res = self.ordering_protocol.poll();
 
-                    trace!("{:?} // Polling ordering protocol with result {:?}", self.node.id(), poll_res);
+                    debug!("{:?} // Polling ordering protocol with result {:?}", self.node.id(), poll_res);
 
                     match poll_res {
                         OrderProtocolPoll::RePoll => {
@@ -310,12 +312,13 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                             }
                             _ => {}
                         }
-                    } else {
-                        // Receive timeouts
-                        continue;
                     }
                 }
             }
+
+            metric_duration(RUN_LATENCY_TIME_ID, last_loop.elapsed());
+
+            last_loop = Instant::now();
         }
 
         Ok(())

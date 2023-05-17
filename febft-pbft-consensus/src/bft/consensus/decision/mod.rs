@@ -449,6 +449,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                                                            stored_msg.clone(), node);
 
                     self.message_queue.signal();
+
                     result = DecisionStatus::Transitioned;
 
                     DecisionPhase::Committing(0)

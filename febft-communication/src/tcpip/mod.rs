@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::iter;
 use std::net::SocketAddr;
 use std::sync::{Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use either::Either;
 
@@ -194,7 +194,7 @@ impl<M: Serializable + 'static> TcpNode<M> {
     }
 
     /// Create the send tos for a given target
-    fn send_tos(&self, shared: Option<&NodePKCrypto>, targets: impl Iterator<Item=NodeId>)
+    fn send_tos(&self, shared: Option<&NodePKCrypto>, targets: impl Iterator<Item=NodeId>, flush: bool)
                 -> (Option<SendTo<M>>, Option<SendTos<M>>, Vec<NodeId>) {
         let mut send_to_me = None;
         let mut send_tos: Option<SendTos<M>> = None;
@@ -213,6 +213,8 @@ impl<M: Serializable + 'static> TcpNode<M> {
                     shared: shared.cloned(),
                     nonce,
                     peer_cnn: SendToPeer::Me(self.loopback_channel().clone()),
+                    flush,
+                    rq_send_time: Instant::now(),
                 })
             } else {
                 match self.peer_connections.get_connection(&id) {
@@ -227,6 +229,8 @@ impl<M: Serializable + 'static> TcpNode<M> {
                                 shared: shared.cloned(),
                                 nonce,
                                 peer_cnn: SendToPeer::Peer(conn),
+                                flush,
+                                rq_send_time: Instant::now()
                             })
                         } else {
                             let mut send = SmallVec::new();
@@ -237,6 +241,8 @@ impl<M: Serializable + 'static> TcpNode<M> {
                                 shared: shared.cloned(),
                                 nonce,
                                 peer_cnn: SendToPeer::Peer(conn),
+                                flush,
+                                rq_send_time: Instant::now()
                             });
 
                             send_tos = Some(send)
@@ -380,7 +386,7 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
     fn send(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool) -> Result<()> {
 
         let (send_to_me, send_to_others, failed) =
-            self.send_tos(None, iter::once(target));
+            self.send_tos(None, iter::once(target), flush);
 
         if !failed.is_empty() {
             return Err(Error::simple(ErrorKind::CommunicationPeerNotFound));
@@ -395,7 +401,7 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
         let keys = Some(&self.keys);
 
         let (send_to_me, send_to_others, failed) =
-            self.send_tos(keys, iter::once(target));
+            self.send_tos(keys, iter::once(target), flush);
 
         if !failed.is_empty() {
             return Err(Error::simple(ErrorKind::CommunicationPeerNotFound));
@@ -408,7 +414,7 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
 
     fn broadcast(&self, message: NetworkMessageKind<M>, targets: impl Iterator<Item=NodeId>) -> std::result::Result<(), Vec<NodeId>> {
         let (send_to_me, send_to_others, failed) =
-            self.send_tos(None, targets);
+            self.send_tos(None, targets, true);
 
         Self::serialize_send_impl(send_to_me, send_to_others, message);
 
@@ -423,7 +429,7 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
         let keys = Some(&self.keys);
 
         let (send_to_me, send_to_others, failed) =
-            self.send_tos(keys, target);
+            self.send_tos(keys, target, true);
 
         Self::serialize_send_impl(send_to_me, send_to_others, message);
 
@@ -435,12 +441,14 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
     }
 
     fn broadcast_serialized(&self, messages: BTreeMap<NodeId, StoredSerializedNetworkMessage<M>>) -> std::result::Result<(), Vec<NodeId>> {
+
         let targets = messages.keys().cloned().into_iter();
 
         let (send_to_me, send_to_others, failed) = self.send_tos(None,
-                                                                 targets);
-
-        Self::send_serialized_impl(send_to_me, send_to_others, messages);
+                                                                 targets, true);
+        threadpool::execute(move || {
+            Self::send_serialized_impl(send_to_me, send_to_others, messages);
+        });
 
         if !failed.is_empty() {
             Err(failed)
@@ -473,6 +481,8 @@ struct SendTo<M: Serializable + 'static> {
     shared: Option<NodePKCrypto>,
     nonce: u64,
     peer_cnn: SendToPeer<M>,
+    flush: bool,
+    rq_send_time: Instant
 }
 
 /// The information about the connection itself which can either be a loopback
@@ -503,7 +513,7 @@ impl<M: Serializable + 'static> SendTo<M> {
                 let message = WireMessage::new(self.my_id, self.peer_id,
                                                buf, self.nonce, Some(digest), key_pair);
 
-                peer.peer_message(message, None).unwrap();
+                peer.peer_message(message, None, self.flush, self.rq_send_time).unwrap();
             }
             (_, _) => { unreachable!() }
         }
@@ -525,7 +535,7 @@ impl<M: Serializable + 'static> SendTo<M> {
 
                 let wm = WireMessage::from_parts(header, buf).unwrap();
 
-                peer_cnn.peer_message(wm, None).unwrap();
+                peer_cnn.peer_message(wm, None, self.flush, self.rq_send_time).unwrap();
             }
         }
     }

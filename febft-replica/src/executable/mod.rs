@@ -73,39 +73,50 @@ impl ExecutorReplier for ReplicaReplier {
             return;
         }
 
-        let batch = Arc::new(ReadOnly::new(batch));
-
         let start = Instant::now();
 
-        let size = batch.len() / REPLY_CONCURRENCY;
+        threadpool::execute(move || {
+            let mut batch = batch.into_inner();
 
-        for i in 0..REPLY_CONCURRENCY {
-            let batch = batch.clone();
+            batch.sort_unstable_by_key(|update_reply| update_reply.to());
 
-            let send_node = send_node.clone();
+            // keep track of the last message and node id
+            // we iterated over
+            let mut curr_send = None;
 
-            let range =
-                (size * i)..if i == REPLY_CONCURRENCY {
-                    batch.len()
-                } else {
-                    size * (i + 1)
-                };
+            for update_reply in batch {
+                let (peer_id, session_id, operation_id, payload) = update_reply.into_inner();
 
-            threadpool::execute(move || {
-                metric_duration(REPLIES_PASSING_TIME_ID, start.elapsed());
-
-                for update_reply in &batch.inner()[range] {
-                    let (peer_id, session_id, operation_id, payload) = update_reply.clone().into_inner();
-
-                    let message =
-                        SystemMessage::OrderedReply(ReplyMessage::new(session_id, operation_id, payload));
-
-                    send_node.send(NetworkMessageKind::from(message), peer_id, true);
+                // NOTE: the technique used here to peek the next reply is a
+                // hack... when we port this fix over to the production
+                // branch, perhaps we can come up with a better approach,
+                // but for now this will do
+                if let Some((message, last_peer_id)) = curr_send.take() {
+                    let flush = peer_id != last_peer_id;
+                    send_node.send(NetworkMessageKind::from(message), last_peer_id, flush);
                 }
 
-                metric_duration(REPLIES_SENT_TIME_ID, start.elapsed());
-            });
-        }
+                // store previous reply message and peer id,
+                // for the next iteration
+                //TODO: Choose ordered or unordered reply
+                let message =
+                    SystemMessage::OrderedReply(ReplyMessage::new(session_id, operation_id, payload));
+
+                curr_send = Some((message, peer_id));
+            }
+
+            // deliver last reply
+            if let Some((message, last_peer_id)) = curr_send {
+                send_node.send(NetworkMessageKind::from(message), last_peer_id, true);
+            } else {
+                // slightly optimize code path;
+                // the previous if branch will always execute
+                // (there is always at least one request in the batch)
+                unreachable!();
+            }
+
+            metric_duration(REPLIES_SENT_TIME_ID, start.elapsed());
+        });
     }
 }
 

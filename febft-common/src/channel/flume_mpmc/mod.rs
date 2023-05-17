@@ -133,6 +133,25 @@ impl<T> ChannelMixedRx<T> {
             }
         }
     }
+
+    #[inline]
+    pub fn try_recv(&self) -> Result<T, TryRecvError> {
+        match self.inner.try_recv() {
+            Ok(ele) => {
+                Ok(ele)
+            }
+            Err(err) => {
+                match err {
+                    flume::TryRecvError::Empty => {
+                        Err(TryRecvError::ChannelEmpty)
+                    }
+                    flume::TryRecvError::Disconnected => {
+                        Err(TryRecvError::ChannelDc)
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl<'a, T> Future for ChannelRxFut<'a, T> {

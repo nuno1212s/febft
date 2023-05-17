@@ -61,7 +61,7 @@ pub enum OrderProtocolExecResult {
     RunCst,
 }
 
-impl<P> Debug for OrderProtocolPoll<P> {
+impl<P> Debug for OrderProtocolPoll<P> where P: Debug {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             OrderProtocolPoll::RunCst => {
@@ -70,8 +70,8 @@ impl<P> Debug for OrderProtocolPoll<P> {
             OrderProtocolPoll::ReceiveFromReplicas => {
                 write!(f, "Receive From Replicas")
             }
-            OrderProtocolPoll::Exec(_) => {
-                write!(f, "Exec")
+            OrderProtocolPoll::Exec(message) => {
+                write!(f, "Exec message {:?}", message.message() )
             }
             OrderProtocolPoll::RePoll => {
                 write!(f, "RePoll")

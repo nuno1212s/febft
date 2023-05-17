@@ -19,7 +19,7 @@ pub(super) fn spawn_outgoing_thread<M: Serializable>(
             let rx = peer.to_send_handle().clone();
 
             loop {
-                let (to_send, callback, dispatch_time) = match rx.recv() {
+                let (to_send, callback, dispatch_time, flush, send_rq_time) = match rx.recv() {
                     Ok(message) => { message }
                     Err(error_kind) => {
                         error!("Failed to receive message to send. {:?}", error_kind);
@@ -29,7 +29,7 @@ pub(super) fn spawn_outgoing_thread<M: Serializable>(
                 };
 
                 if conn_handle.is_cancelled() {
-                    peer.peer_message(to_send, callback).unwrap();
+                    peer.peer_message(to_send, callback, flush, send_rq_time).unwrap();
 
                     return;
                 }
@@ -46,7 +46,7 @@ pub(super) fn spawn_outgoing_thread<M: Serializable>(
                     Err(error_kind) => {
                         error!("Failed to write message to socket. {:?}", error_kind);
 
-                        peer.peer_message(to_send, callback).unwrap();
+                        peer.peer_message(to_send, callback, flush, send_rq_time).unwrap();
 
                         break;
                     }

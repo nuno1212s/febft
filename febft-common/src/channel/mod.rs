@@ -191,6 +191,11 @@ impl<T> ChannelSyncTx<T> {
     pub fn send_timeout(&self, value: T, timeout: Duration) -> Result<(), TrySendError<T>> {
         self.inner.send_timeout(value, timeout)
     }
+
+    #[inline]
+    pub fn try_send(&self, value: T) -> Result<(), TrySendError<T>> {
+        self.inner.try_send(value)
+    }
 }
 
 impl<T> Clone for ChannelSyncTx<T> {
@@ -245,6 +250,7 @@ impl<T> ChannelMixedRx<T> {
         self.inner.len()
     }
 
+    #[inline]
     pub fn recv(&self) -> Result<T, RecvError> {
         match self.inner.recv_sync() {
             Ok(res) => {
@@ -256,6 +262,7 @@ impl<T> ChannelMixedRx<T> {
         }
     }
 
+    #[inline]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvError> {
         match self.inner.recv_timeout(timeout) {
             Ok(result) => {
@@ -267,6 +274,7 @@ impl<T> ChannelMixedRx<T> {
         }
     }
 
+    #[inline]
     pub async fn recv_async(&mut self) -> Result<T, RecvError> {
         match self.inner.recv().await {
             Ok(val) => {
@@ -276,6 +284,11 @@ impl<T> ChannelMixedRx<T> {
                 Err(RecvError::ChannelDc)
             }
         }
+    }
+
+    #[inline]
+    pub fn try_recv(&self) -> Result<T, TryRecvError> {
+        self.inner.try_recv()
     }
 }
 
@@ -501,6 +514,7 @@ impl<T> std::error::Error for SendError<T> {}
 pub enum TrySendError<T> {
     Disconnected(T),
     Timeout(T),
+    Full(T)
 }
 
 impl<T> Debug for TrySendError<T> {

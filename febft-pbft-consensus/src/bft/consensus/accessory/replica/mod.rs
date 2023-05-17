@@ -152,8 +152,10 @@ impl<D, ST> AccessoryConsensus<D, ST> for ReplicaAccessory<D, ST>
             node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
         }
 
-        deciding_log.batch_meta().lock().unwrap().commit_sent_time = Utc::now();
+        debug!("{:?} // Broadcasted commit consensus message {:?}",
+                        node_id, deciding_log.sequence_number());
 
+        deciding_log.batch_meta().lock().unwrap().commit_sent_time = Utc::now();
     }
 
     fn handle_committing_no_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
