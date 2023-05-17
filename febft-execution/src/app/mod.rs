@@ -269,6 +269,10 @@ impl<P> BatchReplies<P> {
         });
     }
 
+    pub fn inner(&self) -> &Vec<UpdateReply<P>> {
+        &self.inner
+    }
+
     /// Returns the inner storage.
     pub fn into_inner(self) -> Vec<UpdateReply<P>> {
         self.inner

@@ -8,9 +8,11 @@ use febft_common::{channel, threadpool};
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 
 use febft_common::error::*;
+use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::{Node};
 use febft_communication::message::{NetworkMessageKind};
+use febft_communication::metric::REPLICA_RQ_PASSING_TIME_ID;
 use febft_execution::app::{BatchReplies, Reply, Request, Service, State, UnorderedBatch, UpdateBatch};
 use febft_execution::{ExecutionRequest, ExecutorHandle};
 use febft_execution::serialize::SharedData;
@@ -18,10 +20,11 @@ use febft_messages::messages::{Message, ReplyMessage, SystemMessage};
 use febft_messages::ordering_protocol::OrderingProtocol;
 use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
 use febft_metrics::metrics::metric_duration;
-use crate::metric::{EXECUTION_LATENCY_TIME_ID, EXECUTION_TIME_TAKEN_ID, REPLIES_SENT_TIME_ID};
+use crate::metric::{EXECUTION_LATENCY_TIME_ID, EXECUTION_TIME_TAKEN_ID, REPLIES_PASSING_TIME_ID, REPLIES_SENT_TIME_ID};
 use crate::server::client_replier::ReplyHandle;
 
 const EXECUTING_BUFFER: usize = 8096;
+const REPLY_CONCURRENCY: usize = 4;
 
 pub trait ExecutorReplier: Send {
     fn execution_finished<D, OP, ST, NT>(
@@ -70,50 +73,39 @@ impl ExecutorReplier for ReplicaReplier {
             return;
         }
 
+        let batch = Arc::new(ReadOnly::new(batch));
+
         let start = Instant::now();
 
-        threadpool::execute(move || {
-            let mut batch = batch.into_inner();
+        let size = batch.len() / REPLY_CONCURRENCY;
 
-            batch.sort_unstable_by_key(|update_reply| update_reply.to());
+        for i in 0..REPLY_CONCURRENCY {
+            let batch = batch.clone();
 
-            // keep track of the last message and node id
-            // we iterated over
-            let mut curr_send = None;
+            let send_node = send_node.clone();
 
-            for update_reply in batch {
-                let (peer_id, session_id, operation_id, payload) = update_reply.into_inner();
+            let range =
+                (size * i)..if i == REPLY_CONCURRENCY {
+                    batch.len()
+                } else {
+                    size * (i + 1)
+                };
 
-                // NOTE: the technique used here to peek the next reply is a
-                // hack... when we port this fix over to the production
-                // branch, perhaps we can come up with a better approach,
-                // but for now this will do
-                if let Some((message, last_peer_id)) = curr_send.take() {
-                    let flush = peer_id != last_peer_id;
-                    send_node.send(NetworkMessageKind::from(message), last_peer_id, flush);
+            threadpool::execute(move || {
+                metric_duration(REPLIES_PASSING_TIME_ID, start.elapsed());
+
+                for update_reply in &batch.inner()[range] {
+                    let (peer_id, session_id, operation_id, payload) = update_reply.clone().into_inner();
+
+                    let message =
+                        SystemMessage::OrderedReply(ReplyMessage::new(session_id, operation_id, payload));
+
+                    send_node.send(NetworkMessageKind::from(message), peer_id, true);
                 }
 
-                // store previous reply message and peer id,
-                // for the next iteration
-                //TODO: Choose ordered or unordered reply
-                let message =
-                    SystemMessage::OrderedReply(ReplyMessage::new(session_id, operation_id, payload));
-
-                curr_send = Some((message, peer_id));
-            }
-
-            // deliver last reply
-            if let Some((message, last_peer_id)) = curr_send {
-                send_node.send(NetworkMessageKind::from(message), last_peer_id, true);
-            } else {
-                // slightly optimize code path;
-                // the previous if branch will always execute
-                // (there is always at least one request in the batch)
-                unreachable!();
-            }
-
-            metric_duration(REPLIES_SENT_TIME_ID, start.elapsed());
-        });
+                metric_duration(REPLIES_SENT_TIME_ID, start.elapsed());
+            });
+        }
     }
 }
 
@@ -168,7 +160,7 @@ impl<S, NT> Executor<S, NT>
             send_node,
             loopback_channel,
         };
-        
+
         for request in requests {
             exec.service.update(&mut exec.state, request);
         }
@@ -186,7 +178,7 @@ impl<S, NT> Executor<S, NT>
                     match exec_req {
                         ExecutionRequest::InstallState(checkpoint, after) => {
                             exec.state = checkpoint;
-                            
+
                             for req in after {
                                 exec.service.update(&mut exec.state, req);
                             }

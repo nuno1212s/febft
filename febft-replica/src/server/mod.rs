@@ -194,11 +194,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
             match self.replica_phase {
                 ReplicaPhase::OrderingProtocol => {
-                    let start = Instant::now();
-
                     let poll_res = self.ordering_protocol.poll();
-
-                    metric_duration(ORDERING_PROTOCOL_POLL_TIME_ID, start.elapsed());
 
                     trace!("{:?} // Polling ordering protocol with result {:?}", self.node.id(), poll_res);
 

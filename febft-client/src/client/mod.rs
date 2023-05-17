@@ -29,7 +29,7 @@ use febft_messages::serialize::{ClientMessage, ClientServiceMsg, OrderingProtoco
 use febft_metrics::benchmarks::ClientPerf;
 use febft_metrics::{measure_ready_rq_time, measure_response_deliver_time, measure_response_rcv_time, measure_sent_rq_info, measure_target_init_time, measure_time_rq_init, start_measurement};
 use febft_metrics::metrics::{metric_duration, metric_increment};
-use crate::metric::{CLIENT_RQ_DELIVER_RESPONSE_ID, CLIENT_RQ_LATENCY_ID, CLIENT_RQ_PER_SECOND_ID, CLIENT_RQ_RECV_PER_SECOND_ID, CLIENT_RQ_RECV_TIME_ID, CLIENT_RQ_SEND_TIME_ID};
+use crate::metric::{CLIENT_RQ_DELIVER_RESPONSE_ID, CLIENT_RQ_LATENCY_ID, CLIENT_RQ_PER_SECOND_ID, CLIENT_RQ_RECV_PER_SECOND_ID, CLIENT_RQ_RECV_TIME_ID, CLIENT_RQ_SEND_TIME_ID, CLIENT_RQ_TIMEOUT_ID};
 
 use self::unordered_client::{FollowerData, UnorderedClientMode};
 
@@ -509,7 +509,7 @@ impl<D, NT> Client<D, NT>
 
         async_runtime::spawn(async move {
             //Timeout delay
-            Delay::new(Duration::from_secs(5)).await;
+            Delay::new(Duration::from_secs(1)).await;
 
             let req_key = get_request_key(session_id, rq_id);
 
@@ -552,6 +552,8 @@ impl<D, NT> Client<D, NT>
                         bucket.remove(&req_key);
                     }*/
                 }
+
+                metric_increment(CLIENT_RQ_TIMEOUT_ID, Some(1));
             }
         });
     }

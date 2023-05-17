@@ -201,15 +201,6 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         //TODO: Should this only be done after the commit phase?
         timeouts.received_pre_prepare(sending_node, timeout_info);
 
-        //If we only send the digest of the request in the pre prepare
-        //It's possible that, if the latency of the client to a given replica A is smaller than the
-        //Latency to leader replica B + time taken to process request in B + Latency between A and B,
-        //This replica does not know of the request and yet it is valid.
-        //This means that that client would not be able to process requests from that replica, which could
-        //break some of the quorum properties (replica A would always be faulty for that client even if it is
-        //not, so we could only tolerate f-1 faults for clients that are in that situation)
-        //log.insert_batched(pre_prepare);
-
         metric_duration(SYNC_BATCH_RECEIVED_ID, start_time.elapsed());
 
         digests
