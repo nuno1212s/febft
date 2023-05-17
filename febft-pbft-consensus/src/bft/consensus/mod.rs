@@ -477,16 +477,16 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         Ok((state, reqs))
     }
 
-    pub fn install_sequence_number(&mut self, seq_no: SeqNo, view: &ViewInfo) {
-        info!("{:?} // Installing sequence number {:?} vs current {:?}", self.node_id, seq_no, self.seq_no);
+    pub fn install_sequence_number(&mut self, novel_seq_no: SeqNo, view: &ViewInfo) {
+        info!("{:?} // Installing sequence number {:?} vs current {:?}", self.node_id, novel_seq_no, self.seq_no);
 
-        match seq_no.index(self.seq_no) {
+        match novel_seq_no.index(self.seq_no) {
             Either::Left(_) => {
                 debug!("{:?} // Installed sequence number is left of the current on. Clearing all queues", self.node_id);
 
                 self.clear_all_queues();
 
-                let mut sequence_no = seq_no;
+                let mut sequence_no = novel_seq_no;
 
                 while self.decisions.len() < self.watermark as usize {
                     let novel_decision = ConsensusDecision::init_decision(self.node_id, sequence_no, view);
@@ -496,8 +496,8 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                     sequence_no = sequence_no + SeqNo::ONE;
                 }
 
-                self.tbo_queue.curr_seq = seq_no;
-                self.seq_no = seq_no;
+                self.tbo_queue.curr_seq = novel_seq_no;
+                self.seq_no = novel_seq_no;
             }
             Either::Right(0) => {
                 // We are in the correct sequence number
@@ -513,17 +513,21 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                 self.signalled.clear();
                 self.consensus_guard.clear();
 
-                let mut sequence_no = seq_no;
+                let mut sequence_no = novel_seq_no;
 
-                let mut overflow = limit - self.decisions.len();
+                let mut overflow = limit - self.watermark as usize;
 
                 if overflow >= self.tbo_queue.pre_prepares.len() {
+                    debug!("{:?} // Decision log overflow is larger than the tbo queue. Clearing tbo queue {} vs {}", self.node_id, overflow, self.tbo_queue.pre_prepares.len());
+
                     // If we have more overflow than stored in the tbo queue, then
                     // We must clear the entire tbo queue and start fresh
                     self.tbo_queue.clear();
 
-                    self.tbo_queue.curr_seq = seq_no;
+                    self.tbo_queue.curr_seq = novel_seq_no;
                 } else {
+                    debug!("{:?} // Decision log overflow eats into the tbo queue. Removing {} out of {} seqs", self.node_id, overflow, self.tbo_queue.pre_prepares.len());
+
                     for _ in 0..overflow {
                         // Read the next overflow consensus instances and dispose of them
                         // As they have already been registered to the log
@@ -533,17 +537,18 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
 
                 /// Get the next few already populated message queues from the tbo queue.
                 /// This will also adjust the tbo queue sequence number to the correct one
-                while self.tbo_queue.sequence_number() < seq_no && self.decisions.len() < self.watermark as usize {
+                while self.tbo_queue.sequence_number() < novel_seq_no && self.decisions.len() < self.watermark as usize {
                     let messages = self.tbo_queue.advance_queue();
 
                     let decision = ConsensusDecision::init_with_msg_log(self.node_id, sequence_no, view, messages);
+
+                    debug!("{:?} // Initialized new decision from TBO queue messages {:?}", self.node_id, decision.sequence_number());
 
                     self.enqueue_decision(decision);
 
                     sequence_no += SeqNo::ONE;
                 }
 
-                /// Populate the rest of the watermark decisions with empty consensus decisions
                 while self.decisions.len() < self.watermark as usize {
                     let decision = ConsensusDecision::init_decision(self.node_id, sequence_no, view);
 
@@ -552,7 +557,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                     sequence_no += SeqNo::ONE;
                 }
 
-                self.seq_no = seq_no;
+                self.seq_no = novel_seq_no;
             }
             Either::Right(limit) => {
                 debug!("{:?} // Installed sequence number is right of the current one and is smaller than the decisions we have stored. Removing decided decisions.", self.node_id);
@@ -562,7 +567,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                     self.decisions.pop_front();
                 }
 
-                // The decision at the head of the list is now seq_no
+                // The decision at the head of the list is now novel_seq_no
 
                 // Get the last decision in the decision queue.
                 // The following new consensus decisions will have the sequence number of the last decision
@@ -583,12 +588,13 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                     sequence_no += SeqNo::ONE;
                 }
 
-                self.seq_no = seq_no;
+                self.seq_no = novel_seq_no;
             }
         }
 
-        self.consensus_guard.install_seq_no(seq_no);
+        self.consensus_guard.install_seq_no(novel_seq_no);
         self.tbo_queue.signal();
+
         // A couple of assertions to make sure we are good
         assert_eq!(self.tbo_queue.sequence_number(), self.seq_no);
         assert_eq!(self.decisions.front().unwrap().sequence_number(), self.seq_no);

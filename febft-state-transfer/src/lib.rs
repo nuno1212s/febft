@@ -841,7 +841,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
         let cst_seq = self.curr_seq();
         let current_view = order_protocol.view();
 
-        debug!("{:?} // Requesting latest consensus seq no with seq {:?}", self.node.id(), cst_seq);
+        info!("{:?} // Requesting latest consensus seq no with seq {:?}", self.node.id(), cst_seq);
 
         self.timeouts.timeout_cst_request(self.curr_timeout,
                                           current_view.quorum() as u32,
@@ -872,6 +872,8 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
 
         let cst_seq = self.curr_seq();
         let current_view = order_protocol.view();
+
+        info!("{:?} // Requesting latest state with cst msg seq {:?}", self.node.id(), cst_seq);
 
         self.timeouts.timeout_cst_request(self.curr_timeout,
                                           current_view.quorum() as u32,
