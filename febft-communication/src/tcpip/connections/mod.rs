@@ -70,12 +70,12 @@ pub struct PeerConnection<M: Serializable + 'static> {
     //The channel used to send serialized messages to the tasks that are meant to handle them
     tx: ChannelMixedTx<NetworkSerializedMessage>,
     // The RX handle corresponding to the tx channel above. This is so we can quickly associate new
-// TX connections to a given connection, as we just have to clone this handle
+    // TX connections to a given connection, as we just have to clone this handle
     rx: ChannelMixedRx<NetworkSerializedMessage>,
     // Counter to assign unique IDs to each of the underlying Tcp streams
     conn_id_generator: AtomicU32,
     // A map to manage the currently active connections and a cached size value to prevent
-// concurrency for simple length checks
+    // concurrency for simple length checks
     active_connection_count: AtomicUsize,
     active_connections: Mutex<BTreeMap<u32, ConnHandle>>,
 }

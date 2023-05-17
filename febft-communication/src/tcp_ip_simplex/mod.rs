@@ -1,3 +1,5 @@
+pub mod connections;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,11 +35,11 @@ impl<M: Serializable + 'static> Node<M> for TCPSimplexNode<M> {
     }
 
     fn id(&self) -> NodeId {
-        todo!()
+        self.id
     }
 
     fn first_cli(&self) -> NodeId {
-        todo!()
+        self.first_cli
     }
 
     fn node_connections(&self) -> &Arc<Self::ConnectionManager> {
