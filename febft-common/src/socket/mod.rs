@@ -33,8 +33,8 @@ mod rio_tcp;
 
 mod std_tcp;
 
-const WRITE_BUFFER_SIZE: usize = 1 * 1024 * 1024;
-const READ_BUFFER_SIZE: usize = 1 * 1024 * 1024;
+const WRITE_BUFFER_SIZE: usize = 8 * 1024 * 1024;
+const READ_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 
 /// A `Listener` represents a socket listening on new communications
 /// initiated by peer nodes in the BFT system.

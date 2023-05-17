@@ -10,7 +10,7 @@ use febft_common::channel::{ChannelMultRx, ChannelMultTx, ChannelSyncRx, Channel
 use febft_common::error::*;
 use febft_metrics::metrics::metric_duration;
 
-use crate::{NodeId};
+use crate::{NodeId, NodeIncomingRqHandler};
 use crate::config::ClientPoolConfig;
 use crate::metric::{CLIENT_POOL_BATCH_PASSING_TIME_ID, CLIENT_POOL_COLLECT_TIME_ID, REPLICA_RQ_PASSING_TIME_ID};
 
@@ -148,8 +148,37 @@ impl<T> PeerIncomingRqHandling<T> where T: Send {
         &self.peer_loopback
     }
 
+    fn get_client_rx(&self) -> Result<&ChannelSyncRx<ClientRqBatchOutput<T>>> {
+        return match &self.client_rx {
+            None => {
+                Err(Error::simple_with_msg(ErrorKind::CommunicationIncomingPeerHandling, "Failed to receive from clients as there are no clients connected"))
+            }
+            Some(rx) => {
+                Ok(rx)
+            }
+        };
+    }
+
+    ///Count the amount of clients present (not including replicas)
+    ///Returns None if this is a client and therefore has no client conns
+    pub fn client_count(&self) -> Option<usize> {
+        return match &self.client_handling {
+            None => { None }
+            Some(client) => {
+                Some(client.connected_clients.load(Ordering::Relaxed))
+            }
+        };
+    }
+
+    ///Count the replicas connected
+    pub fn replica_count(&self) -> usize {
+        return self.replica_handling.connected_client_count.load(Ordering::Relaxed);
+    }
+}
+
+impl<T: Send> NodeIncomingRqHandler<T> for PeerIncomingRqHandling<T> {
     /// Get how many client request batches are waiting in the queue
-    pub fn rqs_len_from_clients(&self) -> usize {
+    fn rqs_len_from_clients(&self) -> usize {
         return match &self.client_rx {
             None => { 0 }
             Some(rx) => {
@@ -159,16 +188,15 @@ impl<T> PeerIncomingRqHandling<T> where T: Send {
     }
 
     ///Receive request vector from clients. Block until we get the requests
-    pub fn receive_from_clients(&self, timeout: Option<Duration>) -> Result<Vec<T>> {
+    fn receive_from_clients(&self, timeout: Option<Duration>) -> Result<Vec<T>> {
         let rx = self.get_client_rx()?;
 
         match timeout {
             None => {
                 match rx.recv() {
                     Ok((vec, time_created)) => {
-                        
                         metric_duration(CLIENT_POOL_BATCH_PASSING_TIME_ID, time_created.elapsed());
-                        
+
                         Ok(vec)
                     }
                     Err(_) => {
@@ -179,9 +207,8 @@ impl<T> PeerIncomingRqHandling<T> where T: Send {
             Some(timeout) => {
                 match rx.recv_timeout(timeout) {
                     Ok((vec, time_created)) => {
-                        
                         metric_duration(CLIENT_POOL_BATCH_PASSING_TIME_ID, time_created.elapsed());
-                        
+
                         Ok(vec)
                     }
                     Err(err) => {
@@ -202,13 +229,13 @@ impl<T> PeerIncomingRqHandling<T> where T: Send {
     /// Try to receive from the clients.
     /// It's possible that there are no messages currently available, so
     /// we return a result with an option
-    pub fn try_receive_from_clients(&self) -> Result<Option<Vec<T>>> {
+    fn try_receive_from_clients(&self) -> Result<Option<Vec<T>>> {
         let rx = self.get_client_rx()?;
 
         match rx.try_recv() {
             Ok((msgs, time_created)) => {
                 metric_duration(CLIENT_POOL_BATCH_PASSING_TIME_ID, time_created.elapsed());
-                
+
                 Ok(Some(msgs))
             }
             Err(err) => {
@@ -224,36 +251,14 @@ impl<T> PeerIncomingRqHandling<T> where T: Send {
         }
     }
 
-    fn get_client_rx(&self) -> Result<&ChannelSyncRx<ClientRqBatchOutput<T>>> {
-        return match &self.client_rx {
-            None => {
-                Err(Error::simple_with_msg(ErrorKind::CommunicationIncomingPeerHandling, "Failed to receive from clients as there are no clients connected"))
-            }
-            Some(rx) => {
-                Ok(rx)
-            }
-        };
+    /// How many requests are there currently in the channel rx replica vec
+    fn rqs_len_from_replicas(&self) -> usize {
+        self.replica_handling.channel_rx_replica.len()
     }
 
     ///Receive a single request from the replicas
-    pub fn receive_from_replicas(&self, timeout: Option<Duration>) -> Result<Option<T>> {
+    fn receive_from_replicas(&self, timeout: Option<Duration>) -> Result<Option<T>> {
         Ok(self.replica_handling.receive_from_replicas(timeout))
-    }
-
-    ///Count the amount of clients present (not including replicas)
-    ///Returns None if this is a client and therefore has no client conns
-    pub fn client_count(&self) -> Option<usize> {
-        return match &self.client_handling {
-            None => { None }
-            Some(client) => {
-                Some(client.connected_clients.load(Ordering::Relaxed))
-            }
-        };
-    }
-
-    ///Count the replicas connected
-    pub fn replica_count(&self) -> usize {
-        return self.replica_handling.connected_client_count.load(Ordering::Relaxed);
     }
 }
 

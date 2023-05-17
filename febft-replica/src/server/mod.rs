@@ -13,7 +13,7 @@ use febft_common::error::*;
 use febft_common::globals::ReadOnly;
 use febft_common::node_id::NodeId;
 use febft_common::ordering::{SeqNo};
-use febft_communication::{Node, NodeConnections};
+use febft_communication::{Node, NodeConnections, NodeIncomingRqHandler};
 use febft_communication::message::{StoredMessage};
 use febft_execution::app::{Request, Service, State};
 use febft_execution::ExecutorHandle;
@@ -28,10 +28,10 @@ use febft_messages::request_pre_processing::work_dividers::WDRoundRobin;
 use febft_messages::serialize::ServiceMsg;
 use febft_messages::state_transfer::{Checkpoint, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
 use febft_messages::timeouts::{TimedOut, Timeout, TimeoutKind, Timeouts};
-use febft_metrics::metrics::metric_duration;
+use febft_metrics::metrics::{metric_duration, metric_store_count};
 use crate::config::ReplicaConfig;
 use crate::executable::{Executor, ReplicaReplier};
-use crate::metric::{ORDERING_PROTOCOL_POLL_TIME_ID, ORDERING_PROTOCOL_PROCESS_TIME_ID, RUN_LATENCY_TIME_ID, STATE_TRANSFER_PROCESS_TIME_ID, TIMEOUT_PROCESS_TIME_ID};
+use crate::metric::{ORDERING_PROTOCOL_POLL_TIME_ID, ORDERING_PROTOCOL_PROCESS_TIME_ID, REPLICA_RQ_QUEUE_SIZE_ID, RUN_LATENCY_TIME_ID, STATE_TRANSFER_PROCESS_TIME_ID, TIMEOUT_PROCESS_TIME_ID};
 use crate::server::client_replier::Replier;
 
 //pub mod observer;
@@ -205,7 +205,11 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                             //Continue
                         }
                         OrderProtocolPoll::ReceiveFromReplicas => {
-                            let network_message = self.node.receive_from_replicas(Some(REPLICA_WAIT_TIME)).unwrap();
+                            let start = Instant::now();
+
+                            let network_message = self.node.node_incoming_rq_handling().receive_from_replicas(Some(REPLICA_WAIT_TIME)).unwrap();
+
+                            metric_store_count(REPLICA_RQ_QUEUE_SIZE_ID, self.node.node_incoming_rq_handling().rqs_len_from_replicas());
 
                             if let Some(network_message) = network_message {
                                 let (header, message) = network_message.into_inner();
@@ -226,7 +230,6 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                             }
                                         }
 
-                                        metric_duration(ORDERING_PROTOCOL_PROCESS_TIME_ID, start.elapsed());
                                     }
                                     SystemMessage::StateTransferMessage(state_transfer) => {
                                         self.state_transfer_protocol.handle_off_ctx_message(&mut self.ordering_protocol,
@@ -258,6 +261,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                 // Receive timeouts in the beginning of the next iteration
                                 continue;
                             }
+
+                            metric_duration(ORDERING_PROTOCOL_PROCESS_TIME_ID, start.elapsed());
                         }
                         OrderProtocolPoll::Exec(message) => {
                             match self.ordering_protocol.process_message(message)? {
@@ -275,7 +280,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                     }
                 }
                 ReplicaPhase::StateTransferProtocol => {
-                    let message = self.node.receive_from_replicas(Some(REPLICA_WAIT_TIME)).unwrap();
+                    let message = self.node.node_incoming_rq_handling().receive_from_replicas(Some(REPLICA_WAIT_TIME)).unwrap();
 
                     if let Some(message) = message {
                         let (header, message) = message.into_inner();

@@ -33,6 +33,9 @@ pub const REPLIES_PASSING_TIME_ID: usize = 508;
 pub const RUN_LATENCY_TIME: &str = "RUN_LATENCY_TIME";
 pub const RUN_LATENCY_TIME_ID: usize = 509;
 
+pub const REPLICA_RQ_QUEUE_SIZE: &str = "REPLICA_RQ_QUEUE_SIZE";
+pub const REPLICA_RQ_QUEUE_SIZE_ID: usize = 510;
+
 pub fn metrics() -> Vec<MetricRegistry> {
 
     vec![
@@ -46,6 +49,7 @@ pub fn metrics() -> Vec<MetricRegistry> {
         (REPLIES_SENT_TIME_ID, REPLIES_SENT_TIME.to_string(), MetricKind::Duration, MetricLevel::Debug).into(),
         (REPLIES_PASSING_TIME_ID, REPLIES_PASSING_TIME.to_string(), MetricKind::Duration, MetricLevel::Debug).into(),
         (RUN_LATENCY_TIME_ID, RUN_LATENCY_TIME.to_string(), MetricKind::Duration, MetricLevel::Debug).into(),
+        (REPLICA_RQ_QUEUE_SIZE_ID, REPLICA_RQ_QUEUE_SIZE.to_string(), MetricKind::Count, MetricLevel::Debug).into(),
     ]
 
 }

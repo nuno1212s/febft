@@ -21,7 +21,7 @@ use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::config::NodeConfig;
 use febft_communication::message::{NetworkMessage, NetworkMessageKind, System};
-use febft_communication::{Node, NodeConnections};
+use febft_communication::{Node, NodeConnections, NodeIncomingRqHandler};
 use febft_execution::serialize::SharedData;
 use febft_execution::system_params::SystemParams;
 use febft_messages::messages::{ReplyMessage, SystemMessage};
@@ -737,10 +737,10 @@ impl<D, NT> Client<D, NT>
         let mut replica_votes: IntMap<ReplicaVotes> = IntMap::new();
 
         //TODO: Maybe change this to make clients use the same timeouts service?
-        while let Ok(message) = node.receive_from_replicas_no_timeout() {
+        while let Ok(message) = node.node_incoming_rq_handling().receive_from_replicas(None) {
             let start = Instant::now();
 
-            let NetworkMessage { header, message } = message;
+            let NetworkMessage { header, message } = message.unwrap();
 
             let sys_msg = message.into();
 

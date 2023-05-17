@@ -300,6 +300,10 @@ impl<M: Serializable + 'static> TcpNode<M> {
             }
         }
     }
+
+    fn loopback_channel(&self) -> &Arc<ConnectedPeer<NetworkMessage<M>>> {
+        self.client_pooling.loopback_connection()
+    }
 }
 
 impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
@@ -309,6 +313,8 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
     type ConnectionManager = PeerConnections<M>;
 
     type Crypto = NodePKCrypto;
+
+    type IncomingRqHandler = PeerIncomingRqHandling<NetworkMessage<M>>;
 
     async fn bootstrap(cfg: NodeConfig) -> Result<Arc<Self>> {
         let id = cfg.id;
@@ -457,21 +463,10 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
         }
     }
 
-    fn loopback_channel(&self) -> &Arc<ConnectedPeer<NetworkMessage<M>>> {
-        self.client_pooling.loopback_connection()
+    fn node_incoming_rq_handling(&self) -> &Arc<PeerIncomingRqHandling<NetworkMessage<M>>> {
+        &self.client_pooling
     }
 
-    fn receive_from_clients(&self, timeout: Option<Duration>) -> Result<Vec<NetworkMessage<M>>> {
-        self.client_pooling.receive_from_clients(timeout)
-    }
-
-    fn try_recv_from_clients(&self) -> Result<Option<Vec<NetworkMessage<M>>>> {
-        self.client_pooling.try_receive_from_clients()
-    }
-
-    fn receive_from_replicas(&self, timeout: Option<Duration>) -> Result<Option<NetworkMessage<M>>> {
-        self.client_pooling.receive_from_replicas(timeout)
-    }
 }
 
 /// Some information about a message about to be sent to a peer

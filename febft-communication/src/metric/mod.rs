@@ -39,7 +39,6 @@ pub const REPLICA_RQ_PASSING_TIME_ID: usize = 406;
 pub const THREADPOOL_PASS_TIME: &str = "THREADPOOL_PASS_TIME";
 pub const THREADPOOL_PASS_TIME_ID: usize = 408;
 
-
 pub fn metrics() -> Vec<MetricRegistry> {
     vec![
         (COMM_RQS_RECVD_ID, COMM_RQS_RECVD.to_string(), MetricKind::Counter, MetricLevel::Trace, 8).into(),
@@ -53,6 +52,6 @@ pub fn metrics() -> Vec<MetricRegistry> {
         (THREADPOOL_PASS_TIME_ID, THREADPOOL_PASS_TIME.to_string(), MetricKind::Duration, MetricLevel::Trace, 16).into(),
         (COMM_RQ_SEND_PASSING_TIME_ID, COMM_RQ_SEND_PASSING_TIME.to_string(), MetricKind::Duration, MetricLevel::Trace, 8).into(),
         (COMM_RQ_TIME_SPENT_IN_MOD_ID, COMM_RQ_TIME_SPENT_IN_MOD.to_string(), MetricKind::Duration, MetricLevel::Trace, 8).into(),
-        (COMM_RQ_SEND_CLI_PASSING_TIME_ID, COMM_RQ_SEND_CLI_PASSING_TIME.to_string(), MetricKind::Duration, MetricLevel::Debug, 8).into()
+        (COMM_RQ_SEND_CLI_PASSING_TIME_ID, COMM_RQ_SEND_CLI_PASSING_TIME.to_string(), MetricKind::Duration, MetricLevel::Debug, 8).into(),
     ]
 }

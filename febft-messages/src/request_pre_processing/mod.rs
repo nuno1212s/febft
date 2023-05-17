@@ -9,7 +9,7 @@ use febft_common::globals::ReadOnly;
 use febft_common::node_id::NodeId;
 use febft_common::ordering::SeqNo;
 use febft_communication::message::{Header, NetworkMessage, StoredMessage};
-use febft_communication::Node;
+use febft_communication::{Node, NodeIncomingRqHandler};
 use febft_execution::serialize::SharedData;
 use febft_metrics::metrics::{metric_duration, metric_increment};
 use crate::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
@@ -127,7 +127,7 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData 
                                                    OP: OrderingProtocolMessage + 'static,
                                                    ST: StateTransferMessage + 'static,
                                                    WD: WorkPartitioner<D::Request> {
-        let messages = match self.network_node.receive_from_clients(ORCHESTRATOR_RCV_TIMEOUT) {
+        let messages = match self.network_node.node_incoming_rq_handling().receive_from_clients(ORCHESTRATOR_RCV_TIMEOUT) {
             Ok(message) => {
                 message
             }
