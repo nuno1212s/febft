@@ -49,7 +49,7 @@ impl ConnCounts {
     }
 
     /// How many connections should we maintain with a given node
-    fn get_connections_to_node(&self, my_id: NodeId, other_id: NodeId, first_cli: NodeId) -> usize {
+    pub(crate) fn get_connections_to_node(&self, my_id: NodeId, other_id: NodeId, first_cli: NodeId) -> usize {
         if my_id < first_cli && other_id < first_cli {
             self.replica_connections
         } else {
@@ -88,9 +88,22 @@ pub struct ConnHandle {
 }
 
 impl ConnHandle {
+    pub fn new(id: u32, my_id: NodeId) -> Self {
+        Self {
+            id,
+            my_id,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     #[inline]
     pub fn id(&self) -> u32 {
         self.id
+    }
+
+    #[inline]
+    pub fn my_id(&self) -> NodeId {
+        self.my_id
     }
 
     #[inline]

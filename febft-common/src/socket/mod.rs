@@ -214,6 +214,11 @@ pub enum SecureReadHalf {
     Sync(SecureReadHalfSync),
 }
 
+pub enum SecureSocket {
+    Async(SecureSocketAsync),
+    Sync(SecureSocketSync),
+}
+
 pub enum SecureSocketSync {
     Plain(SyncSocket),
     Tls(Either<ClientConnection, ServerConnection>, SyncSocket),
@@ -625,6 +630,26 @@ impl Read for SyncSocket {
 
     fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
         std::io::Read::read_exact(&mut self.inner, buf)
+    }
+}
+
+impl AsyncRead for SecureSocketAsync {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for SecureSocketAsync {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_close(cx)
     }
 }
 
