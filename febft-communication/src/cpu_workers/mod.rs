@@ -4,7 +4,7 @@ use log::error;
 use febft_common::channel::{new_oneshot_channel, OneShotRx};
 use febft_common::crypto::hash::Digest;
 use febft_common::error::*;
-use febft_common::threadpool;
+use febft_common::{channel, threadpool};
 use febft_metrics::metrics::metric_duration;
 use crate::message::{Header, NetworkMessageKind};
 use crate::metric::{COMM_DESERIALIZE_VERIFY_TIME_ID, COMM_SERIALIZE_SIGN_TIME_ID, THREADPOOL_PASS_TIME_ID};
@@ -27,6 +27,22 @@ pub(crate) fn serialize_digest_message<M: Serializable + 'static>(message: Netwo
 
         // serialize
         tx.send(serialize_digest_no_threadpool(&message)).unwrap();
+    });
+
+    rx
+}
+
+
+/// Serialize and digest a request in the threadpool but don't actually send it. Instead, return the
+/// the message back to us as well so we can do what ever we want with it.
+pub (crate) fn serialize_digest_threadpool_return_msg<M: Serializable + 'static>(message: NetworkMessageKind<M>) -> OneShotRx<(NetworkMessageKind<M>, Result<(Bytes, Digest)>)> {
+
+    let (tx, rx) = channel::new_oneshot_channel();
+
+    threadpool::execute(move || {
+        let result = serialize_digest_no_threadpool(&message);
+
+        let _ = tx.send((message, result));
     });
 
     rx

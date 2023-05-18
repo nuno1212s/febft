@@ -35,9 +35,9 @@ pub mod connections;
 #[derive(Clone)]
 pub struct PeerAddr {
     // All nodes have a replica facing socket
-    replica_facing_socket: (SocketAddr, String),
+    pub(crate) replica_facing_socket: (SocketAddr, String),
     // Only replicas have a client facing socket
-    client_facing_socket: Option<(SocketAddr, String)>,
+    pub(crate) client_facing_socket: Option<(SocketAddr, String)>,
 }
 
 impl PeerAddr {

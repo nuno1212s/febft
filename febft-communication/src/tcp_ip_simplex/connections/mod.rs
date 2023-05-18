@@ -1,6 +1,7 @@
 pub mod conn_establish;
 pub mod outgoing;
 pub mod incoming;
+mod ping_handler;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -9,7 +10,7 @@ use std::time::Instant;
 use dashmap::DashMap;
 use intmap::IntMap;
 use log::{debug, error, warn};
-use febft_common::channel::{ChannelMixedRx, ChannelMixedTx, new_bounded_mixed, OneShotRx};
+use febft_common::channel::{ChannelMixedRx, ChannelMixedTx, new_bounded_mixed, new_oneshot_channel, OneShotRx};
 use febft_common::error::*;
 use febft_common::node_id::NodeId;
 use febft_common::socket::{SecureSocket, SecureSocketAsync};
@@ -18,8 +19,9 @@ use crate::message::{NetworkMessage, WireMessage};
 use crate::NodeConnections;
 use crate::serialize::Serializable;
 use crate::tcp_ip_simplex::connections::conn_establish::ConnectionHandler;
+use crate::tcp_ip_simplex::connections::ping_handler::PingHandler;
 use crate::tcpip::connections::{Callback, ConnCounts, ConnHandle, NetworkSerializedMessage};
-use crate::tcpip::{NodeConnectionAcceptor, PeerAddr};
+use crate::tcpip::{NodeConnectionAcceptor, PeerAddr, TlsNodeAcceptor, TlsNodeConnector};
 
 /// How many slots the outgoing queue has for messages.
 const TX_CONNECTION_QUEUE: usize = 1024;
@@ -32,6 +34,7 @@ pub struct SimplexConnections<M: Serializable + 'static> {
     client_pooling: Arc<PeerIncomingRqHandling<NetworkMessage<M>>>,
     connection_map: DashMap<NodeId, Arc<PeerConnection<M>>>,
     connection_establishing: Arc<ConnectionHandler>,
+    ping_handler: Arc<PingHandler>,
 }
 
 pub struct PeerConnection<M: Serializable + 'static> {
@@ -53,11 +56,18 @@ pub struct PeerConnection<M: Serializable + 'static> {
     incoming_connections: Connections,
 }
 
+/// The connections of a given node (Only represent one way)
 pub struct Connections {
     // A map to manage the currently active connections and a cached size value to prevent
     // concurrency for simple length checks
     active_connection_count: AtomicUsize,
     active_connections: Mutex<BTreeMap<u32, ConnHandle>>,
+}
+
+/// Which direction is a certain connection going in
+enum ConnectionDirection {
+    Incoming,
+    Outgoing,
 }
 
 impl<M> NodeConnections for SimplexConnections<M> where M: Serializable + 'static {
@@ -76,20 +86,65 @@ impl<M> NodeConnections for SimplexConnections<M> where M: Serializable + 'stati
     }
 
     fn connect_to_node(self: &Arc<Self>, node: NodeId) -> Vec<OneShotRx<Result<()>>> {
-        todo!()
+        let option = self.address_map.get(node.0 as u64);
+
+        match option {
+            None => {
+                let (tx, rx) = new_oneshot_channel();
+
+                tx.send(Err(Error::simple(ErrorKind::CommunicationPeerNotFound))).unwrap();
+
+                vec![rx]
+            }
+            Some(addr) => {
+                let conns_to_have = self.conn_counts.get_connections_to_node(self.id, node, self.first_cli);
+                let connections = self.current_connection_count_of(&node).unwrap_or(0);
+
+                let mut oneshots = Vec::with_capacity(conns_to_have);
+
+                for _ in connections..conns_to_have {
+                    oneshots.push(self.connection_establishing.connect_to_node(self, node, addr.clone()));
+                }
+
+                oneshots
+            }
+        }
     }
 
     async fn disconnect_from_node(&self, node: &NodeId) -> Result<()> {
-        todo!()
+        if let Some((id, conn)) = self.connection_map.remove(node) {
+            todo!();
+
+            Ok(())
+        } else {
+            Err(Error::simple(ErrorKind::CommunicationPeerNotFound))
+        }
     }
 }
 
-enum ConnectionDirection {
-    Incoming,
-    Outgoing,
-}
-
 impl<M> SimplexConnections<M> where M: Serializable + 'static {
+
+    pub fn new(peer_id: NodeId, first_cli: NodeId,
+               conn_counts: ConnCounts,
+               addrs: IntMap<PeerAddr>,
+               node_connector: TlsNodeConnector,
+               node_acceptor: TlsNodeAcceptor,
+               client_pooling: Arc<PeerIncomingRqHandling<NetworkMessage<M>>>) -> Arc<Self> {
+        let connection_establish = ConnectionHandler::new(peer_id, first_cli, conn_counts.clone(),
+                                                          node_connector, node_acceptor);
+
+        Arc::new(Self {
+            id: peer_id,
+            first_cli,
+            address_map: addrs,
+            connection_map: DashMap::new(),
+            connection_establishing: connection_establish,
+            client_pooling,
+            conn_counts,
+            ping_handler: PingHandler::new(),
+        })
+    }
+    
     /// Setup a tcp listener inside this peer connections object.
     pub(super) fn setup_tcp_listener(self: Arc<Self>, node_acceptor: NodeConnectionAcceptor) {
         self.connection_establishing.clone().setup_conn_worker(node_acceptor, self)
@@ -127,7 +182,23 @@ impl<M> SimplexConnections<M> where M: Serializable + 'static {
 
         let concurrency_level = self.conn_counts.get_connections_to_node(self.id, peer_id, self.first_cli);
 
-        peer_conn.insert_new_connection(socket, direction, concurrency_level);
+        match direction {
+            ConnectionDirection::Incoming => {
+                // if we are the ones receiving the connection, then we have to attempt to also establish our TX side
+                let mut current_outgoing_connections = peer_conn.outgoing_connection_count();
+
+                while current_outgoing_connections < concurrency_level {
+                    let addr = self.address_map.get(peer_id.0 as u64).unwrap();
+
+                    let _ = self.connection_establishing.connect_to_node(self, peer_id, addr.clone());
+
+                    current_outgoing_connections += 1;
+                }
+            }
+            ConnectionDirection::Outgoing => {}
+        }
+
+        peer_conn.insert_new_connection(&self.ping_handler, socket, direction, concurrency_level);
     }
 
     /// Handle a connection that has been lost
@@ -137,7 +208,7 @@ impl<M> SimplexConnections<M> where M: Serializable + 'static {
         if remaining_conns <= 0 {
             //The node is no longer accessible. We will remove it until a new TCP connection
             // Has been established
-            let _ = self.connection_map.remove(node);
+            let _ = self.connection_map.remove(&node);
         }
 
         // Attempt to re-establish all of the missing connections
@@ -176,23 +247,43 @@ impl<M> PeerConnection<M> where M: Serializable + 'static {
         active_incoming_conns + active_outgoing_conns
     }
 
+    /// Get the current amount of incoming connections
+    fn incoming_connection_count(&self) -> usize {
+        self.incoming_connections.active_connection_count.load(Ordering::Relaxed)
+    }
+
+    /// Get the current amount of outgoing connections
+    fn outgoing_connection_count(&self) -> usize {
+        self.outgoing_connections.active_connection_count.load(Ordering::Relaxed)
+    }
+
     /// Insert a new connection
-    fn insert_new_connection(self: &Arc<Self>, socket: SecureSocket, direction: ConnectionDirection, conn_limit: usize) {
+    fn insert_new_connection(self: &Arc<Self>, ping_handler: &Arc<PingHandler>, socket: SecureSocket, direction: ConnectionDirection, conn_limit: usize) {
         let conn_id = self.conn_id_generator.fetch_add(1, Ordering::Relaxed);
 
         let conn_handle = ConnHandle::new(conn_id, self.node_connections.id);
 
-        let mut active_conns = match direction {
-            ConnectionDirection::Incoming => self.incoming_connections.active_connections.lock(),
-            ConnectionDirection::Outgoing => self.outgoing_connections.active_connections.lock()
-        }.unwrap();
+        let mut conns = match direction {
+            ConnectionDirection::Incoming => &self.incoming_connections,
+            ConnectionDirection::Outgoing => &self.outgoing_connections
+        };
 
-        active_conns.insert(conn_id, conn_handle);
+        {
+            let mut active_conns = conns.active_connections.lock().unwrap();
+
+            active_conns.insert(conn_id, conn_handle.clone());
+        }
+
+        conns.active_connection_count.fetch_add(1, Ordering::Relaxed);
 
         match direction {
-            ConnectionDirection::Incoming => self.incoming_connections.active_connection_count.fetch_add(1, Ordering::Relaxed),
-            ConnectionDirection::Outgoing => self.outgoing_connections.active_connection_count.fetch_add(1, Ordering::Relaxed)
-        };
+            ConnectionDirection::Incoming => {
+                incoming::spawn_incoming_task_handler(conn_handle, Arc::clone(self), socket)
+            }
+            ConnectionDirection::Outgoing => {
+                outgoing::spawn_outgoing_task_handler(conn_handle, Arc::clone(self), Arc::clone(ping_handler), socket);
+            }
+        }
 
         debug!("{:?} // Inserted new connection {:?} to {:?}. Current connection count: {:?}",
             self.peer_node_id, conn_id, self.peer_node_id, self.connection_count());
@@ -202,15 +293,13 @@ impl<M> PeerConnection<M> where M: Serializable + 'static {
     fn delete_connection(&self, conn_id: u32, direction: ConnectionDirection) -> usize {
         // Remove the corresponding connection from the map
         let conn_handle = {
-            let active_connections = match direction {
+            let mut active_connections = match direction {
                 ConnectionDirection::Incoming => self.incoming_connections.active_connections.lock(),
                 ConnectionDirection::Outgoing => self.outgoing_connections.active_connections.lock()
             }.unwrap();
 
             // Do it inside a tiny scope to minimize the time the mutex is accessed
-            let mut guard = active_connections.lock().unwrap();
-
-            guard.remove(&conn_id)
+            active_connections.remove(&conn_id)
         };
 
         let active_connections = match direction {
@@ -219,7 +308,6 @@ impl<M> PeerConnection<M> where M: Serializable + 'static {
         };
 
         let remaining_conns = if let Some(conn_handle) = conn_handle {
-
             let conn_count = active_connections.fetch_sub(1, Ordering::Relaxed);
 
             //Setting the cancelled variable to true causes all associated threads to be
@@ -234,7 +322,7 @@ impl<M> PeerConnection<M> where M: Serializable + 'static {
         // Retry to establish the connections if possible
         self.node_connections.handle_conn_lost(self.peer_node_id, remaining_conns);
 
-        warn!("{:?} // Connection {} with peer {:?} has been deleted", self.node_connections.id(),
+        warn!("{:?} // Connection {} with peer {:?} has been deleted", self.node_connections.id,
             conn_id,self.peer_node_id);
 
         remaining_conns
@@ -265,6 +353,7 @@ impl<M> PeerConnection<M> where M: Serializable + 'static {
         Ok(())
     }
 
+    /// The client pool peer handle for the our peer connection
     pub fn client_pool_peer(&self) -> &Arc<ConnectedPeer<NetworkMessage<M>>> {
         &self.client
     }

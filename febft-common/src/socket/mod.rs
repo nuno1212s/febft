@@ -411,7 +411,7 @@ impl Write for SecureWriteHalfSync {
 
 pub enum SecureSocketAsync {
     Plain(AsyncSocket),
-    Tls(TlsStream<Compat<AsyncSocket>>),
+    Tls(Compat<TlsStream<Compat<AsyncSocket>>>),
 }
 
 impl SecureSocketAsync {
@@ -420,7 +420,7 @@ impl SecureSocketAsync {
     }
 
     pub fn new_tls(socket: TlsStream<Compat<AsyncSocket>>) -> Self {
-        Self::Tls(socket)
+        Self::Tls(socket.compat())
     }
 
     pub fn split(self) -> (SecureWriteHalfAsync, SecureReadHalfAsync) {
@@ -437,6 +437,8 @@ impl SecureSocketAsync {
                 // between async-std and tokio. This means that we currently have a pretty hard time
                 // implementing this.
                 // https://github.com/tokio-rs/tls/issues/40
+
+                let tls_stream = tls_stream.into_inner();
 
                 //Unfortunately in this situation I don't think we can use async socket's efficient OS level split
                 // Since the stream requires duplex access. So we must wrap this in a bilock from futures
@@ -634,22 +636,50 @@ impl Read for SyncSocket {
 }
 
 impl AsyncRead for SecureSocketAsync {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_read(cx, buf)
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<io::Result<usize>> {
+        match &mut *self {
+            SecureSocketAsync::Plain(plain) => {
+                Pin::new(plain).poll_read(cx, buf)
+            }
+            SecureSocketAsync::Tls(tls) => {
+                Pin::new(tls).poll_read(cx, buf)
+            }
+        }
     }
 }
 
 impl AsyncWrite for SecureSocketAsync {
-    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_write(cx, buf)
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        match &mut *self {
+            SecureSocketAsync::Plain(plain) => {
+                Pin::new(plain).poll_write(cx, buf)
+            }
+            SecureSocketAsync::Tls(tls) => {
+                Pin::new(tls).poll_write(cx, buf)
+            }
+        }
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            SecureSocketAsync::Plain(plain) => {
+                Pin::new(plain).poll_flush(cx)
+            }
+            SecureSocketAsync::Tls(tls) => {
+                Pin::new(tls).poll_flush(cx)
+            }
+        }
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_close(cx)
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            SecureSocketAsync::Plain(plain) => {
+                Pin::new(plain).poll_close(cx)
+            }
+            SecureSocketAsync::Tls(tls) => {
+                Pin::new(tls).poll_close(cx)
+            }
+        }
     }
 }
 

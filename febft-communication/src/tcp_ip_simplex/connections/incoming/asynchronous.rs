@@ -6,7 +6,8 @@ use febft_common::socket::SecureSocketAsync;
 use febft_common::error::*;
 use febft_common::async_runtime as rt;
 use crate::cpu_workers;
-use crate::message::{Header, NetworkMessage};
+use crate::cpu_workers::serialize_digest_threadpool_return_msg;
+use crate::message::{Header, NetworkMessage, NetworkMessageKind, PingMessage, WireMessage};
 use crate::serialize::Serializable;
 use crate::tcp_ip_simplex::connections::{ConnectionDirection, PeerConnection};
 use crate::tcpip::connections::ConnHandle;
@@ -26,7 +27,7 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(
             if let Err(err) = socket.read_exact(&mut read_buffer[..Header::LENGTH]).await {
                 // errors reading -> faulty connection;
                 // drop this socket
-                error!("{:?} // Failed to read header from socket, faulty connection {:?}", conn_handle.my_id, err);
+                error!("{:?} // Failed to read header from socket, faulty connection {:?}", conn_handle.my_id(), err);
                 break;
             }
 
@@ -47,7 +48,7 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(
             if let Err(err) = socket.read_exact(&mut read_buffer[..header.payload_length()]).await {
                 // errors reading -> faulty connection;
                 // drop this socket
-                error!("{:?} // Failed to read payload from socket, faulty connection {:?}", conn_handle.my_id, err);
+                error!("{:?} // Failed to read payload from socket, faulty connection {:?}", conn_handle.my_id(), err);
                 break;
             }
 
@@ -64,10 +65,22 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(
                 Err(err) => {
                     // errors deserializing -> faulty connection;
                     // drop this socket
-                    error!("{:?} // Failed to deserialize message {:?}", conn_handle.my_id,err);
+                    error!("{:?} // Failed to deserialize message {:?}", conn_handle.my_id(),err);
                     break;
                 }
             };
+
+            match message {
+                NetworkMessageKind::Ping(ping) => {
+                    if let Err(err) = respond_to_ping(&peer, &mut socket, &conn_handle, ping).await {
+                        error!("{:?} // Failed to respond to ping {:?}", conn_handle.my_id(), err);
+                        break;
+                    }
+
+                    continue
+                }
+                _ => {}
+            }
 
             let msg = NetworkMessage::new(header, message);
 
@@ -86,4 +99,26 @@ pub(super) fn spawn_incoming_task<M: Serializable + 'static>(
 
         peer.delete_connection(conn_handle.id(), ConnectionDirection::Incoming);
     });
+}
+
+async fn respond_to_ping<M: Serializable + 'static>(peer: &Arc<PeerConnection<M>>,
+                                                    socket: &mut SecureSocketAsync,
+                                                    conn_handle: &ConnHandle, rq: PingMessage) -> Result<()> {
+    if !rq.is_request() {
+        return Err(Error::simple(ErrorKind::CommunicationPingHandler));
+    }
+
+    let pong = NetworkMessageKind::<M>::Ping(PingMessage::new(false));
+
+    let (_, result) = serialize_digest_threadpool_return_msg(pong).await.wrapped(ErrorKind::CommunicationPingHandler)?;
+
+    let (payload, digest) = result?;
+
+    let nonce = fastrand::u64(..);
+
+    let wm = WireMessage::new(conn_handle.my_id(), peer.peer_node_id, payload, nonce, Some(digest), None);
+
+    wm.write_to(socket, true).await?;
+
+    Ok(())
 }

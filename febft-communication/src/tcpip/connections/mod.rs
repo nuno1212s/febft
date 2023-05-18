@@ -84,7 +84,7 @@ pub struct PeerConnection<M: Serializable + 'static> {
 pub struct ConnHandle {
     id: u32,
     my_id: NodeId,
-    cancelled: Arc<AtomicBool>,
+    pub(crate) cancelled: Arc<AtomicBool>,
 }
 
 impl ConnHandle {
@@ -291,6 +291,7 @@ impl<M: Serializable + 'static> NodeConnections for PeerConnections<M> {
         nodes
     }
 
+    /// Connect to a given node
     fn connect_to_node(self: &Arc<Self>, node: NodeId) -> Vec<OneShotRx<Result<()>>> {
         let option = self.address_management.get(node.0 as u64);
 
@@ -317,6 +318,7 @@ impl<M: Serializable + 'static> NodeConnections for PeerConnections<M> {
         }
     }
 
+    /// Disconnected from a given node
     async fn disconnect_from_node(&self, node: &NodeId) -> Result<()> {
         if let Some((id, conn)) = self.connection_map.remove(node) {
             todo!();
