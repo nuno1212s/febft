@@ -57,7 +57,6 @@ impl PeerAddr {
             client_facing_socket: Some(replica_addr),
         }
     }
-
 }
 
 /// The connection type used for connections
@@ -230,7 +229,7 @@ impl<M: Serializable + 'static> TcpNode<M> {
                                 nonce,
                                 peer_cnn: SendToPeer::Peer(conn),
                                 flush,
-                                rq_send_time: Instant::now()
+                                rq_send_time: Instant::now(),
                             })
                         } else {
                             let mut send = SmallVec::new();
@@ -242,7 +241,7 @@ impl<M: Serializable + 'static> TcpNode<M> {
                                 nonce,
                                 peer_cnn: SendToPeer::Peer(conn),
                                 flush,
-                                rq_send_time: Instant::now()
+                                rq_send_time: Instant::now(),
                             });
 
                             send_tos = Some(send)
@@ -258,7 +257,6 @@ impl<M: Serializable + 'static> TcpNode<M> {
     fn serialize_send_impl(send_to_me: Option<SendTo<M>>, send_to_others: Option<SendTos<M>>,
                            message: NetworkMessageKind<M>) {
         threadpool::execute(move || {
-
             match crate::cpu_workers::serialize_digest_no_threadpool(&message) {
                 Ok((buffer, digest)) => {
                     Self::send_impl(send_to_me, send_to_others, message, buffer, digest);
@@ -272,7 +270,6 @@ impl<M: Serializable + 'static> TcpNode<M> {
 
     fn send_impl(send_to_me: Option<SendTo<M>>, send_to_others: Option<SendTos<M>>,
                  msg: NetworkMessageKind<M>, buffer: Buf, digest: Digest, ) {
-
         if let Some(send_to) = send_to_me {
             send_to.value(Either::Left((msg, buffer.clone(), digest.clone())));
         }
@@ -307,7 +304,6 @@ impl<M: Serializable + 'static> TcpNode<M> {
 }
 
 impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
-
     type Config = NodeConfig;
 
     type ConnectionManager = PeerConnections<M>;
@@ -389,8 +385,9 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
         &self.keys
     }
 
-    fn send(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool) -> Result<()> {
+    fn node_incoming_rq_handling(&self) -> &Arc<PeerIncomingRqHandling<NetworkMessage<M>>> { &self.client_pooling }
 
+    fn send(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool) -> Result<()> {
         let (send_to_me, send_to_others, failed) =
             self.send_tos(None, iter::once(target), flush);
 
@@ -447,7 +444,6 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
     }
 
     fn broadcast_serialized(&self, messages: BTreeMap<NodeId, StoredSerializedNetworkMessage<M>>) -> std::result::Result<(), Vec<NodeId>> {
-
         let targets = messages.keys().cloned().into_iter();
 
         let (send_to_me, send_to_others, failed) = self.send_tos(None,
@@ -462,11 +458,6 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
             Ok(())
         }
     }
-
-    fn node_incoming_rq_handling(&self) -> &Arc<PeerIncomingRqHandling<NetworkMessage<M>>> {
-        &self.client_pooling
-    }
-
 }
 
 /// Some information about a message about to be sent to a peer
@@ -477,7 +468,7 @@ struct SendTo<M: Serializable + 'static> {
     nonce: u64,
     peer_cnn: SendToPeer<M>,
     flush: bool,
-    rq_send_time: Instant
+    rq_send_time: Instant,
 }
 
 /// The information about the connection itself which can either be a loopback

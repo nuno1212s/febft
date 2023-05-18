@@ -99,13 +99,13 @@ impl PingHandler {
         {
             let mut awaiting_response = self.awaiting_response.lock().unwrap();
 
-            if awaiting_response.contains_key(&peer_id.into()) {
-                return Err(Error::simple_with_msg(ErrorKind::CommunicationPingHandler, "Already attempting to ping this peer"));
-            }
-
             let time = Utc::now().timestamp_millis();
 
             let map = awaiting_response.entry(peer_id).or_insert_with(BTreeMap::new);
+
+            if map.contains_key(&conn_id) {
+                return Err(Error::simple_with_msg(ErrorKind::CommunicationPingHandler, "Already attempting to ping this peer"));
+            }
 
             map.insert(conn_id, PingInformation {
                 tx,

@@ -193,13 +193,13 @@ impl<M> SimplexConnections<M> where M: Serializable + 'static {
                     let connections = peer_conn.outgoing_connections.active_connections.lock().unwrap();
 
                     for (id, _) in connections.iter() {
-                        let result = self.ping_handler.ping_peer(peer_id, id.clone()).unwrap();
+                        let _ = self.ping_handler.ping_peer(peer_id, id.clone());
                     }
                 }
 
                 while current_outgoing_connections < concurrency_level {
 
-                    let addr = self.address_map.get(peer_id.0 as u64).unwrap();
+                    let addr = self.address_map.get(peer_id.0 as u64).expect("Failed to get addr?");
 
                     let _ = self.connection_establishing.connect_to_node(self, peer_id, addr.clone());
 

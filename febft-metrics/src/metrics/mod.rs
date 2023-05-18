@@ -356,10 +356,7 @@ pub fn metric_duration_start(metric: usize) {
 
             start_duration_measurement(metric)
         }
-        None => {
-            //TODO: Remove this
-            error!("Metrics not initialized");
-        }
+        None => {}
     }
 }
 
@@ -375,10 +372,7 @@ pub fn metric_duration_end(metric: usize) {
 
             end_duration_measurement(metric)
         }
-        None => {
-            //TODO: Remove this
-            error!("Metrics not initialized");
-        }
+        None => {}
     }
 }
 
@@ -394,10 +388,7 @@ pub fn metric_duration(metric: usize, duration: Duration) {
 
             enqueue_duration_measurement(&metric, duration.as_nanos() as u64);
         }
-        None => {
-            //TODO: Remove this
-            error!("Metrics not initialized");
-        }
+        None => {}
     }
 }
 
@@ -413,10 +404,7 @@ pub fn metric_increment(metric: usize, counter: Option<u64>) {
 
             increment_counter_measurement(&metric, counter);
         }
-        None => {
-            //TODO: Remove this
-            error!("Metrics not initialized");
-        }
+        None => {}
     }
 }
 
@@ -432,9 +420,6 @@ pub fn metric_store_count(metric: usize, amount: usize) {
 
             enqueue_counter_measurement(metric, amount);
         }
-        None => {
-            //TODO: Remove this
-            error!("Metrics not initialized");
-        }
+        None => {}
     }
 }

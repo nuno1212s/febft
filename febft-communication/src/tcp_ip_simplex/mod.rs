@@ -1,6 +1,7 @@
 pub mod connections;
 
 use std::collections::BTreeMap;
+use std::iter;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -288,23 +289,75 @@ impl<M: Serializable + 'static> Node<M> for TCPSimplexNode<M> {
     }
 
     fn send(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool) -> febft_common::error::Result<()> {
-        todo!()
+        let (send_to_me, send_to_others, failed) =
+            self.send_tos(None, iter::once(target), flush);
+
+        if !failed.is_empty() {
+            return Err(Error::simple(ErrorKind::CommunicationPeerNotFound));
+        }
+
+        Self::serialize_send_impl(send_to_me, send_to_others, message);
+
+        Ok(())
     }
 
     fn send_signed(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool) -> febft_common::error::Result<()> {
-        todo!()
+        let keys = Some(&self.keys);
+
+        let (send_to_me, send_to_others, failed) =
+            self.send_tos(keys, iter::once(target), flush);
+
+        if !failed.is_empty() {
+            return Err(Error::simple(ErrorKind::CommunicationPeerNotFound));
+        }
+
+        Self::serialize_send_impl(send_to_me, send_to_others, message);
+
+        Ok(())
     }
 
     fn broadcast(&self, message: NetworkMessageKind<M>, targets: impl Iterator<Item=NodeId>) -> std::result::Result<(), Vec<NodeId>> {
-        todo!()
+        let (send_to_me, send_to_others, failed) =
+            self.send_tos(None, targets, true);
+
+        Self::serialize_send_impl(send_to_me, send_to_others, message);
+
+        if !failed.is_empty() {
+            Err(failed)
+        } else {
+            Ok(())
+        }
     }
 
     fn broadcast_signed(&self, message: NetworkMessageKind<M>, target: impl Iterator<Item=NodeId>) -> std::result::Result<(), Vec<NodeId>> {
-        todo!()
+        let keys = Some(&self.keys);
+
+        let (send_to_me, send_to_others, failed) =
+            self.send_tos(keys, target, true);
+
+        Self::serialize_send_impl(send_to_me, send_to_others, message);
+
+        if !failed.is_empty() {
+            Err(failed)
+        } else {
+            Ok(())
+        }
     }
 
     fn broadcast_serialized(&self, messages: BTreeMap<NodeId, StoredSerializedNetworkMessage<M>>) -> std::result::Result<(), Vec<NodeId>> {
-        todo!()
+        let targets = messages.keys().cloned().into_iter();
+
+        let (send_to_me, send_to_others, failed) = self.send_tos(None,
+                                                                 targets, true);
+        threadpool::execute(move || {
+            Self::send_serialized_impl(send_to_me, send_to_others, messages);
+        });
+
+        if !failed.is_empty() {
+            Err(failed)
+        } else {
+            Ok(())
+        }
     }
 
 
