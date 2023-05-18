@@ -149,7 +149,8 @@ impl PingHandler {
         if let Some(information) = response {
             let ping_response = Ok(());
 
-            information.tx.send(ping_response).unwrap();
+            // Ignore if the receiver has been dropped
+            let _ = information.tx.send(ping_response);
 
             debug!("Received ping response from peer {:?}", peer_id);
         } else {
@@ -176,6 +177,7 @@ impl PingHandler {
         if let Some(information) = response {
             let ping_response = Err(Error::simple(ErrorKind::CommunicationPingHandler));
 
+            // Ignore if the receiver has been dropped
             information.tx.send(ping_response).unwrap();
 
             debug!("Received ping response from peer {:?}", peer_id);

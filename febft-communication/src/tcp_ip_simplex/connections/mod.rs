@@ -188,9 +188,17 @@ impl<M> SimplexConnections<M> where M: Serializable + 'static {
                 let mut current_outgoing_connections = peer_conn.outgoing_connection_count();
 
                 debug!("Received incoming connection from {:?}. Establishing TX side with {} connections", peer_id, concurrency_level);
-                
+
+                if current_outgoing_connections > 0 {
+                    let connections = peer_conn.outgoing_connections.active_connections.lock().unwrap();
+
+                    for (id, _) in connections.iter() {
+                        let result = self.ping_handler.ping_peer(peer_id, id.clone()).unwrap();
+                    }
+                }
+
                 while current_outgoing_connections < concurrency_level {
-                    
+
                     let addr = self.address_map.get(peer_id.0 as u64).unwrap();
 
                     let _ = self.connection_establishing.connect_to_node(self, peer_id, addr.clone());
@@ -198,7 +206,9 @@ impl<M> SimplexConnections<M> where M: Serializable + 'static {
                     current_outgoing_connections += 1;
                 }
             }
-            ConnectionDirection::Outgoing => {}
+            ConnectionDirection::Outgoing => {
+                // When we are establishing the connection, we don't have to re establish it xD
+            }
         }
 
         peer_conn.insert_new_connection(&self.ping_handler, socket, direction, concurrency_level);
