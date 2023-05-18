@@ -32,7 +32,7 @@ pub mod connections;
 ///Represents the server addresses of a peer
 ///Clients will only have 1 address while replicas will have 2 addresses (1 for facing clients,
 /// 1 for facing replicas)
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PeerAddr {
     // All nodes have a replica facing socket
     pub(crate) replica_facing_socket: (SocketAddr, String),

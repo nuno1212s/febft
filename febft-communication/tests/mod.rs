@@ -18,9 +18,10 @@ mod communication_test {
     use febft_common::{async_runtime as rt, channel};
     use febft_common::threadpool;
     use febft_communication::config::{ClientPoolConfig, NodeConfig, PKConfig, TcpConfig, TlsConfig};
-    use febft_communication::{Node, NodeConnections};
+    use febft_communication::{Node, NodeConnections, NodeIncomingRqHandler};
     use febft_communication::message::NetworkMessageKind;
     use febft_communication::serialize::Serializable;
+    use febft_communication::tcp_ip_simplex::TCPSimplexNode;
     use febft_communication::tcpip::{PeerAddr, TcpNode};
 
     const FIRST_CLI: NodeId = NodeId(1000u32);
@@ -285,6 +286,24 @@ mod communication_test {
         rt::block_on(TcpNode::bootstrap(cfg))
     }
 
+
+    fn gen_simplex_node<T: Serializable>(node_id: NodeId, addrs: IntMap<PeerAddr>, node_count: usize, name: &str, port: u16) -> Result<Arc<TCPSimplexNode<T>>> {
+        let cfg = NodeConfig {
+            id: node_id,
+            first_cli: FIRST_CLI,
+            tcp_config: TcpConfig {
+                addrs,
+                network_config: gen_tls_config(node_id, name),
+                replica_concurrent_connections: 1,
+                client_concurrent_connections: 1,
+            },
+            client_pool_config: CLI_POOL_CFG,
+            pk_crypto_config: gen_pk_config(node_id, node_count),
+        };
+
+        rt::block_on(TCPSimplexNode::bootstrap(cfg))
+    }
+
     #[test]
     fn test_connection() {
         env_logger::init();
@@ -296,8 +315,8 @@ mod communication_test {
         let node_1 = NodeId(0u32);
         let node_2 = NodeId(1u32);
 
-        let node = gen_node::<TestMessage>(node_1, addrs.clone(), 2, "srv0", 1000).unwrap();
-        let node_2_ = gen_node::<TestMessage>(node_2, addrs, 2, "srv1", 1001).unwrap();
+        let node = gen_simplex_node::<TestMessage>(node_1, addrs.clone(), 2, "srv0", 1000).unwrap();
+        let node_2_ = gen_simplex_node::<TestMessage>(node_2, addrs, 2, "srv1", 1001).unwrap();
 
         let rx = node.node_connections().connect_to_node(node_2);
 
@@ -347,7 +366,7 @@ mod communication_test {
 
         warn!("Sent message. Attempting to receive");
 
-        let message = node_2_.receive_from_replicas(None).unwrap();
+        let message = node_2_.node_incoming_rq_handling().receive_from_replicas(None).unwrap();
 
         assert!(message.is_some());
 
@@ -408,7 +427,7 @@ mod communication_test {
         }
 
         for i in 0..msgs {
-            let message = node_2_.receive_from_replicas(None).unwrap();
+            let message = node_2_.node_incoming_rq_handling().receive_from_replicas(None).unwrap();
 
             assert!(message.is_some());
 
@@ -511,7 +530,7 @@ mod communication_test {
                     node.broadcast(req.clone(), ids.iter().cloned()).unwrap();
 
                     for _ in 0..NODE_COUNT * 2 {
-                        let message = node.receive_from_replicas_no_timeout().unwrap();
+                        let message = node.node_incoming_rq_handling().receive_from_replicas(None).unwrap().unwrap();
 
                         let (header, network_msg) = message.into_inner();
 

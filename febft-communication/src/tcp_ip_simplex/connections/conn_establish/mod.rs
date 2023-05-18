@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap};
 use std::sync::{Arc, Mutex};
 use either::Either;
+use log::debug;
 use febft_common::channel::OneShotRx;
 use febft_common::socket::{AsyncSocket, SyncSocket};
 use febft_common::error::*;
@@ -98,6 +99,8 @@ impl ConnectionHandler {
 
     pub fn connect_to_node<M: Serializable + 'static>(self: &Arc<Self>, peer_connections: &Arc<SimplexConnections<M>>,
                                                       peer_id: NodeId, peer_addr: PeerAddr) -> OneShotRx<Result<()>> {
+        debug!("{:?} // Connecting to node {:?} at {:?}", self.id(), peer_id, peer_addr);
+
         match &self.connector {
             TlsNodeConnector::Async(_) => {
                 asynchronous::connect_to_node_async(Arc::clone(self),

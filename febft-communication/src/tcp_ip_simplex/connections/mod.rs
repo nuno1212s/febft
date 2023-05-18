@@ -187,7 +187,10 @@ impl<M> SimplexConnections<M> where M: Serializable + 'static {
                 // if we are the ones receiving the connection, then we have to attempt to also establish our TX side
                 let mut current_outgoing_connections = peer_conn.outgoing_connection_count();
 
+                debug!("Received incoming connection from {:?}. Establishing TX side with {} connections", peer_id, concurrency_level);
+                
                 while current_outgoing_connections < concurrency_level {
+                    
                     let addr = self.address_map.get(peer_id.0 as u64).unwrap();
 
                     let _ = self.connection_establishing.connect_to_node(self, peer_id, addr.clone());
