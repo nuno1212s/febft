@@ -5,7 +5,7 @@ mod communication_test {
     use std::iter;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::{Arc, Barrier};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use intmap::IntMap;
     use log::{debug, error, info, warn};
     use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig};
@@ -528,6 +528,8 @@ mod communication_test {
                             data: Vec::with_capacity(SIZE),
                         });
 
+                    let start = Instant::now();
+
                     node.broadcast(req.clone(), ids.iter().cloned()).unwrap();
 
                     for _ in 0..NODE_COUNT * 2 {
@@ -543,6 +545,8 @@ mod communication_test {
                             debug!("{:?} // Sending response to {:?}", id, header.from());
 
                             node.send(response.clone(), header.from(), true).unwrap();
+                        } else {
+                            debug!("{:?} // Received response from {:?}. Latency: {:?}", id, header.from(), start.elapsed());
                         }
                     }
 

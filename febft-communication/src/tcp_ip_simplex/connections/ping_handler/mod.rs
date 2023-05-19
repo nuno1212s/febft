@@ -136,7 +136,13 @@ impl PingHandler {
             let mut awaiting_response = self.awaiting_response.lock().unwrap();
 
             let (response, empty) = {
-                let connections = awaiting_response.get_mut(&peer_id).unwrap();
+                let connections = awaiting_response.get_mut(&peer_id);
+
+                if connections.is_none() {
+                    return;
+                }
+
+                let connections = connections.unwrap();
 
                 (connections.remove(&conn_id), connections.is_empty())
             };
@@ -164,7 +170,13 @@ impl PingHandler {
             let mut awaiting_response = self.awaiting_response.lock().unwrap();
 
             let (response, empty) = {
-                let connections = awaiting_response.get_mut(&peer_id).unwrap();
+                let connections = awaiting_response.get_mut(&peer_id);
+
+                if connections.is_none() {
+                    return;
+                }
+
+                let connections = connections.unwrap();
 
                 (connections.remove(&conn_id), connections.is_empty())
             };
@@ -223,9 +235,8 @@ impl PingHandler {
 
                 let ping_info = id_conns.remove(&conn).unwrap();
 
-                ping_info.tx.send(
-                    Err(Error::simple_with_msg(ErrorKind::CommunicationPingHandler,
-                                               "Ping request has timed out"))).unwrap();
+                // Ignore errors when delivering the response
+                let _ = ping_info.tx.send(Err(Error::simple_with_msg(ErrorKind::CommunicationPingHandler, "Ping request has timed out")));
 
                 debug!("Timed out ping to node {:?}", id);
 
