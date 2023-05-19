@@ -3,14 +3,16 @@ use std::time::Duration;
 use mio::{Events, Interest, Poll, Registry, Token};
 use slab::Slab;
 use febft_common::channel::ChannelSyncRx;
+use febft_common::node_id::NodeId;
 use febft_common::socket::{MioListener, MioSocket};
 
 const EVENT_CAPACITY: usize = 1024;
+const WORKER_TIMEOUT: Option<Duration> = Some(Duration::from_millis(1));
 
 const SERVER_TOKEN : Token = Token(0);
 
 pub enum EpollWorkerMessage {
-    NewConnection(MioSocket),
+    NewConnection(NodeId, MioSocket),
     CloseConnection(Token)
 }
 
@@ -25,24 +27,20 @@ struct EpollWorker {
 
 impl EpollWorker {
 
-    fn epoll_worker_loop(mut self, server: Option<MioListener>) -> io::Result<()> {
+    fn epoll_worker_loop(mut self) -> io::Result<()> {
 
         let mut epoll = Poll::new()?;
 
         let mut event_queue = Events::with_capacity(EVENT_CAPACITY);
 
-        if let Some(mut server) = server {
-            epoll.registry().register(&mut server, SERVER_TOKEN, Interest::READABLE)?;
-        }
-
         loop {
 
-            epoll.poll(&mut event_queue, Some(Duration::from_millis(1)))?;
+            epoll.poll(&mut event_queue, WORKER_TIMEOUT)?;
 
             for event in event_queue.iter() {
                 match event.token() {
                     SERVER_TOKEN => {
-
+                        
                     }
                     token => {
 

@@ -1,6 +1,5 @@
 //! Abstractions over different socket types of crates in the Rust ecosystem.
 
-use std::fs::read;
 use std::io;
 use std::io::{BufRead, ErrorKind, Read, Write};
 use std::net::SocketAddr;
@@ -18,7 +17,6 @@ use mio::event::Source;
 use mio::{Interest, Registry, Token};
 
 use rustls::{ClientConnection, Error, IoState, ServerConnection, StreamOwned};
-use tokio::io::ReadBuf;
 use tokio_rustls::TlsStream;
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt, FuturesAsyncReadCompatExt};
 
@@ -94,6 +92,22 @@ impl From<SyncSocket> for MioSocket {
 impl From<SyncListener> for MioListener {
     fn from(value: SyncListener) -> Self {
         value.inner.into()
+    }
+}
+
+impl From<mio::net::TcpStream> for MioSocket {
+    fn from(value: mio::net::TcpStream) -> Self {
+        MioSocket {
+            inner: value,
+        }
+    }
+}
+
+impl From<mio::net::TcpListener> for MioListener {
+    fn from(value: mio::net::TcpListener) -> Self {
+        MioListener {
+            inner: value,
+        }
     }
 }
 
