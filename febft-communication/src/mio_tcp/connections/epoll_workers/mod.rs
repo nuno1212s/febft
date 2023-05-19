@@ -9,8 +9,6 @@ use febft_common::socket::{MioListener, MioSocket};
 const EVENT_CAPACITY: usize = 1024;
 const WORKER_TIMEOUT: Option<Duration> = Some(Duration::from_millis(1));
 
-const SERVER_TOKEN : Token = Token(0);
-
 pub enum EpollWorkerMessage {
     NewConnection(NodeId, MioSocket),
     CloseConnection(Token)
@@ -39,9 +37,6 @@ impl EpollWorker {
 
             for event in event_queue.iter() {
                 match event.token() {
-                    SERVER_TOKEN => {
-                        
-                    }
                     token => {
 
                     }

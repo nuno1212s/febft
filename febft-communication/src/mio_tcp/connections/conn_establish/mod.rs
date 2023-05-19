@@ -3,6 +3,7 @@ use std::io;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use bytes::{Bytes, BytesMut};
+use log::{warn};
 use mio::{Events, Interest, Poll, Registry, Token};
 use mio::event::Event;
 use slab::Slab;
@@ -12,8 +13,11 @@ use crate::message::{Header, WireMessage};
 use crate::mio_tcp::connections::epoll_workers::{interrupted, would_block};
 use crate::tcpip::connections::ConnCounts;
 
-
-const SERVER_TOKEN: Token = Token(0);
+const DEFAULT_ALLOWED_CONCURRENT_JOINS: usize = 128;
+// Since the tokens will always start at 0, we limit the amount of concurrent joins we can have
+// And then make the server token that limit + 1, since we know that it will never be exceeded
+// (Since slab re utilizes tokens)
+const SERVER_TOKEN: Token = Token(DEFAULT_ALLOWED_CONCURRENT_JOINS + 1);
 
 pub struct ConnectionHandler {
     concurrent_conn: ConnCounts,
@@ -35,13 +39,24 @@ enum ConnectionResult {
 }
 
 impl ServerWorker {
+    pub fn new(my_id: NodeId, first_cli: NodeId, listener: MioListener, conn_handler: Arc<ConnectionHandler>) -> Self {
+        Self {
+            my_id,
+            first_cli,
+            listener,
+            currently_accepting: Slab::with_capacity(DEFAULT_ALLOWED_CONCURRENT_JOINS),
+            conn_handler,
+        }
+    }
+
+    /// Run the event loop of this worker
     fn event_loop(mut self) -> io::Result<()> {
         let mut poll = Poll::new()?;
 
         poll.registry()
             .register(&mut self.listener, SERVER_TOKEN, Interest::READABLE)?;
 
-        let mut events = Events::with_capacity(128);
+        let mut events = Events::with_capacity(DEFAULT_ALLOWED_CONCURRENT_JOINS);
 
         loop {
             poll.poll(&mut events, None)?;
@@ -55,6 +70,21 @@ impl ServerWorker {
                         match self.handle_connection_readable(token, &event)? {
                             ConnectionResult::Connected(node_id) => {
                                 // We have identified the peer and should now handle the connection
+
+                                if let Some((conn, _)) = self.currently_accepting.remove(token.into()) {
+                                    // Deregister from this poller as we are no longer
+                                    // the ones that should handle this connection
+                                    poll.registry().deregister(&mut conn)?;
+
+                                    if self.conn_handler.register_connecting_to_node(node_id) {
+                                        // If we can connect to this node, then pass
+                                        // this connection to the correct worker
+
+                                        todo!("Pass connection to correct worker")
+                                    } else {
+                                        // Ignore this connection
+                                    }
+                                }
                             }
                             ConnectionResult::ConnectionBroken => {
                                 // Discard of the connection since it has been broken
@@ -64,7 +94,6 @@ impl ServerWorker {
                             }
                             ConnectionResult::Working => {}
                         }
-
                     }
                 }
             }
@@ -75,6 +104,14 @@ impl ServerWorker {
         loop {
             match self.listener.accept() {
                 Ok((socket, addr)) => {
+                    if self.currently_accepting.len() == DEFAULT_ALLOWED_CONCURRENT_JOINS {
+                        // Ignore connections that would exceed our default concurrent join limit
+                        warn!(" {:?} // Ignoring connection from {} since we have reached the concurrent join limit",
+                            self.my_id, addr);
+
+                        continue;
+                    }
+
                     let read_buffer = BytesMut::with_capacity(Header::LENGTH);
 
                     let token = Token(self.currently_accepting.insert((MioSocket::from(socket), read_buffer)));
@@ -99,11 +136,10 @@ impl ServerWorker {
         let (socket, buffer) = &mut self.currently_accepting[token.into()];
 
         if ev.is_readable() {
-
             loop {
                 match socket.read(&mut buffer[buffer.len()..]) {
                     Ok(0) => {
-                        return Ok(ConnectionResult::ConnectionBroken)
+                        return Ok(ConnectionResult::ConnectionBroken);
                     }
                     Ok(n) => {
                         if buffer.len() == Header::LENGTH {
@@ -131,12 +167,42 @@ impl ServerWorker {
                     Err(ref err) if would_block(err) => break,
                     Err(ref err) if interrupted(err) => continue,
                     Err(err) => {
-                        return Err(err)
+                        return Err(err);
                     }
                 };
             }
         }
 
         Ok(ConnectionResult::Working)
+    }
+}
+
+impl ConnectionHandler {
+    fn register_connecting_to_node(&self, peer_id: NodeId) -> bool {
+        let mut connecting_guard = self.currently_connecting.lock().unwrap();
+
+        let value = connecting_guard.entry(peer_id).or_insert(0);
+
+        *value += 1;
+
+        if *value > self.concurrent_conn.get_connections_to_node(self.id(), peer_id, self.first_cli) * 2 {
+            *value -= 1;
+
+            false
+        } else {
+            true
+        }
+    }
+
+    fn done_connecting_to_node(&self, peer_id: &NodeId) {
+        let mut connection_guard = self.currently_connecting.lock().unwrap();
+
+        connection_guard.entry(peer_id.clone()).and_modify(|value| { *value -= 1 });
+
+        if let Some(connection_count) = connection_guard.get(peer_id) {
+            if *connection_count <= 0 {
+                connection_guard.remove(peer_id);
+            }
+        }
     }
 }
