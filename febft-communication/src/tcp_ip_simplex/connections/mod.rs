@@ -274,7 +274,7 @@ impl<M> PeerConnection<M> where M: Serializable + 'static {
     fn insert_new_connection(self: &Arc<Self>, ping_handler: &Arc<PingHandler>, socket: SecureSocket, direction: ConnectionDirection, conn_limit: usize) {
         let conn_id = self.conn_id_generator.fetch_add(1, Ordering::Relaxed);
 
-        let conn_handle = ConnHandle::new(conn_id, self.node_connections.id);
+        let conn_handle = ConnHandle::new(conn_id, self.node_connections.id, self.peer_node_id);
 
         let mut conns = match direction {
             ConnectionDirection::Incoming => &self.incoming_connections,

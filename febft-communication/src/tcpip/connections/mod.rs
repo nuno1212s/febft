@@ -84,14 +84,16 @@ pub struct PeerConnection<M: Serializable + 'static> {
 pub struct ConnHandle {
     id: u32,
     my_id: NodeId,
+    peer_id: NodeId,
     pub(crate) cancelled: Arc<AtomicBool>,
 }
 
 impl ConnHandle {
-    pub fn new(id: u32, my_id: NodeId) -> Self {
+    pub fn new(id: u32, my_id: NodeId, peer_id: NodeId) -> Self {
         Self {
             id,
             my_id,
+            peer_id,
             cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
