@@ -4,7 +4,7 @@ use std::fs::read;
 use std::io;
 use std::io::{BufRead, ErrorKind, Read, Write};
 use std::net::SocketAddr;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
@@ -14,6 +14,8 @@ use futures::{AsyncRead, AsyncReadExt, AsyncWrite};
 
 use futures::io::{BufReader, BufWriter};
 use log::error;
+use mio::event::Source;
+use mio::{Interest, Registry, Token};
 
 use rustls::{ClientConnection, Error, IoState, ServerConnection, StreamOwned};
 use tokio::io::ReadBuf;
@@ -73,6 +75,82 @@ pub struct AsyncSocket {
 /// This is a synchronous socket
 pub struct SyncSocket {
     inner: std_tcp::Socket,
+}
+
+pub struct MioSocket {
+    inner: mio::net::TcpStream,
+}
+
+pub struct MioListener {
+    inner: mio::net::TcpListener,
+}
+
+impl From<SyncSocket> for MioSocket {
+    fn from(value: SyncSocket) -> Self {
+        value.inner.into()
+    }
+}
+
+impl From<SyncListener> for MioListener {
+    fn from(value: SyncListener) -> Self {
+        value.inner.into()
+    }
+}
+
+impl Source for MioSocket {
+    fn register(&mut self, registry: &Registry, token: Token, interests: Interest) -> io::Result<()> {
+        self.inner.register(registry, token, interests)
+    }
+
+    fn reregister(&mut self, registry: &Registry, token: Token, interests: Interest) -> io::Result<()> {
+        self.inner.reregister(registry, token, interests)
+    }
+
+    fn deregister(&mut self, registry: &Registry) -> io::Result<()> {
+        self.inner.deregister(registry)
+    }
+}
+
+impl Source for MioListener {
+    fn register(&mut self, registry: &Registry, token: Token, interests: Interest) -> io::Result<()> {
+        self.inner.register(registry, token, interests)
+    }
+
+    fn reregister(&mut self, registry: &Registry, token: Token, interests: Interest) -> io::Result<()> {
+        self.inner.reregister(registry, token, interests)
+    }
+
+    fn deregister(&mut self, registry: &Registry) -> io::Result<()> {
+        self.inner.deregister(registry)
+    }
+}
+
+impl Deref for MioListener {
+    type Target = mio::net::TcpListener;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for MioListener {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl Deref for MioSocket {
+    type Target = mio::net::TcpStream;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for MioSocket {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
 }
 
 /// Initialize the sockets module.

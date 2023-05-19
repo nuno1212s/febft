@@ -28,6 +28,7 @@ pub mod message_signing;
 pub mod metric;
 pub mod tcpip;
 pub mod tcp_ip_simplex;
+mod mio_tcp;
 
 /// A trait defined that indicates how the connections are managed
 /// Allows us to verify various things about our current connections as well
