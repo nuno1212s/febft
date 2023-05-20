@@ -120,7 +120,6 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
     fn epoll_worker_loop(mut self) -> io::Result<()> {
         let mut event_queue = Events::with_capacity(EVENT_CAPACITY);
 
-
         loop {
             if let Err(e) = self.poll.poll(&mut event_queue, WORKER_TIMEOUT) {
                 if e.kind() == io::ErrorKind::Interrupted {
@@ -392,6 +391,8 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                                 conn_id, my_id, peer_id, self.waker.clone(),
                             );
 
+                            peer_conn.register_peer_conn(handle.clone());
+
                             self.poll.registry().register(&mut socket,
                                                           token, Interest::READABLE)?;
 
@@ -480,4 +481,10 @@ pub(super) fn would_block(err: &io::Error) -> bool {
 
 pub(super) fn interrupted(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::Interrupted
+}
+
+impl<M> NewConnection<M> where M: Serializable + 'static {
+    pub fn new(conn_id: u32, peer_id: NodeId, my_id: NodeId, socket: MioSocket, peer_conn: Arc<PeerConnection<M>>) -> Self {
+        Self { conn_id, peer_id, my_id, socket, peer_conn }
+    }
 }

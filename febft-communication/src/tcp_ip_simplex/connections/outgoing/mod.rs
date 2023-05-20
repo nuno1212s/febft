@@ -1,6 +1,5 @@
 use std::sync::Arc;
-use febft_common::channel;
-use febft_common::socket::{SecureSocket, SecureSocketAsync};
+use febft_common::socket::{SecureSocket};
 use crate::serialize::Serializable;
 use crate::tcp_ip_simplex::connections::PeerConnection;
 use crate::tcp_ip_simplex::connections::ping_handler::PingHandler;

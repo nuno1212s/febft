@@ -1,17 +1,26 @@
 use std::collections::BTreeMap;
 use std::io;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use bytes::{Bytes, BytesMut};
-use log::{warn};
+use futures::channel::oneshot;
+use log::{debug, error, info, warn};
 use mio::{Events, Interest, Poll, Registry, Token};
 use mio::event::Event;
+use mio::net::TcpStream;
 use slab::Slab;
+use febft_common::channel::OneShotRx;
 use febft_common::node_id::NodeId;
-use febft_common::socket::{MioListener, MioSocket};
+use febft_common::error::*;
+use febft_common::socket::{MioListener, MioSocket, SecureSocket, SecureSocketSync};
+use febft_common::{channel, prng, socket, threadpool};
 use crate::message::{Header, WireMessage};
+use crate::mio_tcp::connections::Connections;
 use crate::mio_tcp::connections::epoll_workers::{interrupted, would_block};
+use crate::serialize::Serializable;
 use crate::tcpip::connections::ConnCounts;
+use crate::tcpip::PeerAddr;
 
 const DEFAULT_ALLOWED_CONCURRENT_JOINS: usize = 128;
 // Since the tokens will always start at 0, we limit the amount of concurrent joins we can have
@@ -22,6 +31,7 @@ const SERVER_TOKEN: Token = Token(DEFAULT_ALLOWED_CONCURRENT_JOINS + 1);
 pub struct ConnectionHandler {
     my_id: NodeId,
     first_cli: NodeId,
+
     concurrent_conn: ConnCounts,
     currently_connecting: Mutex<BTreeMap<NodeId, usize>>,
 }
@@ -182,8 +192,10 @@ impl ServerWorker {
 }
 
 impl ConnectionHandler {
-
-
+    /// Register that we are currently attempting to connect to a node.
+    /// Returns true if we can attempt to connect to this node, false otherwise
+    /// We may not be able to connect to a given node if the amount of connections
+    /// being established already overtakes the limit of concurrent connections
     fn register_connecting_to_node(&self, peer_id: NodeId) -> bool {
         let mut connecting_guard = self.currently_connecting.lock().unwrap();
 
@@ -200,6 +212,7 @@ impl ConnectionHandler {
         }
     }
 
+    /// Register that we are done connecting to a given node (The connection was either successful or failed)
     fn done_connecting_to_node(&self, peer_id: &NodeId) {
         let mut connection_guard = self.currently_connecting.lock().unwrap();
 
@@ -210,6 +223,158 @@ impl ConnectionHandler {
                 connection_guard.remove(peer_id);
             }
         }
+    }
+
+    pub fn connect_to_node<M: Serializable + 'static>(self: &Arc<Self>,
+                                                      connections: Arc<Connections<M>>,
+                                                      peer_id: NodeId, addr: PeerAddr) -> OneShotRx<Result<()>> {
+        
+        let (tx, rx) = channel::new_oneshot_channel();
+
+        debug!(" {:?} // Connecting to node {:?} at {:?}", self.my_id(), peer_id, addr);
+
+        let conn_handler = Arc::clone(self);
+
+        if !self.register_connecting_to_node(peer_id) {
+            warn!("{:?} // Tried to connect to node that I'm already connecting to {:?}",
+                conn_handler.my_id(), peer_id);
+
+            let _ = tx.send(Err(Error::simple_with_msg(ErrorKind::Communication, "Already connecting to node")));
+
+            return rx;
+        }
+
+        std::thread::Builder::new()
+            .name(format!("Connecting to Node {:?}", peer_id))
+            .spawn(move || {
+
+                //Get the correct IP for us to address the node
+                //If I'm a client I will always use the client facing addr
+                //While if I'm a replica I'll connect to the replica addr (clients only have this addr)
+                let addr = if conn_handler.my_id() >= conn_handler.first_cli() {
+                    addr.replica_facing_socket.clone()
+                } else {
+                    //We are a replica, but we are connecting to a client, so
+                    //We need the client addr.
+                    if peer_id >= conn_handler.first_cli() {
+                        addr.replica_facing_socket.clone()
+                    } else {
+                        match addr.client_facing_socket.as_ref() {
+                            Some(addr) => addr,
+                            None => {
+                                error!("{:?} // Failed to find IP address for peer {:?}",
+                            conn_handler.my_id(), peer_id);
+
+                                let _ = tx.send(Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to find IP address for peer")));
+                                return;
+                            }
+                        }.clone()
+                    }
+                };
+
+                const SECS: u64 = 1;
+                const RETRY: usize = 3 * 60;
+
+                let mut rng = prng::State::new();
+
+                let nonce = rng.next_state();
+
+                let my_id = conn_handler.my_id();
+
+                // NOTE:
+                // ========
+                //
+                // 1) not an issue if `tx` is closed, this is not a
+                // permanently running task, so channel send failures
+                // are tolerated
+                //
+                // 2) try to connect up to `RETRY` times, then announce
+                // failure with a channel send op
+                for _try in 0..RETRY {
+                    debug!("Attempting to connect to node {:?} with addr {:?} for the {} time", peer_id, addr, _try);
+
+                    match socket::connect_sync(addr.0) {
+                        Ok(mut sock) => {
+
+                            // create header
+                            let (header, _) =
+                                WireMessage::new(my_id, peer_id,
+                                                 Bytes::new(), nonce,
+                                                 None, None).into_inner();
+
+                            // serialize header
+                            let mut buf = [0; Header::LENGTH];
+                            header.serialize_into(&mut buf[..]).unwrap();
+
+                            // send header
+                            if let Err(err) = sock.write_all(&buf[..]) {
+                                // errors writing -> faulty connection;
+                                // drop this socket
+                                error!("{:?} // Failed to connect to the node {:?} {:?} ", conn_handler.my_id(), peer_id, err);
+                                break;
+                            }
+
+                            if let Err(err) = sock.flush() {
+                                // errors flushing -> faulty connection;
+                                // drop this socket
+                                error!("{:?} // Failed to connect to the node {:?} {:?} ", conn_handler.my_id(), peer_id, err);
+                                break;
+                            }
+
+                            // TLS handshake; drop connection if it fails
+                            let sock = if peer_id >= conn_handler.first_cli() || conn_handler.my_id() >= conn_handler.first_cli() {
+                                debug!("{:?} // Connecting with plain text to node {:?}",my_id, peer_id);
+                                SecureSocketSync::new_plain(sock)
+                            } else {
+                                SecureSocketSync::new_plain(sock)
+                                /*let dns_ref = match ServerName::try_from(addr.1.as_str()) {
+                                    Ok(server_name) => server_name,
+                                    Err(err) => {
+                                        error!("Failed to parse DNS name {:?}", err);
+    
+                                        break;
+                                    }
+                                };
+    
+                                match connector.connect(dns_ref, sock.compat_layer()).await {
+                                    Ok(s) => SecureSocketAsync::new_tls(TlsStream::from(s)),
+                                    Err(err) => {
+                                        error!("{:?} // Failed to connect to the node {:?} {:?} ", conn_handler.id(), peer_id, err);
+                                        break;
+                                    }
+                                }*/
+                            };
+
+                            info!("{:?} // Established connection to node {:?}", my_id, peer_id);
+
+                            connections.handle_connection_established(peer_id, SecureSocket::Sync(sock));
+
+                            conn_handler.done_connecting_to_node(&peer_id);
+
+                            let _ = tx.send(Ok(()));
+
+                            return;
+                        }
+                        Err(err) => {
+                            error!("{:?} // Error on connecting to {:?} addr {:?}: {:?}", 
+                                conn_handler.my_id(), peer_id, addr, err);
+                        }
+                    }
+
+                    // sleep for `SECS` seconds and retry
+                    std::thread::sleep(Duration::from_secs(SECS));
+                }
+
+                conn_handler.done_connecting_to_node(&peer_id);
+
+                // announce we have failed to connect to the peer node
+                //if we fail to connect, then just ignore
+                error!("{:?} // Failed to connect to the node {:?} ", conn_handler.my_id(), peer_id);
+
+                let _ = tx.send(Err(Error::simple_with_msg(ErrorKind::Communication, "Failed to establish connection")));
+            }).expect("Failed to allocate thread to establish connection");
+
+        rx
     }
 
     pub fn my_id(&self) -> NodeId {

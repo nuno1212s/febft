@@ -45,6 +45,8 @@ pub trait NodeConnections {
     fn connected_nodes(&self) -> Vec<NodeId>;
 
     /// Connect this node to another node.
+    /// This will attempt to create various connections,
+    /// depending on the configuration for concurrent connection count.
     /// Returns a vec with the results of each of the attempted connections
     fn connect_to_node(self: &Arc<Self>, node: NodeId) -> Vec<OneShotRx<Result<()>>>;
 
