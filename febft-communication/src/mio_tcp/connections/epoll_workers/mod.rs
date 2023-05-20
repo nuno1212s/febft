@@ -1,10 +1,10 @@
 use std::fs::read;
 use std::io;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::Shutdown;
 use std::sync::Arc;
 use std::time::Duration;
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use mio::{Events, Interest, Poll, Registry, Token, Waker};
 use mio::event::Event;
 use slab::Slab;
@@ -13,7 +13,7 @@ use febft_common::error::{Error, ErrorKind, ResultWrappedExt};
 use febft_common::node_id::NodeId;
 use febft_common::socket::{MioSocket};
 use crate::cpu_workers;
-use crate::message::Header;
+use crate::message::{Header, WireMessage};
 use crate::mio_tcp::connections::{Connections, ConnHandle};
 use super::PeerConnection;
 use crate::serialize::Serializable;
@@ -68,7 +68,11 @@ enum SocketConnection<M: Serializable + 'static> {
         handle: ConnHandle,
         // The mio socket that this connection refers to
         socket: MioSocket,
+        // Information and buffers for the read end of this connection
         read_info: ReadingInformation,
+        // Information and buffers for the write end of this connection
+        // Option since we may not be writing anything at the moment
+        writing_info: Option<WritingInformation>,
         // The connection to the peer this connection is a part of
         connection: Arc<PeerConnection<M>>,
     },
@@ -81,6 +85,12 @@ struct ReadingInformation {
     current_header: Option<Header>,
     // The buffer for reading data from the socket.
     read_buffer: BytesMut,
+}
+
+struct WritingInformation {
+    written_bytes: usize,
+    currently_writing_header: Option<Bytes>,
+    currently_writing: Bytes,
 }
 
 impl<M> EpollWorker<M> where M: Serializable + 'static {
@@ -143,12 +153,25 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                     self.read_until_block(token)?;
                 }
 
-                if event.is_writable() {}
+                if event.is_writable() {
+                    self.try_write_until_block(token)?;
+                }
             }
             SocketConnection::Waker => {
                 // Indicates that we should try to write from the connections
 
-                for (index, connection) in &self.connections {}
+                let connections_to_analyse: Vec<Token> = self.connections.iter()
+                    .filter_map(|(key, conn)|
+                        if let SocketConnection::PeerConn { .. } = conn {
+                            Some(Token(key))
+                        } else {
+                            None
+                        })
+                    .collect();
+
+                for x in connections_to_analyse {
+                    self.try_write_until_block(x)?;
+                }
             }
         }
 
@@ -162,19 +185,80 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
             SocketConnection::PeerConn {
                 handle,
                 socket,
-                read_info,
-                connection
+                connection,
+                writing_info,
+                ..
             } => {
                 loop {
+                    let writing = if let Some(writing_info) = writing_info {
+                        //We are writing something
+                        writing_info
+                    } else {
+                        // We are not currently writing anything
 
-                    // We have something to write
-                    if let Some(to_write) = connection.try_take_from_send()? {}
+                        if let Some(to_write) = connection.try_take_from_send()? {
+                            // We have something to write
+                            *writing_info = Some(WritingInformation::from_message(to_write)?);
+
+                            writing_info.as_mut().unwrap()
+                        } else {
+                            // Nothing to write
+                            break;
+                        }
+                    };
+
+                    if let Some(header) = writing.currently_writing_header.as_ref() {
+                        match socket.write(&header[writing.written_bytes..]) {
+                            Ok(n) => {
+                                // We have successfully written n bytes
+                                if n < header.len() {
+                                    writing.written_bytes += n;
+
+                                    continue;
+                                } else {
+                                    writing.written_bytes = 0;
+                                    writing.currently_writing_header = None;
+                                }
+                            }
+                            Err(err) if would_block(&err) => break,
+                            Err(err) if interrupted(&err) => continue,
+                            Err(err) => { return Err(Error::wrapped(ErrorKind::Communication, err)); }
+                        }
+                    } else {
+                        match socket.write(&writing.currently_writing[writing.written_bytes..]) {
+                            Ok(n) => {
+                                // We have successfully written n bytes
+                                if n + writing.written_bytes < writing.currently_writing.len() {
+                                    writing.written_bytes += n;
+
+                                    continue;
+                                } else {
+                                    // We have written all that we have to write.
+                                    *writing_info = None;
+                                }
+                            }
+                            Err(err) if would_block(&err) => break,
+                            Err(err) if interrupted(&err) => continue,
+                            Err(err) => { return Err(Error::wrapped(ErrorKind::Communication, err)); }
+                        }
+                    }
+                }
+
+                if writing_info.is_none() {
+                    // We have nothing to write, so we don't need to be notified of writability
+                    self.poll.registry().reregister(socket, token, Interest::READABLE)
+                        .wrapped_msg(ErrorKind::Communication, "Failed to reregister socket")?;
+                } else {
+                    // We still have something to write but we reached a would block state,
+                    // so we need to be notified of writability
+                    self.poll.registry().reregister(socket, token, Interest::READABLE.add(Interest::WRITABLE))
+                        .wrapped_msg(ErrorKind::Communication, "Failed to reregister socket")?;
                 }
             }
             _ => unreachable!()
         }
 
-        Ok(())
+        Ok(ConnectionWorkResult::Working)
     }
 
     fn read_until_block(&mut self, token: Token) -> febft_common::error::Result<ConnectionWorkResult> {
@@ -185,7 +269,8 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                 handle,
                 socket,
                 read_info,
-                connection
+                connection,
+                ..
             } => {
                 loop {
                     if let Some(header) = &read_info.current_header {
@@ -314,6 +399,7 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                                 handle: handle.clone(),
                                 socket,
                                 read_info: ReadingInformation::new(),
+                                writing_info: None,
                                 connection: peer_conn,
                             };
 
@@ -352,9 +438,39 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
 impl ReadingInformation {
     fn new() -> Self {
         Self {
+            read_bytes: 0,
             current_header: None,
             read_buffer: BytesMut::with_capacity(Header::LENGTH),
         }
+    }
+}
+
+impl WritingInformation {
+    fn new() -> Self {
+        Self {
+            written_bytes: 0,
+            currently_writing_header: None,
+            currently_writing: Bytes::new(),
+        }
+    }
+
+    // Initialize this struct from a wiremessage
+    fn from_message(message: WireMessage) -> febft_common::error::Result<Self> {
+        let (header, payload) = message.into_inner();
+
+        let mut header_bytes = BytesMut::with_capacity(Header::LENGTH);
+
+        header_bytes.resize(Header::LENGTH, 0);
+
+        header.serialize_into(&mut header_bytes[..Header::LENGTH])?;
+
+        let header_bytes = header_bytes.freeze();
+
+        Ok(Self {
+            written_bytes: 0,
+            currently_writing_header: Some(header_bytes),
+            currently_writing: payload,
+        })
     }
 }
 
