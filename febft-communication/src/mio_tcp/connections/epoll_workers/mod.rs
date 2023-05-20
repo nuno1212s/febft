@@ -1,14 +1,18 @@
+use std::fs::read;
 use std::io;
+use std::io::Read;
+use std::net::Shutdown;
 use std::sync::Arc;
 use std::time::Duration;
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 use mio::{Events, Interest, Poll, Registry, Token, Waker};
 use mio::event::Event;
 use slab::Slab;
 use febft_common::channel::ChannelSyncRx;
-use febft_common::error::{ErrorKind, ResultWrappedExt};
+use febft_common::error::{Error, ErrorKind, ResultWrappedExt};
 use febft_common::node_id::NodeId;
 use febft_common::socket::{MioSocket};
+use crate::cpu_workers;
 use crate::message::Header;
 use crate::mio_tcp::connections::{Connections, ConnHandle};
 use super::PeerConnection;
@@ -29,6 +33,11 @@ pub struct NewConnection<M: Serializable + 'static> {
 pub enum EpollWorkerMessage<M: Serializable + 'static> {
     NewConnection(NewConnection<M>),
     CloseConnection(Token),
+}
+
+enum ConnectionWorkResult {
+    Working,
+    ConnectionBroken,
 }
 
 type ConnectionRegister = ChannelSyncRx<MioSocket>;
@@ -59,14 +68,19 @@ enum SocketConnection<M: Serializable + 'static> {
         handle: ConnHandle,
         // The mio socket that this connection refers to
         socket: MioSocket,
-        // The header of the message we are currently reading (if applicable)
-        current_header: Option<Header>,
-        // The buffer for reading data from the socket.
-        read_buffer: BytesMut,
+        read_info: ReadingInformation,
         // The connection to the peer this connection is a part of
         connection: Arc<PeerConnection<M>>,
     },
-    Waker
+    Waker,
+}
+
+struct ReadingInformation {
+    read_bytes: usize,
+    // The header of the message we are currently reading (if applicable)
+    current_header: Option<Header>,
+    // The buffer for reading data from the socket.
+    read_buffer: BytesMut,
 }
 
 impl<M> EpollWorker<M> where M: Serializable + 'static {
@@ -96,6 +110,7 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
     fn epoll_worker_loop(mut self) -> io::Result<()> {
         let mut event_queue = Events::with_capacity(EVENT_CAPACITY);
 
+
         loop {
             if let Err(e) = self.poll.poll(&mut event_queue, WORKER_TIMEOUT) {
                 if e.kind() == io::ErrorKind::Interrupted {
@@ -117,43 +132,162 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                 }
             }
 
-            self.register_connections(self.poll.registry())?;
+            self.register_connections()?;
         }
     }
 
-    fn handle_connection_event(&mut self, token: Token, event: &Event) {
-
+    fn handle_connection_event(&mut self, token: Token, event: &Event) -> febft_common::error::Result<ConnectionWorkResult> {
         match &self.connections[token.into()] {
             SocketConnection::PeerConn { .. } => {
-
                 if event.is_readable() {
-
+                    self.read_until_block(token)?;
                 }
 
-                if event.is_writable() {
-
-                }
-
+                if event.is_writable() {}
             }
             SocketConnection::Waker => {
                 // Indicates that we should try to write from the connections
 
-                for (index, connection) in &self.connections {
-
-                }
-
+                for (index, connection) in &self.connections {}
             }
         }
 
-        if event.is_readable() {
-            loop {}
+        Ok(ConnectionWorkResult::Working)
+    }
+
+    fn try_write_until_block(&mut self, token: Token) -> febft_common::error::Result<ConnectionWorkResult> {
+        let connection = &mut self.connections[token.into()];
+
+        match connection {
+            SocketConnection::PeerConn {
+                handle,
+                socket,
+                read_info,
+                connection
+            } => {
+                loop {
+
+                    // We have something to write
+                    if let Some(to_write) = connection.try_take_from_send()? {}
+                }
+            }
+            _ => unreachable!()
         }
 
-        loop {}
+        Ok(())
+    }
+
+    fn read_until_block(&mut self, token: Token) -> febft_common::error::Result<ConnectionWorkResult> {
+        let connection = &mut self.connections[token.into()];
+
+        match connection {
+            SocketConnection::PeerConn {
+                handle,
+                socket,
+                read_info,
+                connection
+            } => {
+                loop {
+                    if let Some(header) = &read_info.current_header {
+                        // We are currently reading a message
+                        let currently_read = read_info.read_bytes;
+                        let bytes_to_read = header.payload_length() - currently_read;
+
+                        let read = if bytes_to_read > 0 {
+                            match socket.read(&mut read_info.read_buffer[currently_read..]) {
+                                Ok(0) => {
+                                    // Connection closed
+                                    return Ok(ConnectionWorkResult::ConnectionBroken);
+                                }
+                                Ok(n) => {
+                                    // We still have more to read
+                                    n
+                                }
+                                Err(err) if would_block(&err) => break,
+                                Err(err) if interrupted(&err) => continue,
+                                Err(err) => { return Err(Error::wrapped(ErrorKind::Communication, err)); }
+                            }
+                        } else {
+                            // Only read if we need to read from the socket.
+                            // If not, keep parsing the messages that are in the read buffer
+                            0
+                        };
+
+                        if read >= bytes_to_read {
+                            let header = std::mem::replace(&mut read_info.current_header, None).unwrap();
+
+                            let message = read_info.read_buffer.split_to(header.payload_length());
+
+                            // We have read the message, send it to be verified and then put into the client pool
+                            cpu_workers::deserialize_and_push_message(header, message, connection.client.clone());
+
+                            read_info.read_bytes = read_info.read_buffer.len();
+
+                            read_info.read_buffer.reserve(Header::LENGTH);
+                            read_info.read_buffer.resize(Header::LENGTH, 0);
+                        } else {
+                            read_info.read_bytes += read;
+                        }
+                    } else {
+                        // We are currently reading a header
+                        let currently_read_bytes = read_info.read_bytes;
+                        let bytes_to_read = Header::LENGTH - currently_read_bytes;
+
+                        let n = if bytes_to_read > 0 {
+                            match socket.read(&mut read_info.read_buffer[currently_read_bytes..]) {
+                                Ok(0) => {
+                                    // Connection closed
+                                    return Ok(ConnectionWorkResult::ConnectionBroken);
+                                }
+                                Ok(n) => {
+                                    // We still have to more to read
+                                    n
+                                }
+                                Err(err) if would_block(&err) => break,
+                                Err(err) if interrupted(&err) => continue,
+                                Err(err) => { return Err(Error::wrapped(ErrorKind::Communication, err)); }
+                            }
+                        } else {
+                            // Only read if we need to read from the socket. (As we are missing bytes)
+                            // If not, keep parsing the messages that are in the read buffer
+                            0
+                        };
+
+                        if n >= bytes_to_read {
+                            let header = Header::deserialize_from(&read_info.read_buffer[..Header::LENGTH])?;
+
+                            *(&mut read_info.current_header) = Some(header);
+
+                            if n > bytes_to_read {
+                                // We have read more than we should for the current message,
+                                // so we can't clear the buffer
+                                read_info.read_buffer.advance(Header::LENGTH);
+
+                                read_info.read_bytes = read_info.read_buffer.len();
+
+                                read_info.read_buffer.reserve(header.payload_length());
+                                read_info.read_buffer.resize(header.payload_length(), 0);
+                            } else {
+                                // We have read the header
+                                read_info.read_buffer.clear();
+                                read_info.read_buffer.reserve(header.payload_length());
+                                read_info.read_buffer.resize(header.payload_length(), 0);
+                                read_info.read_bytes = 0;
+                            }
+                        }
+                    }
+                }
+
+                // We don't have any more
+            }
+            _ => unreachable!()
+        }
+
+        Ok(ConnectionWorkResult::Working)
     }
 
     /// Receive connections from the connection register and register them with the epoll instance
-    fn register_connections(&mut self, registry: &Registry) -> io::Result<()> {
+    fn register_connections(&mut self) -> io::Result<()> {
         loop {
             match self.connection_register.try_recv() {
                 Ok(message) => {
@@ -161,7 +295,7 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                         EpollWorkerMessage::NewConnection(conn) => {
                             let NewConnection {
                                 conn_id, peer_id,
-                                my_id, socket,
+                                my_id, mut socket,
                                 peer_conn
                             } = conn;
 
@@ -173,22 +307,33 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                                 conn_id, my_id, peer_id, self.waker.clone(),
                             );
 
+                            self.poll.registry().register(&mut socket,
+                                                          token, Interest::READABLE)?;
+
                             let socket_conn = SocketConnection::PeerConn {
                                 handle: handle.clone(),
                                 socket,
-                                current_header: None,
-                                read_buffer: BytesMut::with_capacity(1024),
+                                read_info: ReadingInformation::new(),
                                 connection: peer_conn,
                             };
 
                             entry.insert(socket_conn);
-
-                            registry.register(&mut self.connections[token.into()].socket,
-                                              token, Interest::READABLE)?;
                         }
                         EpollWorkerMessage::CloseConnection(token) => {
-                            if let Some(conn) = self.connections.remove(token.into()) {
-                                registry.deregister(&mut conn.socket)?;
+                            if let SocketConnection::Waker = &self.connections[token.into()] {
+                                // We can't close the waker, wdym?
+                                continue;
+                            }
+
+                            if let Some(conn) = self.connections.try_remove(token.into()) {
+                                match conn {
+                                    SocketConnection::PeerConn { mut socket, .. } => {
+                                        self.poll.registry().deregister(&mut socket)?;
+
+                                        socket.shutdown(Shutdown::Both)?;
+                                    }
+                                    _ => unreachable!("Only peer connections can be removed from the connection slab")
+                                }
                             }
                         }
                     }
@@ -202,9 +347,16 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
 
         Ok(())
     }
-
 }
 
+impl ReadingInformation {
+    fn new() -> Self {
+        Self {
+            current_header: None,
+            read_buffer: BytesMut::with_capacity(Header::LENGTH),
+        }
+    }
+}
 
 pub(super) fn would_block(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::WouldBlock

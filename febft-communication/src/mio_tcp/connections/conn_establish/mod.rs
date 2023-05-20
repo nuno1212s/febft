@@ -20,6 +20,8 @@ const DEFAULT_ALLOWED_CONCURRENT_JOINS: usize = 128;
 const SERVER_TOKEN: Token = Token(DEFAULT_ALLOWED_CONCURRENT_JOINS + 1);
 
 pub struct ConnectionHandler {
+    my_id: NodeId,
+    first_cli: NodeId,
     concurrent_conn: ConnCounts,
     currently_connecting: Mutex<BTreeMap<NodeId, usize>>,
 }
@@ -71,7 +73,7 @@ impl ServerWorker {
                             ConnectionResult::Connected(node_id) => {
                                 // We have identified the peer and should now handle the connection
 
-                                if let Some((conn, _)) = self.currently_accepting.remove(token.into()) {
+                                if let Some((mut conn, _)) = self.currently_accepting.try_remove(token.into()) {
                                     // Deregister from this poller as we are no longer
                                     // the ones that should handle this connection
                                     poll.registry().deregister(&mut conn)?;
@@ -88,7 +90,7 @@ impl ServerWorker {
                             }
                             ConnectionResult::ConnectionBroken => {
                                 // Discard of the connection since it has been broken
-                                if let Some((conn, _)) = self.currently_accepting.remove(token.into()) {
+                                if let Some((mut conn, _)) = self.currently_accepting.try_remove(token.into()) {
                                     poll.registry().deregister(&mut conn)?;
                                 }
                             }
@@ -116,7 +118,7 @@ impl ServerWorker {
 
                     let token = Token(self.currently_accepting.insert((MioSocket::from(socket), read_buffer)));
 
-                    registry.register(&mut self.currently_accepting[token.into()], token, Interest::READABLE)?;
+                    registry.register(&mut self.currently_accepting[token.into()].0, token, Interest::READABLE)?;
                 }
                 Err(err) if would_block(&err) => {
                     // No more connections are ready to be accepted
@@ -124,7 +126,7 @@ impl ServerWorker {
                 }
                 Err(ref err) if interrupted(err) => continue,
                 Err(err) => {
-                    Err(err)
+                    return Err(err);
                 }
             }
         }
@@ -137,7 +139,9 @@ impl ServerWorker {
 
         if ev.is_readable() {
             loop {
-                match socket.read(&mut buffer[buffer.len()..]) {
+                let currently_read = buffer.len();
+
+                match socket.read(&mut buffer[currently_read..]) {
                     Ok(0) => {
                         return Ok(ConnectionResult::ConnectionBroken);
                     }
@@ -178,6 +182,8 @@ impl ServerWorker {
 }
 
 impl ConnectionHandler {
+
+
     fn register_connecting_to_node(&self, peer_id: NodeId) -> bool {
         let mut connecting_guard = self.currently_connecting.lock().unwrap();
 
@@ -185,7 +191,7 @@ impl ConnectionHandler {
 
         *value += 1;
 
-        if *value > self.concurrent_conn.get_connections_to_node(self.id(), peer_id, self.first_cli) * 2 {
+        if *value > self.concurrent_conn.get_connections_to_node(self.my_id(), peer_id, self.first_cli) * 2 {
             *value -= 1;
 
             false
@@ -204,5 +210,13 @@ impl ConnectionHandler {
                 connection_guard.remove(peer_id);
             }
         }
+    }
+
+    pub fn my_id(&self) -> NodeId {
+        self.my_id
+    }
+
+    pub fn first_cli(&self) -> NodeId {
+        self.first_cli
     }
 }

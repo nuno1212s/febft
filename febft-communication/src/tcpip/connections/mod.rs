@@ -163,6 +163,7 @@ impl<M> PeerConnection<M> where M: Serializable {
         ConnHandle {
             id: conn_id,
             my_id: self.node_connections.id(),
+            peer_id: self.peer_node_id,
             cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
