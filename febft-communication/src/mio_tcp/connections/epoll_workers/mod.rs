@@ -2,10 +2,11 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 use bytes::BytesMut;
-use mio::{Events, Interest, Poll, Registry, Token};
+use mio::{Events, Interest, Poll, Registry, Token, Waker};
 use mio::event::Event;
 use slab::Slab;
 use febft_common::channel::ChannelSyncRx;
+use febft_common::error::{ErrorKind, ResultWrappedExt};
 use febft_common::node_id::NodeId;
 use febft_common::socket::{MioSocket};
 use crate::message::Header;
@@ -14,6 +15,7 @@ use super::PeerConnection;
 use crate::serialize::Serializable;
 
 const EVENT_CAPACITY: usize = 1024;
+const DEFAULT_SOCKET_CAPACITY: usize = 1024;
 const WORKER_TIMEOUT: Option<Duration> = Some(Duration::from_micros(50));
 
 pub struct NewConnection<M: Serializable + 'static> {
@@ -44,30 +46,58 @@ struct EpollWorker<M: Serializable + 'static> {
     connections: Slab<SocketConnection<M>>,
     // register new connections
     connection_register: ChannelSyncRx<EpollWorkerMessage<M>>,
+    // Epoll worker waker
+    waker: Arc<Waker>,
+    // The poll instance of this worker
+    poll: Poll,
 }
 
 /// All information related to a given connection
-struct SocketConnection<M: Serializable + 'static> {
-    // The handle of this connection
-    handle: ConnHandle,
-    // The mio socket that this connection refers to
-    socket: MioSocket,
-    // The header of the message we are currently reading (if applicable)
-    current_header: Option<Header>,
-    // The buffer for reading data from the socket.
-    read_buffer: BytesMut,
-    // The connection to the peer this connection is a part of
-    connection: Arc<PeerConnection<M>>,
+enum SocketConnection<M: Serializable + 'static> {
+    PeerConn {
+        // The handle of this connection
+        handle: ConnHandle,
+        // The mio socket that this connection refers to
+        socket: MioSocket,
+        // The header of the message we are currently reading (if applicable)
+        current_header: Option<Header>,
+        // The buffer for reading data from the socket.
+        read_buffer: BytesMut,
+        // The connection to the peer this connection is a part of
+        connection: Arc<PeerConnection<M>>,
+    },
+    Waker
 }
 
 impl<M> EpollWorker<M> where M: Serializable + 'static {
-    fn epoll_worker_loop(mut self) -> io::Result<()> {
-        let mut epoll = Poll::new()?;
+    pub fn new(worker_id: EpollWorkerId, connections: Arc<Connections<M>>,
+               register: ChannelSyncRx<EpollWorkerMessage<M>>) -> febft_common::error::Result<Self> {
+        let poll = Poll::new().wrapped_msg(ErrorKind::Communication, "Failed to initialize poll")?;
 
+        let mut conn_slab = Slab::with_capacity(DEFAULT_SOCKET_CAPACITY);
+
+        let entry = conn_slab.vacant_entry();
+
+        let waker = Arc::new(Waker::new(poll.registry(), Token(entry.key()))
+            .wrapped_msg(ErrorKind::Communication, "Failed to create waker")?);
+
+        entry.insert(SocketConnection::Waker);
+
+        Ok(Self {
+            worker_id,
+            global_connections: connections,
+            connections: conn_slab,
+            connection_register: register,
+            waker,
+            poll,
+        })
+    }
+
+    fn epoll_worker_loop(mut self) -> io::Result<()> {
         let mut event_queue = Events::with_capacity(EVENT_CAPACITY);
 
         loop {
-            if let Err(e) = epoll.poll(&mut event_queue, WORKER_TIMEOUT) {
+            if let Err(e) = self.poll.poll(&mut event_queue, WORKER_TIMEOUT) {
                 if e.kind() == io::ErrorKind::Interrupted {
                     // spurious wakeup
                     continue;
@@ -87,8 +117,39 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                 }
             }
 
-            self.register_connections(epoll.registry())?;
+            self.register_connections(self.poll.registry())?;
         }
+    }
+
+    fn handle_connection_event(&mut self, token: Token, event: &Event) {
+
+        match &self.connections[token.into()] {
+            SocketConnection::PeerConn { .. } => {
+
+                if event.is_readable() {
+
+                }
+
+                if event.is_writable() {
+
+                }
+
+            }
+            SocketConnection::Waker => {
+                // Indicates that we should try to write from the connections
+
+                for (index, connection) in &self.connections {
+
+                }
+
+            }
+        }
+
+        if event.is_readable() {
+            loop {}
+        }
+
+        loop {}
     }
 
     /// Receive connections from the connection register and register them with the epoll instance
@@ -109,10 +170,10 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                             let token = Token(entry.key());
 
                             let handle = ConnHandle::new(
-                                conn_id, my_id, peer_id, token, registry.try_clone()?,
+                                conn_id, my_id, peer_id, self.waker.clone(),
                             );
 
-                            let socket_conn = SocketConnection {
+                            let socket_conn = SocketConnection::PeerConn {
                                 handle: handle.clone(),
                                 socket,
                                 current_header: None,
@@ -126,11 +187,9 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                                               token, Interest::READABLE)?;
                         }
                         EpollWorkerMessage::CloseConnection(token) => {
-
                             if let Some(conn) = self.connections.remove(token.into()) {
                                 registry.deregister(&mut conn.socket)?;
                             }
-
                         }
                     }
                 }
@@ -144,20 +203,6 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
         Ok(())
     }
 
-    fn handle_connection_event(&mut self, token: Token, event: &Event) {
-        let connection = &mut self.connections[token.into()];
-
-        if event.is_readable() {
-            loop {
-
-
-
-            }
-        }
-
-        loop {
-        }
-    }
 }
 
 
