@@ -126,7 +126,6 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                 }
             }
 
-
             for event in event_queue.iter() {
                 trace!("{:?} // Handling connection event for ev: {:?}", self.global_connections.id, event);
 
@@ -150,16 +149,18 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
     }
 
     fn handle_connection_event(&mut self, token: Token, event: &Event) -> febft_common::error::Result<ConnectionWorkResult> {
-        trace!("{:?} // Handling connection event for token {:?}, ev: {:?}", self.global_connections.id, token, event);
-
         match &self.connections[token.into()] {
             SocketConnection::PeerConn { .. } => {
                 if event.is_readable() {
-                    self.read_until_block(token)?;
+                    if let ConnectionWorkResult::ConnectionBroken = self.read_until_block(token)? {
+                        return Ok(ConnectionWorkResult::ConnectionBroken);
+                    }
                 }
 
                 if event.is_writable() {
-                    self.try_write_until_block(token)?;
+                    if let ConnectionWorkResult::ConnectionBroken = self.try_write_until_block(token)? {
+                        return Ok(ConnectionWorkResult::ConnectionBroken);
+                    }
                 }
             }
             SocketConnection::Waker => {
@@ -319,7 +320,6 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                         let bytes_to_read = header.payload_length() - currently_read;
 
                         let read = if bytes_to_read > 0 {
-
                             match socket.read(&mut read_info.read_buffer[currently_read..]) {
                                 Ok(0) => {
                                     // Connection closed
