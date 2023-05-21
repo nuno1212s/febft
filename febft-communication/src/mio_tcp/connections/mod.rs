@@ -1,22 +1,23 @@
 mod conn_establish;
 pub mod epoll_group;
 
+use std::net::Shutdown;
 use std::sync::{Arc};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use crossbeam_skiplist::SkipMap;
 use dashmap::DashMap;
 use intmap::IntMap;
-use log::{debug, error};
+use log::{debug, error, warn};
 use mio::{Token, Waker};
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, OneShotRx, TryRecvError};
 use febft_common::error::*;
 use febft_common::node_id::NodeId;
-use febft_common::socket::{SecureSocket, SecureSocketSync};
+use febft_common::socket::{MioSocket, SecureSocket, SecureSocketSync, SyncListener};
 use crate::client_pooling::{ConnectedPeer, PeerIncomingRqHandling};
 use crate::message::{NetworkMessage, WireMessage};
 use crate::mio_tcp::connections::conn_establish::ConnectionHandler;
-use crate::mio_tcp::connections::epoll_group::{EpollWorkerGroupHandle, EpollWorkerId};
+use crate::mio_tcp::connections::epoll_group::{EpollWorkerGroupHandle, EpollWorkerId, NewConnection};
 use crate::NodeConnections;
 use crate::serialize::Serializable;
 use crate::tcpip::connections::{Callback, ConnCounts};
@@ -52,7 +53,7 @@ pub struct PeerConnection<M: Serializable + 'static> {
     // A thread-safe counter for generating connection ids
     conn_id_generator: AtomicU32,
     //The map connecting each connection to a token in the MIO Workers
-    connections: SkipMap<u32, ConnHandle>,
+    connections: SkipMap<u32, Option<ConnHandle>>,
     // Sending messages to the connections
     to_send: (ChannelSyncTx<NetworkSerializedMessage>, ChannelSyncRx<NetworkSerializedMessage>),
 }
@@ -114,10 +115,13 @@ impl<M> NodeConnections for Connections<M> where M: Serializable + 'static {
 
         if let Some((node, connection)) = existing_connection {
             for entry in connection.connections.iter() {
-                let worker_id = entry.value().epoll_worker_id;
-                let conn_token = entry.value().token;
+                if let Some(conn) = entry.value() {
+                    let worker_id = conn.epoll_worker_id;
+                    let conn_token = conn.token;
 
-                self.worker_group.disconnect_connection_from_worker(worker_id, conn_token)?;
+                    self.worker_group.disconnect_connection_from_worker(worker_id, conn_token)?;
+                }
+
             }
         }
 
@@ -126,9 +130,27 @@ impl<M> NodeConnections for Connections<M> where M: Serializable + 'static {
 }
 
 impl<M> Connections<M> where M: Serializable + 'static {
-    fn handle_connection_established(self: &Arc<Self>, node: NodeId, socket: SecureSocket) {
-        debug!("{:?} // Handling established connection to {:?}", self.id, node);
+    pub(super) fn initialize_connections(id: NodeId, first_cli: NodeId, addr_map: IntMap<PeerAddr>, group_handle: EpollWorkerGroupHandle<M>,
+                                         conn_counts: ConnCounts, client_pooling: Arc<PeerIncomingRqHandling<NetworkMessage<M>>>) -> Result<Self> {
+        let conn_handler = Arc::new(ConnectionHandler::initialize(id.clone(), first_cli.clone(), conn_counts.clone()));
 
+        Ok(Self {
+            id,
+            first_cli,
+            registered_connections: Default::default(),
+            address_map: addr_map,
+            worker_group: group_handle,
+            client_pooling,
+            conn_counts,
+            conn_handler,
+        })
+    }
+
+    pub(super) fn setup_tcp_server_worker(self: &Arc<Self>, listener: SyncListener) {
+        conn_establish::initialize_server(self.id.clone(), self.first_cli.clone(), listener, self.conn_handler.clone(), Arc::clone(self))
+    }
+
+    fn handle_connection_established(self: &Arc<Self>, node: NodeId, socket: SecureSocket) {
         let socket = match socket {
             SecureSocket::Sync(sync) => {
                 match sync {
@@ -142,6 +164,12 @@ impl<M> Connections<M> where M: Serializable + 'static {
             }
             _ => unreachable!()
         };
+
+        self.handle_connection_established_with_socket(node, socket.into());
+    }
+
+    fn handle_connection_established_with_socket(self: &Arc<Self>, node: NodeId, socket: MioSocket) {
+        debug!("{:?} // Handling established connection to {:?}", self.id, node);
 
         let option = self.registered_connections.entry(node);
 
@@ -159,8 +187,22 @@ impl<M> Connections<M> where M: Serializable + 'static {
 
         let conn_id = peer_conn.gen_conn_id();
 
+        let current_connections = peer_conn.concurrent_connection_count();
+
+        if current_connections + 1 > concurrency_level {
+            // We have too many connections to this node. We need to close this one.
+            warn!("{:?} // Too many connections to {:?}. Closing connection {:?}", self.id, node, conn_id);
+
+            if let Err(err) = socket.shutdown(Shutdown::Both) {
+                error!("{:?} // Failed to shutdown socket {:?} to {:?}. Error: {:?}", self.id, conn_id, node, err);
+            }
+            return;
+        }
+        //FIXME: This isn't really an atomic operation but I also don't care LOL.
+        peer_conn.register_peer_conn_intent(conn_id);
+
         let conn_details = NewConnection::new(conn_id, node, self.id,
-                                              socket.into(), peer_conn.value().clone());
+                                              socket, peer_conn.value().clone());
 
         // We don't register the connection here as we still need some information that will only be provided
         // to us by the worker that will handle the connection.
@@ -206,7 +248,12 @@ impl<M> PeerConnection<M> where M: Serializable + 'static {
 
     /// Register an active connection into this connection map
     fn register_peer_conn(&self, conn: ConnHandle) {
-        self.connections.insert(conn.id, conn);
+        self.connections.insert(conn.id, Some(conn));
+    }
+
+    // Register an intent of registering this connection
+    fn register_peer_conn_intent(&self, id: u32) {
+        self.connections.insert(id, None);
     }
 
     /// Get the amount of concurrent connections we currently have to this peer
@@ -228,7 +275,9 @@ impl<M> PeerConnection<M> where M: Serializable + 'static {
         for conn_ref in self.connections.iter() {
             let conn = conn_ref.value();
 
-            conn.waker.wake().expect("Failed to wake connection");
+            if let Some(conn) = conn {
+                conn.waker.wake().expect("Failed to wake connection");
+            }
         }
 
         Ok(())

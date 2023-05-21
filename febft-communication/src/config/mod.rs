@@ -4,6 +4,14 @@ use febft_common::crypto::signature::{KeyPair, PublicKey};
 use febft_common::node_id::NodeId;
 use crate::tcpip::PeerAddr;
 
+/// Configuration needed for a mio server
+pub struct MioConfig {
+    // The general config of a node.
+    pub node_config: NodeConfig,
+    // How many workers should our mio server have
+    pub worker_count: usize,
+}
+
 /// The configuration of the network node
 pub struct NodeConfig {
     /// The id of this `Node`.

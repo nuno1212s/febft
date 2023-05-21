@@ -18,9 +18,10 @@ mod communication_test {
     use febft_common::node_id::NodeId;
     use febft_common::{async_runtime as rt, channel};
     use febft_common::threadpool;
-    use febft_communication::config::{ClientPoolConfig, NodeConfig, PKConfig, TcpConfig, TlsConfig};
+    use febft_communication::config::{ClientPoolConfig, MioConfig, NodeConfig, PKConfig, TcpConfig, TlsConfig};
     use febft_communication::{Node, NodeConnections, NodeIncomingRqHandler};
     use febft_communication::message::NetworkMessageKind;
+    use febft_communication::mio_tcp::MIOTcpNode;
     use febft_communication::serialize::Serializable;
     use febft_communication::tcp_ip_simplex::TCPSimplexNode;
     use febft_communication::tcpip::{PeerAddr, TcpNode};
@@ -305,6 +306,29 @@ mod communication_test {
         rt::block_on(TCPSimplexNode::bootstrap(cfg))
     }
 
+    fn gen_mio_node<T: Serializable>(node_id: NodeId, addrs: IntMap<PeerAddr>, node_count: usize, name: &str, port: u16) -> Result<Arc<MIOTcpNode<T>>> {
+
+        let cfg = NodeConfig {
+            id: node_id,
+            first_cli: FIRST_CLI,
+            tcp_config: TcpConfig {
+                addrs,
+                network_config: gen_tls_config(node_id, name),
+                replica_concurrent_connections: 1,
+                client_concurrent_connections: 1,
+            },
+            client_pool_config: CLI_POOL_CFG,
+            pk_crypto_config: gen_pk_config(node_id, node_count),
+        };
+
+        let config = MioConfig {
+            node_config: cfg,
+            worker_count: 2,
+        };
+
+        rt::block_on(MIOTcpNode::bootstrap(config))
+    }
+
     #[test]
     fn test_connection() {
         env_logger::init();
@@ -316,8 +340,8 @@ mod communication_test {
         let node_1 = NodeId(0u32);
         let node_2 = NodeId(1u32);
 
-        let node = gen_simplex_node::<TestMessage>(node_1, addrs.clone(), 2, "srv0", 1000).unwrap();
-        let node_2_ = gen_simplex_node::<TestMessage>(node_2, addrs, 2, "srv1", 1001).unwrap();
+        let node = gen_mio_node::<TestMessage>(node_1, addrs.clone(), 2, "srv0", 1000).unwrap();
+        let node_2_ = gen_mio_node::<TestMessage>(node_2, addrs, 2, "srv1", 1001).unwrap();
 
         let rx = node.node_connections().connect_to_node(node_2);
 
@@ -329,6 +353,11 @@ mod communication_test {
 
             res.unwrap().unwrap();
         }
+
+        std::thread::sleep(Duration::from_secs(1));
+
+        assert_eq!(node.node_connections().connected_nodes_count(), 1);
+        assert_eq!(node_2_.node_connections().connected_nodes_count(), 1);
     }
 
     #[test]

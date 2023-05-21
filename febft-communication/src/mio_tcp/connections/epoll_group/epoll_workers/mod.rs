@@ -133,7 +133,7 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                             }
                             Ok(_) => {}
                             Err(err) => {
-                                error!("Error handling connection event: {}", err);
+                                error!("{:?} // Error handling connection event: {}", self.global_connections.id, err);
                             }
                         }
                     }

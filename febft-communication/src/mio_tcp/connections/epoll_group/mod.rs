@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use log::error;
 use mio::Token;
 use febft_common::channel;
-use febft_common::channel::ChannelSyncTx;
+use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 use febft_common::error::*;
 use febft_common::node_id::NodeId;
 use febft_common::socket::MioSocket;
@@ -18,30 +18,37 @@ pub type EpollWorkerId = u32;
 // This will just handle creating and deleting connections so it can be small
 pub const DEFAULT_WORKER_CHANNEL: usize = 128;
 
-pub fn initialize_worker_group<M: Serializable + 'static>(connections: Arc<Connections<M>>, worker_count: u32) -> Result<EpollWorkerGroupHandle<M>> {
+pub fn init_worker_group_handle<M: Serializable + 'static>(worker_count: u32) -> (EpollWorkerGroupHandle<M>, Vec<ChannelSyncRx<EpollWorkerMessage<M>>>) {
     let mut workers = Vec::with_capacity(worker_count as usize);
 
-    for workerId in 0..worker_count {
+    let mut receivers = Vec::with_capacity(worker_count as usize);
+
+    for _ in 0..worker_count {
         let (tx, rx) = channel::new_bounded_sync(DEFAULT_WORKER_CHANNEL);
 
         workers.push(tx);
+        receivers.push(rx);
+    }
 
-        let worker = EpollWorker::new(workerId, connections.clone(), rx)?;
+    (EpollWorkerGroupHandle {
+        workers,
+        round_robin: AtomicUsize::new(0),
+    }, receivers)
+}
 
-        std::thread::Builder::new().name(format!("Epoll Worker {}", workerId))
+pub fn initialize_worker_group<M: Serializable + 'static>(connections: Arc<Connections<M>>, receivers: Vec<ChannelSyncRx<EpollWorkerMessage<M>>>) -> Result<()> {
+    for (worker_id, rx) in receivers.into_iter().enumerate() {
+        let worker = EpollWorker::new(worker_id as u32, connections.clone(), rx)?;
+
+        std::thread::Builder::new().name(format!("Epoll Worker {}", worker_id))
             .spawn(move || {
-                loop {
-                    if let Err(err) = worker.epoll_worker_loop() {
-                        error!("Epoll worker {} failed with error: {:?}", workerId,err);
-                    }
+                if let Err(err) = worker.epoll_worker_loop() {
+                    error!("Epoll worker {} failed with error: {:?}", worker_id,err);
                 }
             }).expect("Failed to launch worker thread");
     }
 
-    Ok(EpollWorkerGroupHandle {
-        workers,
-        round_robin: AtomicUsize::new(0),
-    })
+    Ok(())
 }
 
 /// A handle to the worker group that handles the epoll events
@@ -77,6 +84,7 @@ impl<M: Serializable + 'static> EpollWorkerGroupHandle<M> {
         Ok(())
     }
 
+    /// Order a disconnection of a given connection from a worker
     pub fn disconnect_connection_from_worker(&self, epoll_worker: EpollWorkerId, conn_id: Token) -> febft_common::error::Result<()> {
         let worker = self.workers.get(epoll_worker as usize)
             .ok_or(Error::simple_with_msg(ErrorKind::Communication, "Failed to get worker for connection?"))?;
