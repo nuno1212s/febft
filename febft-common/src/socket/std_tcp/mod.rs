@@ -75,6 +75,8 @@ impl Read for Socket {
 
 impl From<Socket> for MioSocket {
     fn from(value: Socket) -> Self {
+        value.inner.set_nonblocking(true).expect("Failed to set non-blocking");
+
         MioSocket {
             inner: mio::net::TcpStream::from_std(value.inner)
         }
@@ -83,6 +85,8 @@ impl From<Socket> for MioSocket {
 
 impl From<Listener> for MioListener {
     fn from(value: Listener) -> Self {
+        value.inner.set_nonblocking(true).expect("Failed to set non-blocking");
+
         MioListener {
             inner: mio::net::TcpListener::from_std(value.inner)
         }

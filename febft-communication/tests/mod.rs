@@ -427,8 +427,8 @@ mod communication_test {
         let node_1 = NodeId(0u32);
         let node_2 = NodeId(1u32);
 
-        let node = gen_simplex_node::<TestMessage>(node_1, addrs.clone(), 2, "srv0", 1000).unwrap();
-        let node_2_ = gen_simplex_node::<TestMessage>(node_2, addrs, 2, "srv1", 1001).unwrap();
+        let node = gen_mio_node::<TestMessage>(node_1, addrs.clone(), 2, "srv0", 1000).unwrap();
+        let node_2_ = gen_mio_node::<TestMessage>(node_2, addrs, 2, "srv1", 1001).unwrap();
 
         let rx = node.node_connections().connect_to_node(node_2);
 

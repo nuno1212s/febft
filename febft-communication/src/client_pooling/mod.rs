@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use dashmap::DashMap;
 
-use log::{error, info};
+use log::{error, info, trace};
 use febft_common::channel;
 use febft_common::channel::{ChannelMultRx, ChannelMultTx, ChannelSyncRx, ChannelSyncTx, TryRecvError};
 use febft_common::error::*;
@@ -856,6 +856,8 @@ impl<T> ConnectedPeer<T> where T: Send {
     }
 
     pub fn push_request(&self, msg: T) -> Result<()> {
+        trace!("Pushing request to client {:?}", self.client_id());
+
         match self {
             Self::PoolConnection { queue, client_id, .. } => {
                 let mut sender_guard = queue.lock().unwrap();

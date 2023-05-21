@@ -150,6 +150,13 @@ impl<M> Connections<M> where M: Serializable + 'static {
         conn_establish::initialize_server(self.id.clone(), self.first_cli.clone(), listener, self.conn_handler.clone(), Arc::clone(self))
     }
 
+    /// Get the connection to a given node
+    pub fn get_connection(&self, node: &NodeId) -> Option<Arc<PeerConnection<M>>> {
+        let option = self.registered_connections.get(node);
+
+        option.map(|conn| conn.value().clone())
+    }
+
     fn handle_connection_established(self: &Arc<Self>, node: NodeId, socket: SecureSocket) {
         let socket = match socket {
             SecureSocket::Sync(sync) => {

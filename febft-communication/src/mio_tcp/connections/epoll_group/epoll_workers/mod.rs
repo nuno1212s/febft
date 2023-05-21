@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use bytes::{Buf, Bytes, BytesMut};
-use log::error;
+use log::{error, info, trace};
 use mio::{Events, Interest, Poll, Registry, Token, Waker};
 use mio::event::Event;
 use slab::Slab;
@@ -83,7 +83,6 @@ struct WritingInformation {
 }
 
 impl<M> EpollWorker<M> where M: Serializable + 'static {
-
     /// Initializing a worker thread for the worker group
     pub fn new(worker_id: EpollWorkerId, connections: Arc<Connections<M>>,
                register: ChannelSyncRx<EpollWorkerMessage<M>>) -> febft_common::error::Result<Self> {
@@ -93,10 +92,13 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
 
         let entry = conn_slab.vacant_entry();
 
-        let waker = Arc::new(Waker::new(poll.registry(), Token(entry.key()))
+        let waker_token = Token(entry.key());
+        let waker = Arc::new(Waker::new(poll.registry(), waker_token)
             .wrapped_msg(ErrorKind::Communication, "Failed to create waker")?);
 
         entry.insert(SocketConnection::Waker);
+
+        info!("{:?} // Initialized Epoll Worker where Waker is token {:?}", connections.id, waker_token);
 
         Ok(Self {
             worker_id,
@@ -124,7 +126,10 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                 }
             }
 
+
             for event in event_queue.iter() {
+                trace!("{:?} // Handling connection event for ev: {:?}", self.global_connections.id, event);
+
                 match event.token() {
                     token => {
                         match self.handle_connection_event(token, &event) {
@@ -145,6 +150,8 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
     }
 
     fn handle_connection_event(&mut self, token: Token, event: &Event) -> febft_common::error::Result<ConnectionWorkResult> {
+        trace!("{:?} // Handling connection event for token {:?}, ev: {:?}", self.global_connections.id, token, event);
+
         match &self.connections[token.into()] {
             SocketConnection::PeerConn { .. } => {
                 if event.is_readable() {
@@ -187,21 +194,40 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                 ..
             } => {
                 let was_waiting_for_write = writing_info.is_some();
+                let mut wrote = false;
 
                 loop {
                     let writing = if let Some(writing_info) = writing_info {
+                        wrote = true;
+
                         //We are writing something
                         writing_info
                     } else {
                         // We are not currently writing anything
 
                         if let Some(to_write) = connection.try_take_from_send()? {
+                            trace!("{:?} // Writing message {:?}", self.global_connections.id, to_write);
+                            wrote = true;
+
                             // We have something to write
                             *writing_info = Some(WritingInformation::from_message(to_write)?);
 
                             writing_info.as_mut().unwrap()
                         } else {
                             // Nothing to write
+                            trace!("{:?} // Nothing left to write, wrote? {}", self.global_connections.id, wrote);
+
+                            // If we have written something in this loop but we have not written until
+                            // Would block then we should flush the connection
+                            if wrote {
+                                match socket.flush() {
+                                    Ok(_) => {}
+                                    Err(ref err) if would_block(err) => break,
+                                    Err(ref err) if interrupted(err) => continue,
+                                    Err(err) => { return Err(Error::wrapped(ErrorKind::Communication, err)); }
+                                };
+                            }
+
                             break;
                         }
                     };
@@ -220,7 +246,10 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                                     writing.currently_writing_header = None;
                                 }
                             }
-                            Err(err) if would_block(&err) => break,
+                            Err(err) if would_block(&err) => {
+                                trace!("{:?} // Would block writing header", self.global_connections.id);
+                                break;
+                            }
                             Err(err) if interrupted(&err) => continue,
                             Err(err) => { return Err(Error::wrapped(ErrorKind::Communication, err)); }
                         }
@@ -238,7 +267,10 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                                     *writing_info = None;
                                 }
                             }
-                            Err(err) if would_block(&err) => break,
+                            Err(err) if would_block(&err) => {
+                                trace!("{:?} // Would block writing body", self.global_connections.id);
+                                break;
+                            }
                             Err(err) if interrupted(&err) => continue,
                             Err(err) => { return Err(Error::wrapped(ErrorKind::Communication, err)); }
                         }
@@ -270,6 +302,8 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
     fn read_until_block(&mut self, token: Token) -> febft_common::error::Result<ConnectionWorkResult> {
         let connection = &mut self.connections[token.into()];
 
+        trace!("{:?} // Reading until blocking", self.global_connections.id);
+
         match connection {
             SocketConnection::PeerConn {
                 handle,
@@ -285,6 +319,7 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                         let bytes_to_read = header.payload_length() - currently_read;
 
                         let read = if bytes_to_read > 0 {
+
                             match socket.read(&mut read_info.read_buffer[currently_read..]) {
                                 Ok(0) => {
                                     // Connection closed
@@ -294,7 +329,7 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                                     // We still have more to read
                                     n
                                 }
-                                Err(err) if would_block(&err) => break,
+                                Err(err) if would_block(&err) => { break; }
                                 Err(err) if interrupted(&err) => continue,
                                 Err(err) => { return Err(Error::wrapped(ErrorKind::Communication, err)); }
                             }
@@ -325,17 +360,24 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                         let bytes_to_read = Header::LENGTH - currently_read_bytes;
 
                         let n = if bytes_to_read > 0 {
+                            trace!("{:?} // Reading message header with {} left to read", self.global_connections.id, bytes_to_read);
+
                             match socket.read(&mut read_info.read_buffer[currently_read_bytes..]) {
                                 Ok(0) => {
                                     // Connection closed
+                                    trace!("{:?} // Connection closed", self.global_connections.id);
                                     return Ok(ConnectionWorkResult::ConnectionBroken);
                                 }
                                 Ok(n) => {
                                     // We still have to more to read
                                     n
                                 }
-                                Err(err) if would_block(&err) => break,
-                                Err(err) if interrupted(&err) => continue,
+                                Err(err) if would_block(&err) => {
+                                    break;
+                                }
+                                Err(err) if interrupted(&err) => {
+                                    continue;
+                                }
                                 Err(err) => { return Err(Error::wrapped(ErrorKind::Communication, err)); }
                             }
                         } else {
@@ -437,6 +479,10 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
         };
 
         entry.insert(socket_conn);
+
+        let _ = self.read_until_block(token);
+        let _ = self.try_write_until_block(token);
+
         Ok(())
     }
 
@@ -468,10 +514,14 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
 
 impl ReadingInformation {
     fn new() -> Self {
+        let mut bytes_mut = BytesMut::with_capacity(Header::LENGTH);
+
+        bytes_mut.resize(Header::LENGTH, 0);
+
         Self {
             read_bytes: 0,
             current_header: None,
-            read_buffer: BytesMut::with_capacity(Header::LENGTH),
+            read_buffer: bytes_mut,
         }
     }
 }
