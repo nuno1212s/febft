@@ -1,8 +1,8 @@
-mod epoll_workers;
 mod conn_establish;
+pub mod epoll_group;
 
 use std::sync::{Arc};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use crossbeam_skiplist::SkipMap;
 use dashmap::DashMap;
 use intmap::IntMap;
@@ -16,7 +16,7 @@ use febft_common::socket::{SecureSocket, SecureSocketSync};
 use crate::client_pooling::{ConnectedPeer, PeerIncomingRqHandling};
 use crate::message::{NetworkMessage, WireMessage};
 use crate::mio_tcp::connections::conn_establish::ConnectionHandler;
-use crate::mio_tcp::connections::epoll_workers::{EpollWorkerId, EpollWorkerMessage, NewConnection};
+use crate::mio_tcp::connections::epoll_group::{EpollWorkerGroupHandle, EpollWorkerId};
 use crate::NodeConnections;
 use crate::serialize::Serializable;
 use crate::tcpip::connections::{Callback, ConnCounts};
@@ -167,6 +167,23 @@ impl<M> Connections<M> where M: Serializable + 'static {
         // Therefore, the connection will be registered in the worker itself.
         self.worker_group.assign_socket_to_worker(conn_details).expect("Failed to assign socket to worker?");
     }
+
+    /// Handle a connection having broken and being removed from the worker
+    fn handle_connection_failed(self: &Arc<Self>, node: NodeId, conn_id: u32) {
+        debug!("{:?} // Handling failed connection to {:?}. Conn: {:?}", self.id, node, conn_id);
+
+        let connection = if let Some(conn) = self.registered_connections.get(&node) {
+            conn.value().clone()
+        } else {
+            return;
+        };
+
+        connection.delete_connection(conn_id);
+
+        if connection.concurrent_connection_count() == 0 {
+            self.registered_connections.remove(&node);
+        }
+    }
 }
 
 impl<M> PeerConnection<M> where M: Serializable + 'static {
@@ -250,44 +267,6 @@ impl<M> PeerConnection<M> where M: Serializable + 'static {
     }
 }
 
-/// A handle to the worker group that handles the epoll events
-/// Allows us to register new connections to the epoll workers
-struct EpollWorkerGroupHandle<M: Serializable + 'static> {
-    workers: Vec<ChannelSyncTx<EpollWorkerMessage<M>>>,
-    round_robin: AtomicUsize,
-}
-
-impl<M: Serializable + 'static> EpollWorkerGroupHandle<M> {
-    /// Assigns a socket to any given worker
-    fn assign_socket_to_worker(&self, conn_details: NewConnection<M>) -> Result<()> {
-        let round_robin = self.round_robin.fetch_add(1, Ordering::Relaxed);
-
-        let worker = self.workers.get(round_robin % self.workers.len())
-            .ok_or(Error::simple_with_msg(ErrorKind::Communication, "Failed to get worker for connection?"))?;
-
-        worker.send(EpollWorkerMessage::NewConnection(conn_details)).wrapped(ErrorKind::Communication)?;
-
-        Ok(())
-    }
-
-    fn disconnect_connection_from_worker(&self, epoll_worker: EpollWorkerId, conn_id: Token) -> Result<()> {
-        let worker = self.workers.get(epoll_worker as usize)
-            .ok_or(Error::simple_with_msg(ErrorKind::Communication, "Failed to get worker for connection?"))?;
-
-        worker.send(EpollWorkerMessage::CloseConnection(conn_id)).wrapped(ErrorKind::Communication)?;
-
-        Ok(())
-    }
-}
-
-impl<M: Serializable + 'static> Clone for EpollWorkerGroupHandle<M> {
-    fn clone(&self) -> Self {
-        Self {
-            workers: self.workers.clone(),
-            round_robin: AtomicUsize::new(0),
-        }
-    }
-}
 
 impl ConnHandle {
     pub fn new(id: u32, my_id: NodeId, peer_id: NodeId,

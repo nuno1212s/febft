@@ -109,6 +109,9 @@ pub trait Node<M: Serializable + 'static> : Send + Sync {
     /// Crypto
     fn pk_crypto(&self) -> &Self::Crypto;
 
+    /// Get a reference to the incoming request handling
+    fn node_incoming_rq_handling(&self) -> &Arc<Self::IncomingRqHandler>;
+
     /// Sends a message to a given target.
     /// Does not block on the message sent. Returns a result that is
     /// Ok if there is a current connection to the target or err if not. No other checks are made
@@ -138,8 +141,5 @@ pub trait Node<M: Serializable + 'static> : Send + Sync {
     /// Ok if there is a current connection to the targets or err if not. No other checks are made
     /// on the success of the message dispatch
     fn broadcast_serialized(&self, messages: BTreeMap<NodeId, StoredSerializedNetworkMessage<M>>) -> std::result::Result<(), Vec<NodeId>>;
-
-    /// Get a reference to the incoming request handling
-    fn node_incoming_rq_handling(&self) -> &Arc<Self::IncomingRqHandler>;
 
 }

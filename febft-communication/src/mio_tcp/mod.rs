@@ -37,19 +37,22 @@ impl<M: Serializable + 'static> Node<M> for MIOTcpNode<M> {
     }
 
     fn id(&self) -> NodeId {
-        todo!()
+        self.id
     }
 
     fn first_cli(&self) -> NodeId {
-        todo!()
+        self.first_cli
     }
 
     fn node_connections(&self) -> &Arc<Self::ConnectionManager> {
-        todo!()
+        &self.connections
     }
 
     fn pk_crypto(&self) -> &Self::Crypto {
-        todo!()
+        &self.keys
+    }
+    fn node_incoming_rq_handling(&self) -> &Arc<Self::IncomingRqHandler> {
+        &self.connections
     }
 
     fn send(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool) -> febft_common::error::Result<()> {
@@ -72,7 +75,4 @@ impl<M: Serializable + 'static> Node<M> for MIOTcpNode<M> {
         todo!()
     }
 
-    fn node_incoming_rq_handling(&self) -> &Arc<Self::IncomingRqHandler> {
-        todo!()
-    }
 }

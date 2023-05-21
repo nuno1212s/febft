@@ -3,37 +3,27 @@ use std::io;
 use std::io::{Read, Write};
 use std::net::Shutdown;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use bytes::{Buf, Bytes, BytesMut};
+use log::error;
 use mio::{Events, Interest, Poll, Registry, Token, Waker};
 use mio::event::Event;
 use slab::Slab;
-use febft_common::channel::ChannelSyncRx;
+use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 use febft_common::error::{Error, ErrorKind, ResultWrappedExt};
 use febft_common::node_id::NodeId;
 use febft_common::socket::{MioSocket};
 use crate::cpu_workers;
 use crate::message::{Header, WireMessage};
 use crate::mio_tcp::connections::{Connections, ConnHandle};
+use crate::mio_tcp::connections::epoll_group::{EpollWorkerId, EpollWorkerMessage, NewConnection};
 use super::PeerConnection;
 use crate::serialize::Serializable;
 
 const EVENT_CAPACITY: usize = 1024;
 const DEFAULT_SOCKET_CAPACITY: usize = 1024;
 const WORKER_TIMEOUT: Option<Duration> = Some(Duration::from_micros(50));
-
-pub struct NewConnection<M: Serializable + 'static> {
-    conn_id: u32,
-    peer_id: NodeId,
-    my_id: NodeId,
-    socket: MioSocket,
-    peer_conn: Arc<PeerConnection<M>>,
-}
-
-pub enum EpollWorkerMessage<M: Serializable + 'static> {
-    NewConnection(NewConnection<M>),
-    CloseConnection(Token),
-}
 
 enum ConnectionWorkResult {
     Working,
@@ -42,10 +32,9 @@ enum ConnectionWorkResult {
 
 type ConnectionRegister = ChannelSyncRx<MioSocket>;
 
-pub type EpollWorkerId = u32;
 
 /// The information for this worker thread.
-struct EpollWorker<M: Serializable + 'static> {
+pub(super) struct EpollWorker<M: Serializable + 'static> {
     // The id of this worker
     worker_id: EpollWorkerId,
     // A reference to our parent connections, so we can update it in case anything goes wrong
@@ -94,6 +83,8 @@ struct WritingInformation {
 }
 
 impl<M> EpollWorker<M> where M: Serializable + 'static {
+
+    /// Initializing a worker thread for the worker group
     pub fn new(worker_id: EpollWorkerId, connections: Arc<Connections<M>>,
                register: ChannelSyncRx<EpollWorkerMessage<M>>) -> febft_common::error::Result<Self> {
         let poll = Poll::new().wrapped_msg(ErrorKind::Communication, "Failed to initialize poll")?;
@@ -117,7 +108,7 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
         })
     }
 
-    fn epoll_worker_loop(mut self) -> io::Result<()> {
+    pub(super) fn epoll_worker_loop(mut self) -> io::Result<()> {
         let mut event_queue = Events::with_capacity(EVENT_CAPACITY);
 
         loop {
@@ -136,7 +127,15 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
             for event in event_queue.iter() {
                 match event.token() {
                     token => {
-                        self.handle_connection_event(token, &event);
+                        match self.handle_connection_event(token, &event) {
+                            Ok(ConnectionWorkResult::ConnectionBroken) => {
+                                self.delete_connection(token, true)?;
+                            }
+                            Ok(_) => {}
+                            Err(err) => {
+                                error!("Error handling connection event: {}", err);
+                            }
+                        }
                     }
                 }
             }
@@ -182,7 +181,6 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
 
         match connection {
             SocketConnection::PeerConn {
-                handle,
                 socket,
                 connection,
                 writing_info,
@@ -191,7 +189,6 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                 let was_waiting_for_write = writing_info.is_some();
 
                 loop {
-
                     let writing = if let Some(writing_info) = writing_info {
                         //We are writing something
                         writing_info
@@ -211,6 +208,7 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
 
                     if let Some(header) = writing.currently_writing_header.as_ref() {
                         match socket.write(&header[writing.written_bytes..]) {
+                            Ok(0) => return Ok(ConnectionWorkResult::ConnectionBroken),
                             Ok(n) => {
                                 // We have successfully written n bytes
                                 if n < header.len() {
@@ -228,6 +226,7 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                         }
                     } else {
                         match socket.write(&writing.currently_writing[writing.written_bytes..]) {
+                            Ok(0) => return Ok(ConnectionWorkResult::ConnectionBroken),
                             Ok(n) => {
                                 // We have successfully written n bytes
                                 if n + writing.written_bytes < writing.currently_writing.len() {
@@ -385,36 +384,7 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                 Ok(message) => {
                     match message {
                         EpollWorkerMessage::NewConnection(conn) => {
-                            let NewConnection {
-                                conn_id, peer_id,
-                                my_id, mut socket,
-                                peer_conn
-                            } = conn;
-
-                            let entry = self.connections.vacant_entry();
-
-                            let token = Token(entry.key());
-
-                            let handle = ConnHandle::new(
-                                conn_id, my_id, peer_id,
-                                self.worker_id, token,
-                                self.waker.clone(),
-                            );
-
-                            peer_conn.register_peer_conn(handle.clone());
-
-                            self.poll.registry().register(&mut socket,
-                                                          token, Interest::READABLE)?;
-
-                            let socket_conn = SocketConnection::PeerConn {
-                                handle: handle.clone(),
-                                socket,
-                                read_info: ReadingInformation::new(),
-                                writing_info: None,
-                                connection: peer_conn,
-                            };
-
-                            entry.insert(socket_conn);
+                            self.create_connection(conn)?;
                         }
                         EpollWorkerMessage::CloseConnection(token) => {
                             if let SocketConnection::Waker = &self.connections[token.into()] {
@@ -422,22 +392,7 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                                 continue;
                             }
 
-                            if let Some(conn) = self.connections.try_remove(token.into()) {
-                                match conn {
-                                    SocketConnection::PeerConn {
-                                        mut socket,
-                                        connection,
-                                        handle, ..
-                                    } => {
-                                        self.poll.registry().deregister(&mut socket)?;
-
-                                        socket.shutdown(Shutdown::Both)?;
-
-                                        connection.delete_connection(handle.id);
-                                    }
-                                    _ => unreachable!("Only peer connections can be removed from the connection slab")
-                                }
-                            }
+                            self.delete_connection(token, false)?;
                         }
                     }
                 }
@@ -445,6 +400,65 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                     // No more connections are ready to be accepted
                     break;
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn create_connection(&mut self, conn: NewConnection<M>) -> io::Result<()> {
+        let NewConnection {
+            conn_id, peer_id,
+            my_id, mut socket,
+            peer_conn
+        } = conn;
+
+        let entry = self.connections.vacant_entry();
+
+        let token = Token(entry.key());
+
+        let handle = ConnHandle::new(
+            conn_id, my_id, peer_id,
+            self.worker_id, token,
+            self.waker.clone(),
+        );
+
+        peer_conn.register_peer_conn(handle.clone());
+
+        self.poll.registry().register(&mut socket,
+                                      token, Interest::READABLE)?;
+
+        let socket_conn = SocketConnection::PeerConn {
+            handle: handle.clone(),
+            socket,
+            read_info: ReadingInformation::new(),
+            writing_info: None,
+            connection: peer_conn,
+        };
+
+        entry.insert(socket_conn);
+        Ok(())
+    }
+
+    fn delete_connection(&mut self, token: Token, is_failure: bool) -> io::Result<()> {
+        if let Some(conn) = self.connections.try_remove(token.into()) {
+            match conn {
+                SocketConnection::PeerConn {
+                    mut socket,
+                    connection,
+                    handle, ..
+                } => {
+                    self.poll.registry().deregister(&mut socket)?;
+
+                    socket.shutdown(Shutdown::Both)?;
+
+                    if is_failure {
+                        self.global_connections.handle_connection_failed(handle.peer_id, handle.id);
+                    } else {
+                        connection.delete_connection(handle.id);
+                    }
+                }
+                _ => unreachable!("Only peer connections can be removed from the connection slab")
             }
         }
 
@@ -491,11 +505,11 @@ impl WritingInformation {
     }
 }
 
-pub(super) fn would_block(err: &io::Error) -> bool {
+pub fn would_block(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::WouldBlock
 }
 
-pub(super) fn interrupted(err: &io::Error) -> bool {
+pub fn interrupted(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::Interrupted
 }
 
