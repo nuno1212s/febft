@@ -55,10 +55,10 @@ struct EpollWorker<M: Serializable + 'static> {
     connections: Slab<SocketConnection<M>>,
     // register new connections
     connection_register: ChannelSyncRx<EpollWorkerMessage<M>>,
-    // Epoll worker waker
-    waker: Arc<Waker>,
     // The poll instance of this worker
     poll: Poll,
+    // Waker
+    waker: Arc<Waker>,
 }
 
 /// All information related to a given connection
@@ -112,8 +112,8 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
             global_connections: connections,
             connections: conn_slab,
             connection_register: register,
-            waker,
             poll,
+            waker,
         })
     }
 
@@ -188,7 +188,10 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                 writing_info,
                 ..
             } => {
+                let was_waiting_for_write = writing_info.is_some();
+
                 loop {
+
                     let writing = if let Some(writing_info) = writing_info {
                         //We are writing something
                         writing_info
@@ -243,15 +246,20 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                     }
                 }
 
-                if writing_info.is_none() {
-                    // We have nothing to write, so we don't need to be notified of writability
+                if writing_info.is_none() && was_waiting_for_write {
+                    // We have nothing more to write, so we no longer need to be notified of writability
                     self.poll.registry().reregister(socket, token, Interest::READABLE)
                         .wrapped_msg(ErrorKind::Communication, "Failed to reregister socket")?;
-                } else {
+                } else if writing_info.is_some() && !was_waiting_for_write {
                     // We still have something to write but we reached a would block state,
-                    // so we need to be notified of writability
+                    // so we need to be notified of writability.
                     self.poll.registry().reregister(socket, token, Interest::READABLE.add(Interest::WRITABLE))
                         .wrapped_msg(ErrorKind::Communication, "Failed to reregister socket")?;
+                } else {
+                    // We have nothing to write and we were not waiting for writability, so we
+                    // Don't need to re register
+                    // Or we have something to write and we were already waiting for writability,
+                    // So we also don't have to re register
                 }
             }
             _ => unreachable!()
@@ -388,7 +396,9 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                             let token = Token(entry.key());
 
                             let handle = ConnHandle::new(
-                                conn_id, my_id, peer_id, self.waker.clone(),
+                                conn_id, my_id, peer_id,
+                                self.worker_id, token,
+                                self.waker.clone(),
                             );
 
                             peer_conn.register_peer_conn(handle.clone());
@@ -414,10 +424,16 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
 
                             if let Some(conn) = self.connections.try_remove(token.into()) {
                                 match conn {
-                                    SocketConnection::PeerConn { mut socket, .. } => {
+                                    SocketConnection::PeerConn {
+                                        mut socket,
+                                        connection,
+                                        handle, ..
+                                    } => {
                                         self.poll.registry().deregister(&mut socket)?;
 
                                         socket.shutdown(Shutdown::Both)?;
+
+                                        connection.delete_connection(handle.id);
                                     }
                                     _ => unreachable!("Only peer connections can be removed from the connection slab")
                                 }

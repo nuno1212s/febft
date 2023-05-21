@@ -7,7 +7,7 @@ use crossbeam_skiplist::SkipMap;
 use dashmap::DashMap;
 use intmap::IntMap;
 use log::{debug, error};
-use mio::Waker;
+use mio::{Token, Waker};
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, OneShotRx, TryRecvError};
 use febft_common::error::*;
@@ -16,7 +16,7 @@ use febft_common::socket::{SecureSocket, SecureSocketSync};
 use crate::client_pooling::{ConnectedPeer, PeerIncomingRqHandling};
 use crate::message::{NetworkMessage, WireMessage};
 use crate::mio_tcp::connections::conn_establish::ConnectionHandler;
-use crate::mio_tcp::connections::epoll_workers::{EpollWorkerMessage, NewConnection};
+use crate::mio_tcp::connections::epoll_workers::{EpollWorkerId, EpollWorkerMessage, NewConnection};
 use crate::NodeConnections;
 use crate::serialize::Serializable;
 use crate::tcpip::connections::{Callback, ConnCounts};
@@ -62,6 +62,8 @@ pub struct ConnHandle {
     id: u32,
     my_id: NodeId,
     peer_id: NodeId,
+    epoll_worker_id: EpollWorkerId,
+    token: Token,
     waker: Arc<Waker>,
     pub(crate) cancelled: Arc<AtomicBool>,
 }
@@ -108,7 +110,18 @@ impl<M> NodeConnections for Connections<M> where M: Serializable + 'static {
     }
 
     async fn disconnect_from_node(&self, node: &NodeId) -> febft_common::error::Result<()> {
-        todo!()
+        let existing_connection = self.registered_connections.remove(node);
+
+        if let Some((node, connection)) = existing_connection {
+            for entry in connection.connections.iter() {
+                let worker_id = entry.value().epoll_worker_id;
+                let conn_token = entry.value().token;
+
+                self.worker_group.disconnect_connection_from_worker(worker_id, conn_token)?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -169,10 +182,12 @@ impl<M> PeerConnection<M> where M: Serializable + 'static {
         }
     }
 
+    /// Get a unique ID for a connection
     fn gen_conn_id(&self) -> u32 {
         self.conn_id_generator.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// Register an active connection into this connection map
     fn register_peer_conn(&self, conn: ConnHandle) {
         self.connections.insert(conn.id, conn);
     }
@@ -182,6 +197,7 @@ impl<M> PeerConnection<M> where M: Serializable + 'static {
         self.connections.len()
     }
 
+    /// Send the peer a given message
     pub(crate) fn peer_message(&self, msg: WireMessage, callback: Callback) -> Result<()> {
         let from = msg.header().from();
         let to = msg.header().to();
@@ -192,13 +208,21 @@ impl<M> PeerConnection<M> where M: Serializable + 'static {
             return Err(Error::simple(ErrorKind::Communication));
         }
 
+        for conn_ref in self.connections.iter() {
+            let conn = conn_ref.value();
+
+            conn.waker.wake().expect("Failed to wake connection");
+        }
+
         Ok(())
     }
 
+    /// Take a message from the send queue (blocking)
     fn take_from_to_send(&self) -> Result<NetworkSerializedMessage> {
         self.to_send.1.recv().wrapped(ErrorKind::CommunicationChannel)
     }
 
+    /// Attempt to take a message from the send queue (non blocking)
     fn try_take_from_send(&self) -> Result<Option<NetworkSerializedMessage>> {
         match self.to_send.1.try_recv() {
             Ok(msg) => {
@@ -215,6 +239,10 @@ impl<M> PeerConnection<M> where M: Serializable + 'static {
                 }
             }
         }
+    }
+
+    fn delete_connection(&self, conn_id: u32) {
+        self.connections.remove(&conn_id);
     }
 
     pub fn client_pool_peer(&self) -> &Arc<ConnectedPeer<NetworkMessage<M>>> {
@@ -241,6 +269,15 @@ impl<M: Serializable + 'static> EpollWorkerGroupHandle<M> {
 
         Ok(())
     }
+
+    fn disconnect_connection_from_worker(&self, epoll_worker: EpollWorkerId, conn_id: Token) -> Result<()> {
+        let worker = self.workers.get(epoll_worker as usize)
+            .ok_or(Error::simple_with_msg(ErrorKind::Communication, "Failed to get worker for connection?"))?;
+
+        worker.send(EpollWorkerMessage::CloseConnection(conn_id)).wrapped(ErrorKind::Communication)?;
+
+        Ok(())
+    }
 }
 
 impl<M: Serializable + 'static> Clone for EpollWorkerGroupHandle<M> {
@@ -253,13 +290,18 @@ impl<M: Serializable + 'static> Clone for EpollWorkerGroupHandle<M> {
 }
 
 impl ConnHandle {
-    pub fn new(id: u32, my_id: NodeId, peer_id: NodeId, waker: Arc<Waker>) -> Self {
+    pub fn new(id: u32, my_id: NodeId, peer_id: NodeId,
+               epoll_worker: EpollWorkerId,
+               conn_token: Token,
+               waker: Arc<Waker>) -> Self {
         Self {
             id,
             my_id,
             peer_id,
+            epoll_worker_id: epoll_worker,
             cancelled: Arc::new(AtomicBool::new(false)),
             waker,
+            token: conn_token,
         }
     }
 

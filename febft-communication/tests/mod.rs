@@ -8,6 +8,7 @@ mod communication_test {
     use std::time::{Duration, Instant};
     use intmap::IntMap;
     use log::{debug, error, info, warn};
+    use mio::{Events, Poll, Token, Waker};
     use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig};
     use rustls::server::AllowAnyAuthenticatedClient;
     use rustls_pemfile::Item;
@@ -562,5 +563,57 @@ mod communication_test {
         for rx in rxs {
             rx.recv().unwrap();
         }
+    }
+
+    #[test]
+    fn test_mio_waker() {
+
+        const WAKES: usize = 1000000;
+        const TIMEOUTS: Option<Duration> = Some(Duration::from_millis(1));
+
+        let mut poll = Poll::new().unwrap();
+
+        let waker = Arc::new(Waker::new(poll.registry(), Token(0)).unwrap());
+
+        let barrier = Arc::new(Barrier::new(2));
+
+        let barrier_2 = barrier.clone();
+
+        std::thread::spawn(move || {
+
+            let mut wakes = 0;
+
+            while wakes < WAKES {
+                waker.wake().unwrap();
+
+                wakes += 1;
+            }
+
+            barrier_2.wait();
+        });
+
+        let mut events = Events::with_capacity(1);
+
+        let mut wakes = 0;
+
+        loop {
+
+            poll.poll(&mut events, TIMEOUTS).unwrap();
+
+            std::thread::sleep(Duration::from_millis(1));
+
+            if events.is_empty() {
+                break;
+            } else {
+                wakes += 1;
+            }
+
+        }
+
+        barrier.wait();
+
+        println!("Wakes: {}", wakes);
+
+
     }
 }
