@@ -1,16 +1,14 @@
-use std::fs::read;
 use std::io;
 use std::io::{Read, Write};
 use std::net::Shutdown;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use bytes::{Buf, Bytes, BytesMut};
-use log::{error, info, trace};
-use mio::{Events, Interest, Poll, Registry, Token, Waker};
+use log::{debug, error, info, trace};
+use mio::{Events, Interest, Poll, Token, Waker};
 use mio::event::Event;
 use slab::Slab;
-use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
+use febft_common::channel::{ChannelSyncRx};
 use febft_common::error::{Error, ErrorKind, ResultWrappedExt};
 use febft_common::node_id::NodeId;
 use febft_common::socket::{MioSocket};
@@ -303,8 +301,6 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
     fn read_until_block(&mut self, token: Token) -> febft_common::error::Result<ConnectionWorkResult> {
         let connection = &mut self.connections[token.into()];
 
-        trace!("{:?} // Reading until blocking", self.global_connections.id);
-
         match connection {
             SocketConnection::PeerConn {
                 handle,
@@ -407,6 +403,8 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                                 read_info.read_buffer.resize(header.payload_length(), 0);
                                 read_info.read_bytes = 0;
                             }
+                        } else {
+                            read_info.read_bytes += n;
                         }
                     }
                 }
