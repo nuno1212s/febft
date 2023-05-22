@@ -135,7 +135,15 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                             }
                             Ok(_) => {}
                             Err(err) => {
-                                error!("{:?} // Error handling connection event: {}", self.global_connections.id, err);
+                                let connection = &self.connections[token.into()];
+
+                                match connection {
+                                    SocketConnection::PeerConn { handle, .. } => {
+                                        error!("{:?} // Error handling connection event: {:?} for token {:?} (corresponding to conn id {:?})",
+                                            self.global_connections.id, err, token, handle.peer_id());
+                                    }
+                                    _ => unreachable!()
+                                }
                             }
                         }
                     }
