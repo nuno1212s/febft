@@ -316,7 +316,7 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData 
     }
 
     fn process_stopped_rqs(&self, rqs: Vec<StoredRequestMessage<D::Request>>) {
-        unreachable!()
+        todo!()
     }
 
     fn clone_pending_rqs(&self, digests: Vec<ClientRqInfo>, responder: OneShotTx<Vec<StoredRequestMessage<D::Request>>>)

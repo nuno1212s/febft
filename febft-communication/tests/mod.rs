@@ -493,7 +493,7 @@ mod communication_test {
 
         for i in 0..NODE_COUNT {
             let id = NodeId(i as u32);
-            let node = gen_simplex_node::<TestMessage>(id, addrs.clone(), NODE_COUNT as usize,
+            let node = gen_mio_node::<TestMessage>(id, addrs.clone(), NODE_COUNT as usize,
                                                format!("srv{}", i).as_str(), 1000 + i as u16).unwrap();
             nodes.push(node);
             ids.push(id);

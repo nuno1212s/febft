@@ -121,7 +121,6 @@ impl<M> NodeConnections for Connections<M> where M: Serializable + 'static {
 
                     self.worker_group.disconnect_connection_from_worker(worker_id, conn_token)?;
                 }
-
             }
         }
 
@@ -196,15 +195,22 @@ impl<M> Connections<M> where M: Serializable + 'static {
 
         let current_connections = peer_conn.concurrent_connection_count();
 
-        if current_connections + 1 > concurrency_level {
+        //FIXME: Fix the fact that we are closing the previous connection when we don't actually need to
+        // So now we have to multiply the limit because of this
+        if current_connections + 1 > concurrency_level * 2 {
             // We have too many connections to this node. We need to close this one.
-            warn!("{:?} // Too many connections to {:?}. Closing connection {:?}", self.id, node, conn_id);
+            warn!("{:?} // Too many connections to {:?}. Closing connection {:?}. Connection count {} vs max {}", self.id, node, conn_id,
+            current_connections, concurrency_level);
 
             if let Err(err) = socket.shutdown(Shutdown::Both) {
                 error!("{:?} // Failed to shutdown socket {:?} to {:?}. Error: {:?}", self.id, conn_id, node, err);
             }
+
             return;
         }
+
+        debug!("{:?} // Registering connection {:?} to {:?}", self.id, conn_id, node);
+
         //FIXME: This isn't really an atomic operation but I also don't care LOL.
         peer_conn.register_peer_conn_intent(conn_id);
 
