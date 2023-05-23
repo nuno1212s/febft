@@ -46,6 +46,7 @@ pub(super) struct EpollWorker<M: Serializable + 'static> {
     poll: Poll,
     // Waker
     waker: Arc<Waker>,
+    waker_token: Token,
 }
 
 /// All information related to a given connection
@@ -105,11 +106,14 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
             connection_register: register,
             poll,
             waker,
+            waker_token,
         })
     }
 
     pub(super) fn epoll_worker_loop(mut self) -> io::Result<()> {
         let mut event_queue = Events::with_capacity(EVENT_CAPACITY);
+
+        let waker_token = self.waker_token;
 
         loop {
             if let Err(e) = self.poll.poll(&mut event_queue, WORKER_TIMEOUT) {
@@ -127,10 +131,30 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
             for event in event_queue.iter() {
                 trace!("{:?} // Handling connection event for ev: {:?}", self.global_connections.id, event);
 
-                match event.token() {
-                    token => {
-                        match self.handle_connection_event(token, &event) {
+                if event.token() == waker_token {
+                    // Indicates that we should try to write from the connections
+                    let connections_to_analyse: Vec<Token> = self.connections.iter()
+                        .filter_map(|(key, conn)|
+                            if let SocketConnection::PeerConn { .. } = conn {
+                                Some(Token(key))
+                            } else {
+                                None
+                            })
+                        .collect();
+
+                    for token in connections_to_analyse {
+                        match self.try_write_until_block(token) {
                             Ok(ConnectionWorkResult::ConnectionBroken) => {
+                                let connection = &self.connections[token.into()];
+
+                                match connection {
+                                    SocketConnection::PeerConn { handle, .. } => {
+                                        error!("{:?} // Connection broken during reading. Deleting connection {:?} to node {:?}",
+                                    self.global_connections.id, token, handle.peer_id);
+                                    }
+                                    _ => unreachable!()
+                                }
+
                                 self.delete_connection(token, true)?;
                             }
                             Ok(_) => {}
@@ -144,7 +168,41 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                                     }
                                     _ => unreachable!()
                                 }
+
+                                self.delete_connection(token, true)?;
                             }
+                        };
+                    }
+                } else {
+                    let token = event.token();
+
+                    match self.handle_connection_event(token, &event) {
+                        Ok(ConnectionWorkResult::ConnectionBroken) => {
+                            let connection = &self.connections[token.into()];
+
+                            match connection {
+                                SocketConnection::PeerConn { handle, .. } => {
+                                    error!("{:?} // Connection broken during reading. Deleting connection {:?} to node {:?}",
+                                    self.global_connections.id, token, handle.peer_id);
+                                }
+                                _ => unreachable!()
+                            }
+
+                            self.delete_connection(token, true)?;
+                        }
+                        Ok(_) => {}
+                        Err(err) => {
+                            let connection = &self.connections[token.into()];
+
+                            match connection {
+                                SocketConnection::PeerConn { handle, .. } => {
+                                    error!("{:?} // Error handling connection event: {:?} for token {:?} (corresponding to conn id {:?})",
+                                            self.global_connections.id, err, token, handle.peer_id());
+                                }
+                                _ => unreachable!()
+                            }
+
+                            self.delete_connection(token, true)?;
                         }
                     }
                 }
@@ -155,6 +213,14 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
     }
 
     fn handle_connection_event(&mut self, token: Token, event: &Event) -> febft_common::error::Result<ConnectionWorkResult> {
+        let connection = if self.connections.contains(token.into()) {
+            &self.connections[token.into()]
+        } else {
+            error!("{:?} // Received event for non-existent connection with token {:?}", self.global_connections.id, token);
+
+            return Ok(ConnectionWorkResult::ConnectionBroken);
+        };
+
         match &self.connections[token.into()] {
             SocketConnection::PeerConn { .. } => {
                 if event.is_readable() {
@@ -169,29 +235,20 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                     }
                 }
             }
-            SocketConnection::Waker => {
-                // Indicates that we should try to write from the connections
-
-                let connections_to_analyse: Vec<Token> = self.connections.iter()
-                    .filter_map(|(key, conn)|
-                        if let SocketConnection::PeerConn { .. } = conn {
-                            Some(Token(key))
-                        } else {
-                            None
-                        })
-                    .collect();
-
-                for x in connections_to_analyse {
-                    self.try_write_until_block(x)?;
-                }
-            }
+            SocketConnection::Waker => {}
         }
 
         Ok(ConnectionWorkResult::Working)
     }
 
     fn try_write_until_block(&mut self, token: Token) -> febft_common::error::Result<ConnectionWorkResult> {
-        let connection = &mut self.connections[token.into()];
+        let connection = if self.connections.contains(token.into()) {
+            &mut self.connections[token.into()]
+        } else {
+            error!("{:?} // Received write event for non-existent connection with token {:?}", self.global_connections.id, token);
+
+            return Ok(ConnectionWorkResult::ConnectionBroken);
+        };
 
         match connection {
             SocketConnection::PeerConn {
@@ -307,7 +364,14 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
     }
 
     fn read_until_block(&mut self, token: Token) -> febft_common::error::Result<ConnectionWorkResult> {
-        let connection = &mut self.connections[token.into()];
+
+        let connection = if self.connections.contains(token.into()) {
+            &mut self.connections[token.into()]
+        } else {
+            error!("{:?} // Received read event for non-existent connection with token {:?}", self.global_connections.id, token);
+
+            return Ok(ConnectionWorkResult::ConnectionBroken);
+        };
 
         match connection {
             SocketConnection::PeerConn {
@@ -512,6 +576,8 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                 }
                 _ => unreachable!("Only peer connections can be removed from the connection slab")
             }
+        } else {
+            error!("{:?} // Tried to remove a connection that doesn't exist, {:?}", self.global_connections.id, token);
         }
 
         Ok(())
