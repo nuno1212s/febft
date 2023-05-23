@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use crossbeam_skiplist::SkipMap;
 use dashmap::DashMap;
 use intmap::IntMap;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use mio::{Token, Waker};
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, OneShotRx, TryRecvError};
@@ -175,7 +175,7 @@ impl<M> Connections<M> where M: Serializable + 'static {
     }
 
     fn handle_connection_established_with_socket(self: &Arc<Self>, node: NodeId, socket: MioSocket) {
-        debug!("{:?} // Handling established connection to {:?}", self.id, node);
+        info!("{:?} // Handling established connection to {:?}", self.id, node);
 
         let option = self.registered_connections.entry(node);
 
@@ -225,7 +225,7 @@ impl<M> Connections<M> where M: Serializable + 'static {
 
     /// Handle a connection having broken and being removed from the worker
     fn handle_connection_failed(self: &Arc<Self>, node: NodeId, conn_id: u32) {
-        debug!("{:?} // Handling failed connection to {:?}. Conn: {:?}", self.id, node, conn_id);
+        info!("{:?} // Handling failed connection to {:?}. Conn: {:?}", self.id, node, conn_id);
 
         let connection = if let Some(conn) = self.registered_connections.get(&node) {
             conn.value().clone()
