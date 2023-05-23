@@ -112,6 +112,7 @@ impl SeqNo {
     /// Returns the difference between two sequence numbers.
     /// Returns an index that is to the right or to the left of self, as if they were both placed
     /// on a straight line.
+    /// Takes into account how far ahead the messages are and if they are too far ahead, we will ignore them
     #[inline]
     pub fn index(self, other: SeqNo) -> Either<InvalidSeqNo, usize> {
         // TODO: add config param for these consts

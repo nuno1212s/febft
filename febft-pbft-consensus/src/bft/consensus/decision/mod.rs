@@ -332,12 +332,11 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 let batch_metadata = self.message_log.process_pre_prepare(stored_msg.clone(),
                                                                           stored_msg.header().digest().clone(),
                                                                           digests)?;
-
-                let batch_metadata = batch_metadata.unwrap();
-
                 let mut result = DecisionStatus::Deciding;
 
                 self.phase = if received == view.leader_set().len() {
+                    let batch_metadata = batch_metadata.unwrap();
+
                     info!("{:?} // Completed pre prepare phase with all pre prepares Seq {:?}. Batch size {:?}",
                         node.id(), self.sequence_number(), self.message_log.current_batch_size());
 

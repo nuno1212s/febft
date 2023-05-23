@@ -57,7 +57,7 @@ impl NetworkView for ViewInfo {
     }
 }
 
-const LEADER_COUNT: usize = 1;
+const LEADER_COUNT: usize = 3;
 
 impl ViewInfo {
     /// Creates a new instance of `ViewInfo`.
@@ -69,7 +69,7 @@ impl ViewInfo {
 
         let quorum_members: Vec<NodeId> = NodeId::targets_u32(0..n as u32).collect();
 
-        let destined_leader = quorum_members[(usize::from(seq) + 1) % n];
+        let destined_leader = quorum_members[(usize::from(seq)) % n];
 
         let mut leader_set = vec![destined_leader];
 

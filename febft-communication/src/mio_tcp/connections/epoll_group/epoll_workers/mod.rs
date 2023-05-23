@@ -113,6 +113,8 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
     pub(super) fn epoll_worker_loop(mut self) -> io::Result<()> {
         let mut event_queue = Events::with_capacity(EVENT_CAPACITY);
 
+        let my_id = self.global_connections.id;
+
         let waker_token = self.waker_token;
 
         loop {
@@ -143,66 +145,84 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                         .collect();
 
                     for token in connections_to_analyse {
+
+                        if !self.connections.contains(token.into()) {
+                            continue
+                        }
+
                         match self.try_write_until_block(token) {
                             Ok(ConnectionWorkResult::ConnectionBroken) => {
-                                let connection = &self.connections[token.into()];
+                                let peer_id = {
+                                    let connection = &self.connections[token.into()];
 
-                                match connection {
-                                    SocketConnection::PeerConn { handle, .. } => {
-                                        error!("{:?} // Connection broken during reading. Deleting connection {:?} to node {:?}",
-                                    self.global_connections.id, token, handle.peer_id);
-                                    }
-                                    _ => unreachable!()
+                                    connection.peer_id().unwrap_or(NodeId::from(1234567u32))
+                                };
+
+                                error!("{:?} // Connection broken during reading. Deleting connection {:?} to node {:?}",
+                                    my_id, token,peer_id);
+
+                                if let Err(err) = self.delete_connection(token, true) {
+                                    error!("{:?} // Error deleting connection {:?} to node {:?}: {:?}",
+                                        my_id, token, peer_id, err);
                                 }
-
-                                self.delete_connection(token, true)?;
                             }
                             Ok(_) => {}
                             Err(err) => {
-                                let connection = &self.connections[token.into()];
+                                let peer_id = {
+                                    let connection = &self.connections[token.into()];
 
-                                match connection {
-                                    SocketConnection::PeerConn { handle, .. } => {
-                                        error!("{:?} // Error handling connection event: {:?} for token {:?} (corresponding to conn id {:?})",
-                                            self.global_connections.id, err, token, handle.peer_id());
-                                    }
-                                    _ => unreachable!()
+                                    connection.peer_id().unwrap_or(NodeId::from(1234567u32))
+                                };
+
+                                error!("{:?} // Error handling connection event: {:?} for token {:?} (corresponding to conn id {:?})",
+                                            my_id, err, token, peer_id);
+
+                                if let Err(err) = self.delete_connection(token, true) {
+                                    error!("{:?} // Error deleting connection {:?} to node {:?}: {:?}",
+                                        my_id, token, peer_id, err);
                                 }
-
-                                self.delete_connection(token, true)?;
                             }
                         };
                     }
                 } else {
                     let token = event.token();
 
+                    if !self.connections.contains(token.into()) {
+                        // In case the waker already deleted this socket
+                        continue
+                    }
+
                     match self.handle_connection_event(token, &event) {
                         Ok(ConnectionWorkResult::ConnectionBroken) => {
-                            let connection = &self.connections[token.into()];
+                            let peer_id = {
+                                let connection = &self.connections[token.into()];
 
-                            match connection {
-                                SocketConnection::PeerConn { handle, .. } => {
-                                    error!("{:?} // Connection broken during reading. Deleting connection {:?} to node {:?}",
-                                    self.global_connections.id, token, handle.peer_id);
-                                }
-                                _ => unreachable!()
+                                connection.peer_id().unwrap_or(NodeId::from(1234567u32))
+                            };
+
+                            error!("{:?} // Connection broken during reading. Deleting connection {:?} to node {:?}",
+                                    self.global_connections.id, token,peer_id);
+
+                            if let Err(err) = self.delete_connection(token, true) {
+                                error!("{:?} // Error deleting connection {:?} to node {:?}: {:?}",
+                                        my_id, token, peer_id, err);
                             }
-
-                            self.delete_connection(token, true)?;
                         }
                         Ok(_) => {}
                         Err(err) => {
-                            let connection = &self.connections[token.into()];
+                            let peer_id = {
+                                let connection = &self.connections[token.into()];
 
-                            match connection {
-                                SocketConnection::PeerConn { handle, .. } => {
-                                    error!("{:?} // Error handling connection event: {:?} for token {:?} (corresponding to conn id {:?})",
-                                            self.global_connections.id, err, token, handle.peer_id());
-                                }
-                                _ => unreachable!()
+                                connection.peer_id().unwrap_or(NodeId::from(1234567u32))
+                            };
+
+                            error!("{:?} // Error handling connection event: {:?} for token {:?} (corresponding to conn id {:?})",
+                                            self.global_connections.id, err, token, peer_id);
+
+                            if let Err(err) = self.delete_connection(token, true) {
+                                error!("{:?} // Error deleting connection {:?} to node {:?}: {:?}",
+                                        my_id, token, peer_id, err);
                             }
-
-                            self.delete_connection(token, true)?;
                         }
                     }
                 }
@@ -364,7 +384,6 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
     }
 
     fn read_until_block(&mut self, token: Token) -> febft_common::error::Result<ConnectionWorkResult> {
-
         let connection = if self.connections.contains(token.into()) {
             &mut self.connections[token.into()]
         } else {
@@ -460,6 +479,8 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                             *(&mut read_info.current_header) = Some(header);
 
                             if n > bytes_to_read {
+                                //TODO: This will never happen since our buffer is HEADER::LENGTH sized
+
                                 // We have read more than we should for the current message,
                                 // so we can't clear the buffer
                                 read_info.read_buffer.advance(Header::LENGTH);
@@ -550,6 +571,7 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
 
         entry.insert(socket_conn);
 
+        //TODO: Handle any errors from these calls
         let _ = self.read_until_block(token);
         let _ = self.try_write_until_block(token);
 
@@ -638,5 +660,18 @@ pub fn interrupted(err: &io::Error) -> bool {
 impl<M> NewConnection<M> where M: Serializable + 'static {
     pub fn new(conn_id: u32, peer_id: NodeId, my_id: NodeId, socket: MioSocket, peer_conn: Arc<PeerConnection<M>>) -> Self {
         Self { conn_id, peer_id, my_id, socket, peer_conn }
+    }
+}
+
+impl<M> SocketConnection<M> where M: Serializable + 'static {
+    fn peer_id(&self) -> Option<NodeId> {
+        match self {
+            SocketConnection::PeerConn { handle, .. } => {
+                Some(handle.peer_id)
+            }
+            SocketConnection::Waker => {
+                None
+            }
+        }
     }
 }
