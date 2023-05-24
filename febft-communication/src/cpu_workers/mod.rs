@@ -28,7 +28,7 @@ pub(crate) fn serialize_digest_message<M: Serializable + 'static>(message: Netwo
         metric_duration(THREADPOOL_PASS_TIME_ID, start.elapsed());
 
         // serialize
-        tx.send(serialize_digest_no_threadpool(&message)).unwrap();
+        let _ = tx.send(serialize_digest_no_threadpool(&message));
     });
 
     rx
@@ -108,14 +108,20 @@ pub(crate) fn deserialize_message<M: Serializable + 'static>(header: Header, pay
     threadpool::execute(move || {
         metric_duration(THREADPOOL_PASS_TIME_ID, start.elapsed());
 
-        tx.send(deserialize_message_no_threadpool(header, payload)).unwrap();
+        let _ = tx.send(deserialize_message_no_threadpool(header, payload));
     });
 
     rx
 }
 
 pub(crate) fn deserialize_and_push_message<M: Serializable + 'static> (header: Header, payload: BytesMut, connection: Arc<ConnectedPeer<NetworkMessage<M>>>) {
+
+    let start = Instant::now();
+
     threadpool::execute(move || {
+
+        metric_duration(THREADPOOL_PASS_TIME_ID, start.elapsed());
+
         let (message, _) = deserialize_message_no_threadpool::<M>(header.clone(), payload).unwrap();
 
         connection.push_request(NetworkMessage::new(header, message)).unwrap();

@@ -3,7 +3,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 use chrono::Utc;
-use log::{debug, info, trace, warn};
+use log::{debug, info, warn};
 use febft_common::crypto::hash::Digest;
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
@@ -12,9 +12,10 @@ use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, StoredMessage};
 use febft_communication::Node;
 use febft_execution::serialize::SharedData;
-use febft_messages::serialize::{NetworkView, StateTransferMessage};
+use febft_messages::serialize::NetworkView;
+use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::Timeouts;
-use febft_metrics::metrics::{metric_duration, metric_duration_start};
+use febft_metrics::metrics::{metric_duration};
 use crate::bft::consensus::accessory::{AccessoryConsensus, ConsensusDecisionAccessory};
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
@@ -507,7 +508,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 self.message_log.process_message(stored_msg.clone())?;
 
                 return if received == view.params().quorum() {
-                    info!("{:?} // Completed commit phase with all prepares Seq {:?}", node.id(), self.sequence_number());
+                    info!("{:?} // Completed commit phase with all commits Seq {:?}", node.id(), self.sequence_number());
 
                     self.phase = DecisionPhase::Decided;
 

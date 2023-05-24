@@ -12,10 +12,12 @@ use febft_common::node_id::NodeId;
 use febft_common::prng::ThreadSafePrng;
 use febft_common::{socket, threadpool};
 use febft_common::socket::SyncListener;
+use febft_metrics::metrics::metric_duration;
 use crate::client_pooling::{ConnectedPeer, PeerIncomingRqHandling};
 use crate::config::MioConfig;
 use crate::message::{NetworkMessage, NetworkMessageKind, StoredSerializedNetworkMessage, WireMessage};
 use crate::message_signing::{NodePKCrypto, NodePKShared};
+use crate::metric::THREADPOOL_PASS_TIME_ID;
 use crate::mio_tcp::connections::{Connections, PeerConnection};
 use crate::mio_tcp::connections::epoll_group::{init_worker_group_handle, initialize_worker_group};
 use crate::Node;
@@ -132,7 +134,12 @@ impl<M: Serializable + 'static> MIOTcpNode<M> {
 
     fn serialize_send_impl(send_to_me: Option<SendTo<M>>, send_to_others: Option<SendTos<M>>,
                            message: NetworkMessageKind<M>) {
+
+        let start = Instant::now();
+
         threadpool::execute(move || {
+            metric_duration(THREADPOOL_PASS_TIME_ID, start.elapsed());
+
             match crate::cpu_workers::serialize_digest_no_threadpool(&message) {
                 Ok((buffer, digest)) => {
                     Self::send_impl(send_to_me, send_to_others, message, buffer, digest);

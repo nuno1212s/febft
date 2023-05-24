@@ -21,7 +21,7 @@ use crate::serialize::Serializable;
 
 const EVENT_CAPACITY: usize = 1024;
 const DEFAULT_SOCKET_CAPACITY: usize = 1024;
-const WORKER_TIMEOUT: Option<Duration> = Some(Duration::from_micros(50));
+const WORKER_TIMEOUT: Option<Duration> = Some(Duration::from_millis(50));
 
 enum ConnectionWorkResult {
     Working,
@@ -110,6 +110,8 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
         })
     }
 
+
+
     pub(super) fn epoll_worker_loop(mut self) -> io::Result<()> {
         let mut event_queue = Events::with_capacity(EVENT_CAPACITY);
 
@@ -130,8 +132,9 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                 }
             }
 
+            trace!("{:?} // Worker {}: Handling {} events {:?}", self.global_connections.id, self.worker_id, event_queue.iter().count(), event_queue);
+
             for event in event_queue.iter() {
-                trace!("{:?} // Handling connection event for ev: {:?}", self.global_connections.id, event);
 
                 if event.token() == waker_token {
                     // Indicates that we should try to write from the connections
@@ -321,11 +324,13 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                             Ok(0) => return Ok(ConnectionWorkResult::ConnectionBroken),
                             Ok(n) => {
                                 // We have successfully written n bytes
-                                if n < header.len() {
+                                if n + writing.written_bytes < header.len() {
                                     writing.written_bytes += n;
 
                                     continue;
                                 } else {
+                                    // It will always write atmost header.len() bytes, since
+                                    // That's the length of the buffer
                                     writing.written_bytes = 0;
                                     writing.currently_writing_header = None;
                                 }
@@ -603,6 +608,10 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
         }
 
         Ok(())
+    }
+
+    pub fn waker(&self) -> &Arc<Waker> {
+        &self.waker
     }
 }
 

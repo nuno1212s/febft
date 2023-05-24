@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use log::error;
-use mio::Token;
+use mio::{Token};
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 use febft_common::error::*;

@@ -212,7 +212,13 @@ impl<D> Log<D> where D: SharedData + 'static {
             // FIXME: this may not be an invalid state after all; we may just be generating
             // checkpoints too fast for the execution layer to keep up, delivering the
             // hash digests of the appstate
-            _ => return Err("Invalid checkpoint state detected").wrapped(ErrorKind::MsgLog),
+            _ => {
+                error!("Invalid checkpoint state detected");
+
+                self.checkpoint = earlier;
+                
+                return Ok(Info::Nil);
+            }
         };
 
         Ok(Info::BeginCheckpoint)
