@@ -60,6 +60,7 @@ pub struct Proposer<D, NT>
 }
 
 const TIMEOUT: Duration = Duration::from_micros(10);
+const PRINT_INTERVAL: usize = 10000;
 
 struct ProposeBuilder<D> where D: SharedData {
     currently_accumulated: Vec<StoredRequestMessage<D::Request>>,
@@ -129,6 +130,8 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
 
                     let is_leader = info.leader_set().contains(&self.node_ref.id());
 
+                    let leader_set_size = info.leader_set().len();
+
                     let our_slice = info.hash_space_division()
                         .get(&self.node_ref.id()).cloned().clone();
 
@@ -186,12 +189,19 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                                 for message in messages {
                                     let digest = message.header().unique_digest();
 
-                                    if is_leader && is_request_in_hash_space(&digest,
-                                                                             our_slice.as_ref().unwrap()) {
-
-                                        // we know that these operations will always be proposed since we are a
-                                        // Correct replica. We can therefore just add them to the latest op log
-                                        ordered_propose.currently_accumulated.push(message);
+                                    if is_leader {
+                                        if leader_set_size > 1 {
+                                            if is_request_in_hash_space(&digest,
+                                                                        our_slice.as_ref().unwrap()) {
+                                                // we know that these operations will always be proposed since we are a
+                                                // Correct replica. We can therefore just add them to the latest op log
+                                                ordered_propose.currently_accumulated.push(message);
+                                            }
+                                        } else {
+                                            // we know that these operations will always be proposed since we are a
+                                            // Correct replica. We can therefore just add them to the latest op log
+                                            ordered_propose.currently_accumulated.push(message);
+                                        }
                                     } else {
                                         digest_vec.push(ClientRqInfo::from(&message));
                                     }

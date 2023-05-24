@@ -96,7 +96,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
         debug!("{:?} // Initializing timeouts", log_node_id);
 
         let (rq_pre_processor, batch_input) = initialize_request_pre_processor
-            ::<WDRoundRobin, S::Data, OP::Serialization, ST::Serialization, NT>(4, node.clone());
+            ::<WDRoundRobin, S::Data, OP::Serialization, ST::Serialization, NT>(8, node.clone());
 
         // start timeouts handler
         let timeouts = Timeouts::new::<S::Data>(log_node_id.clone(), 500, exec_tx.clone());
