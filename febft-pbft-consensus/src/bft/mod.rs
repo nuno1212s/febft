@@ -3,15 +3,6 @@
 //! By default, it is hidden to the user, unless explicitly enabled
 //! with the feature flag `expose_impl`.
 
-pub mod consensus;
-pub mod proposer;
-pub mod sync;
-pub mod msg_log;
-pub mod config;
-pub mod message;
-pub mod observer;
-pub mod metric;
-
 use std::ops::Drop;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -23,35 +14,41 @@ use log4rs::{
     Config,
     encode::pattern::PatternEncoder,
 };
+
+
 use febft_common::error::*;
-use febft_common::{async_runtime, socket, threadpool};
-use febft_common::error::ErrorKind::CommunicationPeerNotFound;
-use febft_common::globals::{Flag, ReadOnly};
-use febft_common::node_id::NodeId;
+use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, StoredMessage};
 use febft_communication::Node;
 use febft_communication::serialize::Serializable;
-use febft_execution::app::{Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
-use febft_messages::messages::{ClientRqInfo, ForwardedRequestsMessage, Protocol, SystemMessage};
+use febft_messages::messages::ClientRqInfo;
+use febft_messages::messages::Protocol;
 use febft_messages::ordering_protocol::{OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, View};
-use febft_messages::request_pre_processing::{BatchOutput, PreProcessorMessage, RequestPreProcessor};
-use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
+use febft_messages::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
+use febft_messages::serialize::{ServiceMsg, StateTransferMessage};
 use febft_messages::state_transfer::{Checkpoint, DecLog, StatefulOrderProtocol};
-use febft_messages::timeouts::{RqTimeout, Timeout, TimeoutKind, Timeouts};
+use febft_messages::timeouts::{RqTimeout, Timeouts};
 use crate::bft::config::PBFTConfig;
-use crate::bft::consensus::{Consensus, ProposerConsensusGuard, ConsensusPollStatus, ConsensusStatus};
+use crate::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus, ProposerConsensusGuard};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage, ViewChangeMessage};
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::{Info, initialize_decided_log, initialize_persistent_log};
-use crate::bft::msg_log::persistent::{NoPersistentLog, PersistentLogModeTrait};
-use crate::bft::observer::{MessageType, ObserverHandle};
+use crate::bft::msg_log::decided_log::Log;
+use crate::bft::msg_log::persistent::NoPersistentLog;
 use crate::bft::proposer::Proposer;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus};
-use crate::bft::sync::view::ViewInfo;
+
+pub mod consensus;
+pub mod proposer;
+pub mod sync;
+pub mod msg_log;
+pub mod config;
+pub mod message;
+pub mod observer;
+pub mod metric;
 
 // The types responsible for this protocol
 pub type PBFT<D, ST> = ServiceMsg<D, PBFTConsensus<D>, ST>;

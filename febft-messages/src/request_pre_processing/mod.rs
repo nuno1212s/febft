@@ -3,11 +3,12 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use log::error;
 use febft_common::channel;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, new_bounded_sync, OneShotRx, OneShotTx, RecvError, TryRecvError};
 use febft_common::globals::ReadOnly;
 use febft_common::node_id::NodeId;
-use febft_common::ordering::SeqNo;
+use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, NetworkMessage, StoredMessage};
 use febft_communication::{Node, NodeIncomingRqHandler};
 use febft_execution::serialize::SharedData;
@@ -85,7 +86,7 @@ impl<O> RequestPreProcessor<O> {
 
         self.0.send(PreProcessorMessage::CollectAllPendingMessages(tx)).unwrap();
 
-        rx.recv().unwrap()
+        collected_requests
     }
 }
 

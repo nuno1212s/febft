@@ -8,6 +8,7 @@ use std::{
 use std::cell::Cell;
 use std::sync::MutexGuard;
 use bytes::BytesMut;
+use either::Either;
 use futures::SinkExt;
 
 use self::{follower_sync::FollowerSynchronizer, replica_sync::ReplicaSynchronizer};
@@ -18,7 +19,7 @@ use log::{debug, error, info, warn};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use febft_common::crypto::hash::Digest;
-use febft_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_queue_message, tbo_pop_message};
+use febft_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_queue_message, tbo_pop_message, InvalidSeqNo};
 use febft_common::{collections, prng};
 use febft_common::node_id::NodeId;
 use febft_communication::message::{Header, NetworkMessageKind, StoredMessage, System, WireMessage};
@@ -197,11 +198,28 @@ impl<O> TboQueue<O> {
 
     /// Installs a new view into the queue.
     pub fn install_view(&mut self, view: ViewInfo) {
+        let index = view.sequence_number().index(self.view.sequence_number());
+
         let prev_view = std::mem::replace(&mut self.view, view);
 
         self.previous_view = Some(prev_view);
 
-        //TODO: should we move to the next instance queue
+        match index {
+            Either::Right(i) if i > 0 => {
+
+                for _ in 0..i {
+                    self.next_instance_queue();
+                }
+
+            }
+            Either::Right(_) => {
+                warn!("Installing a view with the same seq number as the current one?");
+            }
+            Either::Left(_) => {
+                unreachable!("How can we possibly go back in time?");
+            }
+        }
+
     }
 
     /// Signal this `TboQueue` that it may be able to extract new
@@ -439,7 +457,7 @@ impl<D> Synchronizer<D>
         match self.phase.get() {
             _ if !tbo_guard.get_queue => SynchronizerPollStatus::Recv,
             ProtoPhase::Init => {
-                //If we are
+                //If we are in the init phase and there is a pending request, move to the stopping phase
                 extract_msg!(D::Request =>
                     { self.phase.replace(ProtoPhase::Stopping(0)); },
                     &mut tbo_guard.get_queue,
@@ -497,6 +515,8 @@ impl<D> Synchronizer<D>
 
                         guard.queue_stop(header, message);
 
+                        debug!("{:?} // Received stop message while in init state. Queueing", node.id());
+
                         SynchronizerStatus::Nil
                     }
                     ViewChangeMessageKind::StopData(_) => {
@@ -510,6 +530,8 @@ impl<D> Synchronizer<D>
 
                                 guard.queue_stop_data(header, message);
 
+                                debug!("{:?} // Received stop data message while in init state. Queueing", node.id());
+
                                 SynchronizerStatus::Nil
                             }
                         }
@@ -518,6 +540,8 @@ impl<D> Synchronizer<D>
                         let mut guard = self.tbo.lock().unwrap();
 
                         guard.queue_sync(header, message);
+
+                        debug!("{:?} // Received sync message while in init state. Queueing", node.id());
 
                         SynchronizerStatus::Nil
                     }
@@ -530,6 +554,8 @@ impl<D> Synchronizer<D>
 
                 let i = match message.kind() {
                     ViewChangeMessageKind::Stop(_) if msg_seq != next_seq => {
+                        debug!("{:?} // Received stop message {:?} that does not match up to our local view {:?}", node.id(), message, current_view);
+
                         let mut guard = self.tbo.lock().unwrap();
 
                         guard.queue_stop(header, message);
@@ -539,6 +565,8 @@ impl<D> Synchronizer<D>
                     ViewChangeMessageKind::Stop(_)
                     if self.stopped.borrow().contains_key(header.from().into()) =>
                         {
+                            warn!("{:?} // Received double stop message from node {:?}", node.id(), header.from());
+
                             // drop attempts to vote twice
                             return stop_status!(i, &current_view);
                         }
@@ -554,6 +582,8 @@ impl<D> Synchronizer<D>
                                     let mut guard = self.tbo.lock().unwrap();
 
                                     guard.queue_stop_data(header, message);
+
+                                    debug!("{:?} // Received stop data message while in stopping state. Queueing", node.id());
                                 }
 
                                 return stop_status!(i, &current_view);
@@ -565,6 +595,8 @@ impl<D> Synchronizer<D>
                             let mut guard = self.tbo.lock().unwrap();
 
                             guard.queue_sync(header, message);
+
+                            debug!("{:?} // Received sync message while in init state. Queueing", node.id());
                         }
 
                         return stop_status!(i, &current_view);
@@ -586,15 +618,18 @@ impl<D> Synchronizer<D>
                 // NOTE: we only take this branch of the code before
                 // we have sent our own STOP message
                 if let ProtoPhase::Stopping(_i) = self.phase.get() {
+
                     return if i > current_view.params().f() {
                         self.begin_view_change(None, node, timeouts, log);
                         SynchronizerStatus::Running
                     } else {
+                        self.phase.replace(ProtoPhase::Stopping(i));
+
                         SynchronizerStatus::Nil
                     };
                 }
 
-                if i == current_view.params().quorum() {
+                if i >= current_view.params().quorum() {
                     let next_view = current_view.next_view();
 
                     let previous_view = current_view.clone();
@@ -653,6 +688,8 @@ impl<D> Synchronizer<D>
                                     let mut guard = self.tbo.lock().unwrap();
 
                                     guard.queue_stop(header, message);
+
+                                    debug!("{:?} // Received stop message while in stopping data state. Queueing", node.id());
                                 }
 
                                 return SynchronizerStatus::Running;
@@ -705,7 +742,10 @@ impl<D> Synchronizer<D>
                                     //Since we are the current leader and are waiting for stop data,
                                     //This must be related to another view.
                                     guard.queue_sync(header, message);
+
                                 }
+
+                                debug!("{:?} // Received sync message while in stopping data phase. Queueing", node.id());
 
                                 return SynchronizerStatus::Running;
                             }
@@ -776,8 +816,7 @@ impl<D> Synchronizer<D>
                             let (header, message) = {
                                 let mut buf = Vec::new();
 
-                                info!("{:?} // Forged pre-prepare: {} {:?}", node.id(),
-                                    p.len(), p);
+                                info!("{:?} // Forged pre-prepare: {} {:?}", node.id(), p.len(), p);
 
                                 let forged_pre_prepare = consensus.forge_propose(p, self);
 
@@ -824,7 +863,6 @@ impl<D> Synchronizer<D>
                                 }),
                             ));
 
-
                             let node_id = node.id();
                             let targets = NodeId::targets(0..current_view.params().n())
                                 .filter(move |&id| id != node_id);
@@ -864,6 +902,8 @@ impl<D> Synchronizer<D>
                             let mut guard = self.tbo.lock().unwrap();
 
                             guard.queue_stop(header, message);
+
+                            debug!("{:?} // Received stop message while in syncing phase. Queueing", node.id());
                         }
 
                         return SynchronizerStatus::Running;
@@ -882,6 +922,8 @@ impl<D> Synchronizer<D>
                                     let mut guard = self.tbo.lock().unwrap();
 
                                     guard.queue_stop_data(header, message);
+
+                                    debug!("{:?} // Received stop data message while in syncing phase. Queueing", node.id());
                                 }
 
                                 return SynchronizerStatus::Running;
@@ -890,6 +932,8 @@ impl<D> Synchronizer<D>
                     }
                     ViewChangeMessageKind::Sync(_) if msg_seq != seq => {
                         {
+                            debug!("{:?} // Received sync message whose sequence number does not match our current one {:?} vs {:?}. Queueing", node.id(), message, current_view);
+
                             let mut guard = self.tbo.lock().unwrap();
 
                             guard.queue_sync(header, message);
@@ -1015,6 +1059,10 @@ impl<D> Synchronizer<D>
             //And therefore we don't increase the received message count, just update the phase to Stopping2
             (ProtoPhase::Stopping(i), _) => {
                 self.phase.replace(ProtoPhase::Stopping2(i));
+            }
+            (ProtoPhase::StoppingData(_), _) | (ProtoPhase::Syncing, _) => {
+                // we have already started a view change protocol
+                return;
             }
             // we have timed out, therefore we should send a STOP msg;
             //
