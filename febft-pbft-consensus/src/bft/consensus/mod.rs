@@ -2,13 +2,14 @@ pub mod decision;
 pub mod accessory;
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, BTreeSet, VecDeque};
+use std::collections::{BinaryHeap, BTreeMap, BTreeSet, VecDeque};
 use std::iter;
 use std::os::linux::raw::stat;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::Utc;
 use either::Either;
+use event_listener::Event;
 use log::{debug, error, info, trace, warn};
 use serde::de::Unexpected::Seq;
 use socket2::Protocol;
@@ -21,7 +22,7 @@ use febft_communication::message::{Header, StoredMessage};
 use febft_communication::Node;
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
-use febft_messages::messages::{RequestMessage, StoredRequestMessage, SystemMessage};
+use febft_messages::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage, SystemMessage};
 use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::Timeouts;
 use febft_metrics::metrics::metric_increment;
@@ -780,6 +781,18 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
 
         self.install_view(&view);
 
+        if let ConsensusMessageKind::PrePrepare(reqs) = &message.kind() {
+            let mut final_rqs = Vec::with_capacity(reqs.len());
+
+            for x in reqs {
+                final_rqs.push(ClientRqInfo::from(x));
+            }
+
+            // Register the messages that we have received in this pre prepare from the view change
+            // So the proposer doesn't repeat them
+            self.consensus_guard.install_sync_message_requests(final_rqs);
+        }
+
         // Advance the initialization phase of the first decision, which is the current decision
         // So the proposer won't try to propose anything to this decision
         self.decisions[0].skip_init_phase();
@@ -825,9 +838,18 @@ impl<D, ST> Orderable for Consensus<D, ST> where D: SharedData + 'static, ST: St
 pub struct ProposerConsensusGuard {
     /// Can I propose batches at this time
     can_propose: AtomicBool,
+    /// The proposer should sleep until we are ready to start proposing again
+    event_waker: Event,
     /// The revolving door of available sequence numbers to propose to
     /// We want to have a Min Heap so we reverse the SeqNo's ordering
     seq_no_queue: Mutex<(BinaryHeap<Reverse<SeqNo>>, ViewInfo)>,
+    /// Cached check so we don't always have to lock the last_view_change mutex
+    has_pending_view_change_reqs: AtomicBool,
+    /// A list of all requests sent by the leader in the SYNC message.
+    /// These requests should not be repeated.
+    /// We must store them due to the way the request pre processor
+    /// sends requests to the proposer
+    last_view_change: Mutex<Option<BTreeMap<NodeId, BTreeMap<SeqNo, SeqNo>>>>,
 }
 
 impl ProposerConsensusGuard {
@@ -835,13 +857,21 @@ impl ProposerConsensusGuard {
     pub(super) fn new(view: ViewInfo, watermark: u32) -> Arc<Self> {
         Arc::new(Self {
             can_propose: AtomicBool::new(true),
+            event_waker: Event::new(),
             seq_no_queue: Mutex::new((BinaryHeap::with_capacity(watermark as usize), view)),
+            has_pending_view_change_reqs: AtomicBool::new(false),
+            last_view_change: Mutex::new(None),
         })
     }
 
     /// Are we able to propose to the current consensus instance
     pub fn can_propose(&self) -> bool {
         self.can_propose.load(Ordering::Relaxed)
+    }
+
+    /// Block until we are ready to start proposing again
+    pub fn block_until_ready(&self) {
+        self.event_waker.listen().wait();
     }
 
     /// Lock the consensus, making it impossible for the proposer to propose any requests
@@ -852,6 +882,8 @@ impl ProposerConsensusGuard {
     /// Unlock the consensus instance
     pub fn unlock_consensus(&self) {
         self.can_propose.store(true, Ordering::Relaxed);
+
+        self.event_waker.notify(usize::MAX);
     }
 
     /// Get the next sequence number to propose to
@@ -888,6 +920,48 @@ impl ProposerConsensusGuard {
 
         guard.1 = view;
         guard.0.clear();
+    }
+
+    /// Check if we have pending view change requests
+    pub fn has_pending_view_change_reqs(&self) -> bool {
+        self.has_pending_view_change_reqs.load(Ordering::Relaxed)
+    }
+
+    /// Get the information about the last view change requests
+    pub fn last_view_change(&self) -> &Mutex<Option<BTreeMap<NodeId, BTreeMap<SeqNo, SeqNo>>>> {
+        &self.last_view_change
+    }
+
+    /// Install the sync message requests onto this consensus guard
+    pub(crate) fn install_sync_message_requests(&self, rqs: Vec<ClientRqInfo>) {
+        let mut client_map = BTreeMap::new();
+
+        for req in rqs {
+            let entry = client_map.entry(req.sender).or_insert_with(BTreeMap::new);
+
+            let session_entry = entry.entry(req.session).or_insert_with(|| req.seqno);
+
+            if *session_entry < req.seqno {
+                *session_entry = req.seqno;
+            }
+        }
+
+        {
+            let mut guard = self.last_view_change.lock().unwrap();
+
+            *guard = Some(client_map);
+
+            self.has_pending_view_change_reqs.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Clear the messages we are storing (as it is already empty)
+    pub(crate) fn sync_messages_clear(&self) {
+        let mut guard = self.last_view_change.lock().unwrap();
+
+        *guard = None;
+
+        self.has_pending_view_change_reqs.store(false, Ordering::Relaxed);
     }
 
     /// Clear all of the pending decisions waiting for a propose from this consensus guard

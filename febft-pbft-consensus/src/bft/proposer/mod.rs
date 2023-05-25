@@ -1,15 +1,17 @@
 pub mod follower_proposer;
 
 use std::cmp::max;
+use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use log::{error, warn, debug, info, trace};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use febft_common::channel::{ChannelSyncRx, TryRecvError};
+use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_common::threadpool;
 use febft_communication::message::{NetworkMessage, NetworkMessageKind, StoredMessage};
@@ -125,6 +127,12 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                     //We only want to produce batches to the channel if we are the leader, as
                     //Only the leader will propose thing
 
+                    // Are we able to currently propose a request?
+                    while !self.consensus_guard.can_propose() {
+                        // Wait until we are able to propose a new block
+                        self.consensus_guard.block_until_ready();
+                    }
+
                     //TODO: Maybe not use this as it can spam the lock on synchronizer?
                     let info = self.synchronizer.view();
 
@@ -191,8 +199,7 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
 
                                     if is_leader {
                                         if leader_set_size > 1 {
-                                            if is_request_in_hash_space(&digest,
-                                                                        our_slice.as_ref().unwrap()) {
+                                            if is_request_in_hash_space(&digest, our_slice.as_ref().unwrap()) {
                                                 // we know that these operations will always be proposed since we are a
                                                 // Correct replica. We can therefore just add them to the latest op log
                                                 ordered_propose.currently_accumulated.push(message);
@@ -224,12 +231,10 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                     //Lets first deal with unordered requests since it should be much quicker and easier
                     self.propose_unordered(&mut unordered_propose);
 
-                    self.propose_ordered(is_leader,
-                                         &mut ordered_propose);
+                    self.propose_ordered(is_leader, &mut ordered_propose);
 
                     if !discovered_requests {
                         //Yield to prevent active waiting
-
                         std::thread::yield_now();
                     }
                 }
@@ -361,9 +366,36 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
         &self,
         seq: SeqNo,
         view: &ViewInfo,
-        currently_accumulated: Vec<StoredRequestMessage<D::Request>>,
+        mut currently_accumulated: Vec<StoredRequestMessage<D::Request>>,
     ) where ST: StateTransferMessage + 'static,
             NT: Node<PBFT<D, ST>> {
+
+        let has_pending_messages = self.consensus_guard.has_pending_view_change_reqs();
+
+        let is_view_change_empty = {
+            // Introduce a new scope for the view change lock
+            let mut view_change_msg = if has_pending_messages {
+                Some(self.consensus_guard.last_view_change().lock().unwrap())
+            } else {
+                None
+            };
+
+            currently_accumulated.retain(|msg| {
+                if self.check_if_has_been_proposed(msg, &mut view_change_msg) {
+                    // if it has been proposed, then we do not want to retain it
+                    return false;
+                }
+                true
+            });
+
+            view_change_msg.is_some_and(|msg| msg.is_empty())
+        };
+
+        if is_view_change_empty {
+            // The messages are clear, we no longer need to keep checking them
+            self.consensus_guard.sync_messages_clear();
+        }
+
         info!("{:?} // Proposing new batch with {} request count {:?}", self.node_ref.id(), currently_accumulated.len(), seq);
 
         let message = PBFTMessage::Consensus(ConsensusMessage::new(
@@ -388,4 +420,52 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
         _t: DateTime<Utc>,
         reqs: Vec<StoredRequestMessage<D::Request>>,
     ) {}
+
+    /// Check if the given request has already appeared in a view change message
+    /// Returns true if it has been seen previously (should not be proposed)
+    /// Returns false if not
+    fn check_if_has_been_proposed(&self, req: &StoredRequestMessage<D::Request>, mutex_guard: &mut Option<MutexGuard<Option<BTreeMap<NodeId, BTreeMap<SeqNo, SeqNo>>>>>) -> bool {
+        if let Some(mutex_guard) = mutex_guard {
+            if let Some(seen_rqs) = (*mutex_guard).as_mut() {
+                let result = if seen_rqs.contains_key(req.header().from()) {
+
+                    // Check if we have the corresponding session id in the map get the corresponding seq no, and check if the req.message().sequence_number() is smaller or equal to it
+                    //If so, we remove the value from the map and return true
+                    let (result, should_remove) = {
+                        let session_map = seen_rqs.get_mut(req.header().from()).unwrap();
+
+                        let res = if let Some(seq_no) = session_map.get(&req.message().session_id()) {
+                            if req.message().sequence_number() > *seq_no {
+                                // We have now seen a more recent sequence number for that session, so a previous
+                                // Operation will never be passed along again (due to the request pre processor)
+                                session_map.remove(seq_no);
+
+                                (false, session_map.is_empty())
+                            } else {
+                                // We have already seen a more recent message
+                                (true, false)
+                            }
+                        } else {
+                            (false, false)
+                        };
+
+                        res
+                    };
+
+                    if should_remove {
+                        seen_rqs.remove(req.header().from());
+                    }
+
+                    result
+                } else {
+                    // We have never seen this client, so it's fine
+                    false
+                };
+
+                return result;
+            }
+        }
+
+        false
+    }
 }
