@@ -13,7 +13,7 @@ use febft_communication::{Node, NodeIncomingRqHandler};
 use febft_execution::serialize::SharedData;
 use febft_metrics::metrics::{metric_duration, metric_increment};
 use crate::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
-use crate::metric::{RQ_PP_CLIENT_COUNT_ID, RQ_PP_CLIENT_MSG_ID, RQ_PP_CLONE_RQS_ID, RQ_PP_COLLECT_PENDING_ID, RQ_PP_DECIDED_RQS_ID, RQ_PP_FWD_RQS_ID, RQ_PP_TIMEOUT_RQS_ID, RQ_PP_WORKER_PROPOSER_PASSING_TIME_ID};
+use crate::metric::{RQ_PP_CLIENT_COUNT_ID, RQ_PP_CLIENT_MSG_ID, RQ_PP_CLONE_RQS_ID, RQ_PP_COLLECT_PENDING_ID, RQ_PP_DECIDED_RQS_ID, RQ_PP_FWD_RQS_ID, RQ_PP_TIMEOUT_RQS_ID, RQ_PP_WORKER_PROPOSER_PASSING_TIME_ID, RQ_PP_WORKER_STOPPED_TIME_ID};
 use crate::request_pre_processing::worker::{PreProcessorWorkMessage, PreProcessorWorkMessageOuter, RequestPreProcessingWorker, RequestPreProcessingWorkerHandle};
 use crate::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
 use crate::timeouts::{RqTimeout, TimeoutKind};
@@ -315,8 +315,24 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData 
         metric_duration(RQ_PP_COLLECT_PENDING_ID, start.elapsed());
     }
 
-    fn process_stopped_rqs(&self, rqs: Vec<StoredRequestMessage<D::Request>>) {
-        todo!()
+    /// Process stopped requests by forwarding them to the appropriate worker.
+    fn process_stopped_rqs(&self, rqs: Vec<StoredRequestMessage<D::Request>>) where WD: WorkPartitioner<D::Request> {
+        let start = Instant::now();
+
+        let mut worker_message = init_worker_vecs::<StoredRequestMessage<D::Request>>(self.thread_count, rqs.len());
+
+        for stored_msgs in rqs {
+            let worker = WD::get_worker_for(stored_msgs.header(), stored_msgs.message(), self.thread_count);
+
+            worker_message[worker % self.thread_count].push(stored_msgs);
+        }
+
+        for (worker, messages)
+        in iter::zip(&self.work_comms, worker_message) {
+            worker.send(PreProcessorWorkMessage::StoppedRequestsReceived(messages));
+        }
+
+        metric_duration(RQ_PP_WORKER_STOPPED_TIME_ID, start.elapsed());
     }
 
     fn clone_pending_rqs(&self, digests: Vec<ClientRqInfo>, responder: OneShotTx<Vec<StoredRequestMessage<D::Request>>>)

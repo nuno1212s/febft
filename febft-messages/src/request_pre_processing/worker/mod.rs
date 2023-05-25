@@ -29,6 +29,7 @@ pub enum PreProcessorWorkMessage<O> {
     ClientPoolUnorderedRequestsReceived(Vec<StoredRequestMessage<O>>),
     /// Received requests that were forwarded from other replicas
     ForwardedRequestsReceived(Vec<StoredRequestMessage<O>>),
+    StoppedRequestsReceived(Vec<StoredRequestMessage<O>>),
     /// Analyse timeout requests. Returns only timeouts that have not yet been executed
     TimeoutsReceived(Vec<RqTimeout>, OneShotTx<Vec<RqTimeout>>),
     /// A batch of requests has been decided by the system
@@ -98,6 +99,9 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
                 }
                 PreProcessorWorkMessage::CleanClient(client) => {
                     self.clean_client(client);
+                }
+                PreProcessorWorkMessage::StoppedRequestsReceived(reqs) => {
+                    self.stopped_requests(reqs);
                 }
             }
 
@@ -239,6 +243,19 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
 
     fn clean_client(&self, node_id: NodeId) {
         todo!()
+    }
+
+    fn stopped_requests(&mut self, requests: Vec<StoredRequestMessage<O>>) {
+         requests.into_iter().for_each(|request| {
+            if self.has_received_more_recent_and_update(request.header(), request.message()) {
+                return;
+            }
+
+            let digest = request.header().unique_digest();
+
+            self.pending_requests.insert(digest.clone(), request.clone());
+        })
+
     }
 }
 

@@ -593,13 +593,13 @@ impl<M> EpollWorker<M> where M: Serializable + 'static {
                 } => {
                     self.poll.registry().deregister(&mut socket)?;
 
-                    socket.shutdown(Shutdown::Both)?;
-
                     if is_failure {
                         self.global_connections.handle_connection_failed(handle.peer_id, handle.id);
                     } else {
                         connection.delete_connection(handle.id);
                     }
+
+                    socket.shutdown(Shutdown::Both)?;
                 }
                 _ => unreachable!("Only peer connections can be removed from the connection slab")
             }

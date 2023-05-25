@@ -1,4 +1,4 @@
-use febft_metrics::MetricRegistry;
+use febft_metrics::{MetricLevel, MetricRegistry};
 use febft_metrics::metrics::MetricKind;
 
 /// Core frameworks will get 0XX metric ID
@@ -40,6 +40,9 @@ pub const RQ_PP_ORCHESTRATOR_WORKER_PASSING_TIME_ID: usize = 020;
 pub const RQ_PP_WORKER_PROPOSER_PASSING_TIME: &str = "RQ_PRE_PROCESSING_WORKER_PROPOSER_PASSING_TIME";
 pub const RQ_PP_WORKER_PROPOSER_PASSING_TIME_ID: usize = 021;
 
+pub const RQ_PP_WORKER_STOPPED_TIME: &str = "RQ_PRE_PROCESSING_WORKER_STOPPED_TIME";
+pub const RQ_PP_WORKER_STOPPED_TIME_ID: usize = 022;
+
 pub fn metrics() -> Vec<MetricRegistry> {
     vec![
         (RQ_PP_CLIENT_MSG_ID, RQ_PP_CLIENT_MSG.to_string(), MetricKind::Duration).into(),
@@ -54,5 +57,6 @@ pub fn metrics() -> Vec<MetricRegistry> {
         (RQ_PP_WORKER_DECIDED_PROCESS_TIME_ID, RQ_PP_WORKER_DECIDED_PROCESS_TIME.to_string(), MetricKind::Duration).into(),
         (RQ_PP_ORCHESTRATOR_WORKER_PASSING_TIME_ID, RQ_PP_ORCHESTRATOR_WORKER_PASSING_TIME.to_string(), MetricKind::Duration).into(),
         (RQ_PP_WORKER_PROPOSER_PASSING_TIME_ID, RQ_PP_WORKER_PROPOSER_PASSING_TIME.to_string(), MetricKind::Duration).into(),
+        (RQ_PP_WORKER_STOPPED_TIME_ID, RQ_PP_WORKER_STOPPED_TIME.to_string(), MetricKind::Duration, MetricLevel::Debug).into(),
     ]
 }

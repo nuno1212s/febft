@@ -97,12 +97,12 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
             Logger::builder()
                 .appender("appender")
                 .additive(false)
-                .build("app::appender", LevelFilter::Info),
+                .build("app::appender", LevelFilter::Debug),
         )
         .build(
             Root::builder()
                 .appender("appender")
-                .build(LevelFilter::Info),
+                .build(LevelFilter::Debug),
         )
         .wrapped(ErrorKind::MsgLog)?;
 

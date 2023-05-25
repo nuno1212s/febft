@@ -183,7 +183,7 @@ pub struct TboQueue<O> {
 }
 
 impl<O> TboQueue<O> {
-    fn new(view: ViewInfo) -> Self {
+    pub(crate) fn new(view: ViewInfo) -> Self {
         Self {
             view,
             previous_view: None,

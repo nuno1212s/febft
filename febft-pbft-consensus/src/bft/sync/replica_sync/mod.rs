@@ -223,6 +223,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
         let count = requests.len();
 
+        // Register the requests with the pre-processor
         pre_processor.send(PreProcessorMessage::StoppedRequests(requests)).unwrap();
 
         timeouts.timeout_client_requests(self.timeout_dur.get(), rq_info);
