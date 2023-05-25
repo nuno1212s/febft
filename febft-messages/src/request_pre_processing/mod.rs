@@ -86,7 +86,7 @@ impl<O> RequestPreProcessor<O> {
 
         self.0.send(PreProcessorMessage::CollectAllPendingMessages(tx)).unwrap();
 
-        collected_requests
+        rx.recv().unwrap()
     }
 }
 

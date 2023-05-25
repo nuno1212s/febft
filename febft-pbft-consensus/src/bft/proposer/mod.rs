@@ -388,7 +388,7 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                 true
             });
 
-            view_change_msg.is_some_and(|msg| msg.is_empty())
+            view_change_msg.is_some_and(|msg| msg.as_ref().is_some_and(|msg| msg.is_empty()))
         };
 
         if is_view_change_empty {
@@ -427,18 +427,18 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
     fn check_if_has_been_proposed(&self, req: &StoredRequestMessage<D::Request>, mutex_guard: &mut Option<MutexGuard<Option<BTreeMap<NodeId, BTreeMap<SeqNo, SeqNo>>>>>) -> bool {
         if let Some(mutex_guard) = mutex_guard {
             if let Some(seen_rqs) = (*mutex_guard).as_mut() {
-                let result = if seen_rqs.contains_key(req.header().from()) {
+                let result = if seen_rqs.contains_key(&req.header().from()) {
 
                     // Check if we have the corresponding session id in the map get the corresponding seq no, and check if the req.message().sequence_number() is smaller or equal to it
                     //If so, we remove the value from the map and return true
                     let (result, should_remove) = {
-                        let session_map = seen_rqs.get_mut(req.header().from()).unwrap();
+                        let session_map = seen_rqs.get_mut(&req.header().from()).unwrap();
 
-                        let res = if let Some(seq_no) = session_map.get(&req.message().session_id()) {
-                            if req.message().sequence_number() > *seq_no {
+                        let res = if let Some(seq_no) = session_map.get(&req.message().session_id()).cloned() {
+                            if req.message().sequence_number() > seq_no {
                                 // We have now seen a more recent sequence number for that session, so a previous
                                 // Operation will never be passed along again (due to the request pre processor)
-                                session_map.remove(seq_no);
+                                session_map.remove(&seq_no);
 
                                 (false, session_map.is_empty())
                             } else {
@@ -453,7 +453,7 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                     };
 
                     if should_remove {
-                        seen_rqs.remove(req.header().from());
+                        seen_rqs.remove(&req.header().from());
                     }
 
                     result
