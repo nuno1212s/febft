@@ -350,6 +350,7 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
             }
             CstStatus::SeqNo(seq) => {
                 if order_protocol.sequence_number() < seq {
+                    debug!("{:?} // Installing sequence number {:?} (vs {:?})", self.node.id(), seq, order_protocol.sequence_number());
                     // this step will allow us to ignore any messages
                     // for older consensus instances we may have had stored;
                     //
@@ -363,6 +364,7 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
                         order_protocol,
                     );
                 } else {
+                    debug!("{:?} // Ignoring sequence number {:?} as {:?} is larger", self.node.id(), seq, order_protocol.sequence_number());
                     return Ok(STResult::CstNotNeeded);
                 }
             }

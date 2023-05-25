@@ -122,14 +122,16 @@ impl SeqNo {
 
         let index = {
             let index = (self.0).wrapping_sub(other.0);
-            if index < OVERFLOW_THRES_NEG || index > OVERFLOW_THRES_POS {
+            //TODO: Figure this out correctly
+            /*if index < OVERFLOW_THRES_NEG || index > OVERFLOW_THRES_POS {
                 // guard against overflows
                 i32::MAX
                     .wrapping_add(index)
                     .wrapping_add(1)
             } else {
                 index
-            }
+            }*/
+            index
         };
 
         if index < 0 || index > DROP_SEQNO_THRES {
