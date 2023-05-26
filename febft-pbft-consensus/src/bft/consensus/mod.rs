@@ -856,7 +856,8 @@ impl ProposerConsensusGuard {
     /// Initialize a new consensus guard object
     pub(super) fn new(view: ViewInfo, watermark: u32) -> Arc<Self> {
         Arc::new(Self {
-            can_propose: AtomicBool::new(true),
+            // We start at false since we have to wait for the state transfer protocol
+            can_propose: AtomicBool::new(false),
             event_waker: Event::new(),
             seq_no_queue: Mutex::new((BinaryHeap::with_capacity(watermark as usize), view)),
             has_pending_view_change_reqs: AtomicBool::new(false),
@@ -936,6 +937,8 @@ impl ProposerConsensusGuard {
     pub(crate) fn install_sync_message_requests(&self, rqs: Vec<ClientRqInfo>) {
         let mut client_map = BTreeMap::new();
 
+        warn!("Installing sync message requests. Total: {} requests", rqs.len());
+
         for req in rqs {
             let entry = client_map.entry(req.sender).or_insert_with(BTreeMap::new);
 
@@ -949,6 +952,7 @@ impl ProposerConsensusGuard {
         {
             let mut guard = self.last_view_change.lock().unwrap();
 
+            //FIXME: If there is already a sync message, we should merge the two
             *guard = Some(client_map);
 
             self.has_pending_view_change_reqs.store(true, Ordering::Relaxed);

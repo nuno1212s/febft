@@ -198,7 +198,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                 ReplicaPhase::OrderingProtocol => {
                     let poll_res = self.ordering_protocol.poll();
 
-                    debug!("{:?} // Polling ordering protocol with result {:?}", self.node.id(), poll_res);
+                    trace!("{:?} // Polling ordering protocol with result {:?}", self.node.id(), poll_res);
 
                     match poll_res {
                         OrderProtocolPoll::RePoll => {

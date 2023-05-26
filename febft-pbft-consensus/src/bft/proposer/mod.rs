@@ -130,7 +130,12 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                     // Are we able to currently propose a request?
                     while !self.consensus_guard.can_propose() {
                         // Wait until we are able to propose a new block
+                        // Use a while to guard against spurious wake ups
+                        warn!("{:?} // Stopping proposer as we are currently not able to propose anything.", self.node_ref.id());
+
                         self.consensus_guard.block_until_ready();
+
+                        info!("{:?} // Resuming proposer as we are now able to propose again.", self.node_ref.id());
                     }
 
                     //TODO: Maybe not use this as it can spam the lock on synchronizer?
@@ -373,6 +378,7 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
         let has_pending_messages = self.consensus_guard.has_pending_view_change_reqs();
 
         let is_view_change_empty = {
+
             // Introduce a new scope for the view change lock
             let mut view_change_msg = if has_pending_messages {
                 Some(self.consensus_guard.last_view_change().lock().unwrap())
@@ -392,6 +398,7 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
         };
 
         if is_view_change_empty {
+            info!("{:?} // View change messages have been processed, clearing them", self.node_ref.id());
             // The messages are clear, we no longer need to keep checking them
             self.consensus_guard.sync_messages_clear();
         }
@@ -415,12 +422,6 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
         self.cancelled.store(true, Ordering::Relaxed);
     }
 
-    fn requests_received(
-        &self,
-        _t: DateTime<Utc>,
-        reqs: Vec<StoredRequestMessage<D::Request>>,
-    ) {}
-
     /// Check if the given request has already appeared in a view change message
     /// Returns true if it has been seen previously (should not be proposed)
     /// Returns false if not
@@ -438,7 +439,7 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                             if req.message().sequence_number() > seq_no {
                                 // We have now seen a more recent sequence number for that session, so a previous
                                 // Operation will never be passed along again (due to the request pre processor)
-                                session_map.remove(&seq_no);
+                                session_map.remove(&req.message().session_id());
 
                                 (false, session_map.is_empty())
                             } else {

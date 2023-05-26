@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 use intmap::IntMap;
+use log::warn;
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, OneShotTx};
 use febft_common::collections::HashMap;
 use febft_common::crypto::hash::Digest;
@@ -130,6 +131,24 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
         has_received_more_recent
     }
 
+    fn update_most_recent(&mut self, rq_info: &ClientRqInfo) {
+        let key = operation_key_raw(rq_info.sender, rq_info.session);
+
+        let seq_no = {
+            if let Some(seq_no) = self.latest_ops.get_mut(key) {
+                seq_no.clone()
+            } else {
+                SeqNo::ZERO
+            }
+        };
+
+        let has_received_more_recent = seq_no >= rq_info.seqno;
+
+        if !has_received_more_recent {
+            self.latest_ops.insert(key, rq_info.seqno);
+        }
+    }
+
     /// Process the ordered client pool requests
     fn process_ordered_client_pool_requests(&mut self, requests: Vec<StoredRequestMessage<O>>) {
 
@@ -216,6 +235,10 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
 
         requests.into_iter().for_each(|request| {
             self.pending_requests.remove(&request.digest);
+
+            // Update so that if we later on receive the same request from the client, we can safely ignore it
+            // And not get build up in the pending requests
+            self.update_most_recent(&request);
         });
 
         metric_duration(RQ_PP_WORKER_DECIDED_PROCESS_TIME_ID, start.elapsed());
