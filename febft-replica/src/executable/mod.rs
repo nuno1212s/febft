@@ -3,22 +3,28 @@
 use log::error;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::Instant;
 use febft_common::{channel, threadpool};
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
 
 use febft_common::error::*;
+use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::{Node};
 use febft_communication::message::{NetworkMessageKind};
+use febft_communication::metric::REPLICA_RQ_PASSING_TIME_ID;
 use febft_execution::app::{BatchReplies, Reply, Request, Service, State, UnorderedBatch, UpdateBatch};
 use febft_execution::{ExecutionRequest, ExecutorHandle};
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{Message, ReplyMessage, SystemMessage};
 use febft_messages::ordering_protocol::OrderingProtocol;
 use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
+use febft_metrics::metrics::metric_duration;
+use crate::metric::{EXECUTION_LATENCY_TIME_ID, EXECUTION_TIME_TAKEN_ID, REPLIES_PASSING_TIME_ID, REPLIES_SENT_TIME_ID};
 use crate::server::client_replier::ReplyHandle;
 
 const EXECUTING_BUFFER: usize = 8096;
+const REPLY_CONCURRENCY: usize = 4;
 
 pub trait ExecutorReplier: Send {
     fn execution_finished<D, OP, ST, NT>(
@@ -67,6 +73,8 @@ impl ExecutorReplier for ReplicaReplier {
             return;
         }
 
+        let start = Instant::now();
+
         threadpool::execute(move || {
             let mut batch = batch.into_inner();
 
@@ -106,6 +114,8 @@ impl ExecutorReplier for ReplicaReplier {
                 // (there is always at least one request in the batch)
                 unreachable!();
             }
+
+            metric_duration(REPLIES_SENT_TIME_ID, start.elapsed());
         });
     }
 }
@@ -161,7 +171,7 @@ impl<S, NT> Executor<S, NT>
             send_node,
             loopback_channel,
         };
-        
+
         for request in requests {
             exec.service.update(&mut exec.state, request);
         }
@@ -179,24 +189,37 @@ impl<S, NT> Executor<S, NT>
                     match exec_req {
                         ExecutionRequest::InstallState(checkpoint, after) => {
                             exec.state = checkpoint;
+
                             for req in after {
                                 exec.service.update(&mut exec.state, req);
                             }
                         }
-                        ExecutionRequest::Update(batch) => {
+                        ExecutionRequest::Update((batch, instant)) => {
                             let seq_no = batch.sequence_number();
+
+                            metric_duration(EXECUTION_LATENCY_TIME_ID, instant.elapsed());
+
+                            let start = Instant::now();
 
                             let reply_batch =
                                 exec.service.update_batch(&mut exec.state, batch);
+
+                            metric_duration(EXECUTION_TIME_TAKEN_ID, start.elapsed());
 
                             // deliver replies
                             exec.execution_finished::<OP, ST, T>(Some(seq_no), reply_batch);
                         }
-                        ExecutionRequest::UpdateAndGetAppstate(batch) => {
+                        ExecutionRequest::UpdateAndGetAppstate((batch, instant)) => {
                             let seq_no = batch.sequence_number();
+
+                            metric_duration(EXECUTION_LATENCY_TIME_ID, instant.elapsed());
+
+                            let start = Instant::now();
 
                             let reply_batch =
                                 exec.service.update_batch(&mut exec.state, batch);
+
+                            metric_duration(EXECUTION_TIME_TAKEN_ID, start.elapsed());
 
                             // deliver checkpoint state to the replica
                             exec.deliver_checkpoint_state(seq_no);

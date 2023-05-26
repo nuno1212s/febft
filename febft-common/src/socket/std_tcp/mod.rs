@@ -2,6 +2,7 @@ use std::io;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::ops::{Deref, DerefMut};
+use crate::socket::{MioListener, MioSocket};
 
 pub struct Socket {
     inner: TcpStream,
@@ -38,7 +39,6 @@ impl Socket {
         Socket { inner }
     }
 }
-
 impl Deref for Socket {
     type Target = std::net::TcpStream;
 
@@ -72,6 +72,27 @@ impl Read for Socket {
         std::io::Read::read_exact(&mut self.inner, buf)
     }
 }
+
+impl From<Socket> for MioSocket {
+    fn from(value: Socket) -> Self {
+        value.inner.set_nonblocking(true).expect("Failed to set non-blocking");
+
+        MioSocket {
+            inner: mio::net::TcpStream::from_std(value.inner)
+        }
+    }
+}
+
+impl From<Listener> for MioListener {
+    fn from(value: Listener) -> Self {
+        value.inner.set_nonblocking(true).expect("Failed to set non-blocking");
+
+        MioListener {
+            inner: mio::net::TcpListener::from_std(value.inner)
+        }
+    }
+}
+
 
 pub struct WriteHalf {
     inner: Socket,

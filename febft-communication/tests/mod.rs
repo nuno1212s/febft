@@ -5,9 +5,10 @@ mod communication_test {
     use std::iter;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::{Arc, Barrier};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use intmap::IntMap;
     use log::{debug, error, info, warn};
+    use mio::{Events, Poll, Token, Waker};
     use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig};
     use rustls::server::AllowAnyAuthenticatedClient;
     use rustls_pemfile::Item;
@@ -17,10 +18,12 @@ mod communication_test {
     use febft_common::node_id::NodeId;
     use febft_common::{async_runtime as rt, channel};
     use febft_common::threadpool;
-    use febft_communication::config::{ClientPoolConfig, NodeConfig, PKConfig, TcpConfig, TlsConfig};
-    use febft_communication::{Node, NodeConnections};
+    use febft_communication::config::{ClientPoolConfig, MioConfig, NodeConfig, PKConfig, TcpConfig, TlsConfig};
+    use febft_communication::{Node, NodeConnections, NodeIncomingRqHandler};
     use febft_communication::message::NetworkMessageKind;
+    use febft_communication::mio_tcp::MIOTcpNode;
     use febft_communication::serialize::Serializable;
+    use febft_communication::tcp_ip_simplex::TCPSimplexNode;
     use febft_communication::tcpip::{PeerAddr, TcpNode};
 
     const FIRST_CLI: NodeId = NodeId(1000u32);
@@ -285,6 +288,47 @@ mod communication_test {
         rt::block_on(TcpNode::bootstrap(cfg))
     }
 
+
+    fn gen_simplex_node<T: Serializable>(node_id: NodeId, addrs: IntMap<PeerAddr>, node_count: usize, name: &str, port: u16) -> Result<Arc<TCPSimplexNode<T>>> {
+        let cfg = NodeConfig {
+            id: node_id,
+            first_cli: FIRST_CLI,
+            tcp_config: TcpConfig {
+                addrs,
+                network_config: gen_tls_config(node_id, name),
+                replica_concurrent_connections: 1,
+                client_concurrent_connections: 1,
+            },
+            client_pool_config: CLI_POOL_CFG,
+            pk_crypto_config: gen_pk_config(node_id, node_count),
+        };
+
+        rt::block_on(TCPSimplexNode::bootstrap(cfg))
+    }
+
+    fn gen_mio_node<T: Serializable>(node_id: NodeId, addrs: IntMap<PeerAddr>, node_count: usize, name: &str, port: u16) -> Result<Arc<MIOTcpNode<T>>> {
+
+        let cfg = NodeConfig {
+            id: node_id,
+            first_cli: FIRST_CLI,
+            tcp_config: TcpConfig {
+                addrs,
+                network_config: gen_tls_config(node_id, name),
+                replica_concurrent_connections: 1,
+                client_concurrent_connections: 1,
+            },
+            client_pool_config: CLI_POOL_CFG,
+            pk_crypto_config: gen_pk_config(node_id, node_count),
+        };
+
+        let config = MioConfig {
+            node_config: cfg,
+            worker_count: 2,
+        };
+
+        rt::block_on(MIOTcpNode::bootstrap(config))
+    }
+
     #[test]
     fn test_connection() {
         env_logger::init();
@@ -296,8 +340,8 @@ mod communication_test {
         let node_1 = NodeId(0u32);
         let node_2 = NodeId(1u32);
 
-        let node = gen_node::<TestMessage>(node_1, addrs.clone(), 2, "srv0", 1000).unwrap();
-        let node_2_ = gen_node::<TestMessage>(node_2, addrs, 2, "srv1", 1001).unwrap();
+        let node = gen_mio_node::<TestMessage>(node_1, addrs.clone(), 2, "srv0", 1000).unwrap();
+        let node_2_ = gen_mio_node::<TestMessage>(node_2, addrs, 2, "srv1", 1001).unwrap();
 
         let rx = node.node_connections().connect_to_node(node_2);
 
@@ -309,6 +353,11 @@ mod communication_test {
 
             res.unwrap().unwrap();
         }
+
+        std::thread::sleep(Duration::from_secs(1));
+
+        assert_eq!(node.node_connections().connected_nodes_count(), 1);
+        assert_eq!(node_2_.node_connections().connected_nodes_count(), 1);
     }
 
     #[test]
@@ -347,7 +396,7 @@ mod communication_test {
 
         warn!("Sent message. Attempting to receive");
 
-        let message = node_2_.receive_from_replicas(None).unwrap();
+        let message = node_2_.node_incoming_rq_handling().receive_from_replicas(None).unwrap();
 
         assert!(message.is_some());
 
@@ -378,8 +427,8 @@ mod communication_test {
         let node_1 = NodeId(0u32);
         let node_2 = NodeId(1u32);
 
-        let node = gen_node::<TestMessage>(node_1, addrs.clone(), 2, "srv0", 1000).unwrap();
-        let node_2_ = gen_node::<TestMessage>(node_2, addrs, 2, "srv1", 1001).unwrap();
+        let node = gen_mio_node::<TestMessage>(node_1, addrs.clone(), 2, "srv0", 1000).unwrap();
+        let node_2_ = gen_mio_node::<TestMessage>(node_2, addrs, 2, "srv1", 1001).unwrap();
 
         let rx = node.node_connections().connect_to_node(node_2);
 
@@ -408,7 +457,7 @@ mod communication_test {
         }
 
         for i in 0..msgs {
-            let message = node_2_.receive_from_replicas(None).unwrap();
+            let message = node_2_.node_incoming_rq_handling().receive_from_replicas(None).unwrap();
 
             assert!(message.is_some());
 
@@ -444,7 +493,7 @@ mod communication_test {
 
         for i in 0..NODE_COUNT {
             let id = NodeId(i as u32);
-            let node = gen_node::<TestMessage>(id, addrs.clone(), NODE_COUNT as usize,
+            let node = gen_mio_node::<TestMessage>(id, addrs.clone(), NODE_COUNT as usize,
                                                format!("srv{}", i).as_str(), 1000 + i as u16).unwrap();
             nodes.push(node);
             ids.push(id);
@@ -501,6 +550,7 @@ mod communication_test {
                             hello: format!("Hello from {:?}, run {}", id, i),
                             data: Vec::with_capacity(SIZE),
                         });
+
                     let response = NetworkMessageKind::from(
                         TestMessage {
                             req: false,
@@ -508,10 +558,12 @@ mod communication_test {
                             data: Vec::with_capacity(SIZE),
                         });
 
+                    let start = Instant::now();
+
                     node.broadcast(req.clone(), ids.iter().cloned()).unwrap();
 
                     for _ in 0..NODE_COUNT * 2 {
-                        let message = node.receive_from_replicas_no_timeout().unwrap();
+                        let message = node.node_incoming_rq_handling().receive_from_replicas(None).unwrap().unwrap();
 
                         let (header, network_msg) = message.into_inner();
 
@@ -523,6 +575,8 @@ mod communication_test {
                             debug!("{:?} // Sending response to {:?}", id, header.from());
 
                             node.send(response.clone(), header.from(), true).unwrap();
+                        } else {
+                            debug!("{:?} // Received response from {:?}. Latency: {:?}", id, header.from(), start.elapsed());
                         }
                     }
 
@@ -538,5 +592,57 @@ mod communication_test {
         for rx in rxs {
             rx.recv().unwrap();
         }
+    }
+
+    #[test]
+    fn test_mio_waker() {
+
+        const WAKES: usize = 1000000;
+        const TIMEOUTS: Option<Duration> = Some(Duration::from_millis(1));
+
+        let mut poll = Poll::new().unwrap();
+
+        let waker = Arc::new(Waker::new(poll.registry(), Token(0)).unwrap());
+
+        let barrier = Arc::new(Barrier::new(2));
+
+        let barrier_2 = barrier.clone();
+
+        std::thread::spawn(move || {
+
+            let mut wakes = 0;
+
+            while wakes < WAKES {
+                waker.wake().unwrap();
+
+                wakes += 1;
+            }
+
+            barrier_2.wait();
+        });
+
+        let mut events = Events::with_capacity(1);
+
+        let mut wakes = 0;
+
+        loop {
+
+            poll.poll(&mut events, TIMEOUTS).unwrap();
+
+            std::thread::sleep(Duration::from_millis(1));
+
+            if events.is_empty() {
+                break;
+            } else {
+                wakes += 1;
+            }
+
+        }
+
+        barrier.wait();
+
+        println!("Wakes: {}", wakes);
+
+
     }
 }

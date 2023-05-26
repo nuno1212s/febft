@@ -22,7 +22,10 @@ febft-common = { path = "../febft-common" }
 febft-communication = { path = "../febft-communication" }
 febft-execution = { path = "../febft-execution" }
 febft-capnp = { path = "../febft-capnp", optional = true }
+febft-metrics = { path = "../febft-metrics" }
 serde = { version = "*", optional = true }
+crossbeam = "0.8.2"
+intmap = "2.0.0"
 
 chrono = "0.4.24"
 log = "0.4.17"

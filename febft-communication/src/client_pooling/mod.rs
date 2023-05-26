@@ -4,13 +4,15 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use dashmap::DashMap;
 
-use log::{error, info};
+use log::{error, info, trace};
 use febft_common::channel;
 use febft_common::channel::{ChannelMultRx, ChannelMultTx, ChannelSyncRx, ChannelSyncTx, TryRecvError};
 use febft_common::error::*;
+use febft_metrics::metrics::metric_duration;
 
-use crate::{NodeId};
+use crate::{NodeId, NodeIncomingRqHandler};
 use crate::config::ClientPoolConfig;
+use crate::metric::{CLIENT_POOL_BATCH_PASSING_TIME_ID, CLIENT_POOL_COLLECT_TIME_ID, REPLICA_RQ_PASSING_TIME_ID};
 
 fn channel_init<T>(capacity: usize) -> (ChannelMultTx<T>, ChannelMultRx<T>) {
     channel::new_bounded_mult(capacity)
@@ -19,6 +21,12 @@ fn channel_init<T>(capacity: usize) -> (ChannelMultTx<T>, ChannelMultRx<T>) {
 fn client_channel_init<T>(capacity: usize) -> (ChannelMultTx<T>, ChannelMultRx<T>) {
     channel::new_bounded_mult(capacity)
 }
+
+/// A batch sent from the client pools to be processed is composed of the Vec of requests
+/// and the instant at which it was created and pushed in the queue
+type ClientRqBatchOutput<T> = (Vec<T>, Instant);
+
+type ReplicaRqOutput<T> = (T, Instant);
 
 ///Handles the communication between two peers (replica - replica, replica - client)
 ///Only handles reception of requests, not transmission
@@ -36,9 +44,10 @@ pub struct PeerIncomingRqHandling<T: Send + 'static> {
     replica_handling: Arc<ReplicaHandling<T>>,
     //Client request collection handling (Pooled), is only available on the replicas
     client_handling: Option<Arc<ConnectedPeersGroup<T>>>,
-    client_tx: Option<ChannelSyncTx<Vec<T>>>,
-    client_rx: Option<ChannelSyncRx<Vec<T>>>,
+    client_tx: Option<ChannelSyncTx<ClientRqBatchOutput<T>>>,
+    client_rx: Option<ChannelSyncRx<ClientRqBatchOutput<T>>>,
 }
+
 
 const NODE_CHAN_BOUND: usize = 1024;
 const DEFAULT_CLIENT_QUEUE: usize = 16384;
@@ -78,10 +87,6 @@ impl<T> PeerIncomingRqHandling<T> where T: Send {
             client_channel = None;
         };
 
-        //TODO: Batch size is not correct, should be the value found in env
-        //Both replicas and clients have to interact with replicas, so we always need this pool
-        //We have a much larger queue because we don't want small slowdowns slowing down the connections
-        //And also because there are few replicas, while there can be a very large amount of clients
         let replica_handling = ReplicaHandling::new(NODE_CHAN_BOUND);
 
         let loopback_address = replica_handling.init_client(id);
@@ -143,8 +148,37 @@ impl<T> PeerIncomingRqHandling<T> where T: Send {
         &self.peer_loopback
     }
 
+    fn get_client_rx(&self) -> Result<&ChannelSyncRx<ClientRqBatchOutput<T>>> {
+        return match &self.client_rx {
+            None => {
+                Err(Error::simple_with_msg(ErrorKind::CommunicationIncomingPeerHandling, "Failed to receive from clients as there are no clients connected"))
+            }
+            Some(rx) => {
+                Ok(rx)
+            }
+        };
+    }
+
+    ///Count the amount of clients present (not including replicas)
+    ///Returns None if this is a client and therefore has no client conns
+    pub fn client_count(&self) -> Option<usize> {
+        return match &self.client_handling {
+            None => { None }
+            Some(client) => {
+                Some(client.connected_clients.load(Ordering::Relaxed))
+            }
+        };
+    }
+
+    ///Count the replicas connected
+    pub fn replica_count(&self) -> usize {
+        return self.replica_handling.connected_client_count.load(Ordering::Relaxed);
+    }
+}
+
+impl<T: Send> NodeIncomingRqHandler<T> for PeerIncomingRqHandling<T> {
     /// Get how many client request batches are waiting in the queue
-    pub fn rqs_len_from_clients(&self) -> usize {
+    fn rqs_len_from_clients(&self) -> usize {
         return match &self.client_rx {
             None => { 0 }
             Some(rx) => {
@@ -154,13 +188,15 @@ impl<T> PeerIncomingRqHandling<T> where T: Send {
     }
 
     ///Receive request vector from clients. Block until we get the requests
-    pub fn receive_from_clients(&self, timeout: Option<Duration>) -> Result<Vec<T>> {
+    fn receive_from_clients(&self, timeout: Option<Duration>) -> Result<Vec<T>> {
         let rx = self.get_client_rx()?;
 
         match timeout {
             None => {
                 match rx.recv() {
-                    Ok(vec) => {
+                    Ok((vec, time_created)) => {
+                        metric_duration(CLIENT_POOL_BATCH_PASSING_TIME_ID, time_created.elapsed());
+
                         Ok(vec)
                     }
                     Err(_) => {
@@ -170,7 +206,9 @@ impl<T> PeerIncomingRqHandling<T> where T: Send {
             }
             Some(timeout) => {
                 match rx.recv_timeout(timeout) {
-                    Ok(vec) => {
+                    Ok((vec, time_created)) => {
+                        metric_duration(CLIENT_POOL_BATCH_PASSING_TIME_ID, time_created.elapsed());
+
                         Ok(vec)
                     }
                     Err(err) => {
@@ -191,11 +229,13 @@ impl<T> PeerIncomingRqHandling<T> where T: Send {
     /// Try to receive from the clients.
     /// It's possible that there are no messages currently available, so
     /// we return a result with an option
-    pub fn try_receive_from_clients(&self) -> Result<Option<Vec<T>>> {
+    fn try_receive_from_clients(&self) -> Result<Option<Vec<T>>> {
         let rx = self.get_client_rx()?;
 
         match rx.try_recv() {
-            Ok(msgs) => {
+            Ok((msgs, time_created)) => {
+                metric_duration(CLIENT_POOL_BATCH_PASSING_TIME_ID, time_created.elapsed());
+
                 Ok(Some(msgs))
             }
             Err(err) => {
@@ -211,36 +251,14 @@ impl<T> PeerIncomingRqHandling<T> where T: Send {
         }
     }
 
-    fn get_client_rx(&self) -> Result<&ChannelSyncRx<Vec<T>>> {
-        return match &self.client_rx {
-            None => {
-                Err(Error::simple_with_msg(ErrorKind::CommunicationIncomingPeerHandling, "Failed to receive from clients as there are no clients connected"))
-            }
-            Some(rx) => {
-                Ok(rx)
-            }
-        };
+    /// How many requests are there currently in the channel rx replica vec
+    fn rqs_len_from_replicas(&self) -> usize {
+        self.replica_handling.channel_rx_replica.len()
     }
 
     ///Receive a single request from the replicas
-    pub fn receive_from_replicas(&self, timeout: Option<Duration>) -> Result<Option<T>> {
+    fn receive_from_replicas(&self, timeout: Option<Duration>) -> Result<Option<T>> {
         Ok(self.replica_handling.receive_from_replicas(timeout))
-    }
-
-    ///Count the amount of clients present (not including replicas)
-    ///Returns None if this is a client and therefore has no client conns
-    pub fn client_count(&self) -> Option<usize> {
-        return match &self.client_handling {
-            None => { None }
-            Some(client) => {
-                Some(client.connected_clients.load(Ordering::Relaxed))
-            }
-        };
-    }
-
-    ///Count the replicas connected
-    pub fn replica_count(&self) -> usize {
-        return self.replica_handling.connected_client_count.load(Ordering::Relaxed);
     }
 }
 
@@ -256,7 +274,7 @@ pub enum ConnectedPeer<T> where T: Send {
     },
     UnpooledConnection {
         client_id: NodeId,
-        sender: ChannelSyncTx<T>,
+        sender: ChannelSyncTx<ReplicaRqOutput<T>>,
     },
 }
 
@@ -272,9 +290,9 @@ pub enum ConnectedPeer<T> where T: Send {
 pub struct ReplicaHandling<T> where T: Send {
     capacity: usize,
     //The channel we push replica sent requests into
-    channel_tx_replica: ChannelSyncTx<T>,
+    channel_tx_replica: ChannelSyncTx<ReplicaRqOutput<T>>,
     //The channel used to read requests that were pushed by replicas
-    channel_rx_replica: ChannelSyncRx<T>,
+    channel_rx_replica: ChannelSyncRx<ReplicaRqOutput<T>>,
     connected_clients: DashMap<u32, Arc<ConnectedPeer<T>>>,
     connected_client_count: AtomicUsize,
 }
@@ -330,13 +348,19 @@ impl<T> ReplicaHandling<T> where T: Send {
         return match timeout {
             None => {
                 // This channel is always active,
-                Some(self.channel_rx_replica.recv().unwrap())
+                let (message, instant) = self.channel_rx_replica.recv().unwrap();
+
+                metric_duration(REPLICA_RQ_PASSING_TIME_ID, instant.elapsed());
+
+                Some(message)
             }
             Some(timeout) => {
                 let result = self.channel_rx_replica.recv_timeout(timeout);
 
                 match result {
-                    Ok(item) => {
+                    Ok((item, instant)) => {
+                        metric_duration(REPLICA_RQ_PASSING_TIME_ID, instant.elapsed());
+
                         Some(item)
                     }
                     Err(err) => {
@@ -375,7 +399,7 @@ pub struct ConnectedPeersGroup<T: Send + 'static> {
     client_pools: Mutex<BTreeMap<usize, Arc<ConnectedPeersPool<T>>>>,
     client_connections_cache: DashMap<u32, Arc<ConnectedPeer<T>>>,
     connected_clients: AtomicUsize,
-    batch_transmission: ChannelSyncTx<Vec<T>>,
+    batch_transmission: ChannelSyncTx<ClientRqBatchOutput<T>>,
     per_client_cache: usize,
     //What batch size should we target for each batch (there is no set limit on requests,
     //Just a hint on when it should move on)
@@ -395,7 +419,7 @@ pub struct ConnectedPeersPool<T: Send + 'static> {
     //And since each client has his own reference to push data to, this only needs to be accessed by the thread
     //That's producing the batches and the threads of clients connecting and disconnecting
     connected_clients: Mutex<Vec<Arc<ConnectedPeer<T>>>>,
-    batch_transmission: ChannelSyncTx<Vec<T>>,
+    batch_transmission: ChannelSyncTx<ClientRqBatchOutput<T>>,
     finish_execution: AtomicBool,
     owner: Arc<ConnectedPeersGroup<T>>,
     batch_size: usize,
@@ -405,7 +429,8 @@ pub struct ConnectedPeersPool<T: Send + 'static> {
 }
 
 impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
-    pub fn new(per_client_bound: usize, batch_size: usize, batch_transmission: ChannelSyncTx<Vec<T>>,
+    pub fn new(per_client_bound: usize, batch_size: usize,
+               batch_transmission: ChannelSyncTx<ClientRqBatchOutput<T>>,
                own_id: NodeId, clients_per_pool: usize, batch_timeout_micros: u64,
                batch_sleep_micros: u64) -> Arc<Self> {
         Arc::new(Self {
@@ -556,7 +581,7 @@ impl<T> ConnectedPeersGroup<T> where T: Send + 'static {
 impl<T> ConnectedPeersPool<T> where T: Send {
     //We mark the owner as static since if the pool is active then
     //The owner also has to be active
-    pub fn new(pool_id: usize, batch_size: usize, batch_transmission: ChannelSyncTx<Vec<T>>,
+    pub fn new(pool_id: usize, batch_size: usize, batch_transmission: ChannelSyncTx<ClientRqBatchOutput<T>>,
                owner: Arc<ConnectedPeersGroup<T>>, client_per_pool: usize,
                batch_timeout_micros: u64, batch_sleep_micros: u64) -> Arc<Self> {
         let result = Self {
@@ -583,9 +608,6 @@ impl<T> ConnectedPeersPool<T> where T: Send {
         std::thread::Builder::new()
             .name(format!("Peer pool collector thread #{}", pool_id))
             .spawn(move || {
-                let mut total_rqs_collected: u128 = 0;
-                let mut collections: u64 = 0;
-
                 loop {
                     if self.finish_execution.load(Ordering::Relaxed) {
                         break;
@@ -608,11 +630,10 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                         }
                     };
 
-                    total_rqs_collected += vec.len() as u128;
-                    collections += 1;
-
                     if !vec.is_empty() {
-                        self.batch_transmission.send(vec).expect("Failed to send proposed batch");
+                        self.batch_transmission.send((vec, Instant::now()))
+                            .expect("Failed to send proposed batch");
+
                         // Sleep for a determined amount of time to allow clients to send requests
                         let three_quarters_sleep = (self.batch_sleep_micros / 4) * 3;
                         let five_quarters_sleep = (self.batch_sleep_micros / 4) * 5;
@@ -620,16 +641,6 @@ impl<T> ConnectedPeersPool<T> where T: Send {
                         let sleep_micros = fastrand::u64(three_quarters_sleep..=five_quarters_sleep);
 
                         std::thread::sleep(Duration::from_micros(sleep_micros));
-                    }
-
-                    if collections % 10000000 == 0 {
-                        let current_time_millis = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-
-                        println!("{:?} // {:?} // {} rqs collected in {} collections", self.owner.own_id, current_time_millis,
-                                 total_rqs_collected, collections);
-
-                        total_rqs_collected = 0;
-                        collections = 0;
                     }
 
                     // backoff.spin();
@@ -665,6 +676,8 @@ impl<T> ConnectedPeersPool<T> where T: Send {
     }
 
     pub fn collect_requests(&self, batch_target_size: usize, owner: &Arc<ConnectedPeersGroup<T>>) -> Result<Vec<T>> {
+        let start = Instant::now();
+
         let vec_size = std::cmp::max(batch_target_size, self.owner.per_client_cache);
 
         let mut batch = Vec::with_capacity(vec_size);
@@ -776,6 +789,8 @@ impl<T> ConnectedPeersPool<T> where T: Send {
             }
         }
 
+        metric_duration(CLIENT_POOL_COLLECT_TIME_ID, start.elapsed());
+
         Ok(batch)
     }
 
@@ -841,6 +856,8 @@ impl<T> ConnectedPeer<T> where T: Send {
     }
 
     pub fn push_request(&self, msg: T) -> Result<()> {
+        trace!("Pushing request to client {:?}", self.client_id());
+
         match self {
             Self::PoolConnection { queue, client_id, .. } => {
                 let mut sender_guard = queue.lock().unwrap();
@@ -862,7 +879,7 @@ impl<T> ConnectedPeer<T> where T: Send {
                 }
             }
             Self::UnpooledConnection { sender, client_id } => {
-                match sender.send(msg) {
+                match sender.send((msg, Instant::now())) {
                     Ok(_) => {
                         Ok(())
                     }

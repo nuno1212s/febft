@@ -46,6 +46,7 @@ pub mod channel;
 pub mod socket;
 pub mod mem_pool;
 pub mod node_id;
+pub mod config_utils;
 
 
 static INITIALIZED: Flag = Flag::new();
@@ -96,12 +97,12 @@ pub unsafe fn init(c: InitConfig) -> Result<Option<InitGuard>> {
             Logger::builder()
                 .appender("appender")
                 .additive(false)
-                .build("app::appender", LevelFilter::Debug),
+                .build("app::appender", LevelFilter::Info),
         )
         .build(
             Root::builder()
                 .appender("appender")
-                .build(LevelFilter::Debug),
+                .build(LevelFilter::Info),
         )
         .wrapped(ErrorKind::MsgLog)?;
 

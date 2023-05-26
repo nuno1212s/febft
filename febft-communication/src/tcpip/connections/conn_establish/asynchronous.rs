@@ -5,8 +5,6 @@ use either::Either;
 use futures::{AsyncReadExt, AsyncWriteExt};
 use futures_timer::Delay;
 use log::{debug, error, info, warn};
-use rustls::ServerName;
-use tokio_rustls::TlsStream;
 use febft_common::error::*;
 use febft_common::socket::{AsyncListener, AsyncSocket, SecureReadHalf, SecureSocketAsync, SecureWriteHalf};
 use febft_common::{async_runtime as rt, prng, socket};

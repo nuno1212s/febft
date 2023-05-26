@@ -9,7 +9,7 @@ use rustls::{ClientConfig, ServerConfig};
 use crate::message::{NetworkMessage, NetworkMessageKind, StoredSerializedNetworkMessage};
 use crate::serialize::Serializable;
 use febft_common::error::*;
-use crate::client_pooling::ConnectedPeer;
+use crate::client_pooling::{ConnectedPeer, PeerIncomingRqHandling};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use febft_common::channel::OneShotRx;
@@ -21,11 +21,14 @@ use crate::tcpip::{ConnectionType, NodeConnectionAcceptor, TlsNodeAcceptor, TlsN
 
 pub mod serialize;
 pub mod message;
-pub mod tcpip;
 pub mod cpu_workers;
 pub mod client_pooling;
 pub mod config;
 pub mod message_signing;
+pub mod metric;
+pub mod tcpip;
+pub mod tcp_ip_simplex;
+pub mod mio_tcp;
 
 /// A trait defined that indicates how the connections are managed
 /// Allows us to verify various things about our current connections as well
@@ -42,6 +45,8 @@ pub trait NodeConnections {
     fn connected_nodes(&self) -> Vec<NodeId>;
 
     /// Connect this node to another node.
+    /// This will attempt to create various connections,
+    /// depending on the configuration for concurrent connection count.
     /// Returns a vec with the results of each of the attempted connections
     fn connect_to_node(self: &Arc<Self>, node: NodeId) -> Vec<OneShotRx<Result<()>>>;
 
@@ -63,6 +68,21 @@ pub trait NodePK {
 
 }
 
+/// Trait for taking requests from the network node
+pub trait NodeIncomingRqHandler<T>: Send {
+
+    fn rqs_len_from_clients(&self) -> usize;
+
+    fn receive_from_clients(&self, timeout: Option<Duration>) -> Result<Vec<T>>;
+
+    fn try_receive_from_clients(&self) -> Result<Option<Vec<T>>>;
+
+    fn rqs_len_from_replicas(&self) -> usize;
+
+    fn receive_from_replicas(&self, timeout: Option<Duration>) -> Result<Option<T>>;
+
+}
+
 /// A network node. Handles all the connections between nodes.
 pub trait Node<M: Serializable + 'static> : Send + Sync {
 
@@ -71,6 +91,8 @@ pub trait Node<M: Serializable + 'static> : Send + Sync {
     type ConnectionManager : NodeConnections;
 
     type Crypto: NodePK;
+
+    type IncomingRqHandler: NodeIncomingRqHandler<NetworkMessage<M>>;
 
     /// Bootstrap the node
     async fn bootstrap(node_config: Self::Config) -> Result<Arc<Self>>;
@@ -86,6 +108,9 @@ pub trait Node<M: Serializable + 'static> : Send + Sync {
 
     /// Crypto
     fn pk_crypto(&self) -> &Self::Crypto;
+
+    /// Get a reference to the incoming request handling
+    fn node_incoming_rq_handling(&self) -> &Arc<Self::IncomingRqHandler>;
 
     /// Sends a message to a given target.
     /// Does not block on the message sent. Returns a result that is
@@ -116,29 +141,5 @@ pub trait Node<M: Serializable + 'static> : Send + Sync {
     /// Ok if there is a current connection to the targets or err if not. No other checks are made
     /// on the success of the message dispatch
     fn broadcast_serialized(&self, messages: BTreeMap<NodeId, StoredSerializedNetworkMessage<M>>) -> std::result::Result<(), Vec<NodeId>>;
-
-    /// Get a reference to our loopback channel
-    fn loopback_channel(&self) -> &Arc<ConnectedPeer<NetworkMessage<M>>>;
-
-    /// Receive messages from the clients we are connected to
-    /// Blocks if there are no pending requests to collect.
-    fn receive_from_clients(
-        &self,
-        timeout: Option<Duration>,
-    ) -> Result<Vec<NetworkMessage<M>>>;
-
-    /// Try to receive messages from the clients, without blocking if there are no requests available.
-    fn try_recv_from_clients(
-        &self,
-    ) -> Result<Option<Vec<NetworkMessage<M>>>>;
-
-    //Receive messages from the replicas we are connected to
-    fn receive_from_replicas(&self, timeout: Option<Duration>) -> Result<Option<NetworkMessage<M>>>;
-
-    /// Receive from replicas without a timeout
-    fn receive_from_replicas_no_timeout(&self) -> Result<NetworkMessage<M>> {
-        // We can unwrap it since we know it will always contain a value, unless there was an error
-        Ok(self.receive_from_replicas(None)?.unwrap())
-    }
 
 }

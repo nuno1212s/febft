@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::iter;
 use std::net::SocketAddr;
 use std::sync::{Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use either::Either;
 
@@ -32,12 +32,12 @@ pub mod connections;
 ///Represents the server addresses of a peer
 ///Clients will only have 1 address while replicas will have 2 addresses (1 for facing clients,
 /// 1 for facing replicas)
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PeerAddr {
     // All nodes have a replica facing socket
-    replica_facing_socket: (SocketAddr, String),
+    pub(crate) replica_facing_socket: (SocketAddr, String),
     // Only replicas have a client facing socket
-    client_facing_socket: Option<(SocketAddr, String)>,
+    pub(crate) client_facing_socket: Option<(SocketAddr, String)>,
 }
 
 impl PeerAddr {
@@ -57,7 +57,6 @@ impl PeerAddr {
             client_facing_socket: Some(replica_addr),
         }
     }
-
 }
 
 /// The connection type used for connections
@@ -194,7 +193,7 @@ impl<M: Serializable + 'static> TcpNode<M> {
     }
 
     /// Create the send tos for a given target
-    fn send_tos(&self, shared: Option<&NodePKCrypto>, targets: impl Iterator<Item=NodeId>)
+    fn send_tos(&self, shared: Option<&NodePKCrypto>, targets: impl Iterator<Item=NodeId>, flush: bool)
                 -> (Option<SendTo<M>>, Option<SendTos<M>>, Vec<NodeId>) {
         let mut send_to_me = None;
         let mut send_tos: Option<SendTos<M>> = None;
@@ -213,6 +212,8 @@ impl<M: Serializable + 'static> TcpNode<M> {
                     shared: shared.cloned(),
                     nonce,
                     peer_cnn: SendToPeer::Me(self.loopback_channel().clone()),
+                    flush,
+                    rq_send_time: Instant::now(),
                 })
             } else {
                 match self.peer_connections.get_connection(&id) {
@@ -227,6 +228,8 @@ impl<M: Serializable + 'static> TcpNode<M> {
                                 shared: shared.cloned(),
                                 nonce,
                                 peer_cnn: SendToPeer::Peer(conn),
+                                flush,
+                                rq_send_time: Instant::now(),
                             })
                         } else {
                             let mut send = SmallVec::new();
@@ -237,6 +240,8 @@ impl<M: Serializable + 'static> TcpNode<M> {
                                 shared: shared.cloned(),
                                 nonce,
                                 peer_cnn: SendToPeer::Peer(conn),
+                                flush,
+                                rq_send_time: Instant::now(),
                             });
 
                             send_tos = Some(send)
@@ -252,7 +257,6 @@ impl<M: Serializable + 'static> TcpNode<M> {
     fn serialize_send_impl(send_to_me: Option<SendTo<M>>, send_to_others: Option<SendTos<M>>,
                            message: NetworkMessageKind<M>) {
         threadpool::execute(move || {
-
             match crate::cpu_workers::serialize_digest_no_threadpool(&message) {
                 Ok((buffer, digest)) => {
                     Self::send_impl(send_to_me, send_to_others, message, buffer, digest);
@@ -266,7 +270,6 @@ impl<M: Serializable + 'static> TcpNode<M> {
 
     fn send_impl(send_to_me: Option<SendTo<M>>, send_to_others: Option<SendTos<M>>,
                  msg: NetworkMessageKind<M>, buffer: Buf, digest: Digest, ) {
-
         if let Some(send_to) = send_to_me {
             send_to.value(Either::Left((msg, buffer.clone(), digest.clone())));
         }
@@ -294,15 +297,20 @@ impl<M: Serializable + 'static> TcpNode<M> {
             }
         }
     }
+
+    fn loopback_channel(&self) -> &Arc<ConnectedPeer<NetworkMessage<M>>> {
+        self.client_pooling.loopback_connection()
+    }
 }
 
 impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
-
     type Config = NodeConfig;
 
     type ConnectionManager = PeerConnections<M>;
 
     type Crypto = NodePKCrypto;
+
+    type IncomingRqHandler = PeerIncomingRqHandling<NetworkMessage<M>>;
 
     async fn bootstrap(cfg: NodeConfig) -> Result<Arc<Self>> {
         let id = cfg.id;
@@ -377,10 +385,11 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
         &self.keys
     }
 
-    fn send(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool) -> Result<()> {
+    fn node_incoming_rq_handling(&self) -> &Arc<PeerIncomingRqHandling<NetworkMessage<M>>> { &self.client_pooling }
 
+    fn send(&self, message: NetworkMessageKind<M>, target: NodeId, flush: bool) -> Result<()> {
         let (send_to_me, send_to_others, failed) =
-            self.send_tos(None, iter::once(target));
+            self.send_tos(None, iter::once(target), flush);
 
         if !failed.is_empty() {
             return Err(Error::simple(ErrorKind::CommunicationPeerNotFound));
@@ -395,7 +404,7 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
         let keys = Some(&self.keys);
 
         let (send_to_me, send_to_others, failed) =
-            self.send_tos(keys, iter::once(target));
+            self.send_tos(keys, iter::once(target), flush);
 
         if !failed.is_empty() {
             return Err(Error::simple(ErrorKind::CommunicationPeerNotFound));
@@ -408,7 +417,7 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
 
     fn broadcast(&self, message: NetworkMessageKind<M>, targets: impl Iterator<Item=NodeId>) -> std::result::Result<(), Vec<NodeId>> {
         let (send_to_me, send_to_others, failed) =
-            self.send_tos(None, targets);
+            self.send_tos(None, targets, true);
 
         Self::serialize_send_impl(send_to_me, send_to_others, message);
 
@@ -423,7 +432,7 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
         let keys = Some(&self.keys);
 
         let (send_to_me, send_to_others, failed) =
-            self.send_tos(keys, target);
+            self.send_tos(keys, target, true);
 
         Self::serialize_send_impl(send_to_me, send_to_others, message);
 
@@ -438,31 +447,16 @@ impl<M: Serializable + 'static> Node<M> for TcpNode<M> {
         let targets = messages.keys().cloned().into_iter();
 
         let (send_to_me, send_to_others, failed) = self.send_tos(None,
-                                                                 targets);
-
-        Self::send_serialized_impl(send_to_me, send_to_others, messages);
+                                                                 targets, true);
+        threadpool::execute(move || {
+            Self::send_serialized_impl(send_to_me, send_to_others, messages);
+        });
 
         if !failed.is_empty() {
             Err(failed)
         } else {
             Ok(())
         }
-    }
-
-    fn loopback_channel(&self) -> &Arc<ConnectedPeer<NetworkMessage<M>>> {
-        self.client_pooling.loopback_connection()
-    }
-
-    fn receive_from_clients(&self, timeout: Option<Duration>) -> Result<Vec<NetworkMessage<M>>> {
-        self.client_pooling.receive_from_clients(timeout)
-    }
-
-    fn try_recv_from_clients(&self) -> Result<Option<Vec<NetworkMessage<M>>>> {
-        self.client_pooling.try_receive_from_clients()
-    }
-
-    fn receive_from_replicas(&self, timeout: Option<Duration>) -> Result<Option<NetworkMessage<M>>> {
-        self.client_pooling.receive_from_replicas(timeout)
     }
 }
 
@@ -473,6 +467,8 @@ struct SendTo<M: Serializable + 'static> {
     shared: Option<NodePKCrypto>,
     nonce: u64,
     peer_cnn: SendToPeer<M>,
+    flush: bool,
+    rq_send_time: Instant,
 }
 
 /// The information about the connection itself which can either be a loopback
@@ -503,7 +499,7 @@ impl<M: Serializable + 'static> SendTo<M> {
                 let message = WireMessage::new(self.my_id, self.peer_id,
                                                buf, self.nonce, Some(digest), key_pair);
 
-                peer.peer_message(message, None).unwrap();
+                peer.peer_message(message, None, self.flush, self.rq_send_time).unwrap();
             }
             (_, _) => { unreachable!() }
         }
@@ -525,7 +521,7 @@ impl<M: Serializable + 'static> SendTo<M> {
 
                 let wm = WireMessage::from_parts(header, buf).unwrap();
 
-                peer_cnn.peer_message(wm, None).unwrap();
+                peer_cnn.peer_message(wm, None, self.flush, self.rq_send_time).unwrap();
             }
         }
     }

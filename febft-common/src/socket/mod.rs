@@ -1,10 +1,9 @@
 //! Abstractions over different socket types of crates in the Rust ecosystem.
 
-use std::fs::read;
 use std::io;
 use std::io::{BufRead, ErrorKind, Read, Write};
 use std::net::SocketAddr;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
@@ -14,9 +13,10 @@ use futures::{AsyncRead, AsyncReadExt, AsyncWrite};
 
 use futures::io::{BufReader, BufWriter};
 use log::error;
+use mio::event::Source;
+use mio::{Interest, Registry, Token};
 
 use rustls::{ClientConnection, Error, IoState, ServerConnection, StreamOwned};
-use tokio::io::ReadBuf;
 use tokio_rustls::TlsStream;
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt, FuturesAsyncReadCompatExt};
 
@@ -33,8 +33,8 @@ mod rio_tcp;
 
 mod std_tcp;
 
-const WRITE_BUFFER_SIZE: usize = 1 * 1024 * 1024;
-const READ_BUFFER_SIZE: usize = 1 * 1024 * 1024;
+const WRITE_BUFFER_SIZE: usize = 8 * 1024 * 1024;
+const READ_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 
 /// A `Listener` represents a socket listening on new communications
 /// initiated by peer nodes in the BFT system.
@@ -73,6 +73,98 @@ pub struct AsyncSocket {
 /// This is a synchronous socket
 pub struct SyncSocket {
     inner: std_tcp::Socket,
+}
+
+pub struct MioSocket {
+    inner: mio::net::TcpStream,
+}
+
+pub struct MioListener {
+    inner: mio::net::TcpListener,
+}
+
+impl From<SyncSocket> for MioSocket {
+    fn from(value: SyncSocket) -> Self {
+        value.inner.into()
+    }
+}
+
+impl From<SyncListener> for MioListener {
+    fn from(value: SyncListener) -> Self {
+        value.inner.into()
+    }
+}
+
+impl From<mio::net::TcpStream> for MioSocket {
+    fn from(value: mio::net::TcpStream) -> Self {
+        MioSocket {
+            inner: value,
+        }
+    }
+}
+
+impl From<mio::net::TcpListener> for MioListener {
+    fn from(value: mio::net::TcpListener) -> Self {
+        MioListener {
+            inner: value,
+        }
+    }
+}
+
+impl Source for MioSocket {
+    fn register(&mut self, registry: &Registry, token: Token, interests: Interest) -> io::Result<()> {
+        self.inner.register(registry, token, interests)
+    }
+
+    fn reregister(&mut self, registry: &Registry, token: Token, interests: Interest) -> io::Result<()> {
+        self.inner.reregister(registry, token, interests)
+    }
+
+    fn deregister(&mut self, registry: &Registry) -> io::Result<()> {
+        self.inner.deregister(registry)
+    }
+}
+
+impl Source for MioListener {
+    fn register(&mut self, registry: &Registry, token: Token, interests: Interest) -> io::Result<()> {
+        self.inner.register(registry, token, interests)
+    }
+
+    fn reregister(&mut self, registry: &Registry, token: Token, interests: Interest) -> io::Result<()> {
+        self.inner.reregister(registry, token, interests)
+    }
+
+    fn deregister(&mut self, registry: &Registry) -> io::Result<()> {
+        self.inner.deregister(registry)
+    }
+}
+
+impl Deref for MioListener {
+    type Target = mio::net::TcpListener;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for MioListener {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl Deref for MioSocket {
+    type Target = mio::net::TcpStream;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for MioSocket {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
 }
 
 /// Initialize the sockets module.
@@ -212,6 +304,11 @@ pub enum SecureWriteHalf {
 pub enum SecureReadHalf {
     Async(SecureReadHalfAsync),
     Sync(SecureReadHalfSync),
+}
+
+pub enum SecureSocket {
+    Async(SecureSocketAsync),
+    Sync(SecureSocketSync),
 }
 
 pub enum SecureSocketSync {
@@ -406,7 +503,7 @@ impl Write for SecureWriteHalfSync {
 
 pub enum SecureSocketAsync {
     Plain(AsyncSocket),
-    Tls(TlsStream<Compat<AsyncSocket>>),
+    Tls(Compat<TlsStream<Compat<AsyncSocket>>>),
 }
 
 impl SecureSocketAsync {
@@ -415,7 +512,7 @@ impl SecureSocketAsync {
     }
 
     pub fn new_tls(socket: TlsStream<Compat<AsyncSocket>>) -> Self {
-        Self::Tls(socket)
+        Self::Tls(socket.compat())
     }
 
     pub fn split(self) -> (SecureWriteHalfAsync, SecureReadHalfAsync) {
@@ -432,6 +529,8 @@ impl SecureSocketAsync {
                 // between async-std and tokio. This means that we currently have a pretty hard time
                 // implementing this.
                 // https://github.com/tokio-rs/tls/issues/40
+
+                let tls_stream = tls_stream.into_inner();
 
                 //Unfortunately in this situation I don't think we can use async socket's efficient OS level split
                 // Since the stream requires duplex access. So we must wrap this in a bilock from futures
@@ -625,6 +724,54 @@ impl Read for SyncSocket {
 
     fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
         std::io::Read::read_exact(&mut self.inner, buf)
+    }
+}
+
+impl AsyncRead for SecureSocketAsync {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<io::Result<usize>> {
+        match &mut *self {
+            SecureSocketAsync::Plain(plain) => {
+                Pin::new(plain).poll_read(cx, buf)
+            }
+            SecureSocketAsync::Tls(tls) => {
+                Pin::new(tls).poll_read(cx, buf)
+            }
+        }
+    }
+}
+
+impl AsyncWrite for SecureSocketAsync {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        match &mut *self {
+            SecureSocketAsync::Plain(plain) => {
+                Pin::new(plain).poll_write(cx, buf)
+            }
+            SecureSocketAsync::Tls(tls) => {
+                Pin::new(tls).poll_write(cx, buf)
+            }
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            SecureSocketAsync::Plain(plain) => {
+                Pin::new(plain).poll_flush(cx)
+            }
+            SecureSocketAsync::Tls(tls) => {
+                Pin::new(tls).poll_flush(cx)
+            }
+        }
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            SecureSocketAsync::Plain(plain) => {
+                Pin::new(plain).poll_close(cx)
+            }
+            SecureSocketAsync::Tls(tls) => {
+                Pin::new(tls).poll_close(cx)
+            }
+        }
     }
 }
 

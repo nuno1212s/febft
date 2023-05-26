@@ -8,6 +8,8 @@ use std::{
 use std::cell::Cell;
 use std::sync::MutexGuard;
 use bytes::BytesMut;
+use either::Either;
+use futures::SinkExt;
 
 use self::{follower_sync::FollowerSynchronizer, replica_sync::ReplicaSynchronizer};
 
@@ -17,7 +19,7 @@ use log::{debug, error, info, warn};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use febft_common::crypto::hash::Digest;
-use febft_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_queue_message, tbo_pop_message};
+use febft_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_queue_message, tbo_pop_message, InvalidSeqNo};
 use febft_common::{collections, prng};
 use febft_common::node_id::NodeId;
 use febft_communication::message::{Header, NetworkMessageKind, StoredMessage, System, WireMessage};
@@ -25,14 +27,14 @@ use febft_communication::{Node, NodePK, serialize};
 use febft_communication::serialize::Buf;
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::serialize::SharedData;
-use febft_messages::messages::{ForwardedRequestsMessage, RequestMessage, SystemMessage};
+use febft_messages::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
+use febft_messages::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use febft_messages::serialize::StateTransferMessage;
-use febft_messages::timeouts::{ClientRqInfo, Timeouts};
+use febft_messages::timeouts::{RqTimeout, Timeouts};
 use crate::bft::consensus::Consensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::{CollectData, Proof, ViewDecisionPair};
-use crate::bft::msg_log::pending_decision::PendingRequestLog;
 use crate::bft::PBFT;
 
 use crate::bft::sync::view::ViewInfo;
@@ -182,7 +184,7 @@ pub struct TboQueue<O> {
 }
 
 impl<O> TboQueue<O> {
-    fn new(view: ViewInfo) -> Self {
+    pub(crate) fn new(view: ViewInfo) -> Self {
         Self {
             view,
             previous_view: None,
@@ -196,11 +198,28 @@ impl<O> TboQueue<O> {
 
     /// Installs a new view into the queue.
     pub fn install_view(&mut self, view: ViewInfo) {
+        let index = view.sequence_number().index(self.view.sequence_number());
+
         let prev_view = std::mem::replace(&mut self.view, view);
 
         self.previous_view = Some(prev_view);
 
-        //TODO: should we move to the next instance queue
+        match index {
+            Either::Right(i) if i > 0 => {
+
+                for _ in 0..i {
+                    self.next_instance_queue();
+                }
+
+            }
+            Either::Right(_) => {
+                warn!("Installing a view with the same seq number as the current one?");
+            }
+            Either::Left(_) => {
+                unreachable!("How can we possibly go back in time?");
+            }
+        }
+
     }
 
     /// Signal this `TboQueue` that it may be able to extract new
@@ -266,18 +285,6 @@ impl<O> TboQueue<O> {
     }
 }
 
-#[derive(Copy, Clone)]
-pub(super) enum TimeoutPhase {
-    // we have never received a timeout
-    Init(Instant),
-    // we received a second timeout for the same request;
-    // start view change protocol
-    TimedOutOnce(Instant),
-    // keep requests that timed out stored in memory,
-    // for efficiency
-    TimedOut,
-}
-
 #[derive(Copy, Clone, Debug)]
 pub(super) enum ProtoPhase {
     // the view change protocol isn't running;
@@ -321,8 +328,8 @@ pub enum SynchronizerStatus {
     /// We need to invoke the leader change protocol if
     /// we have a non empty set of stopped messages.
     RequestsTimedOut {
-        forwarded: Vec<Digest>,
-        stopped: Vec<Digest>,
+        forwarded: Vec<ClientRqInfo>,
+        stopped: Vec<ClientRqInfo>,
     },
 }
 
@@ -363,7 +370,7 @@ pub struct Synchronizer<D: SharedData> {
     //Tbo queue, keeps track of the current view and keeps messages arriving in order
     tbo: Mutex<TboQueue<D::Request>>,
     //Stores currently received requests from other nodes
-    stopped: RefCell<IntMap<Vec<StoredMessage<RequestMessage<D::Request>>>>>,
+    stopped: RefCell<IntMap<Vec<StoredRequestMessage<D::Request>>>>,
     //TODO: This does not require a Mutex I believe since it's only accessed when
     // Processing messages (which is always done in the replica thread)
     collects: Mutex<CollectsType<D>>,
@@ -450,7 +457,7 @@ impl<D> Synchronizer<D>
         match self.phase.get() {
             _ if !tbo_guard.get_queue => SynchronizerPollStatus::Recv,
             ProtoPhase::Init => {
-                //If we are
+                //If we are in the init phase and there is a pending request, move to the stopping phase
                 extract_msg!(D::Request =>
                     { self.phase.replace(ProtoPhase::Stopping(0)); },
                     &mut tbo_guard.get_queue,
@@ -488,7 +495,7 @@ impl<D> Synchronizer<D>
         message: ViewChangeMessage<D::Request>,
         timeouts: &Timeouts,
         log: &mut Log<D>,
-        pending_rq_log: &PendingRequestLog<D>,
+        rq_pre_processor: &RequestPreProcessor<D::Request>,
         consensus: &mut Consensus<D, ST>,
         node: &NT,
     ) -> SynchronizerStatus
@@ -508,6 +515,8 @@ impl<D> Synchronizer<D>
 
                         guard.queue_stop(header, message);
 
+                        debug!("{:?} // Received stop message while in init state. Queueing", node.id());
+
                         SynchronizerStatus::Nil
                     }
                     ViewChangeMessageKind::StopData(_) => {
@@ -521,6 +530,8 @@ impl<D> Synchronizer<D>
 
                                 guard.queue_stop_data(header, message);
 
+                                debug!("{:?} // Received stop data message while in init state. Queueing", node.id());
+
                                 SynchronizerStatus::Nil
                             }
                         }
@@ -529,6 +540,8 @@ impl<D> Synchronizer<D>
                         let mut guard = self.tbo.lock().unwrap();
 
                         guard.queue_sync(header, message);
+
+                        debug!("{:?} // Received sync message while in init state. Queueing", node.id());
 
                         SynchronizerStatus::Nil
                     }
@@ -541,6 +554,8 @@ impl<D> Synchronizer<D>
 
                 let i = match message.kind() {
                     ViewChangeMessageKind::Stop(_) if msg_seq != next_seq => {
+                        debug!("{:?} // Received stop message {:?} that does not match up to our local view {:?}", node.id(), message, current_view);
+
                         let mut guard = self.tbo.lock().unwrap();
 
                         guard.queue_stop(header, message);
@@ -550,6 +565,8 @@ impl<D> Synchronizer<D>
                     ViewChangeMessageKind::Stop(_)
                     if self.stopped.borrow().contains_key(header.from().into()) =>
                         {
+                            warn!("{:?} // Received double stop message from node {:?}", node.id(), header.from());
+
                             // drop attempts to vote twice
                             return stop_status!(i, &current_view);
                         }
@@ -565,6 +582,8 @@ impl<D> Synchronizer<D>
                                     let mut guard = self.tbo.lock().unwrap();
 
                                     guard.queue_stop_data(header, message);
+
+                                    debug!("{:?} // Received stop data message while in stopping state. Queueing", node.id());
                                 }
 
                                 return stop_status!(i, &current_view);
@@ -576,6 +595,8 @@ impl<D> Synchronizer<D>
                             let mut guard = self.tbo.lock().unwrap();
 
                             guard.queue_sync(header, message);
+
+                            debug!("{:?} // Received sync message while in init state. Queueing", node.id());
                         }
 
                         return stop_status!(i, &current_view);
@@ -583,15 +604,12 @@ impl<D> Synchronizer<D>
                 };
 
                 // store pending requests from this STOP
-                let stopped = match message.into_kind() {
+                let mut stopped = match message.into_kind() {
                     ViewChangeMessageKind::Stop(stopped) => stopped,
                     _ => unreachable!(),
                 };
 
-                // Register these requests into the pending request log so we
-                // Can later use it to retrieve all pending messages when sending
-                // Our stop data message
-                pending_rq_log.register_stopped_requests(&stopped);
+                // FIXME: Check if we have already seen the messages in the stop quorum
 
                 self.stopped
                     .borrow_mut()
@@ -600,18 +618,19 @@ impl<D> Synchronizer<D>
                 // NOTE: we only take this branch of the code before
                 // we have sent our own STOP message
                 if let ProtoPhase::Stopping(_i) = self.phase.get() {
+
                     return if i > current_view.params().f() {
                         self.begin_view_change(None, node, timeouts, log);
                         SynchronizerStatus::Running
                     } else {
+                        self.phase.replace(ProtoPhase::Stopping(i));
+
                         SynchronizerStatus::Nil
                     };
                 }
 
-                if i == current_view.params().quorum() {
+                if i >= current_view.params().quorum() {
                     let next_view = current_view.next_view();
-
-                    warn!("{:?} // Stopping quorum reached, moving to next view {:?}", node.id(), next_view);
 
                     let previous_view = current_view.clone();
 
@@ -620,17 +639,21 @@ impl<D> Synchronizer<D>
 
                     let next_leader = next_view.leader();
 
+                    warn!("{:?} // Stopping quorum reached, moving to next view {:?}. ", node.id(), next_view);
+
                     self.install_view(next_view);
 
                     match &self.accessory {
                         SynchronizerAccessory::Replica(rep) => {
-                            rep.handle_stopping_quorum(self, previous_view, log,
-                                                       pending_rq_log, timeouts, node)
+                            rep.handle_stopping_quorum(self, previous_view, consensus,
+                                                       log, rq_pre_processor, timeouts, node)
                         }
                         SynchronizerAccessory::Follower(_) => {}
                     }
 
                     if next_leader == node.id() {
+                        warn!("{:?} // I am the new leader, moving to the stopping data phase.", node.id());
+
                         //Move to the stopping data phase as we are the new leader
                         self.phase.replace(ProtoPhase::StoppingData(0));
                     } else {
@@ -665,6 +688,8 @@ impl<D> Synchronizer<D>
                                     let mut guard = self.tbo.lock().unwrap();
 
                                     guard.queue_stop(header, message);
+
+                                    debug!("{:?} // Received stop message while in stopping data state. Queueing", node.id());
                                 }
 
                                 return SynchronizerStatus::Running;
@@ -717,7 +742,10 @@ impl<D> Synchronizer<D>
                                     //Since we are the current leader and are waiting for stop data,
                                     //This must be related to another view.
                                     guard.queue_sync(header, message);
+
                                 }
+
+                                debug!("{:?} // Received sync message while in stopping data phase. Queueing", node.id());
 
                                 return SynchronizerStatus::Running;
                             }
@@ -777,11 +805,12 @@ impl<D> Synchronizer<D>
                                 // may be a point of contention on the lib!
                                 collects_guard.clear();
 
+                                error!("{:?} // The view change is not sound. Cancelling.", node.id());
+
                                 return SynchronizerStatus::Running;
                             }
 
-                            let p = pending_rq_log.view_change_propose();
-
+                            let p = rq_pre_processor.collect_all_pending_rqs();
                             let node_sign = node.pk_crypto().sign_detached();
 
                             //We create the pre-prepare here as we are the new leader,
@@ -789,8 +818,7 @@ impl<D> Synchronizer<D>
                             let (header, message) = {
                                 let mut buf = Vec::new();
 
-                                info!("{:?} // Forged pre-prepare: {} {:?}", node.id(),
-                                    p.len(), p);
+                                info!("{:?} // Forged pre-prepare: {} {:?}", node.id(), p.len(), p);
 
                                 let forged_pre_prepare = consensus.forge_propose(p, self);
 
@@ -837,7 +865,6 @@ impl<D> Synchronizer<D>
                                 }),
                             ));
 
-
                             let node_id = node.id();
                             let targets = NodeId::targets(0..current_view.params().n())
                                 .filter(move |&id| id != node_id);
@@ -877,6 +904,8 @@ impl<D> Synchronizer<D>
                             let mut guard = self.tbo.lock().unwrap();
 
                             guard.queue_stop(header, message);
+
+                            debug!("{:?} // Received stop message while in syncing phase. Queueing", node.id());
                         }
 
                         return SynchronizerStatus::Running;
@@ -895,6 +924,8 @@ impl<D> Synchronizer<D>
                                     let mut guard = self.tbo.lock().unwrap();
 
                                     guard.queue_stop_data(header, message);
+
+                                    debug!("{:?} // Received stop data message while in syncing phase. Queueing", node.id());
                                 }
 
                                 return SynchronizerStatus::Running;
@@ -903,6 +934,8 @@ impl<D> Synchronizer<D>
                     }
                     ViewChangeMessageKind::Sync(_) if msg_seq != seq => {
                         {
+                            debug!("{:?} // Received sync message whose sequence number does not match our current one {:?} vs {:?}. Queueing", node.id(), message, current_view);
+
                             let mut guard = self.tbo.lock().unwrap();
 
                             guard.queue_sync(header, message);
@@ -938,6 +971,8 @@ impl<D> Synchronizer<D>
                 let sound = sound(&current_view, &normalized_collects);
 
                 if !sound.test() {
+                    error!("{:?} // The view change is not sound. Cancelling.", node.id());
+
                     //FIXME: BFT-SMaRt doesn't do anything if `sound`
                     // evaluates to false; do we keep the same behavior,
                     // and wait for a new time out? but then, no other
@@ -1007,7 +1042,7 @@ impl<D> Synchronizer<D>
     /// originated in the other replicas.
     pub fn begin_view_change<ST, NT>(
         &self,
-        timed_out: Option<Vec<StoredMessage<RequestMessage<D::Request>>>>,
+        timed_out: Option<Vec<StoredRequestMessage<D::Request>>>,
         node: &NT,
         timeouts: &Timeouts,
         _log: &Log<D>,
@@ -1028,6 +1063,10 @@ impl<D> Synchronizer<D>
             //And therefore we don't increase the received message count, just update the phase to Stopping2
             (ProtoPhase::Stopping(i), _) => {
                 self.phase.replace(ProtoPhase::Stopping2(i));
+            }
+            (ProtoPhase::StoppingData(_), _) | (ProtoPhase::Syncing, _) => {
+                // we have already started a view change protocol
+                return;
             }
             // we have timed out, therefore we should send a STOP msg;
             //
@@ -1103,7 +1142,9 @@ impl<D> Synchronizer<D>
             last_proof
         } = state;
 
-        warn!("{:?} // Finalizing view change to CID {:?}", node.id(), curr_cid);
+        let view = self.view();
+
+        warn!("{:?} // Finalizing view change to view {:?} and consensus ID {:?}", node.id(), view, curr_cid);
 
         // we will get some value to be proposed because of the
         // check we did in `pre_finalize()`, guarding against no values
@@ -1121,7 +1162,7 @@ impl<D> Synchronizer<D>
             // We are missing the last decision, which should be included in the collect data
             // sent by the leader in the SYNC message
             if let Some(last_proof) = last_proof {
-                consensus.catch_up_to_quorum(last_proof.seq_no(), last_proof, log)
+                consensus.catch_up_to_quorum(last_proof.seq_no(), &view, last_proof, log)
                     .expect("Failed to catch up to quorum");
             } else {
                 // This maybe happens when a checkpoint is done and the first execution after it
@@ -1158,19 +1199,9 @@ impl<D> Synchronizer<D>
         }
     }
 
-    /// Watch requests that have been forwarded to us
-    pub fn watch_forwarded_requests(&self, requests: &ForwardedRequestsMessage<D::Request>, timeouts: &Timeouts) {
-        match &self.accessory {
-            SynchronizerAccessory::Replica(rep) => {
-                rep.watch_forwarded_requests(requests, timeouts)
-            }
-            _ => {}
-        }
-    }
-
     /// Watch requests that have been received from other replicas
     ///
-    pub fn watch_received_requests(&self, digest: Vec<(Digest, SeqNo, SeqNo)>, timeouts: &Timeouts) {
+    pub fn watch_received_requests(&self, digest: Vec<ClientRqInfo>, timeouts: &Timeouts) {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
                 rep.watch_received_requests(digest, timeouts);
@@ -1179,27 +1210,17 @@ impl<D> Synchronizer<D>
         }
     }
 
-    /// Watch a client request with the digest `digest`.
-    pub fn watch_request(&self, digest: Digest, seq: SeqNo, session: SeqNo, timeouts: &Timeouts) {
-        match &self.accessory {
-            SynchronizerAccessory::Replica(rep) =>
-                rep.watch_request(digest, seq, session, timeouts),
-            _ => {}
-        }
-    }
-
     /// Forward the requests that have timed out to the whole network
     /// So that everyone knows about (including a leader that could still be correct, but
     /// Has not received the requests from the client)
     pub fn forward_requests<ST, NT>(&self,
-                                    timed_out: Vec<StoredMessage<RequestMessage<D::Request>>>,
-                                    node: &NT,
-                                    log: &PendingRequestLog<D>)
+                                    timed_out: Vec<StoredRequestMessage<D::Request>>,
+                                    node: &NT)
         where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {}
             SynchronizerAccessory::Replica(rep) => {
-                rep.forward_requests(self, timed_out, node, log);
+                rep.forward_requests(self, timed_out, node);
             }
         }
     }
@@ -1208,15 +1229,16 @@ impl<D> Synchronizer<D>
     /// Requests that have timed out
     pub fn client_requests_timed_out(
         &self,
+        base_sync: &Synchronizer<D>,
         my_id: NodeId,
-        seq: &Vec<ClientRqInfo>,
+        seq: &Vec<RqTimeout>,
     ) -> SynchronizerStatus {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {
                 SynchronizerStatus::Nil
             }
             SynchronizerAccessory::Replica(rep) => {
-                rep.client_requests_timed_out(my_id, seq)
+                rep.client_requests_timed_out(base_sync, my_id, seq)
             }
         }
     }

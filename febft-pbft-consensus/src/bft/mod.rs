@@ -3,14 +3,6 @@
 //! By default, it is hidden to the user, unless explicitly enabled
 //! with the feature flag `expose_impl`.
 
-pub mod consensus;
-pub mod proposer;
-pub mod sync;
-pub mod msg_log;
-pub mod config;
-pub mod message;
-pub mod observer;
-
 use std::ops::Drop;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -22,35 +14,41 @@ use log4rs::{
     Config,
     encode::pattern::PatternEncoder,
 };
+
+
 use febft_common::error::*;
-use febft_common::{async_runtime, socket, threadpool};
-use febft_common::error::ErrorKind::CommunicationPeerNotFound;
-use febft_common::globals::{Flag, ReadOnly};
-use febft_common::node_id::NodeId;
+use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, StoredMessage};
 use febft_communication::Node;
 use febft_communication::serialize::Serializable;
-use febft_execution::app::{Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
-use febft_messages::messages::{ForwardedRequestsMessage, Protocol, SystemMessage};
-use febft_messages::ordering_protocol::{OrderingProtocol, OrderProtocolExecResult, OrderProtocolPoll, View};
-use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
+use febft_messages::messages::ClientRqInfo;
+use febft_messages::messages::Protocol;
+use febft_messages::ordering_protocol::{OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, View};
+use febft_messages::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
+use febft_messages::serialize::{ServiceMsg, StateTransferMessage};
 use febft_messages::state_transfer::{Checkpoint, DecLog, StatefulOrderProtocol};
-use febft_messages::timeouts::{ClientRqInfo, Timeout, TimeoutKind, Timeouts};
+use febft_messages::timeouts::{RqTimeout, Timeouts};
 use crate::bft::config::PBFTConfig;
-use crate::bft::consensus::{AbstractConsensus, Consensus, ConsensusGuard, ConsensusPollStatus, ConsensusStatus};
-use crate::bft::message::{ConsensusMessage, ObserveEventKind, PBFTMessage, ViewChangeMessage};
+use crate::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus, ProposerConsensusGuard};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage, ViewChangeMessage};
 use crate::bft::message::serialize::PBFTConsensus;
+use crate::bft::msg_log::{Info, initialize_decided_log, initialize_persistent_log};
 use crate::bft::msg_log::decided_log::Log;
-use crate::bft::msg_log::{Info, initialize_decided_log, initialize_pending_request_log, initialize_persistent_log};
-use crate::bft::msg_log::pending_decision::PendingRequestLog;
-use crate::bft::msg_log::persistent::{NoPersistentLog, PersistentLogModeTrait};
-use crate::bft::observer::{MessageType, ObserverHandle};
+use crate::bft::msg_log::persistent::NoPersistentLog;
 use crate::bft::proposer::Proposer;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus};
-use crate::bft::sync::view::ViewInfo;
+
+pub mod consensus;
+pub mod proposer;
+pub mod sync;
+pub mod msg_log;
+pub mod config;
+pub mod message;
+pub mod observer;
+pub mod metric;
 
 // The types responsible for this protocol
 pub type PBFT<D, ST> = ServiceMsg<D, PBFTConsensus<D>, ST>;
@@ -89,21 +87,16 @@ pub struct PBFTOrderProtocol<D, ST, NT>
     consensus: Consensus<D, ST>,
     /// The synchronizer state machine
     synchronizer: Arc<Synchronizer<D>>,
-
+    /// The request pre processor
+    pre_processor: RequestPreProcessor<D::Request>,
     // A reference to the timeouts layer
     timeouts: Timeouts,
 
-    //The guard for the consensus.
-    //Set to true when there is a consensus running, false when it's ready to receive
-    //A new pre-prepare message
-    consensus_guard: ConsensusGuard,
+    //The proposer guard
+    consensus_guard: Arc<ProposerConsensusGuard>,
     // Check if unordered requests can be proposed.
     // This can only occur when we are in the normal phase of the state machine
     unordered_rq_guard: Arc<AtomicBool>,
-
-    // The pending request log. Handles requests received by this replica
-    // Or forwarded by others that have not yet made it into a consensus instance
-    pending_request_log: Arc<PendingRequestLog<D>>,
     // The log of the decided consensus messages
     // This is completely owned by the server thread and therefore does not
     // Require any synchronization
@@ -129,11 +122,14 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     type Serialization = PBFTConsensus<D>;
     type Config = PBFTConfig<D, ST>;
 
-    fn initialize(config: PBFTConfig<D, ST>, executor: ExecutorHandle<D>,
-                  timeouts: Timeouts, node: Arc<NT>) -> Result<Self> where
+    fn initialize(config: PBFTConfig<D, ST>, args: OrderingProtocolArgs<D, NT>) -> Result<Self> where
         Self: Sized,
     {
-        Self::initialize_protocol(config, executor, timeouts, node, None)
+        Self::initialize_protocol(config, args, None)
+    }
+
+    fn view(&self) -> View<Self::Serialization> {
+        self.synchronizer.view()
     }
 
     fn handle_off_ctx_message(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>) {
@@ -143,8 +139,6 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
             PBFTMessage::Consensus(consensus) => {
                 debug!("{:?} // Received off context consensus message {:?}", self.node.id(), consensus);
                 self.consensus.queue(header, consensus);
-
-                self.consensus.signal();
             }
             PBFTMessage::ViewChange(view_change) => {
                 debug!("{:?} // Received off context view change message {:?}", self.node.id(), view_change);
@@ -178,31 +172,30 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
         }
     }
 
-    fn handle_timeout(&mut self, timeout: Vec<ClientRqInfo>) -> Result<OrderProtocolExecResult> {
+    fn handle_timeout(&mut self, timeout: Vec<RqTimeout>) -> Result<OrderProtocolExecResult> {
         let status = self.synchronizer
-            .client_requests_timed_out(self.node.id(), &timeout);
+            .client_requests_timed_out(&self.synchronizer, self.node.id(), &timeout);
 
         match status {
             SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
                 if forwarded.len() > 0 {
-                    let requests = self.pending_request_log.clone_pending_requests(&forwarded);
+                    let requests = self.pre_processor.clone_pending_rqs(forwarded);
 
                     self.synchronizer.forward_requests(
                         requests,
                         &*self.node,
-                        &self.pending_request_log,
                     );
                 }
 
                 if stopped.len() > 0 {
-                    let stopped = self.pending_request_log.clone_pending_requests(&stopped);
+                    let stopped = self.pre_processor.clone_pending_rqs(stopped);
+
+                    self.switch_phase(ConsensusPhase::SyncPhase);
 
                     self.synchronizer.begin_view_change(Some(stopped),
                                                         &*self.node,
                                                         &self.timeouts,
                                                         &self.message_log);
-
-                    self.switch_phase(ConsensusPhase::SyncPhase)
                 }
             }
             // nothing to do
@@ -214,16 +207,11 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
 
     fn handle_execution_changed(&mut self, is_executing: bool) -> Result<()> {
         if !is_executing {
-            if let Some(consensus_guard) = self.consensus.consensus_guard() {
-                consensus_guard.lock_consensus();
-            }
+            self.consensus_guard.lock_consensus();
         } else {
             match self.phase {
                 ConsensusPhase::NormalPhase => {
-                    //TODO: Is this feasible? Do we know whether this is ready for a new batch?
-                    if let Some(consensus_guard) = self.consensus.consensus_guard() {
-                        consensus_guard.unlock_consensus();
-                    }
+                    self.consensus_guard.unlock_consensus();
                 }
                 ConsensusPhase::SyncPhase => {}
             }
@@ -233,45 +221,35 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
 
         Ok(())
     }
-
-    fn handle_forwarded_requests(&mut self, requests: StoredMessage<ForwardedRequestsMessage<D::Request>>) -> Result<()> {
-        let (_header, requests) = requests.into_inner();
-
-        self.synchronizer.watch_forwarded_requests(&requests, &self.timeouts);
-
-        self.pending_request_log.insert_forwarded(requests.into_inner());
-
-        Ok(())
-    }
 }
 
 impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
                                                    ST: StateTransferMessage + 'static,
                                                    NT: Node<PBFT<D, ST>> + 'static {
-    fn initialize_protocol(config: PBFTConfig<D, ST>, executor: ExecutorHandle<D>,
-                           timeouts: Timeouts, node: Arc<NT>, initial_state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<Self> {
+    fn initialize_protocol(config: PBFTConfig<D, ST>, args: OrderingProtocolArgs<D, NT>,
+                           initial_state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<Self> {
         let PBFTConfig {
             node_id,
             follower_handle,
             view, timeout_dur, db_path,
-            proposer_config, _phantom_data
+            proposer_config, watermark, _phantom_data
         } = config;
+
+        let OrderingProtocolArgs(executor, timeouts,
+                                 pre_processor, batch_input, node) = args;
 
         let sync = Synchronizer::new_replica(view.clone(), timeout_dur);
 
-        let consensus = Consensus::<D, ST>::new_replica(node_id, view.clone(),
-                                                        SeqNo::ZERO, executor.clone(), follower_handle);
+        let consensus_guard = ProposerConsensusGuard::new(view.clone(), watermark);
 
-        let consensus_guard = consensus.consensus_guard().cloned().unwrap();
-
-        let pending_rq_log = Arc::new(initialize_pending_request_log()?);
+        let consensus = Consensus::<D, ST>::new_replica(node_id, &sync.view(), executor.clone(),
+                                                        SeqNo::ZERO, watermark, consensus_guard.clone());
 
         let persistent_log = initialize_persistent_log::<D, String, NoPersistentLog>(executor.clone(), db_path)?;
 
         let dec_log = initialize_decided_log::<D>(node_id, persistent_log, initial_state)?;
 
-        let proposer = Proposer::<D, NT>::new(node.clone(), sync.clone(),
-                                              pending_rq_log.clone(), timeouts.clone(),
+        let proposer = Proposer::<D, NT>::new(node.clone(), batch_input, sync.clone(), timeouts.clone(),
                                               executor.clone(), consensus_guard.clone(),
                                               proposer_config);
 
@@ -279,11 +257,11 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             phase: ConsensusPhase::NormalPhase,
             consensus,
             synchronizer: sync,
+            pre_processor,
             timeouts,
             consensus_guard,
             unordered_rq_guard: Arc::new(Default::default()),
             executor,
-            pending_request_log: pending_rq_log,
             message_log: dec_log,
             proposer,
             node,
@@ -295,6 +273,9 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
               replica.node.id(), crr_view.sequence_number(), replica.sequence_number());
 
         info!("{:?} // Leader count: {}, Leader set: {:?}", replica.node.id(),
+        crr_view.leader_set().len(), crr_view.leader_set());
+
+        println!("{:?} // Leader count: {}, Leader set: {:?}", replica.node.id(),
         crr_view.leader_set().len(), crr_view.leader_set());
 
         replica.proposer.clone().start();
@@ -363,18 +344,17 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         //
         // the order of the next consensus message is guaranteed by
         // `TboQueue`, in the consensus module.
-        let polled_message = self.consensus.poll(&self.pending_request_log);
+        let polled_message = self.consensus.poll();
 
         match polled_message {
             ConsensusPollStatus::Recv => OrderProtocolPoll::ReceiveFromReplicas,
             ConsensusPollStatus::NextMessage(h, m) => {
                 OrderProtocolPoll::Exec(StoredMessage::new(h, Protocol::new(PBFTMessage::Consensus(m))))
             }
-            ConsensusPollStatus::TryProposeAndRecv => {
-                self.consensus.advance_init_phase();
+            ConsensusPollStatus::Decided => {
+                self.finalize_all_possible().expect("Failed to finalize all possible decided instances");
 
-                //Receive the PrePrepare message from the client rq handler thread
-                OrderProtocolPoll::ReceiveFromReplicas
+                OrderProtocolPoll::RePoll
             }
         }
     }
@@ -421,7 +401,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
                     view_change,
                     &self.timeouts,
                     &mut self.message_log,
-                    &self.pending_request_log,
+                    &self.pre_processor,
                     &mut self.consensus,
                     &*self.node,
                 );
@@ -459,8 +439,6 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         //     message
         // );
 
-        // let start = Instant::now();
-
         let status = self.consensus.process_message(
             header,
             message,
@@ -468,7 +446,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             &self.timeouts,
             &mut self.message_log,
             &*self.node,
-        );
+        )?;
 
         match status {
             // if deciding, nothing to do
@@ -480,31 +458,12 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             // FIXME: execution layer needs to receive the id
             // attributed by the consensus layer to each op,
             // to execute in order
-            ConsensusStatus::Decided(completed_batch) => {
-                // Clear the requests from the pending request log
-                self.pending_request_log.delete_requests_in_batch(&completed_batch);
+            ConsensusStatus::Decided => {
+                self.finalize_all_possible()?;
 
-                if let Some(exec_info) =
-                    //Should the execution be scheduled here or will it be scheduled by the persistent log?
-                    self.message_log.finalize_batch(seq, completed_batch)? {
-                    let (info, batch, completed_batch) = exec_info.into();
-
-                    match info {
-                        Info::Nil => self.executor.queue_update(batch),
-                        // execute and begin local checkpoint
-                        Info::BeginCheckpoint => {
-                            self.executor.queue_update_and_get_appstate(batch)
-                        }
-                    }.unwrap();
-                }
-
-                self.consensus.next_instance(&mut self.message_log);
+                // When we can no longer finalize then
             }
         }
-
-        // we processed a consensus message,
-        // signal the consensus layer of this event
-        self.consensus.signal();
 
         //
         // debug!(
@@ -516,17 +475,54 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         Ok(OrderProtocolExecResult::Success)
     }
 
+    /// Finalize all possible consensus instances
+    fn finalize_all_possible(&mut self) -> Result<()> {
+        let view = self.synchronizer.view();
+
+        while self.consensus.can_finalize() {
+            // This will automatically move the consensus machine to the next consensus instance
+            let completed_batch = self.consensus.finalize(&view)?.unwrap();
+
+            let seq = completed_batch.sequence_number();
+
+            let mut completed_rqs = Vec::with_capacity(completed_batch.request_count());
+
+            completed_batch.pre_prepare_messages().iter().for_each(|m| {
+                if let ConsensusMessageKind::PrePrepare(rqs) = m.message().kind() {
+                    completed_rqs.extend(rqs.iter().map(|rq| ClientRqInfo::from(rq)));
+                }
+            });
+
+            self.pre_processor.send(PreProcessorMessage::DecidedBatch(completed_rqs)).unwrap();
+
+            //Should the execution be scheduled here or will it be scheduled by the persistent log?
+            if let Some(exec_info) =
+                self.message_log.finalize_batch(seq, completed_batch)? {
+                let (info, batch, completed_batch) = exec_info.into();
+
+                match info {
+                    Info::Nil => self.executor.queue_update(batch),
+                    // execute and begin local checkpoint
+                    Info::BeginCheckpoint => {
+                        self.executor.queue_update_and_get_appstate(batch)
+                    }
+                }.unwrap();
+            }
+        }
+
+        Ok(())
+    }
+
 
     /// Advance the sync phase of the algorithm
     fn adv_sync(&mut self, header: Header,
                 message: ViewChangeMessage<D::Request>) -> SyncPhaseRes {
-
         let status = self.synchronizer.process_message(
             header,
             message,
             &self.timeouts,
             &mut self.message_log,
-            &self.pending_request_log,
+            &self.pre_processor,
             &mut self.consensus,
             &*self.node,
         );
@@ -571,12 +567,9 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     type StateSerialization = PBFTConsensus<D>;
 
 
-    fn initialize_with_initial_state(config: Self::Config, executor: ExecutorHandle<D>, timeouts: Timeouts, node: Arc<NT>, initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where Self: Sized {
-        Self::initialize_protocol(config, executor, timeouts, node, Some(initial_state))
-    }
-
-    fn view(&self) -> View<Self::Serialization> {
-        self.synchronizer.view()
+    fn initialize_with_initial_state(config: Self::Config, args: OrderingProtocolArgs<D, NT>,
+                                     initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where Self: Sized {
+        Self::initialize_protocol(config, args, Some(initial_state))
     }
 
     fn install_state(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>,
@@ -593,19 +586,17 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
 
         info!("{:?} // Installing decision log with last execution {:?}", self.node.id(),last_exec);
 
-        let res = self.consensus.install_state(state.state().clone(), view_info.clone(), &dec_log)?;
+        self.synchronizer.install_view(view_info.clone());
+
+        let res = self.consensus.install_state(state.state().clone(), view_info, &dec_log)?;
 
         self.message_log.install_state(state, dec_log);
-
-        self.synchronizer.install_view(view_info);
 
         Ok(res)
     }
 
     fn install_seq_no(&mut self, seq_no: SeqNo) -> Result<()> {
-        self.consensus.install_sequence_number(seq_no);
-
-        self.message_log.install_sequence_number(seq_no);
+        self.consensus.install_sequence_number(seq_no, &self.synchronizer.view());
 
         Ok(())
     }
@@ -624,7 +615,6 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT>
           ST: StateTransferMessage + 'static,
           NT: Node<PBFT<D, ST>> + 'static {
     pub(crate) fn switch_phase(&mut self, new_phase: ConsensusPhase) {
-
         info!("{:?} // Switching from phase {:?} to phase {:?}", self.node.id(), self.phase, new_phase);
 
         let old_phase = self.phase.clone();
@@ -647,12 +637,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT>
                     //Other operations.
                     self.consensus_guard.lock_consensus();
                 }
-                (ConsensusPhase::SyncPhase, ConsensusPhase::NormalPhase) => {
-                    // When changing from the sync phase to the normal phase
-                    // The phase starts with a SYNC phase, so we don't want to allow
-                    // The proposer to propose anything
-                    self.consensus_guard.lock_consensus();
-                }
+                (ConsensusPhase::SyncPhase, ConsensusPhase::NormalPhase) => {}
                 (_, _) => {}
             }
 

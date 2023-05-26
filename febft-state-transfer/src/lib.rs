@@ -30,7 +30,7 @@ use febft_messages::messages::{StateTransfer, SystemMessage};
 use febft_messages::ordering_protocol::{OrderingProtocol, View};
 use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage, NetworkView};
 use febft_messages::state_transfer::{Checkpoint, CstM, DecLog, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
-use febft_messages::timeouts::Timeouts;
+use febft_messages::timeouts::{RqTimeout, TimeoutKind, Timeouts};
 use crate::config::StateTransferConfig;
 
 use crate::message::{CstMessage, CstMessageKind};
@@ -350,6 +350,8 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
             }
             CstStatus::SeqNo(seq) => {
                 if order_protocol.sequence_number() < seq {
+                    debug!("{:?} // Installing sequence number and requesting state {:?}", self.node.id(), seq);
+
                     // this step will allow us to ignore any messages
                     // for older consensus instances we may have had stored;
                     //
@@ -363,6 +365,7 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
                         order_protocol,
                     );
                 } else {
+                    debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), order_protocol.sequence_number(), seq);
                     return Ok(STResult::CstNotNeeded);
                 }
             }
@@ -402,12 +405,16 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
         Ok(())
     }
 
-    fn handle_timeout(&mut self, order_protocol: &mut OP, timeout: Vec<SeqNo>) -> Result<STTimeoutResult>
+    fn handle_timeout(&mut self, order_protocol: &mut OP, timeout: Vec<RqTimeout>) -> Result<STTimeoutResult>
         where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> {
+
         for cst_seq in timeout {
-            if self.cst_request_timed_out(cst_seq, order_protocol) {
-                return Ok(STTimeoutResult::RunCst);
+            if let TimeoutKind::Cst(cst_seq) = cst_seq.timeout_kind() {
+                if self.cst_request_timed_out(cst_seq.clone(), order_protocol) {
+                    return Ok(STTimeoutResult::RunCst);
+                }
             }
+
         }
 
         Ok(STTimeoutResult::CstNotNeeded)
@@ -837,7 +844,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
         let cst_seq = self.curr_seq();
         let current_view = order_protocol.view();
 
-        debug!("{:?} // Requesting latest consensus seq no with seq {:?}", self.node.id(), cst_seq);
+        info!("{:?} // Requesting latest consensus seq no with seq {:?}", self.node.id(), cst_seq);
 
         self.timeouts.timeout_cst_request(self.curr_timeout,
                                           current_view.quorum() as u32,
@@ -868,6 +875,8 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
 
         let cst_seq = self.curr_seq();
         let current_view = order_protocol.view();
+
+        info!("{:?} // Requesting latest state with cst msg seq {:?}", self.node.id(), cst_seq);
 
         self.timeouts.timeout_cst_request(self.curr_timeout,
                                           current_view.quorum() as u32,

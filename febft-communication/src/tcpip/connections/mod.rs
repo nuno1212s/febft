@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::time::Instant;
 
 use dashmap::DashMap;
 use intmap::IntMap;
@@ -26,7 +27,7 @@ mod conn_establish;
 
 pub type Callback = Option<Box<dyn FnOnce(bool) -> () + Send>>;
 
-pub type SerializedMessage = (WireMessage, Callback);
+pub type NetworkSerializedMessage = (WireMessage, Callback, Instant, bool, Instant);
 
 /// How many slots the outgoing queue has for messages.
 const TX_CONNECTION_QUEUE: usize = 1024;
@@ -48,7 +49,7 @@ impl ConnCounts {
     }
 
     /// How many connections should we maintain with a given node
-    fn get_connections_to_node(&self, my_id: NodeId, other_id: NodeId, first_cli: NodeId) -> usize {
+    pub(crate) fn get_connections_to_node(&self, my_id: NodeId, other_id: NodeId, first_cli: NodeId) -> usize {
         if my_id < first_cli && other_id < first_cli {
             self.replica_connections
         } else {
@@ -67,14 +68,14 @@ pub struct PeerConnection<M: Serializable + 'static> {
     //A handle to the request buffer of the peer we are connected to in the client pooling module
     client: Arc<ConnectedPeer<NetworkMessage<M>>>,
     //The channel used to send serialized messages to the tasks that are meant to handle them
-    tx: ChannelMixedTx<SerializedMessage>,
+    tx: ChannelMixedTx<NetworkSerializedMessage>,
     // The RX handle corresponding to the tx channel above. This is so we can quickly associate new
-// TX connections to a given connection, as we just have to clone this handle
-    rx: ChannelMixedRx<SerializedMessage>,
+    // TX connections to a given connection, as we just have to clone this handle
+    rx: ChannelMixedRx<NetworkSerializedMessage>,
     // Counter to assign unique IDs to each of the underlying Tcp streams
     conn_id_generator: AtomicU32,
     // A map to manage the currently active connections and a cached size value to prevent
-// concurrency for simple length checks
+    // concurrency for simple length checks
     active_connection_count: AtomicUsize,
     active_connections: Mutex<BTreeMap<u32, ConnHandle>>,
 }
@@ -83,13 +84,28 @@ pub struct PeerConnection<M: Serializable + 'static> {
 pub struct ConnHandle {
     id: u32,
     my_id: NodeId,
-    cancelled: Arc<AtomicBool>,
+    peer_id: NodeId,
+    pub(crate) cancelled: Arc<AtomicBool>,
 }
 
 impl ConnHandle {
+    pub fn new(id: u32, my_id: NodeId, peer_id: NodeId) -> Self {
+        Self {
+            id,
+            my_id,
+            peer_id,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     #[inline]
     pub fn id(&self) -> u32 {
         self.id
+    }
+
+    #[inline]
+    pub fn my_id(&self) -> NodeId {
+        self.my_id
     }
 
     #[inline]
@@ -115,12 +131,12 @@ impl<M> PeerConnection<M> where M: Serializable {
     }
 
     /// Send a message through this connection. Only valid for peer connections
-    pub(crate) fn peer_message(&self, msg: WireMessage, callback: Callback) -> Result<()> {
+    pub(crate) fn peer_message(&self, msg: WireMessage, callback: Callback, should_flush: bool, send_rq_time: Instant) -> Result<()> {
 
         let from = msg.header().from();
         let to = msg.header().to();
 
-        if let Err(_) = self.tx.send((msg, callback)) {
+        if let Err(_) = self.tx.send((msg, callback, Instant::now(), should_flush, send_rq_time)) {
             error!("{:?} // Failed to send peer message to {:?}", from,
                 to);
 
@@ -130,10 +146,10 @@ impl<M> PeerConnection<M> where M: Serializable {
         Ok(())
     }
 
-    async fn peer_msg_return_async(&self, msg: WireMessage, callback: Callback) -> Result<()> {
+    async fn peer_msg_return_async(&self,to_send: NetworkSerializedMessage) -> Result<()> {
         let send = self.tx.clone();
 
-        if let Err(_) = send.send_async((msg, callback)).await {
+        if let Err(_) = send.send_async(to_send).await {
             return Err(Error::simple(ErrorKind::Communication));
         }
 
@@ -147,6 +163,7 @@ impl<M> PeerConnection<M> where M: Serializable {
         ConnHandle {
             id: conn_id,
             my_id: self.node_connections.id(),
+            peer_id: self.peer_node_id,
             cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -241,7 +258,7 @@ impl<M> PeerConnection<M> where M: Serializable {
     }
 
     /// Get the handle to the receiver for transmission
-    fn to_send_handle(&self) -> &ChannelMixedRx<SerializedMessage> {
+    fn to_send_handle(&self) -> &ChannelMixedRx<NetworkSerializedMessage> {
         &self.rx
     }
 }
@@ -277,6 +294,7 @@ impl<M: Serializable + 'static> NodeConnections for PeerConnections<M> {
         nodes
     }
 
+    /// Connect to a given node
     fn connect_to_node(self: &Arc<Self>, node: NodeId) -> Vec<OneShotRx<Result<()>>> {
         let option = self.address_management.get(node.0 as u64);
 
@@ -303,6 +321,7 @@ impl<M: Serializable + 'static> NodeConnections for PeerConnections<M> {
         }
     }
 
+    /// Disconnected from a given node
     async fn disconnect_from_node(&self, node: &NodeId) -> Result<()> {
         if let Some((id, conn)) = self.connection_map.remove(node) {
             todo!();

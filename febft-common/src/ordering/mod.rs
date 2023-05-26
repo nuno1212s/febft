@@ -6,6 +6,7 @@ use std::cmp::{
     Ordering,
 };
 use std::collections::VecDeque;
+use std::ops::{Add, AddAssign};
 use std::sync::atomic::AtomicI32;
 
 use either::{
@@ -18,7 +19,7 @@ use log::{error, warn};
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
-pub const PERIOD: u32 = 1000;
+pub const PERIOD: u32 = 100000;
 
 /// Represents a sequence number attributed to a client request
 /// during a `Consensus` instance.
@@ -76,13 +77,12 @@ impl PartialOrd for SeqNo {
         Some(match self.index(*other) {
             Right(0) => Ordering::Equal,
             Left(InvalidSeqNo::Small) => Ordering::Less,
-             _ => Ordering::Greater,
+            _ => Ordering::Greater,
         })
     }
 }
 
 impl ThreadSafeSeqNo {
-
     pub const ZERO: Self = ThreadSafeSeqNo(AtomicI32::new(0));
 
     /// Increments the SeqNo
@@ -94,12 +94,13 @@ impl ThreadSafeSeqNo {
     pub fn to_seq_no(&self) -> SeqNo {
         SeqNo(self.0.load(std::sync::atomic::Ordering::Relaxed))
     }
-
 }
 
 impl SeqNo {
     /// Represents the first available sequence number.
     pub const ZERO: Self = SeqNo(0);
+    pub const ONE: Self = SeqNo(1);
+
 
     /// Returns the following sequence number.
     #[inline]
@@ -108,7 +109,10 @@ impl SeqNo {
         SeqNo(if overflow { 0 } else { next })
     }
 
-    /// Return an appropriate value to index the `TboQueue`.
+    /// Returns the difference between two sequence numbers.
+    /// Returns an index that is to the right or to the left of self, as if they were both placed
+    /// on a straight line.
+    /// Takes into account how far ahead the messages are and if they are too far ahead, we will ignore them
     #[inline]
     pub fn index(self, other: SeqNo) -> Either<InvalidSeqNo, usize> {
         // TODO: add config param for these consts
@@ -118,14 +122,16 @@ impl SeqNo {
 
         let index = {
             let index = (self.0).wrapping_sub(other.0);
-            if index < OVERFLOW_THRES_NEG || index > OVERFLOW_THRES_POS {
+            //TODO: Figure this out correctly
+            /*if index < OVERFLOW_THRES_NEG || index > OVERFLOW_THRES_POS {
                 // guard against overflows
                 i32::MAX
                     .wrapping_add(index)
                     .wrapping_add(1)
             } else {
                 index
-            }
+            }*/
+            index
         };
 
         if index < 0 || index > DROP_SEQNO_THRES {
@@ -173,7 +179,7 @@ pub fn tbo_queue_message<M: Orderable>(
             // we can try running the state transfer protocol
             warn!("Message is behind our current sequence no {:?}", curr_seq, );
             return;
-        },
+        }
     };
 
     if index >= tbo.len() {
@@ -194,13 +200,33 @@ pub fn tbo_advance_message_queue<M>(
             // recycle memory
             vec.clear();
             tbo.push_back(vec);
-        },
+        }
         None => (),
     }
+}
+
+pub fn tbo_advance_message_queue_return<M>(
+    tbo: &mut VecDeque<VecDeque<M>>
+) -> Option<VecDeque<M>> {
+    tbo.pop_front()
 }
 
 /// Represents any value that can be oredered.
 pub trait Orderable {
     /// Returns the sequence number of this value.
     fn sequence_number(&self) -> SeqNo;
+}
+
+impl Add for SeqNo {
+    type Output = SeqNo;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        SeqNo(self.0 + rhs.0)
+    }
+}
+
+impl AddAssign for SeqNo {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 = self.0 + rhs.0;
+    }
 }

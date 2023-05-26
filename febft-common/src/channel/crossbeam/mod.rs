@@ -28,11 +28,10 @@ impl<T> Clone for ChannelSyncRx<T> {
 }
 
 impl<T> ChannelSyncTx<T> {
-
     #[inline]
     pub fn send(&self, value: T) -> Result<(), SendError<T>> {
         match self.inner.send(value) {
-            Ok(_) => {Ok(())}
+            Ok(_) => { Ok(()) }
             Err(err) => {
                 Err(SendError(err.into_inner()))
             }
@@ -57,10 +56,28 @@ impl<T> ChannelSyncTx<T> {
             }
         }
     }
+
+    #[inline]
+    pub fn try_send(&self, value: T) -> Result<(), TrySendError<T>> {
+        match self.inner.try_send(value) {
+            Ok(_) => {
+                Ok(())
+            }
+            Err(err) => {
+                match err {
+                    crossbeam_channel::TrySendError::Full(value) => {
+                        Err(TrySendError::Full(value))
+                    }
+                    crossbeam_channel::TrySendError::Disconnected(value) => {
+                        Err(TrySendError::Disconnected(value))
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl<T> ChannelSyncRx<T> {
-
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         match self.inner.try_recv() {

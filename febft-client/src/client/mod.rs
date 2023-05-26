@@ -21,13 +21,15 @@ use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::config::NodeConfig;
 use febft_communication::message::{NetworkMessage, NetworkMessageKind, System};
-use febft_communication::{Node, NodeConnections};
+use febft_communication::{Node, NodeConnections, NodeIncomingRqHandler};
 use febft_execution::serialize::SharedData;
 use febft_execution::system_params::SystemParams;
 use febft_messages::messages::{ReplyMessage, SystemMessage};
 use febft_messages::serialize::{ClientMessage, ClientServiceMsg, OrderingProtocolMessage, ServiceMessage, ServiceMsg, StateTransferMessage};
 use febft_metrics::benchmarks::ClientPerf;
 use febft_metrics::{measure_ready_rq_time, measure_response_deliver_time, measure_response_rcv_time, measure_sent_rq_info, measure_target_init_time, measure_time_rq_init, start_measurement};
+use febft_metrics::metrics::{metric_duration, metric_increment};
+use crate::metric::{CLIENT_RQ_DELIVER_RESPONSE_ID, CLIENT_RQ_LATENCY_ID, CLIENT_RQ_PER_SECOND_ID, CLIENT_RQ_RECV_PER_SECOND_ID, CLIENT_RQ_RECV_TIME_ID, CLIENT_RQ_SEND_TIME_ID, CLIENT_RQ_TIMEOUT_ID};
 
 use self::unordered_client::{FollowerData, UnorderedClientMode};
 
@@ -45,10 +47,12 @@ macro_rules! certain {
 }
 
 struct SentRequestInfo {
+    // The time at which this request was sent
+    sent_time: Instant,
     //The amount of replicas/followers we sent the request to
     target_count: usize,
     //The amount of responses that we need to deliver the received response to the application
-    //Delivers the response to the client when we have # of equal received responses == responses_needed
+    //Delivers the response to the client when we have # of equal received responses >= responses_needed
     responses_needed: usize,
 }
 
@@ -93,8 +97,8 @@ pub struct ClientData<D>
     //Follower data
     follower_data: FollowerData,
 
-    //Information about the requests that were sent like to how many replicas were
-    //they sent, how many responses they need, etc
+    //Information about the requests that were sent like to how many replicas
+    //they sent to, how many responses they need, etc
     request_info: Vec<Mutex<IntMap<SentRequestInfo>>>,
 
     //The ready items for requests made by this client. This is what is going to be used by the message receive task
@@ -158,7 +162,7 @@ impl<D: SharedData, NT> Clone for Client<D, NT> {
     }
 }
 
-struct ClientRequestFut<'a, P> {
+pub(super) struct ClientRequestFut<'a, P> {
     request_key: u64,
     ready: &'a Mutex<IntMap<ClientAwaker<P>>>,
 }
@@ -228,6 +232,7 @@ pub struct ClientConfig<D: SharedData + 'static, NT: Node<ClientServiceMsg<D>>> 
 
 ///Keeps track of the replica (or follower, depending on the request mode) votes for a given request
 pub struct ReplicaVotes {
+    sent_time: Instant,
     //How many nodes did we contact in total with this request, so we can keep track if they have all responded
     contacted_nodes: usize,
     //How many votes do we need to provide a response?
@@ -237,6 +242,8 @@ pub struct ReplicaVotes {
     //The different digests we have received and how many times we have seen them
     digests: BTreeMap<Digest, usize>,
 }
+
+pub type RequestCallback<D: SharedData> = Box<dyn FnOnce(Result<D::Reply>) + Send>;
 
 impl<D, NT> Client<D, NT>
     where
@@ -339,19 +346,25 @@ impl<D, NT> Client<D, NT>
         self.node.id()
     }
 
-    /// Updates the replicated state of the application running
-    /// on top of `febft`.
-    //
-    pub async fn update<T>(&mut self, operation: D::Request) -> Result<D::Reply>
+    #[inline]
+    pub fn session_id(&self) -> SeqNo {
+        self.session_id
+    }
+
+    pub(super) fn client_data(&self) -> &Arc<ClientData<D>> {
+        &self.data
+    }
+
+    pub(super) fn update_inner<T>(&mut self, operation: D::Request) -> Result<ClientRequestFut<D::Reply>>
         where
             T: ClientType<D, NT>,
-            NT: Node<ClientServiceMsg<D>>
-    {
+            NT: Node<ClientServiceMsg<D>> {
+        let start = Instant::now();
+
         let session_id = self.session_id;
         let operation_id = self.next_operation_id();
 
         let request_key = get_request_key(session_id, operation_id);
-
 
         let message = T::init_request(session_id, operation_id, operation);
 
@@ -360,11 +373,13 @@ impl<D, NT> Client<D, NT>
         //get the targets that we are supposed to broadcast the message to
         let (targets, target_count) = T::init_targets(&self);
 
+        let sent_info = SentRequestInfo {
+            sent_time: Instant::now(),
+            target_count,
+            responses_needed: T::needed_responses(self),
+        };
+
         {
-            let sent_info = SentRequestInfo {
-                target_count: target_count,
-                responses_needed: T::needed_responses(self),
-            };
 
             let mut request_info_guard = request_info.lock().unwrap();
 
@@ -390,8 +405,69 @@ impl<D, NT> Client<D, NT>
             self.data.clone(),
         );
 
-        ClientRequestFut { request_key, ready }.await
+        metric_duration(CLIENT_RQ_SEND_TIME_ID, start.elapsed());
+        metric_increment(CLIENT_RQ_PER_SECOND_ID, Some(1));
+
+        Ok(ClientRequestFut { request_key, ready })
     }
+
+    /// Updates the replicated state of the application running
+    /// on top of `atlas`.
+    pub async fn update<T>(&mut self, operation: D::Request) -> Result<D::Reply>
+        where
+            T: ClientType<D, NT>,
+            NT: Node<ClientServiceMsg<D>>
+    {
+        self.update_inner::<T>(operation)?.await
+    }
+
+    pub(super) fn update_callback_inner<T>(&mut self, operation: D::Request) -> u64 where
+        T: ClientType<D, NT>,
+        NT: Node<ClientServiceMsg<D>> {
+        let start = Instant::now();
+
+        let session_id = self.session_id;
+
+        let operation_id = self.next_operation_id();
+
+        let message = T::init_request(session_id, operation_id, operation);
+
+        // await response
+        let request_key = get_request_key(session_id, operation_id);
+
+        //We only send the message after storing the callback to prevent us receiving the result without having
+        //The callback registered, therefore losing the response
+        let (targets, target_count) = T::init_targets(&self);
+
+        let request_info = get_request_info(session_id, &*self.data);
+
+        let sent_info = SentRequestInfo {
+            sent_time: Instant::now(),
+            target_count,
+            responses_needed: T::needed_responses(self),
+        };
+
+        {
+            let mut request_info_guard = request_info.lock().unwrap();
+
+            request_info_guard.insert(request_key, sent_info);
+        }
+
+        self.node.broadcast(NetworkMessageKind::from(message), targets);
+
+        Self::start_timeout(
+            self.node.clone(),
+            session_id,
+            operation_id,
+            self.data.clone(),
+        );
+
+        metric_duration(CLIENT_RQ_SEND_TIME_ID, start.elapsed());
+        metric_increment(CLIENT_RQ_PER_SECOND_ID, Some(1));
+
+        request_key
+    }
+
 
     ///Update the SMR state with the given operation
     /// The callback should be a function to execute when we receive the response to the request.
@@ -403,78 +479,14 @@ impl<D, NT> Client<D, NT>
     pub fn update_callback<T>(
         &mut self,
         operation: D::Request,
-        callback: Box<dyn FnOnce(Result<D::Reply>) + Send>,
+        callback: RequestCallback<D>,
     ) where
         T: ClientType<D, NT>,
         NT: Node<ClientServiceMsg<D>>
     {
-        let session_id = self.session_id;
+        let rq_key = self.update_callback_inner::<T>(operation);
 
-        let operation_id = self.next_operation_id();
-
-        start_measurement!(init_rq);
-
-        let message = T::init_request(session_id, operation_id, operation);
-
-        measure_time_rq_init!(&self.data.stats, init_rq);
-
-
-        start_measurement!(target_init);
-
-
-        // await response
-        let request_key = get_request_key(session_id, operation_id);
-
-        //We only send the message after storing the callback to prevent us receiving the result without having
-        //The callback registered, therefore losing the response
-        let (targets, target_count) = T::init_targets(&self);
-
-        measure_target_init_time!(&self.data.stats, target_init);
-
-        start_measurement!(rq_info_init);
-
-        let request_info = get_request_info(session_id, &*self.data);
-
-        {
-            let sent_info = SentRequestInfo {
-                target_count,
-                responses_needed: T::needed_responses(self),
-            };
-
-            let mut request_info_guard = request_info.lock().unwrap();
-
-            request_info_guard.insert(request_key, sent_info);
-        }
-
-        measure_sent_rq_info!(&self.data.stats, rq_info_init);
-
-
-        start_measurement!(rq_ready_init);
-
-        let ready = get_ready::<D>(session_id, &*self.data);
-
-        let callback = Callback {
-            to_call: callback,
-            timed_out: AtomicBool::new(false),
-        };
-
-        //Scope the mutex operations to reduce the lifetime of the guard
-        {
-            let mut ready_callback_guard = ready.lock().unwrap();
-
-            ready_callback_guard.insert(request_key, ClientAwaker::Callback(callback));
-        }
-
-        measure_ready_rq_time!(&self.data.stats, rq_ready_init);
-
-        self.node.broadcast(NetworkMessageKind::from(message), targets);
-
-        Self::start_timeout(
-            self.node.clone(),
-            session_id,
-            operation_id,
-            self.data.clone(),
-        );
+        register_callback(self.session_id, rq_key, &*self.data, callback);
     }
 
     fn next_operation_id(&mut self) -> SeqNo {
@@ -497,7 +509,7 @@ impl<D, NT> Client<D, NT>
 
         async_runtime::spawn(async move {
             //Timeout delay
-            Delay::new(Duration::from_secs(5)).await;
+            Delay::new(Duration::from_secs(1)).await;
 
             let req_key = get_request_key(session_id, rq_id);
 
@@ -540,6 +552,8 @@ impl<D, NT> Client<D, NT>
                         bucket.remove(&req_key);
                     }*/
                 }
+
+                metric_increment(CLIENT_RQ_TIMEOUT_ID, Some(1));
             }
         });
     }
@@ -558,6 +572,7 @@ impl<D, NT> Client<D, NT>
             //If we have information about the request in question,
             //Utilize it
             ReplicaVotes {
+                sent_time: rq_info.sent_time,
                 contacted_nodes: rq_info.target_count,
                 needed_votes_count: rq_info.responses_needed,
                 voted: Default::default(),
@@ -566,6 +581,7 @@ impl<D, NT> Client<D, NT>
         } else {
             //If there is no stored information, take the safe road and require f + 1 votes
             ReplicaVotes {
+                sent_time: Instant::now(),
                 contacted_nodes: params.n(),
                 needed_votes_count: params.f() + 1,
                 voted: Default::default(),
@@ -578,9 +594,12 @@ impl<D, NT> Client<D, NT>
     fn deliver_response(
         node_id: NodeId,
         request_key: u64,
+        vote: ReplicaVotes,
         ready: &Mutex<IntMap<ClientAwaker<D::Reply>>>,
         message: ReplyMessage<D::Reply>,
     ) {
+        let start = Instant::now();
+
         let mut ready_lock = ready.lock().unwrap();
 
         let request = ready_lock.get_mut(request_key);
@@ -638,6 +657,10 @@ impl<D, NT> Client<D, NT>
         } else {
             error!("Failed to get awaker for request {:?}", request_key)
         }
+
+        metric_duration(CLIENT_RQ_DELIVER_RESPONSE_ID, start.elapsed());
+        metric_duration(CLIENT_RQ_LATENCY_ID, vote.sent_time.elapsed());
+        metric_increment(CLIENT_RQ_RECV_PER_SECOND_ID, Some(1));
     }
 
     ///Deliver an error response
@@ -714,8 +737,10 @@ impl<D, NT> Client<D, NT>
         let mut replica_votes: IntMap<ReplicaVotes> = IntMap::new();
 
         //TODO: Maybe change this to make clients use the same timeouts service?
-        while let Ok(message) = node.receive_from_replicas_no_timeout() {
-            let NetworkMessage { header, message } = message;
+        while let Ok(message) = node.node_incoming_rq_handling().receive_from_replicas(None) {
+            let start = Instant::now();
+
+            let NetworkMessage { header, message } = message.unwrap();
 
             let sys_msg = message.into();
 
@@ -724,8 +749,6 @@ impl<D, NT> Client<D, NT>
                 | SystemMessage::UnorderedReply(msg_info) => {
                     let session_id = msg_info.session_id();
                     let operation_id = msg_info.sequence_number();
-
-                    start_measurement!(start_time);
 
                     //Check if we have already executed the operation
                     let last_operation_id = last_operation_ids
@@ -771,14 +794,11 @@ impl<D, NT> Client<D, NT>
                         1
                     };
 
-                    measure_response_rcv_time!(&data.stats, start_time);
-
                     // wait for the amount of votes that we require identical replies
                     // In a BFT system, this is by default f+1
                     if count >= votes.needed_votes_count {
-                        start_measurement!(start_time);
 
-                        replica_votes.remove(request_key);
+                        let votes = replica_votes.remove(request_key).unwrap();
 
                         last_operation_ids.insert(session_id.into(), operation_id);
 
@@ -789,6 +809,7 @@ impl<D, NT> Client<D, NT>
                         Self::deliver_response(
                             node.id(),
                             request_key,
+                            votes,
                             ready,
                             match sys_msg {
                                 SystemMessage::OrderedReply(message)
@@ -797,7 +818,6 @@ impl<D, NT> Client<D, NT>
                             },
                         );
 
-                        measure_response_deliver_time!(&data.stats, start_time);
                     } else {
                         //If we do not have f+1 replies yet, check if it's still possible to get those
                         //Replies by taking a look at the target count and currently received replies count
@@ -825,6 +845,8 @@ impl<D, NT> Client<D, NT>
                         }
                     }
 
+                    metric_duration(CLIENT_RQ_RECV_TIME_ID, start.elapsed());
+
                     continue;
                 }
                 _ => {}
@@ -846,6 +868,26 @@ fn get_correct_vec_for<T>(session_id: SeqNo, vec: &Vec<Mutex<T>>) -> &Mutex<T> {
     let index = session_id % vec.len();
 
     &vec[index]
+}
+
+#[inline]
+pub(super) fn register_callback<D: SharedData>(session_id: SeqNo,
+                                               request_key: u64,
+                                               data: &ClientData<D>,
+                                               callback: RequestCallback<D>) {
+    let ready = get_ready::<D>(session_id, &*data);
+
+    let callback = Callback {
+        to_call: callback,
+        timed_out: AtomicBool::new(false),
+    };
+
+    //Scope the mutex operations to reduce the lifetime of the guard
+    {
+        let mut ready_callback_guard = ready.lock().unwrap();
+
+        ready_callback_guard.insert(request_key, ClientAwaker::Callback(callback));
+    }
 }
 
 #[inline]

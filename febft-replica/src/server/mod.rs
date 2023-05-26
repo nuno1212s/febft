@@ -1,7 +1,7 @@
-//! Contains the server side core protocol logic of `febft`.
+ //! Contains the server side core protocol logic of `febft`.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use futures_timer::Delay;
 
 use log::{debug, error, info, trace};
@@ -13,21 +13,25 @@ use febft_common::error::*;
 use febft_common::globals::ReadOnly;
 use febft_common::node_id::NodeId;
 use febft_common::ordering::{SeqNo};
-use febft_communication::{Node, NodeConnections};
+use febft_communication::{Node, NodeConnections, NodeIncomingRqHandler};
 use febft_communication::message::{StoredMessage};
-use febft_execution::app::{Service, State};
+use febft_execution::app::{Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::digest_state;
 use febft_messages::messages::Message;
 use febft_messages::messages::SystemMessage;
-use febft_messages::ordering_protocol::OrderingProtocol;
+use febft_messages::ordering_protocol::{OrderingProtocol, OrderingProtocolArgs};
 use febft_messages::ordering_protocol::OrderProtocolExecResult;
 use febft_messages::ordering_protocol::OrderProtocolPoll;
+use febft_messages::request_pre_processing::{initialize_request_pre_processor, PreProcessorMessage, RequestPreProcessor};
+use febft_messages::request_pre_processing::work_dividers::WDRoundRobin;
 use febft_messages::serialize::ServiceMsg;
 use febft_messages::state_transfer::{Checkpoint, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
-use febft_messages::timeouts::{Timeout, TimeoutKind, Timeouts};
+use febft_messages::timeouts::{TimedOut, Timeout, TimeoutKind, Timeouts};
+use febft_metrics::metrics::{metric_duration, metric_store_count};
 use crate::config::ReplicaConfig;
 use crate::executable::{Executor, ReplicaReplier};
+use crate::metric::{ORDERING_PROTOCOL_POLL_TIME_ID, ORDERING_PROTOCOL_PROCESS_TIME_ID, REPLICA_RQ_QUEUE_SIZE_ID, RUN_LATENCY_TIME_ID, STATE_TRANSFER_PROCESS_TIME_ID, TIMEOUT_PROCESS_TIME_ID};
 use crate::server::client_replier::Replier;
 
 //pub mod observer;
@@ -52,13 +56,14 @@ pub struct Replica<S, OP, ST, NT> where S: Service {
     // The ordering protocol
     ordering_protocol: OP,
     state_transfer_protocol: ST,
+    rq_pre_processor: RequestPreProcessor<Request<S>>,
     timeouts: Timeouts,
     executor_handle: ExecutorHandle<S::Data>,
     // The networking layer for a Node in the network (either Client or Replica)
     node: Arc<NT>,
     // THe handle to the execution and timeouts handler
     execution_rx: ChannelSyncRx<Message<S::Data>>,
-    execution_tx: ChannelSyncTx<Message<S::Data>>
+    execution_tx: ChannelSyncTx<Message<S::Data>>,
 }
 
 impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
@@ -90,17 +95,28 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
         debug!("{:?} // Initializing timeouts", log_node_id);
 
+        let (rq_pre_processor, batch_input) = initialize_request_pre_processor
+            ::<WDRoundRobin, S::Data, OP::Serialization, ST::Serialization, NT>(4, node.clone());
+
+        let default_timeout = Duration::from_secs(3);
+
         // start timeouts handler
-        let timeouts = Timeouts::new::<S::Data>(log_node_id.clone(), 500, exec_tx.clone());
+        let timeouts = Timeouts::new::<S::Data>(log_node_id.clone(), Duration::from_millis(50),
+                                                default_timeout,
+                                                exec_tx.clone());
 
         //Calculate the initial state of the application so we can pass it to the ordering protocol
         let init_ex_state = S::initial_state()?;
-        let digest = febft_execution::serialize::digest_state::<S::Data>(&init_ex_state)?;
+        let digest = digest_state::<S::Data>(&init_ex_state)?;
 
         let initial_state = Checkpoint::new(SeqNo::ZERO, init_ex_state, digest);
 
+        let op_args = OrderingProtocolArgs(executor.clone(), timeouts.clone(),
+                                           rq_pre_processor.clone(),
+                                           batch_input, node.clone());
+
         // Initialize the ordering protocol
-        let ordering_protocol = OP::initialize_with_initial_state(op_config, executor.clone(), timeouts.clone(), node.clone(), initial_state)?;
+        let ordering_protocol = OP::initialize_with_initial_state(op_config, op_args, initial_state)?;
 
         let state_transfer_protocol = ST::initialize(st_config, timeouts.clone(), node.clone())?;
 
@@ -133,28 +149,24 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             connections.push((node_id, connection_results));
         }
 
-        ///FIXME: Protect against a slow loris attack by only requiring connections to a quorum of nodes
-        /// and not wait with a for loop like this where we can spend a long time waiting for each connection
-        rt::spawn(async move {
-            'outer: for (peer_id, conn_result) in connections {
-                for conn in conn_result {
-                    match conn.await {
-                        Ok(result) => {
-                            if let Err(err) = result {
-                                error!("{:?} // Failed to connect to {:?} for {:?}", log_node_id, peer_id, err);
-                                continue 'outer;
-                            }
-                        }
-                        Err(error) => {
-                            error!("Failed to connect to the given node. {:?}", error);
+        'outer: for (peer_id, conn_result) in connections {
+            for conn in conn_result {
+                match conn.await {
+                    Ok(result) => {
+                        if let Err(err) = result {
+                            error!("{:?} // Failed to connect to {:?} for {:?}", log_node_id, peer_id, err);
                             continue 'outer;
                         }
                     }
+                    Err(error) => {
+                        error!("Failed to connect to the given node. {:?}", error);
+                        continue 'outer;
+                    }
                 }
-
-                info!("{:?} // Established a new connection to node {:?}.", log_node_id, peer_id);
             }
-        });
+
+            info!("{:?} // Established a new connection to node {:?}.", log_node_id, peer_id);
+        }
 
         info!("{:?} // Connected to all other replicas.", log_node_id);
 
@@ -165,6 +177,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             replica_phase: ReplicaPhase::StateTransferProtocol,
             ordering_protocol,
             state_transfer_protocol,
+            rq_pre_processor,
             timeouts,
             executor_handle: executor,
             node,
@@ -180,6 +193,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
     }
 
     pub fn run(&mut self) -> Result<()> {
+        let mut last_loop = Instant::now();
+
         loop {
             self.receive_internal()?;
 
@@ -194,7 +209,11 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                             //Continue
                         }
                         OrderProtocolPoll::ReceiveFromReplicas => {
-                            let network_message = self.node.receive_from_replicas(Some(REPLICA_WAIT_TIME)).unwrap();
+                            let start = Instant::now();
+
+                            let network_message = self.node.node_incoming_rq_handling().receive_from_replicas(Some(REPLICA_WAIT_TIME)).unwrap();
+
+                            metric_store_count(REPLICA_RQ_QUEUE_SIZE_ID, self.node.node_incoming_rq_handling().rqs_len_from_replicas());
 
                             if let Some(network_message) = network_message {
                                 let (header, message) = network_message.into_inner();
@@ -203,6 +222,9 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
                                 match message {
                                     SystemMessage::ProtocolMessage(protocol) => {
+
+                                        let start = Instant::now();
+
                                         match self.ordering_protocol.process_message(StoredMessage::new(header, protocol))? {
                                             OrderProtocolExecResult::Success => {
                                                 //Continue execution
@@ -211,15 +233,19 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                                 self.run_state_transfer_protocol()?;
                                             }
                                         }
+
                                     }
                                     SystemMessage::StateTransferMessage(state_transfer) => {
                                         self.state_transfer_protocol.handle_off_ctx_message(&mut self.ordering_protocol,
                                                                                             StoredMessage::new(header, state_transfer)).unwrap();
                                     }
                                     SystemMessage::ForwardedRequestMessage(fwd_reqs) => {
-                                        self.ordering_protocol.handle_forwarded_requests(StoredMessage::new(header, fwd_reqs))?;
+                                        // Send the forwarded requests to be handled, filtered and then passed onto the ordering protocol
+                                        self.rq_pre_processor.send(PreProcessorMessage::ForwardedRequests(StoredMessage::new(header, fwd_reqs))).unwrap();
                                     }
                                     SystemMessage::ForwardedProtocolMessage(fwd_protocol) => {
+                                        let start = Instant::now();
+
                                         match self.ordering_protocol.process_message(fwd_protocol.into_inner())? {
                                             OrderProtocolExecResult::Success => {
                                                 //Continue execution
@@ -228,6 +254,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                                 self.run_state_transfer_protocol()?;
                                             }
                                         }
+
+                                        metric_duration(ORDERING_PROTOCOL_PROCESS_TIME_ID, start.elapsed());
                                     }
                                     _ => {
                                         error!("{:?} // Received unsupported message {:?}", self.node.id(), message);
@@ -237,6 +265,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                 // Receive timeouts in the beginning of the next iteration
                                 continue;
                             }
+
+                            metric_duration(ORDERING_PROTOCOL_PROCESS_TIME_ID, start.elapsed());
                         }
                         OrderProtocolPoll::Exec(message) => {
                             match self.ordering_protocol.process_message(message)? {
@@ -254,7 +284,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                     }
                 }
                 ReplicaPhase::StateTransferProtocol => {
-                    let message = self.node.receive_from_replicas(Some(REPLICA_WAIT_TIME)).unwrap();
+                    let message = self.node.node_incoming_rq_handling().receive_from_replicas(Some(REPLICA_WAIT_TIME)).unwrap();
 
                     if let Some(message) = message {
                         let (header, message) = message.into_inner();
@@ -266,6 +296,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                 self.ordering_protocol.handle_off_ctx_message(StoredMessage::new(header, protocol));
                             }
                             SystemMessage::StateTransferMessage(state_transfer) => {
+                                let start = Instant::now();
+
                                 let result = self.state_transfer_protocol.process_message(&mut self.ordering_protocol, StoredMessage::new(header, state_transfer))?;
 
                                 match result {
@@ -284,15 +316,18 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                         self.run_state_transfer_protocol()?;
                                     }
                                 }
+
+                                metric_duration(STATE_TRANSFER_PROCESS_TIME_ID, start.elapsed());
                             }
                             _ => {}
                         }
-                    } else {
-                        // Receive timeouts
-                        continue;
                     }
                 }
             }
+
+            metric_duration(RUN_LATENCY_TIME_ID, last_loop.elapsed());
+
+            last_loop = Instant::now();
         }
 
         Ok(())
@@ -318,23 +353,26 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
         Ok(())
     }
 
-    fn timeout_received(&mut self, timeouts: Timeout) -> Result<()> {
+    fn timeout_received(&mut self, timeouts: TimedOut) -> Result<()> {
+        let start = Instant::now();
+
         let mut client_rq = Vec::with_capacity(timeouts.len());
         let mut cst_rq = Vec::with_capacity(timeouts.len());
 
         for timeout in timeouts {
-            match timeout {
-                TimeoutKind::ClientRequestTimeout(rq) => {
-                    client_rq.push(rq);
+            match timeout.timeout_kind() {
+                TimeoutKind::ClientRequestTimeout(_) => {
+                    client_rq.push(timeout);
                 }
-                TimeoutKind::Cst(rq) => {
-                    cst_rq.push(rq);
+                TimeoutKind::Cst(_) => {
+                    cst_rq.push(timeout);
                 }
             }
         }
 
         if !client_rq.is_empty() {
             debug!("{:?} // Received client request timeouts: {}", self.node.id(), client_rq.len());
+
             match self.ordering_protocol.handle_timeout(client_rq)? {
                 OrderProtocolExecResult::RunCst => {
                     self.run_state_transfer_protocol()?;
@@ -353,6 +391,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                 _ => {}
             };
         }
+
+        metric_duration(TIMEOUT_PROCESS_TIME_ID, start.elapsed());
 
         Ok(())
     }
@@ -406,7 +446,6 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                     error!("Failed to serialize and digest application state: {:?}", error)
                 }
             }
-
         });
 
         Ok(())

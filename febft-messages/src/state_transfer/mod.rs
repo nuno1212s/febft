@@ -6,13 +6,14 @@ use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::StoredMessage;
 use febft_communication::Node;
 use crate::messages::{Protocol, StateTransfer};
-use crate::ordering_protocol::{OrderingProtocol, View};
+use crate::ordering_protocol::{OrderingProtocol, OrderingProtocolArgs, View};
 use crate::serialize::{NetworkView, OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage};
-use crate::timeouts::Timeouts;
+use crate::timeouts::{RqTimeout, Timeouts};
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 use febft_common::crypto::hash::Digest;
 use febft_execution::ExecutorHandle;
+use crate::request_pre_processing::BatchOutput;
 
 
 /// Represents a local checkpoint.
@@ -116,7 +117,7 @@ pub trait StateTransferProtocol<D, OP, NT> where
         where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>;
 
     /// Handle a timeout being received from the timeout layer
-    fn handle_timeout(&mut self, order_protocol: &mut OP, timeout: Vec<SeqNo>) -> Result<STTimeoutResult>
+    fn handle_timeout(&mut self, order_protocol: &mut OP, timeout: Vec<RqTimeout>) -> Result<STTimeoutResult>
         where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>;
 }
 
@@ -127,12 +128,9 @@ pub trait StatefulOrderProtocol<D: SharedData + 'static, NT>: OrderingProtocol<D
     /// The serialization abstraction for
     type StateSerialization: StatefulOrderProtocolMessage + 'static;
 
-    fn initialize_with_initial_state(config: Self::Config, executor: ExecutorHandle<D>,
-                                     timeouts: Timeouts, node: Arc<NT>, initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where
+    fn initialize_with_initial_state(config: Self::Config, args: OrderingProtocolArgs<D, NT>, initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where
         Self: Sized;
 
-
-    fn view(&self) -> View<Self::Serialization>;
 
     /// Install a state received from other replicas in the system
     /// Should only alter the necessary things within its own state and
