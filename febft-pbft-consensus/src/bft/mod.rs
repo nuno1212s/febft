@@ -190,12 +190,12 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
                 if stopped.len() > 0 {
                     let stopped = self.pre_processor.clone_pending_rqs(stopped);
 
+                    self.switch_phase(ConsensusPhase::SyncPhase);
+
                     self.synchronizer.begin_view_change(Some(stopped),
                                                         &*self.node,
                                                         &self.timeouts,
                                                         &self.message_log);
-
-                    self.switch_phase(ConsensusPhase::SyncPhase)
                 }
             }
             // nothing to do

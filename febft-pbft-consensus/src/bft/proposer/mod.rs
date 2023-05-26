@@ -224,7 +224,9 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                             }
                         }
 
-                        self.synchronizer.watch_received_requests(digest_vec, &self.timeouts);
+                        if !digest_vec.is_empty() {
+                            self.synchronizer.watch_received_requests(digest_vec, &self.timeouts);
+                        }
 
                         metric_duration(PROPOSER_REQUEST_PROCESSING_TIME_ID, start_time.elapsed());
 

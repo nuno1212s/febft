@@ -194,7 +194,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             //let request_digest = header.digest().clone();
 
             digests.push(digest.clone());
-            timeout_info.push(ClientRqInfo::from(x));
+            timeout_info.push(ClientRqInfo::new(digest, header.from(), seq_no, session));
         }
 
         //Notify the timeouts that we have received the following requests
@@ -228,21 +228,10 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
         timeouts.timeout_client_requests(self.timeout_dur.get(), rq_info);
 
+        debug!("Registering {} stopped requests",count);
+
         metric_increment(SYNC_STOPPED_COUNT_ID, Some(count as u64));
         metric_duration(SYNC_STOPPED_REQUESTS_ID, start_time.elapsed());
-    }
-
-    fn watch_request_impl(
-        &self,
-        client_rq: ClientRqInfo,
-        timeouts: &Timeouts,
-    ) {
-        timeouts.timeout_client_requests(self.timeout_dur.get(), vec![client_rq]);
-    }
-
-    /// Watch a client request with the digest `digest`.
-    pub fn watch_request(&self, client: ClientRqInfo, timeouts: &Timeouts) {
-        self.watch_request_impl( client, timeouts);
     }
 
     /// Remove a client request with digest `digest` from the watched list
@@ -293,7 +282,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         // - on the second timeout, we start a view change by
         //   broadcasting a STOP message
 
-        debug!("{:?} // Received {} timeouts from the timeout layer",
+        info!("{:?} // Received {} timeouts from the timeout layer",
             my_id,
             timed_out_rqs.len());
 
@@ -311,7 +300,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
                     if *id == 0 {
                         forwarded.push(rq_info.clone());
-                    } else if *id == 1 {
+                    } else if *id >= 1 {
                         // The second timeout generates a stopped request
                         stopped.push(rq_info.clone());
                     }
@@ -324,8 +313,6 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             return SynchronizerStatus::Nil;
         }
 
-        debug!("{:?} // Replying requests time out forwarded {}, stopped {}", my_id, forwarded.len(), stopped.len());
-
         if !stopped.is_empty() || !base_sync.stopped.borrow().is_empty() {
             let known_stops = self.stopped_request_digests(base_sync, None);
 
@@ -337,6 +324,10 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
                 stopped.push(stopped_rq);
             }
         }
+
+        info!("{:?} // Replying requests time out forwarded {}, stopped {}", my_id, forwarded.len(), stopped.len());
+
+        debug!("{:?} // Stopped requests: {:?}", my_id, stopped);
 
         SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
     }

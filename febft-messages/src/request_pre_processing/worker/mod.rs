@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 use intmap::IntMap;
-use log::warn;
+use log::{debug, warn};
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, OneShotTx};
 use febft_common::collections::HashMap;
 use febft_common::crypto::hash::Digest;
@@ -189,22 +189,30 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
 
     /// Process the forwarded requests
     fn process_forwarded_requests(&mut self, requests: Vec<StoredRequestMessage<O>>) {
+        debug!("Processing forwarded requests with len {}", requests.len());
+
         let requests = requests.into_iter().filter(|request| {
             if self.has_received_more_recent_and_update(request.header(), request.message()) {
-                return true;
+                return false;
             }
 
             let digest = request.header().unique_digest();
 
             self.pending_requests.insert(digest.clone(), request.clone());
 
-            return false;
+            return true;
         }).collect();
+
+        debug!("Forwarded requests processed, left with {:?}", requests);
 
         self.batch_production.send((PreProcessorOutputMessage::DeDupedOrderedRequests(requests), Instant::now())).expect("Failed to send batch to proposer");
     }
 
     /// Process the timeouts
+    /// We want that timeouts which are either for requests we have not yet seen
+    /// And for requests that we have seen and are still in the pending request list.
+    /// If they are not in the pending request map that means they have already been executed
+    /// And need not be processed
     fn process_timeouts(&mut self, mut timeouts: Vec<RqTimeout>, tx: OneShotTx<Vec<RqTimeout>>) {
         let mut returned_timeouts = Vec::with_capacity(timeouts.len());
 
@@ -213,7 +221,11 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
                 let key = operation_key_raw(rq_info.sender, rq_info.session);
 
                 if let Some(seq_no) = self.latest_ops.get(key) {
-                    *seq_no < rq_info.seqno
+                    if *seq_no >= rq_info.seqno {
+                        self.pending_requests.contains_key(&rq_info.digest)
+                    } else {
+                        true
+                    }
                 } else {
                     true
                 }

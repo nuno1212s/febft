@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use chrono::Utc;
-use log::{info, warn};
+use log::{debug, info, warn};
 use febft_common::{channel, collections};
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, TryRecvError};
 use febft_common::collections::HashMap;
@@ -94,6 +94,7 @@ pub struct Timeouts {
 /// This includes timing out messages exchanged between replicas and between clients
 struct TimeoutsThread<D: SharedData + 'static> {
     my_id: NodeId,
+    default_timeout: Duration,
     //Stores the pending timeouts, grouped by the time at which they timeout.
     //Iterating a binary tree is pretty quick and it keeps the elements ordered
     //So we can use that to our advantage when timing out requests
@@ -109,16 +110,17 @@ struct TimeoutsThread<D: SharedData + 'static> {
     //processed
     loopback_channel: ChannelSyncTx<Message<D>>,
     //How long between each timeout iteration
-    iteration_delay: u64,
+    iteration_delay: Duration,
 }
 
 
 impl Timeouts {
     ///Initialize the timeouts thread and return a handle to it
     /// This handle can then be used everywhere timeouts are needed.
-    pub fn new<D: SharedData + 'static>(node_id: NodeId, iteration_delay: u64,
+    pub fn new<D: SharedData + 'static>(node_id: NodeId, iteration_delay: Duration,
+                                        default_timeout: Duration,
                                         loopback_channel: ChannelSyncTx<Message<D>>) -> Self {
-        let tx = TimeoutsThread::<D>::new(node_id, iteration_delay, loopback_channel);
+        let tx = TimeoutsThread::<D>::new(node_id, default_timeout, iteration_delay, loopback_channel);
 
         Self {
             handle: tx,
@@ -130,6 +132,8 @@ impl Timeouts {
         let requests: Vec<TimeoutKind> = requests.into_iter()
             .map(|rq_info| TimeoutKind::ClientRequestTimeout(rq_info))
             .collect();
+
+        debug!("Timing out requests: {:?}", requests.len());
 
         self.handle.send(TimeoutMessage::TimeoutRequest(RqTimeoutMessage {
             timeout,
@@ -188,13 +192,14 @@ impl Timeouts {
 }
 
 impl<D: SharedData + 'static> TimeoutsThread<D> {
-    fn new(node_id: NodeId, iteration_delay: u64, loopback_channel: ChannelSyncTx<Message<D>>) -> ChannelSyncTx<TimeoutMessage> {
+    fn new(node_id: NodeId, default_timeout: Duration, iteration_delay: Duration, loopback_channel: ChannelSyncTx<Message<D>>) -> ChannelSyncTx<TimeoutMessage> {
         let (tx, rx) = channel::new_bounded_sync(CHANNEL_SIZE);
 
         std::thread::Builder::new().name("Timeout Thread".to_string())
             .spawn(move || {
                 let timeout_thread = Self {
                     my_id: node_id,
+                    default_timeout,
                     pending_timeouts: Default::default(),
                     watching_rqs: Default::default(),
                     done_requests: collections::hash_map(),
@@ -210,22 +215,16 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
     }
 
     fn run(mut self) {
-        let iteration_delay = Duration::from_millis(self.iteration_delay);
-
         loop {
-            let message = match self.channel_rx.recv_timeout(iteration_delay) {
+            let message = match self.channel_rx.recv_timeout(self.iteration_delay) {
                 Ok(message) => { Some(message) }
+                Err(TryRecvError::Timeout) => {
+                    None
+                }
                 Err(err) => {
-                    match err {
-                        TryRecvError::Timeout => {
-                            None
-                        }
-                        _ => {
-                            info!("Timeouts received error from recv, shutting down");
+                    info!("Timeouts received error from recv {:?}, shutting down", err);
 
-                            break;
-                        }
-                    }
+                    break;
                 }
             };
 
@@ -233,7 +232,7 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
             if let Some(mut message) = message {
                 match message {
                     MessageType::TimeoutRequest(timeout_rq) => {
-                        self.handle_message_timeout_request(timeout_rq);
+                        self.handle_message_timeout_request(timeout_rq, None);
                     }
                     MessageType::MessagesReceived(message) => {
                         self.handle_messages_received(message);
@@ -269,27 +268,34 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
             }
 
             if !to_time_out.is_empty() {
+                let mut timeout_per_phase = BTreeMap::new();
 
                 //Get the underlying request information
                 let to_time_out = to_time_out.into_iter().map(|req| {
                     let timeout = req.info;
 
-                    let info = self.watching_rqs.entry(timeout.clone())
-                        .or_insert(TimeoutPhase::TimedOut(0, Instant::now()));
+                    let info = self.watching_rqs.remove(&timeout).expect("Failed to get information about timeout?").clone();
 
-                    let timed_out = info.clone();
+                    let timeouts = timeout_per_phase.entry(info.timeout_count()).or_insert_with(Vec::new);
 
-                    match &info {
-                        TimeoutPhase::TimedOut(times, instant) => {
-                            *info = TimeoutPhase::TimedOut(times + 1, Instant::now())
-                        }
-                    }
+                    timeouts.push(timeout.clone());
 
                     RqTimeout {
                         timeout_kind: timeout,
-                        timeout_phase: timed_out,
+                        timeout_phase: info,
                     }
                 }).collect();
+
+                for (phase, timeout) in timeout_per_phase {
+                    let message = RqTimeoutMessage {
+                        timeout: self.default_timeout,
+                        notifications_needed: 1,
+                        timeout_info: timeout,
+                    };
+
+                    // Re add the messages to the timeouts
+                    self.handle_message_timeout_request(message, Some(TimeoutPhase::TimedOut(phase + 1, Instant::now())));
+                }
 
                 if let Err(_) = self.loopback_channel.send(Message::Timeout(to_time_out)) {
                     info!("Loopback channel has disconnected, disconnecting timeouts thread");
@@ -300,7 +306,7 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
         }
     }
 
-    fn handle_message_timeout_request(&mut self, message: RqTimeoutMessage) {
+    fn handle_message_timeout_request(&mut self, message: RqTimeoutMessage, phase: Option<TimeoutPhase>) {
         let RqTimeoutMessage {
             timeout,
             notifications_needed,
@@ -312,6 +318,8 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
         let final_timestamp = current_timestamp + timeout.as_millis() as u64;
 
         let mut timeout_rqs = Vec::with_capacity(timeout_info.len());
+
+        let final_phase = phase.clone().unwrap_or(TimeoutPhase::TimedOut(0, Instant::now()));
 
         'outer: for timeout_kind in timeout_info {
             let mut timeout_rq = TimeoutRequest {
@@ -331,11 +339,17 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
                 }
             }
 
-            self.watching_rqs.entry(timeout_rq.info.clone())
-                .or_insert_with(|| TimeoutPhase::TimedOut(0, Instant::now()));
+            if self.watching_rqs.contains_key(&timeout_rq.info) {
+                //We are already watching this request, so we don't need to add it again
+                continue;
+            }
+
+            self.watching_rqs.insert(timeout_rq.info.clone(), final_phase.clone());
 
             timeout_rqs.push(timeout_rq);
         }
+
+        debug!("Adding {} timeouts to be handled at {} with phase {:?}", timeout_rqs.len(), final_timestamp, phase);
 
         if self.pending_timeouts.contains_key(&final_timestamp) {
             self.pending_timeouts.get_mut(&final_timestamp).unwrap()
@@ -346,12 +360,8 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
     }
 
     fn handle_messages_received(&mut self, mut received_request: ReceivedRequest) {
-        if let ReceivedRequest::PrePrepareRequestReceived(node, _) = &received_request {
-            if *node == self.my_id {
-                // We don't receive timeouts from requests in our own associated space
-                return;
-            }
-        }
+
+        let mut cleared_requests = 0;
 
         for timeout_requests in self.pending_timeouts.values_mut() {
             timeout_requests.drain_filter(|rq| {
@@ -376,14 +386,18 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
                     (_, _) => { false }
                 };
             }).for_each(|rq| {
+                cleared_requests += 1;
+
                 self.watching_rqs.remove(&rq.info);
                 self.done_requests.remove(&rq.info);
             });
         }
 
+        debug!("Cleared {} requests from the timeout queue", cleared_requests);
+
         match received_request {
             ReceivedRequest::PrePrepareRequestReceived(node, ids) => {
-                if !ids.is_empty() {
+                if !ids.is_empty() && node != self.my_id {
                     // This means we have not yet seen these requests (in the proposer).\
                     // As soon as we see them, they will be skipped over
                     warn!("{:?} // Received requests but did not have a timeout for them: {:?}, {:?}.", self.my_id, node, ids.len());
@@ -463,13 +477,13 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
             });
         }
 
-        let phase = TimeoutPhase::TimedOut(0, Instant::now());
         let mut to_timeout = Vec::with_capacity(self.watching_rqs.len());
 
-        for (timeout, watching_phase) in self.watching_rqs.iter_mut() {
-            if let TimeoutKind::ClientRequestTimeout(_) =&timeout {
-                *watching_phase = phase.clone();
-
+        for (timeout, _) in self.watching_rqs.drain_filter(|timeout, _| match timeout {
+            TimeoutKind::ClientRequestTimeout(_) => { true }
+            _ => false
+        }) {
+            if let TimeoutKind::ClientRequestTimeout(_) = &timeout {
                 to_timeout.push(timeout.clone());
             }
         }
@@ -478,7 +492,7 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
             timeout: timeout_dur,
             notifications_needed: 1,
             timeout_info: to_timeout,
-        })
+        }, Some(TimeoutPhase::TimedOut(0, Instant::now())))
     }
 }
 
@@ -519,3 +533,11 @@ impl RqTimeout {
     }
 }
 
+impl TimeoutPhase {
+    fn timeout_count(&self) -> usize {
+        return match self {
+            Self::TimedOut(times, _) => *times,
+            _ => 0
+        };
+    }
+}

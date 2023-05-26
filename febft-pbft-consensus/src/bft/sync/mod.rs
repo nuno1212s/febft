@@ -805,6 +805,8 @@ impl<D> Synchronizer<D>
                                 // may be a point of contention on the lib!
                                 collects_guard.clear();
 
+                                error!("{:?} // The view change is not sound. Cancelling.", node.id());
+
                                 return SynchronizerStatus::Running;
                             }
 
@@ -969,6 +971,8 @@ impl<D> Synchronizer<D>
                 let sound = sound(&current_view, &normalized_collects);
 
                 if !sound.test() {
+                    error!("{:?} // The view change is not sound. Cancelling.", node.id());
+
                     //FIXME: BFT-SMaRt doesn't do anything if `sound`
                     // evaluates to false; do we keep the same behavior,
                     // and wait for a new time out? but then, no other
@@ -1194,6 +1198,7 @@ impl<D> Synchronizer<D>
             SynchronizerAccessory::Follower(fol) => fol.watch_request_batch(pre_prepare),
         }
     }
+
     /// Watch requests that have been received from other replicas
     ///
     pub fn watch_received_requests(&self, digest: Vec<ClientRqInfo>, timeouts: &Timeouts) {
@@ -1202,15 +1207,6 @@ impl<D> Synchronizer<D>
                 rep.watch_received_requests(digest, timeouts);
             }
             SynchronizerAccessory::Follower(_) => {}
-        }
-    }
-
-    /// Watch a client request with the digest `digest`.
-    pub fn watch_request(&self, rq_info: ClientRqInfo, timeouts: &Timeouts) {
-        match &self.accessory {
-            SynchronizerAccessory::Replica(rep) =>
-                rep.watch_request(rq_info, timeouts),
-            _ => {}
         }
     }
 

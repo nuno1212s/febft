@@ -238,6 +238,12 @@ impl<M> Connections<M> where M: Serializable + 'static {
         if connection.concurrent_connection_count() == 0 {
             self.registered_connections.remove(&node);
         }
+
+        let addr = self.address_map.get(node.0 as u64);
+
+        if let Some(addr) = addr {
+            self.conn_handler.connect_to_node(Arc::clone(self), node, addr.clone());
+        }
     }
 }
 

@@ -96,10 +96,14 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
         debug!("{:?} // Initializing timeouts", log_node_id);
 
         let (rq_pre_processor, batch_input) = initialize_request_pre_processor
-            ::<WDRoundRobin, S::Data, OP::Serialization, ST::Serialization, NT>(8, node.clone());
+            ::<WDRoundRobin, S::Data, OP::Serialization, ST::Serialization, NT>(4, node.clone());
+
+        let default_timeout = Duration::from_secs(3);
 
         // start timeouts handler
-        let timeouts = Timeouts::new::<S::Data>(log_node_id.clone(), 500, exec_tx.clone());
+        let timeouts = Timeouts::new::<S::Data>(log_node_id.clone(), Duration::from_millis(50),
+                                                default_timeout,
+                                                exec_tx.clone());
 
         //Calculate the initial state of the application so we can pass it to the ordering protocol
         let init_ex_state = S::initial_state()?;
