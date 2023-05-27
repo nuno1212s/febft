@@ -3,6 +3,7 @@ pub mod follower_proposer;
 use std::cmp::max;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
+use std::ops::Div;
 use log::{error, warn, debug, info, trace};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, MutexGuard};
@@ -27,7 +28,7 @@ use febft_metrics::metrics::{metric_duration, metric_increment, metric_local_dur
 use crate::bft::config::ProposerConfig;
 use crate::bft::consensus::ProposerConsensusGuard;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, PBFTMessage};
-use crate::bft::metric::{CLIENT_POOL_BATCH_SIZE_ID, PROPOSER_BATCHES_MADE_ID, PROPOSER_FWD_REQUESTS_ID, PROPOSER_LATENCY_ID, PROPOSER_REQUEST_FILTER_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUESTS_COLLECTED_ID};
+use crate::bft::metric::{CLIENT_POOL_BATCH_SIZE_ID, PROPOSER_BATCHES_MADE_ID, PROPOSER_FWD_REQUESTS_ID, PROPOSER_LATENCY_ID, PROPOSER_PROPOSE_TIME_ID, PROPOSER_REQUEST_FILTER_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUEST_TIME_ITERATIONS_ID, PROPOSER_REQUESTS_COLLECTED_ID};
 use crate::bft::observer::{ConnState, MessageType, ObserverHandle};
 use crate::bft::PBFT;
 use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
@@ -196,6 +197,7 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                         let start_time = Instant::now();
 
                         let mut digest_vec = Vec::with_capacity(messages.len());
+                        let mut counter = messages.len();
 
                         match messages {
                             PreProcessorOutputMessage::DeDupedOrderedRequests(messages) => {
@@ -215,9 +217,10 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                                             ordered_propose.currently_accumulated.push(message);
                                         }
                                     } else {
-                                        digest_vec.push(ClientRqInfo::from(&message));
+                                        digest_vec.push(ClientRqInfo::new(digest, message.header().from(), message.message().sequence_number(), message.message().session_id()));
                                     }
                                 }
+
                             }
                             PreProcessorOutputMessage::DeDupedUnorderedRequests(mut messages) => {
                                 unordered_propose.currently_accumulated.append(&mut messages);
@@ -228,17 +231,26 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                             self.synchronizer.watch_received_requests(digest_vec, &self.timeouts);
                         }
 
-                        metric_duration(PROPOSER_REQUEST_PROCESSING_TIME_ID, start_time.elapsed());
+                        if counter > 0 {
+                            metric_duration(PROPOSER_REQUEST_PROCESSING_TIME_ID, start_time.elapsed());
+                            metric_increment(PROPOSER_REQUEST_TIME_ITERATIONS_ID, Some(1));
+                        }
 
                         discovered_requests = true;
                     } else {
                         discovered_requests = false;
                     }
 
-                    //Lets first deal with unordered requests since it should be much quicker and easier
-                    self.propose_unordered(&mut unordered_propose);
+                    let start = Instant::now();
 
-                    self.propose_ordered(is_leader, &mut ordered_propose);
+                    //Lets first deal with unordered requests since it should be much quicker and easier
+                    let unordered = self.propose_unordered(&mut unordered_propose);
+
+                    let ordered = self.propose_ordered(is_leader, &mut ordered_propose);
+
+                    if unordered || ordered {
+                        metric_duration(PROPOSER_PROPOSE_TIME_ID, start.elapsed());
+                    }
 
                     if !discovered_requests {
                         //Yield to prevent active waiting
@@ -254,14 +266,13 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
     fn propose_unordered<ST>(
         &self,
         propose: &mut ProposeBuilder<D>,
-    ) where ST: StateTransferMessage + 'static,
+    ) -> bool where ST: StateTransferMessage + 'static,
             NT: Node<PBFT<D, ST>> {
         if !propose.currently_accumulated.is_empty() {
             let current_batch_size = propose.currently_accumulated.len();
 
             let should_exec = if current_batch_size < self.target_global_batch_size {
-                let micros_since_last_batch = Instant::now()
-                    .duration_since(propose.last_proposal)
+                let micros_since_last_batch = propose.last_proposal.elapsed()
                     .as_micros();
 
                 if micros_since_last_batch <= self.global_batch_time_limit {
@@ -312,14 +323,19 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                         );
                     }
                 });
+
+                return true;
             }
         }
+
+        return false;
     }
 
     /// attempt to propose the ordered requests that we have collected
+    /// Returns true if a batch was proposed
     fn propose_ordered<ST>(&self,
                            is_leader: bool,
-                           propose: &mut ProposeBuilder<D>, )
+                           propose: &mut ProposeBuilder<D>, ) -> bool
         where ST: StateTransferMessage + 'static,
               NT: Node<PBFT<D, ST>> {
 
@@ -328,11 +344,11 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
             let current_batch_size = propose.currently_accumulated.len();
 
             if current_batch_size < self.target_global_batch_size {
-                let micros_since_last_batch = Instant::now().duration_since(propose.last_proposal).as_micros();
+                let micros_since_last_batch = propose.last_proposal.elapsed().as_micros();
 
                 if micros_since_last_batch <= self.global_batch_time_limit {
                     //Batch isn't large enough and time hasn't passed, don't even attempt to propose
-                    return;
+                    return false;
                 }
             }
 
@@ -362,9 +378,13 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                     self.propose(seq, &view, current_batch);
 
                     metric_duration(PROPOSER_LATENCY_ID, last_proposed_batch.elapsed());
+
+                    return true;
                 }
             }
         }
+
+        return false;
     }
 
     /// Proposes a new batch.

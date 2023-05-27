@@ -1,5 +1,5 @@
 use std::time::Instant;
-use febft_metrics::MetricRegistry;
+use febft_metrics::{MetricLevel, MetricRegistry};
 use febft_metrics::metrics::{metric_duration, metric_duration_end, metric_store_count, MetricKind};
 
 /// Consensus will take the ID range 1XX, for now
@@ -27,6 +27,11 @@ pub const CLIENT_POOL_BATCH_SIZE_ID: usize = 105;
 pub const PROPOSER_LATENCY: &str = "PROPOSER_LATENCY";
 pub const PROPOSER_LATENCY_ID: usize = 106;
 
+pub const PROPOSER_PROPOSE_TIME: &str = "PROPOSER_PROPOSE_TIME";
+pub const PROPOSER_PROPOSE_TIME_ID: usize = 107;
+
+pub const PROPOSER_REQUEST_TIME_ITERATIONS: &str = "PROPOSER_REQUEST_TIME_ITERATIONS";
+pub const PROPOSER_REQUEST_TIME_ITERATIONS_ID: usize = 108;
 /// 110-119: Consensus
 
 pub const PROPOSE_LATENCY: &str = "PROPOSE_LATENCY";
@@ -75,11 +80,13 @@ pub const SYNC_FORWARDED_COUNT_ID: usize = 125;
 pub fn metrics() -> Vec<MetricRegistry> {
     
     vec![
-        (PROPOSER_BATCHES_MADE_ID, PROPOSER_BATCHES_MADE.to_string(), MetricKind::Counter).into(),
-        (PROPOSER_REQUESTS_COLLECTED_ID, PROPOSER_REQUESTS_COLLECTED.to_string(), MetricKind::Counter).into(),
+        (PROPOSER_BATCHES_MADE_ID, PROPOSER_BATCHES_MADE.to_string(), MetricKind::Counter, MetricLevel::Info, 1).into(),
+        (PROPOSER_REQUESTS_COLLECTED_ID, PROPOSER_REQUESTS_COLLECTED.to_string(), MetricKind::Counter, MetricLevel::Info, 1).into(),
         (PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME.to_string(), MetricKind::Duration).into(),
         (PROPOSER_REQUEST_FILTER_TIME_ID, PROPOSER_REQUEST_FILTER_TIME.to_string(), MetricKind::Duration).into(),
         (PROPOSER_FWD_REQUESTS_ID, PROPOSER_FWD_REQUESTS.to_string(), MetricKind::Duration).into(),
+        (PROPOSER_PROPOSE_TIME_ID, PROPOSER_PROPOSE_TIME.to_string(), MetricKind::Duration).into(),
+        (PROPOSER_REQUEST_TIME_ITERATIONS_ID, PROPOSER_REQUEST_TIME_ITERATIONS.to_string(), MetricKind::Counter).into(),
         (CLIENT_POOL_BATCH_SIZE_ID, CLIENT_POOL_BATCH_SIZE.to_string(), MetricKind::Count).into(),
         (CONSENSUS_PRE_PREPARE_LATENCY_ID, CONSENSUS_PRE_PREPARE_LATENCY.to_string(), MetricKind::Duration).into(),
         (PROPOSER_LATENCY_ID, PROPOSER_LATENCY.to_string(), MetricKind::Duration).into(),

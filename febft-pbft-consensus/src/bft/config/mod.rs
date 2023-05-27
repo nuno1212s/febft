@@ -32,6 +32,7 @@ impl<D: SharedData + 'static,
     pub fn new(node_id: NodeId,
                follower_handle: Option<FollowerHandle<PBFTConsensus<D>>>,
                view: ViewInfo, timeout_dur: Duration,
+               watermark: u32,
                db_path: String, proposer_config: ProposerConfig) -> Self {
         Self {
             node_id,
@@ -41,7 +42,7 @@ impl<D: SharedData + 'static,
             timeout_dur,
             db_path,
             proposer_config,
-            watermark: 30,
+            watermark,
             _phantom_data: Default::default(),
         }
     }

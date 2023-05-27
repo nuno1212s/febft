@@ -57,7 +57,7 @@ impl NetworkView for ViewInfo {
     }
 }
 
-const LEADER_COUNT: usize = 1;
+const LEADER_COUNT: usize = 3;
 
 impl ViewInfo {
     /// Creates a new instance of `ViewInfo`.
