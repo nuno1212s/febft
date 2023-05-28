@@ -19,7 +19,7 @@ use log::{error, warn};
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
-pub const PERIOD: u32 = 100000;
+pub const PERIOD: u32 = 100000000;
 
 /// Represents a sequence number attributed to a client request
 /// during a `Consensus` instance.

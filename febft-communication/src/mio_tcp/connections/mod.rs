@@ -99,7 +99,7 @@ impl<M> NodeConnections for Connections<M> where M: Serializable + 'static {
 
         let connections = self.conn_counts.get_connections_to_node(self.id, node, self.first_cli);
 
-        let connections = connections - current_connections;
+        let connections = if current_connections > connections { 0 } else { connections - current_connections };
 
         let mut result_vec = Vec::with_capacity(connections);
 
@@ -237,9 +237,9 @@ impl<M> Connections<M> where M: Serializable + 'static {
 
         if connection.concurrent_connection_count() == 0 {
             self.registered_connections.remove(&node);
-        }
 
-        let _ = self.connect_to_node(node);
+            let _ = self.connect_to_node(node);
+        }
     }
 }
 

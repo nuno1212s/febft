@@ -13,7 +13,7 @@ use febft_execution::serialize::SharedData;
 use febft_messages::state_transfer::Checkpoint;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
-use crate::bft::msg_log::{Info, operation_key, PERIOD};
+use crate::bft::msg_log::{Info, operation_key, CHECKPOINT_PERIOD};
 use crate::bft::msg_log::decisions::{CollectData, DecisionLog, Proof, ProofMetadata};
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
 use crate::bft::msg_log::persistent::{InstallState, PersistentLog, WriteMode};
@@ -334,7 +334,7 @@ impl<D> Log<D> where D: SharedData + 'static {
 
         let last_seq_no_u32 = u32::from(seq);
 
-        let info = if last_seq_no_u32 > 0 && last_seq_no_u32 % PERIOD == 0 {
+        let info = if last_seq_no_u32 > 0 && last_seq_no_u32 % CHECKPOINT_PERIOD == 0 {
             //We check that % == 0 so we don't start multiple checkpoints
             self.begin_checkpoint(seq)?
         } else {
