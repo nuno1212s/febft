@@ -12,7 +12,6 @@ use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::{Header, StoredMessage};
 use febft_communication::Node;
 use febft_execution::serialize::SharedData;
-use febft_messages::serialize::NetworkView;
 use febft_messages::serialize::StateTransferMessage;
 use febft_messages::timeouts::Timeouts;
 use febft_metrics::metrics::{metric_duration};
