@@ -826,6 +826,12 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         self.signalled.clear();
         self.consensus_guard.clear();
     }
+
+    pub(super) fn is_catching_up(&self) -> bool{
+        // If we have a bunch of messages still to process,
+        // Don't listen to timeouts
+        self.tbo_queue.pre_prepares.len() > 0
+    }
 }
 
 impl<D, ST> Orderable for Consensus<D, ST> where D: SharedData + 'static, ST: StateTransferMessage + 'static {

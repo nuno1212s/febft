@@ -101,7 +101,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
         let default_timeout = Duration::from_secs(3);
 
         // start timeouts handler
-        let timeouts = Timeouts::new::<S::Data>(log_node_id.clone(), Duration::from_millis(50),
+        let timeouts = Timeouts::new::<S::Data>(log_node_id.clone(), Duration::from_millis(1),
                                                 default_timeout,
                                                 exec_tx.clone());
 
@@ -372,6 +372,10 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
         if !client_rq.is_empty() {
             debug!("{:?} // Received client request timeouts: {}", self.node.id(), client_rq.len());
+
+            let (client_rq, to_delete) = self.rq_pre_processor.process_timeouts(client_rq).recv().unwrap();
+
+            self.timeouts.cancel_client_rq_timeouts(Some(to_delete));
 
             match self.ordering_protocol.handle_timeout(client_rq)? {
                 OrderProtocolExecResult::RunCst => {

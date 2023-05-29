@@ -51,7 +51,7 @@ pub struct PeerIncomingRqHandling<T: Send + 'static> {
 
 const NODE_CHAN_BOUND: usize = 1024;
 const DEFAULT_CLIENT_QUEUE: usize = 16384;
-const DEFAULT_REPLICA_QUEUE: usize = 1024;
+const DEFAULT_REPLICA_QUEUE: usize = 131072;
 
 ///We make this class Sync and send since the clients are going to be handled by a single class
 ///And the replicas are going to be handled by another class.

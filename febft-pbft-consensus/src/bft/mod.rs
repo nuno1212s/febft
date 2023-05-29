@@ -7,7 +7,7 @@ use std::ops::Drop;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use log::{debug, info, LevelFilter};
+use log::{debug, info, LevelFilter, warn};
 use log4rs::{
     append::file::FileAppender,
     config::{Appender, Logger, Root},
@@ -173,6 +173,13 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     }
 
     fn handle_timeout(&mut self, timeout: Vec<RqTimeout>) -> Result<OrderProtocolExecResult> {
+
+        if self.consensus.is_catching_up() {
+            warn!("{:?} // Ignoring timeouts while catching up", self.node.id());
+
+            return Ok(OrderProtocolExecResult::Success);
+        }
+
         let status = self.synchronizer
             .client_requests_timed_out(&self.synchronizer, self.node.id(), &timeout);
 

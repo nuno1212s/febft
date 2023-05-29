@@ -1064,7 +1064,7 @@ impl<D> Synchronizer<D>
             (ProtoPhase::Stopping(i), _) => {
                 self.phase.replace(ProtoPhase::Stopping2(i));
             }
-            (ProtoPhase::StoppingData(_), _) | (ProtoPhase::Syncing, _) => {
+            (ProtoPhase::StoppingData(_), _) | (ProtoPhase::Syncing, _) | (ProtoPhase::Stopping2(_), _) => {
                 // we have already started a view change protocol
                 return;
             }

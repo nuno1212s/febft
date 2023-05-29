@@ -3,19 +3,21 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use chrono::Utc;
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use febft_common::{channel, collections};
-use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, TryRecvError};
+use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, TryRecvError, TrySendError};
 use febft_common::collections::HashMap;
 use febft_common::crypto::hash::Digest;
 use febft_common::node_id::NodeId;
 use febft_common::ordering::SeqNo;
 use febft_execution::app::Service;
 use febft_execution::serialize::SharedData;
+use febft_metrics::metrics::{metric_duration, metric_increment};
 use crate::messages::{ClientRqInfo, Message, StoredRequestMessage};
+use crate::metric::{TIMEOUT_MESSAGE_PROCESSING_ID, TIMEOUT_MESSAGES_PROCESSED_ID};
 use crate::serialize::OrderingProtocolMessage;
 
-const CHANNEL_SIZE: usize = 1024;
+const CHANNEL_SIZE: usize = 16384;
 
 ///Contains the requests that have just been timed out
 pub type Timeout = Vec<TimeoutKind>;
@@ -133,29 +135,40 @@ impl Timeouts {
             .map(|rq_info| TimeoutKind::ClientRequestTimeout(rq_info))
             .collect();
 
-        debug!("Timing out requests: {:?}", requests.len());
-
-        self.handle.send(TimeoutMessage::TimeoutRequest(RqTimeoutMessage {
+        let res = self.handle.try_send(TimeoutMessage::TimeoutRequest(RqTimeoutMessage {
             timeout,
             // we choose 1 here because we only need to receive one valid pre prepare containing
             // this request for it to be considered valid
             notifications_needed: 1,
             timeout_info: requests,
-        })).expect("Failed to contact timeout thread")
-    }
+        }));
 
-    /// Set the timeout phase of all timeouts to the initial state (0 timeouts) and re call all of the timeouts
-    pub fn reset_all_client_rq_timeouts(&self, duration: Duration) {
-        self.handle.send(TimeoutMessage::ResetClientTimeouts(duration)).expect("Failed to contact timeout thread")
+        match res {
+            Err(_) => {
+                warn!("Discarding pre prepare timeout message as queue is already full")
+            }
+            _ => {}
+        }
     }
 
     /// Notify that a pre prepare with the following requests has been received and we must therefore
     /// Disable any timeouts pertaining to the received requests
     pub fn received_pre_prepare(&self, from: NodeId, recvd_rqs: Vec<ClientRqInfo>) {
-        self.handle.send(TimeoutMessage::MessagesReceived(
+        let res = self.handle.try_send(TimeoutMessage::MessagesReceived(
             ReceivedRequest::PrePrepareRequestReceived(from, recvd_rqs)
-        ))
-            .expect("Failed to contact timeout thread");
+        ));
+
+        match res {
+            Err(_) => {
+                warn!("Discarding pre prepare timeout message as queue is already full")
+            }
+            _ => {}
+        }
+    }
+
+    /// Set the timeout phase of all timeouts to the initial state (0 timeouts) and re call all of the timeouts
+    pub fn reset_all_client_rq_timeouts(&self, duration: Duration) {
+        self.handle.send(TimeoutMessage::ResetClientTimeouts(duration)).expect("Failed to contact timeout thread")
     }
 
     /// Cancel timeouts of player requests.
@@ -230,6 +243,8 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
 
             //Handle all incoming messages and update the pending timeouts accordingly
             if let Some(mut message) = message {
+                let start = Instant::now();
+
                 match message {
                     MessageType::TimeoutRequest(timeout_rq) => {
                         self.handle_message_timeout_request(timeout_rq, None);
@@ -247,12 +262,15 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
                         self.handle_reset_client_timeouts(dur);
                     }
                 }
+
+                metric_duration(TIMEOUT_MESSAGE_PROCESSING_ID, start.elapsed());
+                metric_increment(TIMEOUT_MESSAGES_PROCESSED_ID, Some(1));
             }
 
             // run timeouts
             let current_timestamp = Utc::now().timestamp_millis() as u64;
 
-            let mut to_time_out = vec![];
+            let mut to_time_out = Vec::new();
 
             //Get the smallest timeout (which should be closest to our current time)
             while let Some((timeout, _)) = self.pending_timeouts.first_key_value() {
@@ -349,7 +367,7 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
             timeout_rqs.push(timeout_rq);
         }
 
-        debug!("Adding {} timeouts to be handled at {} with phase {:?}", timeout_rqs.len(), final_timestamp, phase);
+        trace!("Adding {} timeouts to be handled at {} with phase {:?}", timeout_rqs.len(), final_timestamp, phase);
 
         if self.pending_timeouts.contains_key(&final_timestamp) {
             self.pending_timeouts.get_mut(&final_timestamp).unwrap()
@@ -393,7 +411,7 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
             });
         }
 
-        debug!("Cleared {} requests from the timeout queue", cleared_requests);
+        trace!("Cleared {} requests from the timeout queue", cleared_requests);
 
         match received_request {
             ReceivedRequest::PrePrepareRequestReceived(node, ids) => {
@@ -409,6 +427,8 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
                         self.done_requests.entry(timeout_kind).or_insert_with(Vec::new)
                             .push(node.clone());
                     }
+                } else if node == self.my_id {
+                    debug!("{:?} // Received a pre-prepare request from myself, ignoring since these requests didn't get registered anyways.", self.my_id);
                 }
             }
             _ => {}
