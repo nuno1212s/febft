@@ -145,7 +145,7 @@ impl Timeouts {
 
         match res {
             Err(_) => {
-                warn!("Discarding pre prepare timeout message as queue is already full")
+                warn!("Discarding Client Request timeout message as queue is already full")
             }
             _ => {}
         }
@@ -242,7 +242,7 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
             };
 
             //Handle all incoming messages and update the pending timeouts accordingly
-            if let Some(mut message) = message {
+            while let Some(mut message) = message {
                 let start = Instant::now();
 
                 match message {
@@ -265,6 +265,18 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
 
                 metric_duration(TIMEOUT_MESSAGE_PROCESSING_ID, start.elapsed());
                 metric_increment(TIMEOUT_MESSAGES_PROCESSED_ID, Some(1));
+
+                message = match self.channel_rx.try_recv() {
+                    Ok(message) => { Some(message) }
+                    Err(TryRecvError::Empty) => {
+                        None
+                    }
+                    Err(err) => {
+                        info!("Timeouts received error from recv {:?}, shutting down", err);
+
+                        break;
+                    }
+                };
             }
 
             // run timeouts

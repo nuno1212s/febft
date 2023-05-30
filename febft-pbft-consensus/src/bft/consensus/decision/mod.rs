@@ -337,8 +337,8 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 self.phase = if received == view.leader_set().len() {
                     let batch_metadata = batch_metadata.unwrap();
 
-                    info!("{:?} // Completed pre prepare phase with all pre prepares Seq {:?}. Batch size {:?}",
-                        node.id(), self.sequence_number(), self.message_log.current_batch_size());
+                    info!("{:?} // Completed pre prepare phase with all pre prepares Seq {:?} with pre prepare from {:?}. Batch size {:?}",
+                        node.id(), self.sequence_number(), header.from(), self.message_log.current_batch_size());
 
                     //We have received all pre prepare requests for this consensus instance
                     //We are now ready to broadcast our prepare message and move to the next phase
@@ -372,6 +372,9 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     // message with the digest of the entire batch
                     DecisionPhase::Preparing(0)
                 } else {
+
+                    debug!("{:?} // Received pre prepare message {:?} from {:?}. Current received {:?}",
+                        self.node_id, message, header.from(), received);
 
                     self.accessory.handle_partial_pre_prepare(&self.message_log,
                                                               &view, stored_msg.clone(), node);
@@ -436,7 +439,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 let mut result = DecisionStatus::Deciding;
 
                 self.phase = if received == view.params().quorum() {
-                    info!("{:?} // Completed prepare phase with all prepares Seq {:?}", node.id(), self.sequence_number());
+                    info!("{:?} // Completed prepare phase with all prepares Seq {:?} with prepare from {:?}", node.id(), self.sequence_number(), header.from());
 
                     self.message_log.batch_meta().lock().unwrap().commit_sent_time = Utc::now();
                     self.consensus_metrics.prepare_quorum_recvd();
@@ -507,7 +510,9 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 self.message_log.process_message(stored_msg.clone())?;
 
                 return if received == view.params().quorum() {
-                    info!("{:?} // Completed commit phase with all commits Seq {:?}", node.id(), self.sequence_number());
+                    info!("{:?} // Completed commit phase with all commits Seq {:?} with commit from {:?}", node.id(), self.sequence_number(),
+                    header.from());
+
 
                     self.phase = DecisionPhase::Decided;
 

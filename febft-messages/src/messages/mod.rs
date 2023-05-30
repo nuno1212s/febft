@@ -29,6 +29,8 @@ pub enum Message<D> where D: SharedData {
     DigestedAppState(Arc<ReadOnly<Checkpoint<D::State>>>),
     /// We received a timeout from the timeouts layer.
     Timeout(TimedOut),
+    /// Timeouts that have already been processed by the request pre processing layer.
+    ProcessedTimeout(TimedOut, TimedOut)
 }
 
 impl<D> Debug for Message<D> where D: SharedData {
@@ -42,6 +44,9 @@ impl<D> Debug for Message<D> where D: SharedData {
             }
             Message::DigestedAppState(_) => {
                 write!(f, "DigestedAppState")
+            }
+            Message::ProcessedTimeout(_, _) => {
+                write!(f, "Digested Timeouts")
             }
         }
     }
@@ -60,6 +65,10 @@ impl<D: SharedData> Message<D> {
                     .wrapped(ErrorKind::CommunicationMessage),
             Message::DigestedAppState(_) => {
                 Err("Expected System found DigestedAppState")
+                    .wrapped(ErrorKind::CommunicationMessage)
+            }
+            Message::ProcessedTimeout(_, _) => {
+                Err("Expected System found ProcessedTimeout")
                     .wrapped(ErrorKind::CommunicationMessage)
             }
         }

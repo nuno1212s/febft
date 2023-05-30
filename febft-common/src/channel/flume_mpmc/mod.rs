@@ -184,3 +184,10 @@ pub fn new_bounded<T>(bound: usize) -> (ChannelMixedTx<T>, ChannelMixedRx<T>) {
 
     (ChannelMixedTx { inner: tx }, ChannelMixedRx { inner: rx })
 }
+
+/// Generate a new unbounded channel from flume, wrap it in our own channel and return it
+pub fn new_unbounded<T>() -> (ChannelMixedTx<T>, ChannelMixedRx<T>) {
+    let (tx, rx) = flume::unbounded();
+
+    (ChannelMixedTx { inner: tx }, ChannelMixedRx { inner: rx })
+}

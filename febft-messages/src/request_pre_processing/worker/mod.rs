@@ -32,7 +32,7 @@ pub enum PreProcessorWorkMessage<O> {
     ForwardedRequestsReceived(Vec<StoredRequestMessage<O>>),
     StoppedRequestsReceived(Vec<StoredRequestMessage<O>>),
     /// Analyse timeout requests. Returns only timeouts that have not yet been executed
-    TimeoutsReceived(Vec<RqTimeout>, OneShotTx<(Vec<RqTimeout>, Vec<Digest>)>),
+    TimeoutsReceived(Vec<RqTimeout>, ChannelSyncTx<(Vec<RqTimeout>, Vec<RqTimeout>)>),
     /// A batch of requests has been decided by the system
     DecidedBatch(Vec<ClientRqInfo>),
     /// Collect all pending messages from the given worker
@@ -213,7 +213,7 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
     /// And for requests that we have seen and are still in the pending request list.
     /// If they are not in the pending request map that means they have already been executed
     /// And need not be processed
-    fn process_timeouts(&mut self, mut timeouts: Vec<RqTimeout>, tx: OneShotTx<(Vec<RqTimeout>, Vec<Digest>)>) {
+    fn process_timeouts(&mut self, mut timeouts: Vec<RqTimeout>, tx: ChannelSyncTx<(Vec<RqTimeout>, Vec<RqTimeout>)>) {
         let mut returned_timeouts = Vec::with_capacity(timeouts.len());
 
         let mut removed_timeouts = Vec::with_capacity(timeouts.len());
@@ -238,9 +238,7 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
             if result {
                 returned_timeouts.push(timeout);
             } else {
-                if let TimeoutKind::ClientRequestTimeout(rq_info) = timeout.timeout_kind() {
-                    removed_timeouts.push(rq_info.digest.clone());
-                };
+                removed_timeouts.push(timeout);
             }
         }
 

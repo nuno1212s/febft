@@ -231,6 +231,23 @@ pub fn new_bounded_sync<T>(bound: usize) -> (ChannelSyncTx<T>, ChannelSyncRx<T>)
     }
 }
 
+#[inline]
+pub fn new_unbounded_sync<T>() -> (ChannelSyncTx<T>, ChannelSyncRx<T>) {
+    #[cfg(feature = "channel_sync_crossbeam")]
+    {
+        let (tx, rx) = crossbeam::new_unbounded();
+
+        (ChannelSyncTx { inner: tx }, ChannelSyncRx { inner: rx })
+    }
+
+    #[cfg(feature = "channel_sync_flume")]
+    {
+        let (tx, rx) = flume_mpmc::new_unbounded();
+
+        (ChannelSyncTx { inner: tx }, ChannelSyncRx { inner: rx })
+    }
+}
+
 /**
 Async and sync mixed channels (Allows us to connect async and sync environments together)
  */

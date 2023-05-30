@@ -15,7 +15,7 @@ use febft_communication::{Node, NodeIncomingRqHandler};
 use febft_execution::serialize::SharedData;
 use febft_metrics::metrics::{metric_duration, metric_increment};
 use crate::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
-use crate::metric::{RQ_PP_CLIENT_COUNT_ID, RQ_PP_CLIENT_MSG_ID, RQ_PP_CLONE_RQS_ID, RQ_PP_COLLECT_PENDING_ID, RQ_PP_DECIDED_RQS_ID, RQ_PP_FWD_RQS_ID, RQ_PP_TIMEOUT_RQS_ID, RQ_PP_WORKER_PROPOSER_PASSING_TIME_ID, RQ_PP_WORKER_STOPPED_TIME_ID};
+use crate::metric::{RQ_PP_CLIENT_COUNT_ID, RQ_PP_CLIENT_MSG_ID, RQ_PP_CLONE_PENDING_TIME_ID, RQ_PP_CLONE_RQS_ID, RQ_PP_COLLECT_PENDING_ID, RQ_PP_COLLECT_PENDING_TIME_ID, RQ_PP_DECIDED_RQS_ID, RQ_PP_FWD_RQS_ID, RQ_PP_TIMEOUT_RQS_ID, RQ_PP_WORKER_PROPOSER_PASSING_TIME_ID, RQ_PP_WORKER_STOPPED_TIME_ID};
 use crate::request_pre_processing::worker::{PreProcessorWorkMessage, PreProcessorWorkMessageOuter, RequestPreProcessingWorker, RequestPreProcessingWorkerHandle};
 use crate::serialize::{OrderingProtocolMessage, ServiceMsg, StateTransferMessage};
 use crate::timeouts::{RqTimeout, TimeoutKind, Timeouts};
@@ -52,7 +52,7 @@ pub enum PreProcessorMessage<O> {
     /// We have received requests that are already decided by the system
     StoppedRequests(Vec<StoredRequestMessage<O>>),
     /// Analyse timeout requests. Returns only timeouts that have not yet been executed
-    TimeoutsReceived(Vec<RqTimeout>, OneShotTx<(Vec<RqTimeout>, Vec<Digest>)>),
+    TimeoutsReceived(Vec<RqTimeout>, ChannelSyncTx<(Vec<RqTimeout>, Vec<RqTimeout>)>),
     /// A batch of requests that has been decided by the system
     DecidedBatch(Vec<ClientRqInfo>),
     /// Collect all pending messages from all workers.
@@ -75,28 +75,35 @@ pub struct RequestPreProcessor<O>(ChannelSyncTx<PreProcessorMessage<O>>);
 
 impl<O> RequestPreProcessor<O> {
     pub fn clone_pending_rqs(&self, client_rqs: Vec<ClientRqInfo>) -> Vec<StoredRequestMessage<O>> {
+        let start = Instant::now();
+
         let (tx, rx) = channel::new_oneshot_channel();
 
         self.0.send(PreProcessorMessage::CloneRequests(client_rqs, tx)).unwrap();
 
-        rx.recv().unwrap()
+        let result = rx.recv().unwrap();
+
+        metric_duration(RQ_PP_CLONE_PENDING_TIME_ID, start.elapsed());
+
+        result
     }
 
     pub fn collect_all_pending_rqs(&self) -> Vec<StoredRequestMessage<O>> {
+        let start = Instant::now();
+
         let (tx, rx) = channel::new_oneshot_channel();
 
         self.0.send(PreProcessorMessage::CollectAllPendingMessages(tx)).unwrap();
 
-        rx.recv().unwrap()
+        let result = rx.recv().unwrap();
+
+        metric_duration(RQ_PP_COLLECT_PENDING_TIME_ID, start.elapsed());
+
+        result
     }
 
-    pub fn process_timeouts(&self, timeouts: Vec<RqTimeout>) -> OneShotRx<(Vec<RqTimeout>, Vec<Digest>)> {
-
-        let (tx, rx) = channel::new_oneshot_channel();
-
-        self.0.send(PreProcessorMessage::TimeoutsReceived(timeouts, tx)).unwrap();
-
-        rx
+    pub fn process_timeouts(&self, timeouts: Vec<RqTimeout>, response: ChannelSyncTx<(Vec<RqTimeout>, Vec<RqTimeout>)>) {
+        self.0.send(PreProcessorMessage::TimeoutsReceived(timeouts, response)).unwrap();
     }
 }
 
@@ -261,14 +268,11 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData 
         metric_duration(RQ_PP_DECIDED_RQS_ID, start.elapsed());
     }
 
-    fn process_timeouts(&self, timeouts: Vec<RqTimeout>, responder: OneShotTx<(Vec<RqTimeout>, Vec<Digest>)>)
+    fn process_timeouts(&self, timeouts: Vec<RqTimeout>, responder: ChannelSyncTx<(Vec<RqTimeout>, Vec<RqTimeout>)>)
         where WD: WorkPartitioner<D::Request> {
         let start = Instant::now();
 
-        let timeout_count = timeouts.len();
         let mut worker_messages = init_worker_vecs(self.thread_count, timeouts.len());
-
-        let returners = init_for_workers(self.thread_count, || channel::new_oneshot_channel());
 
         for timeout in timeouts {
             if let TimeoutKind::ClientRequestTimeout(rq) = timeout.timeout_kind() {
@@ -278,28 +282,10 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData 
             }
         }
 
-        let mut rxs = Vec::with_capacity(self.thread_count);
-
-        for (worker,
-            (messages, (tx, rx)))
-        in iter::zip(&self.work_comms, iter::zip(worker_messages, returners)) {
-            worker.send(PreProcessorWorkMessage::TimeoutsReceived(messages, tx));
-
-            rxs.push(rx);
+        for (worker, messages)
+        in iter::zip(&self.work_comms, worker_messages) {
+            worker.send(PreProcessorWorkMessage::TimeoutsReceived(messages, responder.clone()));
         }
-
-        let mut final_requests = Vec::with_capacity(timeout_count);
-        let mut final_deleted = Vec::with_capacity(timeout_count);
-
-        for rx in rxs {
-            let (rqs, deleted) = rx.recv().unwrap();
-
-            final_requests.extend(rqs);
-
-            final_deleted.extend(deleted);
-        }
-
-        responder.send((final_requests, final_deleted)).unwrap();
 
         metric_duration(RQ_PP_TIMEOUT_RQS_ID, start.elapsed());
     }

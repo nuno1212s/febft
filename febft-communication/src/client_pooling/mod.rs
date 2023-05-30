@@ -299,7 +299,7 @@ pub struct ReplicaHandling<T> where T: Send {
 
 impl<T> ReplicaHandling<T> where T: Send {
     pub fn new(capacity: usize) -> Arc<Self> {
-        let (sender, receiver) = channel::new_bounded_sync(capacity);
+        let (sender, receiver) = channel::new_unbounded_sync();
 
         Arc::new(
             Self {

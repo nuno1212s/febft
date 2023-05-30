@@ -1,4 +1,4 @@
- //! Contains the server side core protocol logic of `febft`.
+//! Contains the server side core protocol logic of `febft`.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,7 +27,7 @@ use febft_messages::request_pre_processing::{initialize_request_pre_processor, P
 use febft_messages::request_pre_processing::work_dividers::WDRoundRobin;
 use febft_messages::serialize::ServiceMsg;
 use febft_messages::state_transfer::{Checkpoint, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
-use febft_messages::timeouts::{TimedOut, Timeout, TimeoutKind, Timeouts};
+use febft_messages::timeouts::{RqTimeout, TimedOut, Timeout, TimeoutKind, Timeouts};
 use febft_metrics::metrics::{metric_duration, metric_store_count};
 use crate::config::ReplicaConfig;
 use crate::executable::{Executor, ReplicaReplier};
@@ -64,6 +64,8 @@ pub struct Replica<S, OP, ST, NT> where S: Service {
     // THe handle to the execution and timeouts handler
     execution_rx: ChannelSyncRx<Message<S::Data>>,
     execution_tx: ChannelSyncTx<Message<S::Data>>,
+    // THe handle for processed timeouts
+    processed_timeout: (ChannelSyncTx<(Vec<RqTimeout>, Vec<RqTimeout>)>, ChannelSyncRx<(Vec<RqTimeout>, Vec<RqTimeout>)>),
 }
 
 impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
@@ -172,6 +174,8 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
         info!("{:?} // Finished bootstrapping node.", log_node_id);
 
+        let timeout_channel = channel::new_bounded_sync(1024);
+
         let mut replica = Self {
             // We start with the state transfer protocol to make sure everything is up to date
             replica_phase: ReplicaPhase::StateTransferProtocol,
@@ -183,6 +187,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
             node,
             execution_rx: exec_rx,
             execution_tx: exec_tx,
+            processed_timeout: timeout_channel,
         };
 
         info!("{:?} // Requesting state", log_node_id);
@@ -222,7 +227,6 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
                                 match message {
                                     SystemMessage::ProtocolMessage(protocol) => {
-
                                         let start = Instant::now();
 
                                         match self.ordering_protocol.process_message(StoredMessage::new(header, protocol))? {
@@ -233,7 +237,6 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                                 self.run_state_transfer_protocol()?;
                                             }
                                         }
-
                                     }
                                     SystemMessage::StateTransferMessage(state_transfer) => {
                                         self.state_transfer_protocol.handle_off_ctx_message(&mut self.ordering_protocol,
@@ -347,7 +350,14 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                 Message::DigestedAppState(digested) => {
                     self.state_transfer_protocol.handle_state_received_from_app(&mut self.ordering_protocol, digested)?;
                 }
+                _ => {
+
+                }
             }
+        }
+
+        while let Ok((timeouts, deleted)) = self.processed_timeout.1.try_recv() {
+            self.processed_timeout_recvd(timeouts, deleted)?;
         }
 
         Ok(())
@@ -373,16 +383,7 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
         if !client_rq.is_empty() {
             debug!("{:?} // Received client request timeouts: {}", self.node.id(), client_rq.len());
 
-            let (client_rq, to_delete) = self.rq_pre_processor.process_timeouts(client_rq).recv().unwrap();
-
-            self.timeouts.cancel_client_rq_timeouts(Some(to_delete));
-
-            match self.ordering_protocol.handle_timeout(client_rq)? {
-                OrderProtocolExecResult::RunCst => {
-                    self.run_state_transfer_protocol()?;
-                }
-                _ => {}
-            };
+            self.rq_pre_processor.process_timeouts(client_rq, self.processed_timeout.0.clone());
         }
 
         if !cst_rq.is_empty() {
@@ -397,6 +398,25 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
         }
 
         metric_duration(TIMEOUT_PROCESS_TIME_ID, start.elapsed());
+
+        Ok(())
+    }
+
+    // Process a processed timeout request
+    fn processed_timeout_recvd(&mut self, timed_out: Vec<RqTimeout>, to_delete: Vec<RqTimeout>) -> Result<()> {
+        self.timeouts.cancel_client_rq_timeouts(Some(to_delete.into_iter().map(|t| match t.timeout_kind() {
+            TimeoutKind::ClientRequestTimeout(info) => {
+                info.digest
+            }
+            _ => unreachable!()
+        }).collect()));
+
+        match self.ordering_protocol.handle_timeout(timed_out)? {
+            OrderProtocolExecResult::RunCst => {
+                self.run_state_transfer_protocol()?;
+            }
+            _ => {}
+        };
 
         Ok(())
     }

@@ -147,8 +147,15 @@ impl<T> Deref for ChannelSyncTx<T> {
 }
 
 #[inline]
-pub fn new_bounded<T>(bound: usize) -> (ChannelSyncTx<T>, ChannelSyncRx<T>) {
+pub(super) fn new_bounded<T>(bound: usize) -> (ChannelSyncTx<T>, ChannelSyncRx<T>) {
     let (tx, rx) = crossbeam_channel::bounded(bound);
+
+    (ChannelSyncTx { inner: tx }, ChannelSyncRx { inner: rx })
+}
+
+#[inline]
+pub(super) fn new_unbounded<T>() -> (ChannelSyncTx<T>, ChannelSyncRx<T>) {
+    let (tx, rx) = crossbeam_channel::unbounded();
 
     (ChannelSyncTx { inner: tx }, ChannelSyncRx { inner: rx })
 }
