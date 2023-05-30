@@ -28,10 +28,10 @@ use febft_messages::request_pre_processing::work_dividers::WDRoundRobin;
 use febft_messages::serialize::ServiceMsg;
 use febft_messages::state_transfer::{Checkpoint, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
 use febft_messages::timeouts::{RqTimeout, TimedOut, Timeout, TimeoutKind, Timeouts};
-use febft_metrics::metrics::{metric_duration, metric_store_count};
+use febft_metrics::metrics::{metric_duration, metric_increment, metric_store_count};
 use crate::config::ReplicaConfig;
 use crate::executable::{Executor, ReplicaReplier};
-use crate::metric::{ORDERING_PROTOCOL_POLL_TIME_ID, ORDERING_PROTOCOL_PROCESS_TIME_ID, REPLICA_RQ_QUEUE_SIZE_ID, RUN_LATENCY_TIME_ID, STATE_TRANSFER_PROCESS_TIME_ID, TIMEOUT_PROCESS_TIME_ID};
+use crate::metric::{ORDERING_PROTOCOL_POLL_TIME_ID, ORDERING_PROTOCOL_PROCESS_TIME_ID, REPLICA_INTERNAL_PROCESS_TIME_ID, REPLICA_ORDERED_RQS_PROCESSED_ID, REPLICA_RQ_QUEUE_SIZE_ID, REPLICA_TAKE_FROM_NETWORK_ID, RUN_LATENCY_TIME_ID, STATE_TRANSFER_PROCESS_TIME_ID, TIMEOUT_PROCESS_TIME_ID};
 use crate::server::client_replier::Replier;
 
 //pub mod observer;
@@ -201,7 +201,11 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
         let mut last_loop = Instant::now();
 
         loop {
+            let now = Instant::now();
+
             self.receive_internal()?;
+
+            metric_duration(REPLICA_INTERNAL_PROCESS_TIME_ID, now.elapsed());
 
             match self.replica_phase {
                 ReplicaPhase::OrderingProtocol => {
@@ -218,7 +222,9 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
                             let network_message = self.node.node_incoming_rq_handling().receive_from_replicas(Some(REPLICA_WAIT_TIME)).unwrap();
 
-                            metric_store_count(REPLICA_RQ_QUEUE_SIZE_ID, self.node.node_incoming_rq_handling().rqs_len_from_replicas());
+                            metric_duration(REPLICA_TAKE_FROM_NETWORK_ID, start.elapsed());
+
+                            let start = Instant::now();
 
                             if let Some(network_message) = network_message {
                                 let (header, message) = network_message.into_inner();
@@ -247,8 +253,6 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                         self.rq_pre_processor.send(PreProcessorMessage::ForwardedRequests(StoredMessage::new(header, fwd_reqs))).unwrap();
                                     }
                                     SystemMessage::ForwardedProtocolMessage(fwd_protocol) => {
-                                        let start = Instant::now();
-
                                         match self.ordering_protocol.process_message(fwd_protocol.into_inner())? {
                                             OrderProtocolExecResult::Success => {
                                                 //Continue execution
@@ -257,8 +261,6 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                                 self.run_state_transfer_protocol()?;
                                             }
                                         }
-
-                                        metric_duration(ORDERING_PROTOCOL_PROCESS_TIME_ID, start.elapsed());
                                     }
                                     _ => {
                                         error!("{:?} // Received unsupported message {:?}", self.node.id(), message);
@@ -270,8 +272,11 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                             }
 
                             metric_duration(ORDERING_PROTOCOL_PROCESS_TIME_ID, start.elapsed());
+                            metric_increment(REPLICA_ORDERED_RQS_PROCESSED_ID, Some(1));
                         }
                         OrderProtocolPoll::Exec(message) => {
+                            let start = Instant::now();
+
                             match self.ordering_protocol.process_message(message)? {
                                 OrderProtocolExecResult::Success => {
                                     // Continue execution
@@ -280,6 +285,9 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
                                     self.run_state_transfer_protocol()?;
                                 }
                             }
+
+                            metric_duration(ORDERING_PROTOCOL_PROCESS_TIME_ID, start.elapsed());
+                            metric_increment(REPLICA_ORDERED_RQS_PROCESSED_ID, Some(1));
                         }
                         OrderProtocolPoll::RunCst => {
                             self.run_state_transfer_protocol()?;

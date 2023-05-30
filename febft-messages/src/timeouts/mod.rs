@@ -229,7 +229,7 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
 
     fn run(mut self) {
         loop {
-            let message = match self.channel_rx.recv_timeout(self.iteration_delay) {
+            let mut message = match self.channel_rx.recv_timeout(self.iteration_delay) {
                 Ok(message) => { Some(message) }
                 Err(TryRecvError::Timeout) => {
                     None
@@ -242,10 +242,10 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
             };
 
             //Handle all incoming messages and update the pending timeouts accordingly
-            while let Some(mut message) = message {
+            while let Some(mut inner_msg) = message {
                 let start = Instant::now();
 
-                match message {
+                match inner_msg {
                     MessageType::TimeoutRequest(timeout_rq) => {
                         self.handle_message_timeout_request(timeout_rq, None);
                     }
@@ -268,7 +268,7 @@ impl<D: SharedData + 'static> TimeoutsThread<D> {
 
                 message = match self.channel_rx.try_recv() {
                     Ok(message) => { Some(message) }
-                    Err(TryRecvError::Empty) => {
+                    Err(TryRecvError::ChannelEmpty) => {
                         None
                     }
                     Err(err) => {

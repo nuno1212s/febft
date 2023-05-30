@@ -374,7 +374,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 } else {
 
                     debug!("{:?} // Received pre prepare message {:?} from {:?}. Current received {:?}",
-                        self.node_id, message, header.from(), received);
+                        self.node_id, stored_msg.message(), stored_msg.header().from(), received);
 
                     self.accessory.handle_partial_pre_prepare(&self.message_log,
                                                               &view, stored_msg.clone(), node);

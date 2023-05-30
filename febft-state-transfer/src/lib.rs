@@ -706,7 +706,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                 // TODO: check for more than one reply from the same node
                 let i = i + 1;
 
-                if i != order_protocol.view().quorum() {
+                if i <= order_protocol.view().f()  {
                     self.phase = ProtoPhase::ReceivingState(i);
                     return CstStatus::Running;
                 }

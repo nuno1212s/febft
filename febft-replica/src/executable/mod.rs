@@ -23,8 +23,8 @@ use febft_metrics::metrics::metric_duration;
 use crate::metric::{EXECUTION_LATENCY_TIME_ID, EXECUTION_TIME_TAKEN_ID, REPLIES_PASSING_TIME_ID, REPLIES_SENT_TIME_ID};
 use crate::server::client_replier::ReplyHandle;
 
-const EXECUTING_BUFFER: usize = 8096;
-const REPLY_CONCURRENCY: usize = 4;
+const EXECUTING_BUFFER: usize = 16384;
+//const REPLY_CONCURRENCY: usize = 4;
 
 pub trait ExecutorReplier: Send {
     fn execution_finished<D, OP, ST, NT>(

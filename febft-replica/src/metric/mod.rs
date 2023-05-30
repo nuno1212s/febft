@@ -36,6 +36,15 @@ pub const RUN_LATENCY_TIME_ID: usize = 509;
 pub const REPLICA_RQ_QUEUE_SIZE: &str = "REPLICA_RQ_QUEUE_SIZE";
 pub const REPLICA_RQ_QUEUE_SIZE_ID: usize = 510;
 
+pub const REPLICA_INTERNAL_PROCESS_TIME: &str = "REPLICA_INTERNAL_PROCESS_TIME";
+pub const REPLICA_INTERNAL_PROCESS_TIME_ID: usize = 511;
+
+pub const REPLICA_TAKE_FROM_NETWORK: &str = "REPLICA_TAKE_FROM_NETWORK";
+pub const REPLICA_TAKE_FROM_NETWORK_ID: usize = 512;
+
+pub const REPLICA_ORDERED_RQS_PROCESSED: &str = "REPLICA_ORDERED_RQS_PROCESSED";
+pub const REPLICA_ORDERED_RQS_PROCESSED_ID: usize = 513;
+
 pub fn metrics() -> Vec<MetricRegistry> {
 
     vec![
@@ -49,7 +58,10 @@ pub fn metrics() -> Vec<MetricRegistry> {
         (REPLIES_SENT_TIME_ID, REPLIES_SENT_TIME.to_string(), MetricKind::Duration, MetricLevel::Debug).into(),
         (REPLIES_PASSING_TIME_ID, REPLIES_PASSING_TIME.to_string(), MetricKind::Duration, MetricLevel::Debug).into(),
         (RUN_LATENCY_TIME_ID, RUN_LATENCY_TIME.to_string(), MetricKind::Duration, MetricLevel::Debug).into(),
-        (REPLICA_RQ_QUEUE_SIZE_ID, REPLICA_RQ_QUEUE_SIZE.to_string(), MetricKind::Count, MetricLevel::Debug).into(),
+        (REPLICA_RQ_QUEUE_SIZE_ID, REPLICA_RQ_QUEUE_SIZE.to_string(), MetricKind::Count, MetricLevel::Trace).into(),
+        (REPLICA_INTERNAL_PROCESS_TIME_ID, REPLICA_INTERNAL_PROCESS_TIME.to_string(), MetricKind::Duration, MetricLevel::Trace).into(),
+        (REPLICA_TAKE_FROM_NETWORK_ID, REPLICA_TAKE_FROM_NETWORK.to_string(), MetricKind::Duration, MetricLevel::Trace).into(),
+        (REPLICA_ORDERED_RQS_PROCESSED_ID, REPLICA_ORDERED_RQS_PROCESSED.to_string(), MetricKind::Counter, MetricLevel::Trace).into(),
     ]
 
 }

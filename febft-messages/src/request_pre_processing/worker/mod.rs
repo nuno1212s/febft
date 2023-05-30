@@ -151,12 +151,11 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
 
     /// Process the ordered client pool requests
     fn process_ordered_client_pool_requests(&mut self, requests: Vec<StoredRequestMessage<O>>) {
-
         let start = Instant::now();
 
         let processed_rqs = requests.len();
 
-        let requests = requests.into_iter().filter(|request| {
+        let requests: Vec<StoredRequestMessage<O>> = requests.into_iter().filter(|request| {
             if self.has_received_more_recent_and_update(request.header(), request.message()) {
                 return false;
             }
@@ -168,7 +167,9 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
             return true;
         }).collect();
 
-        self.batch_production.send((PreProcessorOutputMessage::DeDupedOrderedRequests(requests), Instant::now())).expect("Failed to send batch to proposer");
+        if !requests.is_empty() {
+            let _ = self.batch_production.try_send((PreProcessorOutputMessage::DeDupedOrderedRequests(requests), Instant::now()));
+        }
 
         metric_duration(RQ_PP_WORKER_ORDER_PROCESS_ID, start.elapsed());
         metric_increment(RQ_PP_WORKER_ORDER_PROCESS_COUNT_ID, Some(processed_rqs as u64));
@@ -176,7 +177,7 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
 
     /// Process the unordered client pool requests
     fn process_unordered_client_pool_rqs(&mut self, requests: Vec<StoredRequestMessage<O>>) {
-        let requests = requests.into_iter().filter(|request| {
+        let requests: Vec<StoredRequestMessage<O>> = requests.into_iter().filter(|request| {
             if self.has_received_more_recent_and_update(request.header(), request.message()) {
                 return false;
             }
@@ -184,14 +185,16 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
             return true;
         }).collect();
 
-        self.batch_production.send((PreProcessorOutputMessage::DeDupedUnorderedRequests(requests), Instant::now())).expect("Failed to send batch to proposer");
+        if !requests.is_empty() {
+            let _ = self.batch_production.try_send((PreProcessorOutputMessage::DeDupedUnorderedRequests(requests), Instant::now()));
+        }
     }
 
     /// Process the forwarded requests
     fn process_forwarded_requests(&mut self, requests: Vec<StoredRequestMessage<O>>) {
         debug!("Processing forwarded requests with len {}", requests.len());
 
-        let requests = requests.into_iter().filter(|request| {
+        let requests: Vec<StoredRequestMessage<O>> = requests.into_iter().filter(|request| {
             if self.has_received_more_recent_and_update(request.header(), request.message()) {
                 return false;
             }
@@ -205,7 +208,9 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
 
         debug!("Forwarded requests processed, left with {:?}", requests);
 
-        self.batch_production.send((PreProcessorOutputMessage::DeDupedOrderedRequests(requests), Instant::now())).expect("Failed to send batch to proposer");
+        if !requests.is_empty() {
+            let _ = self.batch_production.try_send((PreProcessorOutputMessage::DeDupedOrderedRequests(requests), Instant::now()));
+        }
     }
 
     /// Process the timeouts
@@ -217,7 +222,7 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
         let mut returned_timeouts = Vec::with_capacity(timeouts.len());
 
         let mut removed_timeouts = Vec::with_capacity(timeouts.len());
-        
+
         for timeout in timeouts {
             let result = if let TimeoutKind::ClientRequestTimeout(rq_info) = timeout.timeout_kind() {
                 let key = operation_key_raw(rq_info.sender, rq_info.session);
@@ -262,7 +267,6 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
 
     /// Clone a set of pending requests
     fn clone_pending_requests(&self, requests: Vec<ClientRqInfo>, responder: OneShotTx<Vec<StoredRequestMessage<O>>>) {
-
         let mut final_rqs = Vec::with_capacity(requests.len());
 
         for rq_info in requests {
@@ -285,7 +289,7 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
     }
 
     fn stopped_requests(&mut self, requests: Vec<StoredRequestMessage<O>>) {
-         requests.into_iter().for_each(|request| {
+        requests.into_iter().for_each(|request| {
             if self.has_received_more_recent_and_update(request.header(), request.message()) {
                 return;
             }
@@ -294,7 +298,6 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
 
             self.pending_requests.insert(digest.clone(), request.clone());
         })
-
     }
 }
 
@@ -316,9 +319,7 @@ pub(super) fn spawn_worker<O>(worker_id: usize, batch_tx: ChannelSyncTx<(PreProc
 pub struct RequestPreProcessingWorkerHandle<O>(ChannelSyncTx<PreProcessorWorkMessageOuter<O>>);
 
 impl<O> RequestPreProcessingWorkerHandle<O> {
-
     pub fn send(&self, message: PreProcessorWorkMessage<O>) {
         self.0.send((Instant::now(), message)).unwrap()
     }
-
 }

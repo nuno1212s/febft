@@ -329,6 +329,8 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
         debug!("{:?} // Stopped requests: {:?}", my_id, stopped);
 
+        debug!("{:?} // Forwarded requests: {:?}", my_id, forwarded);
+
         SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
     }
 
