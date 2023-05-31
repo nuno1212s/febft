@@ -14,7 +14,7 @@ use febft_metrics::benchmarks::BatchMeta;
 use febft_metrics::metrics::metric_duration;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::metric::PRE_PREPARE_LOG_ANALYSIS_ID;
-use crate::bft::msg_log::decisions::{IncompleteProof, Proof, ProofMetadata, StoredConsensusMessage, ViewDecisionPair, WriteSet};
+use crate::bft::msg_log::decisions::{IncompleteProof, Proof, ProofMetadata, StoredConsensusMessage, ViewDecisionPair, PrepareSet};
 use crate::bft::sync::view::ViewInfo;
 
 /// A batch that has been decided by the consensus instance and is now ready to be delivered to the
@@ -342,15 +342,20 @@ impl<O> OnGoingDecision<O> {
     pub fn deciding(&self, in_exec: SeqNo, f: usize) -> IncompleteProof {
 
         // fetch write set
-        let write_set = WriteSet({
+        let write_set = PrepareSet({
             let mut buf = Vec::new();
 
             for stored in self.prepare_messages.iter().rev() {
                 match stored.message().sequence_number().cmp(&in_exec) {
                     Ordering::Equal => {
+                        let digest = match stored.message().kind() {
+                            ConsensusMessageKind::Prepare(d) => d.clone(),
+                            _ => unreachable!(),
+                        };
+
                         buf.push(ViewDecisionPair(
                             stored.message().view(),
-                            stored.header().digest().clone(),
+                            digest,
                         ));
                     }
                     Ordering::Less => break,
@@ -363,7 +368,7 @@ impl<O> OnGoingDecision<O> {
         });
 
         // fetch quorum prepares
-        let quorum_writes = 'outer: loop {
+        let quorum_prepares = 'outer: loop {
             // NOTE: check `last_decision` comment on quorum
             let quorum = f << 1;
             let mut last_view = None;
@@ -396,7 +401,7 @@ impl<O> OnGoingDecision<O> {
             break 'outer None;
         };
 
-        IncompleteProof::new(in_exec, write_set, quorum_writes)
+        IncompleteProof::new(in_exec, write_set, quorum_prepares)
     }
 }
 

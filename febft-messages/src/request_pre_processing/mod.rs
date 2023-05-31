@@ -189,8 +189,14 @@ impl<WD, D, NT> RequestPreProcessingOrchestrator<WD, D, NT> where D: SharedData 
             for (worker,
                 (ordered_msgs, unordered_messages))
             in std::iter::zip(&self.work_comms, std::iter::zip(worker_message, unordered_worker_message)) {
-                worker.send(PreProcessorWorkMessage::ClientPoolOrderedRequestsReceived(ordered_msgs));
-                worker.send(PreProcessorWorkMessage::ClientPoolUnorderedRequestsReceived(unordered_messages));
+
+                if !ordered_msgs.is_empty() {
+                    worker.send(PreProcessorWorkMessage::ClientPoolOrderedRequestsReceived(ordered_msgs));
+                }
+
+                if !unordered_messages.is_empty() {
+                    worker.send(PreProcessorWorkMessage::ClientPoolUnorderedRequestsReceived(unordered_messages));
+                }
             }
 
             metric_duration(RQ_PP_CLIENT_MSG_ID, start.elapsed());

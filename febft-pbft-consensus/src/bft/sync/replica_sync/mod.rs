@@ -96,10 +96,10 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
         let incomplete_proof = consensus.collect_incomplete_proof(previous_view.params().f());
 
-        let collect = CollectData {
-            incomplete_proof,
-            last_proof,
-        };
+        let collect = CollectData::new(incomplete_proof, last_proof);
+
+        debug!("{:?} // Sending STOP-DATA message collect data {:?}",
+            node.id(), collect);
 
         let message = PBFTMessage::ViewChange(ViewChangeMessage::new(
             current_view_seq,

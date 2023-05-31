@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 use intmap::IntMap;
-use log::{debug, warn};
+use log::{debug, error, warn};
 use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, OneShotTx};
 use febft_common::collections::HashMap;
 use febft_common::crypto::hash::Digest;
@@ -45,6 +45,7 @@ pub enum PreProcessorWorkMessage<O> {
 
 /// Each worker will be assigned a given set of clients
 pub struct RequestPreProcessingWorker<O> {
+    worker_id: usize,
     /// Receive work
     message_rx: ChannelSyncRx<PreProcessorWorkMessageOuter<O>>,
 
@@ -61,8 +62,9 @@ pub struct RequestPreProcessingWorker<O> {
 
 
 impl<O> RequestPreProcessingWorker<O> where O: Clone {
-    pub fn new(message_rx: ChannelSyncRx<PreProcessorWorkMessageOuter<O>>, batch_production: ChannelSyncTx<PreProcessorOutput<O>>) -> Self {
+    pub fn new(worker_id: usize, message_rx: ChannelSyncRx<PreProcessorWorkMessageOuter<O>>, batch_production: ChannelSyncTx<PreProcessorOutput<O>>) -> Self {
         Self {
+            worker_id,
             message_rx,
             batch_production,
             latest_ops: Default::default(),
@@ -168,7 +170,9 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
         }).collect();
 
         if !requests.is_empty() {
-            let _ = self.batch_production.try_send((PreProcessorOutputMessage::DeDupedOrderedRequests(requests), Instant::now()));
+            if let Err(err) = self.batch_production.try_send((PreProcessorOutputMessage::DeDupedOrderedRequests(requests), Instant::now())) {
+                error!("Worker {} // Failed to send client requests to batch production: {:?}", self.worker_id, err);
+            }
         }
 
         metric_duration(RQ_PP_WORKER_ORDER_PROCESS_ID, start.elapsed());
@@ -186,13 +190,16 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
         }).collect();
 
         if !requests.is_empty() {
-            let _ = self.batch_production.try_send((PreProcessorOutputMessage::DeDupedUnorderedRequests(requests), Instant::now()));
+            if let Err(err) = self.batch_production.try_send((PreProcessorOutputMessage::DeDupedUnorderedRequests(requests), Instant::now())) {
+                error!("Worker {} // Failed to send unordered requests to batch production: {:?}", self.worker_id, err);
+            }
         }
     }
 
     /// Process the forwarded requests
     fn process_forwarded_requests(&mut self, requests: Vec<StoredRequestMessage<O>>) {
-        debug!("Processing forwarded requests with len {}", requests.len());
+
+        let initial_size = requests.len();
 
         let requests: Vec<StoredRequestMessage<O>> = requests.into_iter().filter(|request| {
             if self.has_received_more_recent_and_update(request.header(), request.message()) {
@@ -206,10 +213,12 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
             return true;
         }).collect();
 
-        debug!("Forwarded requests processed, left with {:?}", requests);
+        debug!("Worker {} // Forwarded requests processed, out of {} left with {:?}", self.worker_id, initial_size, requests);
 
         if !requests.is_empty() {
-            let _ = self.batch_production.try_send((PreProcessorOutputMessage::DeDupedOrderedRequests(requests), Instant::now()));
+            if let Err(err) = self.batch_production.try_send((PreProcessorOutputMessage::DeDupedOrderedRequests(requests), Instant::now())) {
+                error!("Worker {} // Failed to send forwarded requests to batch production: {:?}", self.worker_id, err);
+            }
         }
     }
 
@@ -305,7 +314,7 @@ pub(super) fn spawn_worker<O>(worker_id: usize, batch_tx: ChannelSyncTx<(PreProc
     where O: Clone + Send + 'static {
     let (worker_tx, worker_rx) = febft_common::channel::new_bounded_sync(WORKER_QUEUE_SIZE);
 
-    let worker = RequestPreProcessingWorker::new(worker_rx, batch_tx);
+    let worker = RequestPreProcessingWorker::new(worker_id, worker_rx, batch_tx);
 
     std::thread::Builder::new()
         .name(format!("{}{}", WORKER_THREAD_NAME, worker_id))

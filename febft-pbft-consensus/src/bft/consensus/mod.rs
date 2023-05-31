@@ -327,7 +327,9 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
 
                         //TODO: Prevent non leaders from forming an always increasing
                         // List of available sequence numbers
-                        self.consensus_guard.make_seq_available(seq_no);
+                        if self.curr_view.leader_set().contains(&self.node_id) {
+                            self.consensus_guard.make_seq_available(seq_no);
+                        }
                     }
                     _ => {}
                 }

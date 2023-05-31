@@ -59,8 +59,8 @@ pub struct Proof<O> {
 /// Contains a collection of `ViewDecisionPair` values,
 /// pertaining to a particular consensus instance.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct WriteSet(pub Vec<ViewDecisionPair>);
+#[derive(Clone, Debug)]
+pub struct PrepareSet(pub Vec<ViewDecisionPair>);
 
 /// Contains a sequence number pertaining to a particular view,
 /// as well as a hash digest of a value decided in a consensus
@@ -68,19 +68,19 @@ pub struct WriteSet(pub Vec<ViewDecisionPair>);
 ///
 /// Corresponds to the `TimestampValuePair` class in `BFT-SMaRt`.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ViewDecisionPair(pub SeqNo, pub Digest);
 
 /// Represents an incomplete decision from the `DecisionLog`.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IncompleteProof {
     in_exec: SeqNo,
-    write_set: WriteSet,
+    write_set: PrepareSet,
     quorum_prepares: Option<ViewDecisionPair>,
 }
 
-impl WriteSet {
+impl PrepareSet {
     /// Iterate over this `WriteSet`.
     ///
     /// Convenience method for calling `iter()` on the inner `Vec`.
@@ -212,7 +212,7 @@ impl<O> Deref for Proof<O> {
 }
 
 impl IncompleteProof {
-    pub fn new(in_exec: SeqNo, write_set: WriteSet, quorum_prepares: Option<ViewDecisionPair>) -> Self {
+    pub fn new(in_exec: SeqNo, write_set: PrepareSet, quorum_prepares: Option<ViewDecisionPair>) -> Self {
         Self {
             in_exec,
             write_set,
@@ -227,13 +227,13 @@ impl IncompleteProof {
     }
 
     /// Returns a reference to the `WriteSet` included in this `IncompleteProof`.
-    pub fn write_set(&self) -> &WriteSet {
+    pub fn write_set(&self) -> &PrepareSet {
         &self.write_set
     }
 
-    /// Returns a reference to the quorum writes included in this `IncompleteProof`,
+    /// Returns a reference to the quorum prepares included in this `IncompleteProof`,
     /// if any value was prepared in the previous view.
-    pub fn quorum_writes(&self) -> Option<&ViewDecisionPair> {
+    pub fn quorum_prepares(&self) -> Option<&ViewDecisionPair> {
         self.quorum_prepares.as_ref()
     }
 }
@@ -375,5 +375,11 @@ impl<O> Clone for Proof<O> {
 impl<O> Debug for Proof<O> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Proof {{ Metadata: {:?}, pre_prepares: {}, prepares: {}, commits: {} }}", self.metadata, self.pre_prepares.len(), self.prepares.len(), self.commits.len())
+    }
+}
+
+impl<O> Debug for CollectData<O> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CollectData {{ incomplete_proof: {:?}, last_proof: {:?} }}", self.incomplete_proof, self.last_proof)
     }
 }

@@ -145,6 +145,7 @@ pub(super) enum FinalizeStatus<O> {
 }
 
 ///
+#[derive(Clone, Debug)]
 pub(self) enum Sound {
     Unbound(bool),
     Bound(Digest),
@@ -1297,6 +1298,8 @@ fn sound<'a, O>(curr_view: &ViewInfo, normalized_collects: &[Option<&'a CollectD
     let mut seq_numbers = collections::hash_set();
     let mut values = collections::hash_set();
 
+    debug!("Checking soundness of view {:?} with collects: {:?}", curr_view, normalized_collects);
+
     for maybe_collect in normalized_collects.iter() {
         // NOTE: BFT-SMaRt assumes normalized values start on view 0,
         // if their CID is different from the one in execution;
@@ -1304,6 +1307,8 @@ fn sound<'a, O>(curr_view: &ViewInfo, normalized_collects: &[Option<&'a CollectD
         let c = match maybe_collect {
             Some(c) => c,
             None => {
+                debug!("Found no collect data.");
+
                 seq_numbers.insert(SeqNo::ZERO);
                 continue;
             }
@@ -1312,7 +1317,7 @@ fn sound<'a, O>(curr_view: &ViewInfo, normalized_collects: &[Option<&'a CollectD
         // add quorum write sequence numers
         seq_numbers.insert(
             c.incomplete_proof()
-                .quorum_writes()
+                .quorum_prepares()
                 .map(|ViewDecisionPair(ts, _)| *ts)
                 .unwrap_or(SeqNo::ZERO),
         );
@@ -1324,10 +1329,15 @@ fn sound<'a, O>(curr_view: &ViewInfo, normalized_collects: &[Option<&'a CollectD
         }
     }
 
+    debug!("View change sound final sequence numbers: {:?}", seq_numbers);
+    debug!("View change sound final values: {:?}", values);
+
     for seq_no in seq_numbers {
         for value in values.iter() {
             if binds(&curr_view, seq_no, value, normalized_collects) {
                 return Sound::Bound(*value);
+            } else {
+                debug!("Failed to bind seq no {:?} and value {:?}.", seq_no, value);
             }
         }
     }
@@ -1342,15 +1352,24 @@ fn binds<O>(
     normalized_collects: &[Option<&CollectData<O>>],
 ) -> bool {
     if normalized_collects.len() < curr_view.params().quorum() {
+
+        debug!("Not enough collects to bind. Need {:?}, have {:?}.", curr_view.params().quorum(), normalized_collects.len());
+
         false
     } else {
-        quorum_highest(curr_view, ts, value, normalized_collects)
-            && certified_value(curr_view, ts, value, normalized_collects)
+        let quorum_highest = quorum_highest(curr_view, ts, value, normalized_collects);
+
+        let certified_value = certified_value(curr_view, ts, value, normalized_collects);
+
+        quorum_highest && certified_value
     }
 }
 
 fn unbound<O>(curr_view: &ViewInfo, normalized_collects: &[Option<&CollectData<O>>]) -> bool {
     if normalized_collects.len() < curr_view.params().quorum() {
+
+        debug!("Not enough collects to unbound. Need {:?}, have {:?}.", curr_view.params().quorum(), normalized_collects.len());
+
         false
     } else {
         let count = normalized_collects
@@ -1360,7 +1379,7 @@ fn unbound<O>(curr_view: &ViewInfo, normalized_collects: &[Option<&CollectData<O
                     .map(|collect| {
                         collect
                             .incomplete_proof()
-                            .quorum_writes()
+                            .quorum_prepares()
                             .map(|ViewDecisionPair(other_ts, _)| *other_ts == SeqNo::ZERO)
                             // when there is no quorum write, BFT-SMaRt
                             // assumes replicas are on view 0
@@ -1370,6 +1389,9 @@ fn unbound<O>(curr_view: &ViewInfo, normalized_collects: &[Option<&CollectData<O
                     .unwrap_or(true)
             })
             .count();
+
+        debug!("Unbound count: {:?} for collect data: {:?}.", count, normalized_collects);
+
         count >= curr_view.params().quorum()
     }
 }
@@ -1390,13 +1412,14 @@ fn quorum_highest<O>(
     value: &Digest,
     normalized_collects: &[Option<&CollectData<O>>],
 ) -> bool {
+
     let appears = normalized_collects
         .iter()
         .filter_map(Option::as_ref)
         .position(|collect| {
             collect
                 .incomplete_proof()
-                .quorum_writes()
+                .quorum_prepares()
                 .map(|ViewDecisionPair(other_ts, other_value)| {
                     *other_ts == ts && other_value == value
                 })
@@ -1410,9 +1433,8 @@ fn quorum_highest<O>(
         .filter(move |collect| {
             collect
                 .incomplete_proof()
-                .quorum_writes()
-                .map(
-                    |ViewDecisionPair(other_ts, other_value)| match other_ts.cmp(&ts) {
+                .quorum_prepares()
+                .map(|ViewDecisionPair(other_ts, other_value)| match other_ts.cmp(&ts) {
                         Ordering::Less => true,
                         Ordering::Equal if other_value == value => true,
                         _ => false,
@@ -1421,6 +1443,8 @@ fn quorum_highest<O>(
                 .unwrap_or(false)
         })
         .count();
+
+    debug!("Quorum highest: {:?} appears? {} {:?} times.", value, appears, count);
 
     appears && count >= curr_view.params().quorum()
 }
@@ -1445,6 +1469,9 @@ fn certified_value<O>(
                 .count()
         })
         .sum();
+
+    debug!("Certified value: {:?} appears {:?} times.", value, count);
+
     count > curr_view.params().f()
 }
 
