@@ -412,9 +412,9 @@ impl<S, OP, ST, NT> Replica<S, OP, ST, NT> where S: Service + 'static,
 
     // Process a processed timeout request
     fn processed_timeout_recvd(&mut self, timed_out: Vec<RqTimeout>, to_delete: Vec<RqTimeout>) -> Result<()> {
-        self.timeouts.cancel_client_rq_timeouts(Some(to_delete.into_iter().map(|t| match t.timeout_kind() {
+        self.timeouts.cancel_client_rq_timeouts(Some(to_delete.into_iter().map(|t| match t.into_timeout_kind() {
             TimeoutKind::ClientRequestTimeout(info) => {
-                info.digest
+                info
             }
             _ => unreachable!()
         }).collect()));

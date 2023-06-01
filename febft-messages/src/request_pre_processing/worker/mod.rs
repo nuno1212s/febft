@@ -144,10 +144,10 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
             }
         };
 
-        let has_received_more_recent = seq_no >= rq_info.seqno;
+        let has_received_more_recent = seq_no >= rq_info.seq_no;
 
         if !has_received_more_recent {
-            self.latest_ops.insert(key, rq_info.seqno);
+            self.latest_ops.insert(key, rq_info.seq_no);
         }
     }
 
@@ -237,7 +237,7 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
                 let key = operation_key_raw(rq_info.sender, rq_info.session);
 
                 if let Some(seq_no) = self.latest_ops.get(key) {
-                    if *seq_no >= rq_info.seqno {
+                    if *seq_no >= rq_info.seq_no {
                         self.pending_requests.contains_key(&rq_info.digest)
                     } else {
                         true

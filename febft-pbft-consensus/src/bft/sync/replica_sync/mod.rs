@@ -234,12 +234,6 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         metric_duration(SYNC_STOPPED_REQUESTS_ID, start_time.elapsed());
     }
 
-    /// Remove a client request with digest `digest` from the watched list
-    /// of requests.
-    pub fn unwatch_request(&self, digest: &Digest, timeouts: &Timeouts) {
-        timeouts.cancel_client_rq_timeouts(Some(vec![digest.clone()]));
-    }
-
     /// Stop watching all pending client requests.
     pub fn unwatch_all_requests(&self, timeouts: &Timeouts) {
         timeouts.cancel_client_rq_timeouts(None);

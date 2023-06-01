@@ -950,10 +950,10 @@ impl ProposerConsensusGuard {
         for req in rqs {
             let entry = client_map.entry(req.sender).or_insert_with(BTreeMap::new);
 
-            let session_entry = entry.entry(req.session).or_insert_with(|| req.seqno);
+            let session_entry = entry.entry(req.session).or_insert_with(|| req.seq_no);
 
-            if *session_entry < req.seqno {
-                *session_entry = req.seqno;
+            if *session_entry < req.seq_no {
+                *session_entry = req.seq_no;
             }
         }
 

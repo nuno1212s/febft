@@ -199,7 +199,7 @@ pub struct ClientRqInfo {
 
     // The sender, sequence number and session number
     pub sender: NodeId,
-    pub seqno: SeqNo,
+    pub seq_no: SeqNo,
     pub session: SeqNo,
 }
 
@@ -392,7 +392,7 @@ impl<O> Debug for RequestMessage<O> {
 
 impl Orderable for ClientRqInfo {
     fn sequence_number(&self) -> SeqNo {
-        self.seqno
+        self.seq_no
     }
 }
 
@@ -401,7 +401,7 @@ impl ClientRqInfo {
         Self {
             digest,
             sender,
-            seqno,
+            seq_no: seqno,
             session,
         }
     }
@@ -418,7 +418,7 @@ impl<O> From<&StoredRequestMessage<O>> for ClientRqInfo {
         Self {
             digest,
             sender,
-            seqno: seq_no,
+            seq_no: seq_no,
             session,
         }
     }
