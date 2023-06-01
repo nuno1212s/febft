@@ -6,6 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 use std::cell::Cell;
+use std::fmt::{Debug, Formatter};
 use std::sync::MutexGuard;
 use bytes::BytesMut;
 use either::Either;
@@ -198,28 +199,29 @@ impl<O> TboQueue<O> {
 
 
     /// Installs a new view into the queue.
-    pub fn install_view(&mut self, view: ViewInfo) {
+    pub fn install_view(&mut self, view: ViewInfo) -> bool {
         let index = view.sequence_number().index(self.view.sequence_number());
 
-        let prev_view = std::mem::replace(&mut self.view, view);
-
-        self.previous_view = Some(prev_view);
-
-        match index {
+        return match index {
             Either::Right(i) if i > 0 => {
+                let prev_view = std::mem::replace(&mut self.view, view);
+
+                self.previous_view = Some(prev_view);
 
                 for _ in 0..i {
                     self.next_instance_queue();
                 }
 
+                true
             }
             Either::Right(_) => {
                 warn!("Installing a view with the same seq number as the current one?");
+                false
             }
             Either::Left(_) => {
                 unreachable!("How can we possibly go back in time?");
             }
-        }
+        };
 
     }
 
@@ -335,6 +337,7 @@ pub enum SynchronizerStatus {
 }
 
 /// Represents the status of calling `poll()` on a `Synchronizer`.
+#[derive(Clone)]
 pub enum SynchronizerPollStatus<O> {
     /// The `Replica` associated with this `Synchronizer` should
     /// poll its network channel for more messages, as it has no messages
@@ -399,10 +402,12 @@ impl<D: SharedData + 'static> AbstractSynchronizer<D> for Synchronizer<D> {
     /// running the view change protocol.
     fn install_view(&self, view: ViewInfo) {
         // FIXME: is the following line necessary?
-        self.phase.replace(ProtoPhase::Init);
         let mut guard = self.tbo.lock().unwrap();
 
-        guard.install_view(view);
+        if guard.install_view(view) {
+            // If we don't install a new view, then we don't want to forget our current state now do we?
+            self.phase.replace(ProtoPhase::Init);
+        }
     }
 
     fn queue(&self, header: Header, message: ViewChangeMessage<D::Request>) {
@@ -804,11 +809,13 @@ impl<D> Synchronizer<D>
                                 // and wait for a new time out? but then, no other
                                 // consensus messages have been processed... this
                                 // may be a point of contention on the lib!
-                                collects_guard.clear();
 
                                 error!("{:?} // The view change is not sound. Cancelling.", node.id());
+                                /*
+                                collects_guard.clear();
 
                                 return SynchronizerStatus::Running;
+                                */
                             }
 
                             let p = rq_pre_processor.collect_all_pending_rqs();
@@ -979,7 +986,7 @@ impl<D> Synchronizer<D>
                     // and wait for a new time out? but then, no other
                     // consensus messages have been processed... this
                     // may be a point of contention on the lib!
-                    return SynchronizerStatus::Running;
+                    //return SynchronizerStatus::Running;
                 }
 
                 let state = FinalizeState {
@@ -1594,4 +1601,21 @@ fn highest_proof<'a, D, I, ST, NT>(
             commits_valid && prepares_valid
         })
         .max_by_key(|proof| proof.sequence_number())
+}
+
+
+impl<O> Debug for SynchronizerPollStatus<O> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SynchronizerPollStatus::Recv => {
+                write!(f, "SynchronizerPollStatus::Recv")
+            }
+            SynchronizerPollStatus::NextMessage(_, _) => {
+                write!(f, "SynchronizerPollStatus::NextMessage")
+            }
+            SynchronizerPollStatus::ResumeViewChange => {
+                write!(f, "SynchronizerPollStatus::ResumeViewChange")
+            }
+        }
+    }
 }

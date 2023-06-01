@@ -10,6 +10,7 @@ use febft_common::crypto::hash::Digest;
 use febft_common::globals::ReadOnly;
 use febft_common::ordering::{Orderable, SeqNo};
 use febft_communication::message::StoredMessage;
+use febft_messages::serialize::{OrderProtocolLog, OrderProtocolProof};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::msg_log::deciding_log::CompletedBatch;
 
@@ -342,6 +343,16 @@ impl<O> DecisionLog<O> {
         decided_request_count
     }
 }
+
+impl<O> Orderable for DecisionLog<O> {
+    fn sequence_number(&self) -> SeqNo {
+        self.last_exec.unwrap_or(SeqNo::ZERO)
+    }
+}
+
+impl<O> OrderProtocolLog for DecisionLog<O> {}
+
+impl<O> OrderProtocolProof for Proof<O> {}
 
 impl<O> Clone for Proof<O> {
     fn clone(&self) -> Self {

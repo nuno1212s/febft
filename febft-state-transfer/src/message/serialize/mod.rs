@@ -12,7 +12,7 @@ use crate::message::CstMessage;
 pub struct CSTMsg<D: SharedData, OP: OrderingProtocolMessage, SOP: StatefulOrderProtocolMessage>(PhantomData<(D, OP, SOP)>);
 
 impl<D: SharedData, OP: OrderingProtocolMessage, SOP: StatefulOrderProtocolMessage> StateTransferMessage for CSTMsg<D, OP, SOP> {
-    type StateTransferMessage = CstMessage<D::State, OP::ViewInfo, SOP::DecLog>;
+    type StateTransferMessage = CstMessage<D::State, OP::ViewInfo, SOP::DecLog, SOP::Proof>;
 
     #[cfg(feature = "serialize_capnp")]
     fn serialize_capnp(builder: febft_capnp::cst_messages_capnp::cst_message::Builder, msg: &Self::StateTransferMessage) -> febft_common::error::Result<()> {

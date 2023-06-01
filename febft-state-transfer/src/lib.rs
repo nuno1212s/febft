@@ -4,12 +4,10 @@ pub mod message;
 pub mod config;
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
-use std::collections::hash_map::Entry;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use log::{debug, info};
+use log::{debug, error, info};
 
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
@@ -29,21 +27,21 @@ use febft_execution::serialize::SharedData;
 use febft_messages::messages::{StateTransfer, SystemMessage};
 use febft_messages::ordering_protocol::{OrderingProtocol, View};
 use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage, NetworkView};
-use febft_messages::state_transfer::{Checkpoint, CstM, DecLog, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
+use febft_messages::state_transfer::{Checkpoint, CstM, DecLog, SerProof, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
 use febft_messages::timeouts::{RqTimeout, TimeoutKind, Timeouts};
 use crate::config::StateTransferConfig;
 
 use crate::message::{CstMessage, CstMessageKind};
 use crate::message::serialize::{CSTMsg};
 
-enum ProtoPhase<S, V, O> {
+enum ProtoPhase<S, V, O, P> {
     Init,
-    WaitingCheckpoint(Vec<StoredMessage<CstMessage<S, V, O>>>),
+    WaitingCheckpoint(Vec<StoredMessage<CstMessage<S, V, O, P>>>),
     ReceivingCid(usize),
     ReceivingState(usize),
 }
 
-impl<S, V, O> Debug for ProtoPhase<S, V, O> {
+impl<S, V, O, P> Debug for ProtoPhase<S, V, O, P> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ProtoPhase::Init => {
@@ -149,7 +147,7 @@ struct ReceivedState<S, V, O> {
 /// The implementation is based on the paper «On the Efﬁciency of
 /// Durable State Machine Replication», by A. Bessani et al.
 pub struct CollabStateTransfer<D: SharedData + 'static, OP: StatefulOrderProtocol<D, NT>, NT> {
-    latest_cid: SeqNo,
+    largest_cid: SeqNo,
     cst_seq: SeqNo,
     latest_cid_count: usize,
     base_timeout: Duration,
@@ -160,7 +158,7 @@ pub struct CollabStateTransfer<D: SharedData + 'static, OP: StatefulOrderProtoco
     //voted: HashSet<NodeId>,
     node: Arc<NT>,
     received_states: HashMap<Digest, ReceivedState<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>>>,
-    phase: ProtoPhase<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>>,
+    phase: ProtoPhase<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>, SerProof<OP::StateSerialization>>,
 }
 
 /// Status returned from processing a state transfer message.
@@ -212,13 +210,13 @@ impl<S, V, O> Debug for CstStatus<S, V, O> {
 ///
 /// To clarify, the mention of state machine here has nothing to do with the
 /// SMR protocol, but rather the implementation in code of the CST protocol.
-pub enum CstProgress<S, V, O> {
+pub enum CstProgress<S, V, O, P> {
     // TODO: Timeout( some type here)
     /// This value represents null progress in the CST code's state machine.
     Nil,
     /// We have a fresh new message to feed the CST state machine, from
     /// the communication layer.
-    Message(Header, CstMessage<S, V, O>),
+    Message(Header, CstMessage<S, V, O, P>),
 }
 
 macro_rules! getmessage {
@@ -407,14 +405,12 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
 
     fn handle_timeout(&mut self, order_protocol: &mut OP, timeout: Vec<RqTimeout>) -> Result<STTimeoutResult>
         where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> {
-
         for cst_seq in timeout {
             if let TimeoutKind::Cst(cst_seq) = cst_seq.timeout_kind() {
                 if self.cst_request_timed_out(cst_seq.clone(), order_protocol) {
                     return Ok(STTimeoutResult::RunCst);
                 }
             }
-
         }
 
         Ok(STTimeoutResult::CstNotNeeded)
@@ -436,7 +432,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
             node,
             received_states: collections::hash_map(),
             phase: ProtoPhase::Init,
-            latest_cid: SeqNo::ZERO,
+            largest_cid: SeqNo::ZERO,
             latest_cid_count: 0,
             cst_seq: SeqNo::ZERO,
         }
@@ -453,13 +449,23 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
     fn process_request_seq(
         &mut self,
         header: Header,
-        message: CstMessage<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>>,
+        message: CstMessage<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>, SerProof<OP::StateSerialization>>,
         order_protocol: &mut OP, )
         where
             OP: StatefulOrderProtocol<D, NT>,
             NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>
     {
-        let kind = CstMessageKind::ReplyLatestConsensusSeq(order_protocol.sequence_number());
+        let proof = match order_protocol.sequence_number_with_proof() {
+            Ok(res) => {
+                res
+            }
+            Err(err) => {
+                error!("{:?} // Error while getting sequence number with proof {:?}", self.node.id(), err);
+                return;
+            }
+        };
+
+        let kind = CstMessageKind::ReplyLatestConsensusSeq(proof);
 
         let reply = CstMessage::new(message.sequence_number(), kind);
 
@@ -481,7 +487,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
         let waiting = std::mem::replace(&mut self.phase, ProtoPhase::Init);
 
         if let ProtoPhase::WaitingCheckpoint(reqs) = waiting {
-            let mut map: HashMap<NodeId, StoredMessage<CstMessage<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>>>> = collections::hash_map();
+            let mut map: HashMap<NodeId, StoredMessage<CstMessage<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>, SerProof<OP::StateSerialization>>>> = collections::hash_map();
 
             for request in reqs {
                 // We only want to reply to the most recent requests from each of the nodes
@@ -510,7 +516,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
     fn process_request_state(
         &mut self,
         header: Header,
-        message: CstMessage<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>>,
+        message: CstMessage<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>, SerProof<OP::StateSerialization>>,
         op: &mut OP,
     ) where
         OP: StatefulOrderProtocol<D, NT>,
@@ -560,7 +566,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
     /// Advances the state of the CST state machine.
     pub fn process_message(
         &mut self,
-        progress: CstProgress<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>>,
+        progress: CstProgress<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>, SerProof<OP::StateSerialization>>,
         order_protocol: &mut OP,
     ) -> CstStatus<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>>
         where
@@ -613,12 +619,27 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                 }
 
                 match message.kind() {
-                    CstMessageKind::ReplyLatestConsensusSeq(seq) => {
+                    CstMessageKind::ReplyLatestConsensusSeq(proof) => {
+
+                        let seq = if let Some((seq, proof)) = proof {
+                            if let Ok(verified) = order_protocol.verify_sequence_number(*seq, proof) {
+                                if verified {
+                                    *seq
+                                } else {
+                                    SeqNo::ZERO
+                                }
+                            } else {
+                                SeqNo::ZERO
+                            }
+                        } else {
+                            SeqNo::ZERO
+                        };
+
                         debug!("{:?} // Received CID vote {:?} from {:?}", self.node.id(), seq, header.from());
 
-                        match seq.cmp(&self.latest_cid) {
+                        match seq.cmp(&self.largest_cid) {
                             Ordering::Greater => {
-                                self.latest_cid = *seq;
+                                self.largest_cid = seq;
                                 self.latest_cid_count = 1;
                             }
                             Ordering::Equal => {
@@ -649,25 +670,22 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
 
                 debug!("{:?} // Quorum count {}, i: {}, cst_seq {:?}. Current Latest Cid: {:?}. Current Latest Cid Count: {}",
                         self.node.id(), order_protocol.view().quorum(), i,
-                        self.cst_seq, self.latest_cid, self.latest_cid_count);
+                        self.cst_seq, self.largest_cid, self.latest_cid_count);
 
                 if i == order_protocol.view().quorum() {
                     self.phase = ProtoPhase::Init;
 
-                    if self.latest_cid_count > order_protocol.view().f() {
-                        // reset timeout, since req was successful
-                        self.curr_timeout = self.base_timeout;
+                    // reset timeout, since req was successful
+                    self.curr_timeout = self.base_timeout;
 
-                        info!("{:?} // Identified the latest consensus seq no as {:?} with {} votes.",
+                    info!("{:?} // Identified the latest consensus seq no as {:?} with {} votes.",
                             self.node.id(),
-                            self.latest_cid, self.latest_cid_count);
+                            self.largest_cid, self.latest_cid_count);
 
-                        // the latest cid was available in at least
-                        // f+1 replicas
-                        CstStatus::SeqNo(self.latest_cid)
-                    } else {
-                        CstStatus::RequestLatestCid
-                    }
+                    // we don't need the latest cid to be available in at least
+                    // f+1 replicas since the replica has the proof that the system
+                    // has decided
+                    CstStatus::SeqNo(self.largest_cid)
                 } else {
                     self.phase = ProtoPhase::ReceivingCid(i);
 
@@ -693,12 +711,30 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                 debug!("{:?} // Received state with digest {:?}, is contained in map? {}", self.node.id(),
                 state_digest, self.received_states.contains_key(&state_digest));
 
-                let received_state = self
-                    .received_states
-                    .entry(state_digest)
-                    .or_insert(ReceivedState { count: 0, state });
+                if self.received_states.contains_key(&state_digest) {
+                    let current_state = self.received_states.get_mut(&state_digest).unwrap();
 
-                received_state.count += 1;
+                    let current_state_seq: SeqNo = current_state.state.log().sequence_number();
+                    let recv_state_seq: SeqNo = state.log().sequence_number();
+
+                    match recv_state_seq.cmp(&current_state_seq) {
+                        Ordering::Less | Ordering::Equal => {
+                            // we have just verified that the state is the same, but the decision log is
+                            // smaller than the one we have already received
+                            current_state.count += 1;
+                        }
+                        Ordering::Greater => {
+                            current_state.state = state;
+                            // We have also verified that the state is the same but the decision log is
+                            // Larger, so we want to store the newest one. However we still want to increment the count
+                            // We can do this since to be in the decision log, a replica must have all of the messages
+                            // From at least 2f+1 replicas, so we know that the log is valid
+                            current_state.count += 1;
+                        }
+                    }
+                } else {
+                    self.received_states.insert(state_digest, ReceivedState { count: 1, state });
+                }
 
                 // check if we have gathered enough state
                 // replies from peer nodes
@@ -706,7 +742,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                 // TODO: check for more than one reply from the same node
                 let i = i + 1;
 
-                if i <= order_protocol.view().f()  {
+                if i <= order_protocol.view().f() {
                     self.phase = ProtoPhase::ReceivingState(i);
                     return CstStatus::Running;
                 }
@@ -718,14 +754,18 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
                 // check if we have at least f+1 matching states
                 let digest = {
                     let received_state = self.received_states.iter().max_by_key(|(_, st)| st.count);
+
                     match received_state {
                         Some((digest, _)) => digest.clone(),
                         None => {
-                            self.received_states.clear();
+                            return if i >= order_protocol.view().quorum() {
+                                self.received_states.clear();
 
-                            debug!("{:?} // No matching states found", self.node.id());
-
-                            return CstStatus::RequestState;
+                                debug!("{:?} // No matching states found, clearing", self.node.id());
+                                CstStatus::RequestState
+                            } else {
+                                CstStatus::Running
+                            };
                         }
                     }
                 };
@@ -741,6 +781,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
 
                 // return the state
                 let f = order_protocol.view().f();
+
                 match received_state {
                     Some(ReceivedState { count, state }) if count > f => {
                         self.phase = ProtoPhase::Init;
@@ -838,7 +879,7 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
     {
 
         // reset state of latest seq no. request
-        self.latest_cid = SeqNo::ZERO;
+        self.largest_cid = SeqNo::ZERO;
         self.latest_cid_count = 0;
 
         let cst_seq = self.curr_seq();

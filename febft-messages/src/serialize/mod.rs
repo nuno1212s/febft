@@ -25,6 +25,18 @@ pub trait NetworkView: Orderable {
     fn n(&self) -> usize;
 }
 
+pub trait OrderProtocolLog: Orderable {
+
+    // At the moment I only need orderable, but I might need more in the future
+
+}
+
+pub trait OrderProtocolProof: Orderable {
+
+    // At the moment I only need orderable, but I might need more in the future
+
+}
+
 /// We do not need a serde module since serde serialization is just done on the network level.
 /// The abstraction for ordering protocol messages.
 pub trait OrderingProtocolMessage: Send {
@@ -72,16 +84,31 @@ pub trait StateTransferMessage: Send {
 /// The messages for the stateful ordering protocol
 pub trait StatefulOrderProtocolMessage: Send {
     #[cfg(feature = "serialize_capnp")]
-    type DecLog: Send + Clone;
+    type DecLog: OrderProtocolLog + Send + Clone;
 
     #[cfg(feature = "serialize_serde")]
-    type DecLog: for<'a> Deserialize<'a> + Serialize + Send + Clone;
+    type DecLog: OrderProtocolLog + for<'a> Deserialize<'a> + Serialize + Send + Clone;
+
+    /// A proof of a given Sequence number in the consensus protocol
+    /// This is used when requesting the latest consensus id in the state transfer protocol,
+    /// in order to verify that a given consensus id is valid
+    #[cfg(feature = "serialize_capnp")]
+    type Proof: OrderProtocolProof + Send + Clone;
+
+    #[cfg(feature = "serialize_serde")]
+    type Proof: OrderProtocolProof + for<'a> Deserialize<'a> + Serialize + Send + Clone;
 
     #[cfg(feature = "serialize_capnp")]
     fn serialize_declog_capnp(builder: febft_capnp::cst_messages_capnp::dec_log::Builder, msg: &Self::DecLog) -> Result<()>;
 
     #[cfg(feature = "serialize_capnp")]
     fn deserialize_declog_capnp(reader: febft_capnp::cst_messages_capnp::dec_log::Reader) -> Result<Self::DecLog>;
+
+    #[cfg(feature = "serialize_capnp")]
+    fn serialize_proof_capnp(builder: febft_capnp::cst_messages_capnp::proof::Builder, msg: &Self::Proof) -> Result<()>;
+
+    #[cfg(feature = "serialize_capnp")]
+    fn deserialize_proof_capnp(reader: febft_capnp::cst_messages_capnp::proof::Reader) -> Result<Self::Proof>;
 }
 
 /// The type that encapsulates all the serializing, so we don't have to constantly use SystemMessage

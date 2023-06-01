@@ -122,6 +122,7 @@ pub trait StateTransferProtocol<D, OP, NT> where
 }
 
 pub type DecLog<OP> = <OP as StatefulOrderProtocolMessage>::DecLog;
+pub type SerProof<OP> = <OP as StatefulOrderProtocolMessage>::Proof;
 
 /// An order protocol that uses the state transfer protocol to manage its state.
 pub trait StatefulOrderProtocol<D: SharedData + 'static, NT>: OrderingProtocol<D, NT> {
@@ -131,6 +132,13 @@ pub trait StatefulOrderProtocol<D: SharedData + 'static, NT>: OrderingProtocol<D
     fn initialize_with_initial_state(config: Self::Config, args: OrderingProtocolArgs<D, NT>, initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where
         Self: Sized;
 
+    /// Get the current sequence number of the protocol, combined with a proof of it so we can send it to other replicas
+    fn sequence_number_with_proof(&self) -> Result<Option<(SeqNo, SerProof<Self::StateSerialization>)>>;
+
+    /// Verify the sequence number sent by another replica. This doesn't pass a mutable reference since we don't want to
+    /// make any changes to the state of the protocol here (or allow the implementer to do so). Instead, we want to
+    /// just verify this sequence number
+    fn verify_sequence_number(&self, seq_no: SeqNo, proof: &SerProof<Self::StateSerialization>) -> Result<bool>;
 
     /// Install a state received from other replicas in the system
     /// Should only alter the necessary things within its own state and

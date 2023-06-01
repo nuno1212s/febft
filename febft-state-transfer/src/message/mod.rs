@@ -9,21 +9,21 @@ use crate::RecoveryState;
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct CstMessage<S, V, O> {
+pub struct CstMessage<S, V, O, P> {
     // NOTE: not the same sequence number used in the
     // consensus layer to order client requests!
     seq: SeqNo,
-    kind: CstMessageKind<S, V, O>,
+    kind: CstMessageKind<S, V, O, P>,
 }
 
-impl<S, V, O> Debug for CstMessage<S, V, O> {
+impl<S, V, O, P> Debug for CstMessage<S, V, O, P> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self.kind {
+        match &self.kind {
             CstMessageKind::RequestLatestConsensusSeq => {
                 write!(f, "Request consensus ID")
             }
-            CstMessageKind::ReplyLatestConsensusSeq(seq) => {
-                write!(f, "Reply consensus seq {:?}", seq)
+            CstMessageKind::ReplyLatestConsensusSeq(opt ) => {
+                write!(f, "Reply consensus seq {:?}", opt.as_ref().map(|(seq, _)| *seq).unwrap_or(SeqNo::ZERO))
             }
             CstMessageKind::RequestState => {
                 write!(f, "Request state message")
@@ -38,29 +38,29 @@ impl<S, V, O> Debug for CstMessage<S, V, O> {
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub enum CstMessageKind<S, V, O> {
+pub enum CstMessageKind<S, V, O, P> {
     RequestLatestConsensusSeq,
-    ReplyLatestConsensusSeq(SeqNo),
+    ReplyLatestConsensusSeq(Option<(SeqNo, P)>),
     RequestState,
     ReplyState(RecoveryState<S, V, O>),
 }
 
-impl<S, O, V> Orderable for CstMessage<S, V, O> {
+impl<S, O, V, P> Orderable for CstMessage<S, V, O, P> {
     /// Returns the sequence number of this state transfer message.
     fn sequence_number(&self) -> SeqNo {
         self.seq
     }
 }
 
-impl<S, O, V> CstMessage<S, V, O> {
+impl<S, O, V, P> CstMessage<S, V, O, P> {
     /// Creates a new `CstMessage` with sequence number `seq`,
     /// and of the kind `kind`.
-    pub fn new(seq: SeqNo, kind: CstMessageKind<S, V, O>) -> Self {
+    pub fn new(seq: SeqNo, kind: CstMessageKind<S, V, O, P>) -> Self {
         Self { seq, kind }
     }
 
     /// Returns a reference to the state transfer message kind.
-    pub fn kind(&self) -> &CstMessageKind<S, V, O> {
+    pub fn kind(&self) -> &CstMessageKind<S, V, O, P> {
         &self.kind
     }
 

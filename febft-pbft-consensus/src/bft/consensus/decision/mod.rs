@@ -352,20 +352,18 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
 
                     self.consensus_metrics.all_pre_prepares_recvd(self.message_log.current_batch_size());
 
-                    let seq_no = self.sequence_number();
-                    let metadata = batch_metadata;
-
-                    let current_digest = metadata.batch_digest();
+                    let current_digest = batch_metadata.batch_digest();
 
                     // Register that all of the batches have been received
                     // The digest of the batch and the order of the batches
-                    log.all_batches_received(metadata);
+                    log.all_batches_received(batch_metadata);
 
                     self.accessory.handle_pre_prepare_phase_completed(&self.message_log,
                                                                       &view, stored_msg.clone(), node);
 
                     self.message_queue.signal();
 
+                    // Mark that we have transitioned to the next phase
                     result = DecisionStatus::Transitioned;
 
                     // We no longer start the count at 1 since all leaders must also send the prepare

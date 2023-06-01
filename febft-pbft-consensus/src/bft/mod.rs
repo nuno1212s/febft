@@ -7,7 +7,7 @@ use std::ops::Drop;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use log::{debug, info, LevelFilter, warn};
+use log::{debug, info, LevelFilter, trace, warn};
 use log4rs::{
     append::file::FileAppender,
     config::{Appender, Logger, Root},
@@ -28,8 +28,8 @@ use febft_messages::messages::ClientRqInfo;
 use febft_messages::messages::Protocol;
 use febft_messages::ordering_protocol::{OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, View};
 use febft_messages::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
-use febft_messages::serialize::{ServiceMsg, StateTransferMessage};
-use febft_messages::state_transfer::{Checkpoint, DecLog, StatefulOrderProtocol};
+use febft_messages::serialize::{NetworkView, ServiceMsg, StateTransferMessage};
+use febft_messages::state_transfer::{Checkpoint, DecLog, SerProof, StatefulOrderProtocol};
 use febft_messages::timeouts::{RqTimeout, Timeouts};
 use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus, ProposerConsensusGuard};
@@ -37,6 +37,7 @@ use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKi
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::{Info, initialize_decided_log, initialize_persistent_log};
 use crate::bft::msg_log::decided_log::Log;
+use crate::bft::msg_log::decisions::Proof;
 use crate::bft::msg_log::persistent::NoPersistentLog;
 use crate::bft::proposer::Proposer;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus};
@@ -173,7 +174,6 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     }
 
     fn handle_timeout(&mut self, timeout: Vec<RqTimeout>) -> Result<OrderProtocolExecResult> {
-
         if self.consensus.is_catching_up() {
             warn!("{:?} // Ignoring timeouts while catching up", self.node.id());
 
@@ -285,7 +285,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         info!("{:?} // Watermark: {}", replica.node.id(), watermark);
 
         println!("{:?} // Leader count: {}, Leader set: {:?}", replica.node.id(),
-        crr_view.leader_set().len(), crr_view.leader_set());
+                 crr_view.leader_set().len(), crr_view.leader_set());
         println!("{:?} // Watermark: {}", replica.node.id(), watermark);
 
         replica.proposer.clone().start();
@@ -294,13 +294,20 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
     }
 
     fn poll_sync_phase(&mut self) -> OrderProtocolPoll<PBFTMessage<D::Request>> {
+
         // retrieve a view change message to be processed
-        match self.synchronizer.poll() {
+        let poll_result = self.synchronizer.poll();
+
+        debug!("{:?} // Polling sync phase {:?}", self.node.id(), poll_result);
+
+        match poll_result {
             SynchronizerPollStatus::Recv => OrderProtocolPoll::ReceiveFromReplicas,
             SynchronizerPollStatus::NextMessage(h, m) => {
                 OrderProtocolPoll::Exec(StoredMessage::new(h, Protocol::new(PBFTMessage::ViewChange(m))))
             }
             SynchronizerPollStatus::ResumeViewChange => {
+                debug!("{:?} // Resuming view change", self.node.id());
+
                 self.synchronizer.resume_view_change(
                     &mut self.message_log,
                     &self.timeouts,
@@ -580,6 +587,19 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     fn initialize_with_initial_state(config: Self::Config, args: OrderingProtocolArgs<D, NT>,
                                      initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where Self: Sized {
         Self::initialize_protocol(config, args, Some(initial_state))
+    }
+
+    fn sequence_number_with_proof(&self) -> Result<Option<(SeqNo, SerProof<Self::StateSerialization>)>> {
+        Ok(self.message_log.last_proof(self.synchronizer.view().f())
+            .map(|p| (p.sequence_number(), p)))
+    }
+
+    fn verify_sequence_number(&self, seq_no: SeqNo, proof: &SerProof<Self::StateSerialization>) -> Result<bool> {
+        let proof: &Proof<D::Request> = proof;
+
+        //TODO: Verify the proof
+
+        Ok(true)
     }
 
     fn install_state(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>,

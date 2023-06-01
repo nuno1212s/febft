@@ -243,6 +243,8 @@ impl<D: SharedData + 'static> TimeoutWorker<D> {
                     Entry::Occupied(occupied) => {
                         let mut info = occupied.into_mut();
 
+                        // If the current request we have stored is older than the one we are now receiving,
+                        // This means we are outdated and need to catch up to the consensus
                         if info.seq_no < client_rq.seq_no {
 
                             // Remove the timeout from the pending timeouts, since we have already receive a newer request, meaning this
@@ -342,7 +344,7 @@ impl<D: SharedData + 'static> TimeoutWorker<D> {
                 if let TimeoutKind::ClientRequestTimeout(rq) = &timeout.info {
                     let client_request = &client_rq.timeout_info;
 
-                    return !(rq.sender == client_request.sender && rq.session == client_request.session && rq.seq_no == client_request.seq_no);
+                    return rq.sender == client_request.sender && rq.session == client_request.session && rq.seq_no == client_request.seq_no;
                 }
 
                 false

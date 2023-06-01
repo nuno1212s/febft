@@ -10,6 +10,10 @@ struct DecLog {
 
 }
 
+struct Proof {
+
+}
+
 struct ViewInfo {
 
 }

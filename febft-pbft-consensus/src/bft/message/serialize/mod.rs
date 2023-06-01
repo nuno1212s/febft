@@ -23,7 +23,7 @@ use febft_execution::serialize::SharedData;
 use febft_messages::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage};
 use crate::bft::message::{ConsensusMessage, PBFTMessage};
 use crate::bft::{PBFT};
-use crate::bft::msg_log::decisions::DecisionLog;
+use crate::bft::msg_log::decisions::{DecisionLog, Proof};
 use crate::bft::sync::view::ViewInfo;
 
 #[cfg(feature = "serialize_capnp")]
@@ -93,6 +93,7 @@ impl<D> OrderingProtocolMessage for PBFTConsensus<D> where D: SharedData {
 
 impl<D> StatefulOrderProtocolMessage for PBFTConsensus<D> where D: SharedData {
     type DecLog = DecisionLog<D::Request>;
+    type Proof = Proof<D::Request>;
 
 
     #[cfg(feature = "serialize_capnp")]
@@ -102,6 +103,17 @@ impl<D> StatefulOrderProtocolMessage for PBFTConsensus<D> where D: SharedData {
 
     #[cfg(feature = "serialize_capnp")]
     fn deserialize_declog_capnp(reader: febft_capnp::cst_messages_capnp::dec_log::Reader) -> Result<Self::DecLog> {
+        todo!()
+    }
+
+
+    #[cfg(feature = "serialize_capnp")]
+    fn serialize_proof_capnp(builder: febft_capnp::cst_messages_capnp::proof::Builder, msg: &Self::Proof) -> Result<()> {
+        todo!()
+    }
+
+    #[cfg(feature = "serialize_capnp")]
+    fn deserialize_proof_capnp(reader: febft_capnp::cst_messages_capnp::proof::Reader) -> Result<Self::Proof> {
         todo!()
     }
 }
