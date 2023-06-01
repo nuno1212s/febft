@@ -213,11 +213,15 @@ pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static
     /// The consensus guard that will be used to ensure that the proposer only proposes one batch
     /// for each consensus instance
     consensus_guard: Arc<ProposerConsensusGuard>,
+    // A reference to the timeouts
+    timeouts: Timeouts,
+    /// Check if we are currently recovering from a fault, meaning we should ignore timeouts
+    is_recovering: bool,
 }
 
 impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                                    ST: StateTransferMessage + 'static {
-    pub fn new_replica(node_id: NodeId, view: &ViewInfo, executor_handle: ExecutorHandle<D>, seq_no: SeqNo, watermark: u32, consensus_guard: Arc<ProposerConsensusGuard>) -> Self {
+    pub fn new_replica(node_id: NodeId, view: &ViewInfo, executor_handle: ExecutorHandle<D>, seq_no: SeqNo, watermark: u32, consensus_guard: Arc<ProposerConsensusGuard>, timeouts: Timeouts) -> Self {
         let mut curr_seq = seq_no;
 
         let mut consensus = Self {
@@ -231,6 +235,8 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             tbo_queue: TboQueue::new(seq_no, watermark),
             view_queue: VecDeque::with_capacity(watermark as usize),
             consensus_guard,
+            timeouts,
+            is_recovering: false,
         };
 
         // Initialize the consensus instances
@@ -462,6 +468,13 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         // (expected during normal operations, then we will create a new message queue)
         let queue = self.tbo_queue.advance_queue();
 
+        if !queue.is_signalled() && self.is_recovering {
+            self.is_recovering = false;
+
+            // This means the queue is empty.
+            self.timeouts.cancel_client_rq_timeouts(None);
+        }
+
         let new_seq_no = self.decisions.back()
             .map(|d| d.sequence_number().next())
             // If the watermark is 1, then the seq no of the
@@ -482,6 +495,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
     pub fn install_state(&mut self, state: D::State,
                          view_info: ViewInfo,
                          dec_log: &DecisionLog<D::Request>) -> Result<(D::State, Vec<D::Request>)> {
+
         // get the latest seq no
         let seq_no = {
             let last_exec = dec_log.last_execution();
@@ -491,6 +505,12 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                 last_exec.unwrap()
             }
         };
+
+        if seq_no > SeqNo::ZERO {
+            // If we have installed a new state, then we must be recovering and therefore should
+            // Stop timeouts
+            self.is_recovering = true;
+        }
 
         // skip old messages
         self.install_sequence_number(seq_no.next(), &view_info);
@@ -829,10 +849,10 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         self.consensus_guard.clear();
     }
 
-    pub(super) fn is_catching_up(&self) -> bool{
+    pub(super) fn is_catching_up(&self) -> bool {
         // If we have a bunch of messages still to process,
         // Don't listen to timeouts
-        self.tbo_queue.pre_prepares.len() > 0
+        self.is_recovering
     }
 }
 

@@ -6,6 +6,7 @@
 use std::ops::Drop;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 
 use log::{debug, info, LevelFilter, trace, warn};
 use log4rs::{
@@ -31,10 +32,12 @@ use febft_messages::request_pre_processing::{PreProcessorMessage, RequestPreProc
 use febft_messages::serialize::{NetworkView, ServiceMsg, StateTransferMessage};
 use febft_messages::state_transfer::{Checkpoint, DecLog, SerProof, StatefulOrderProtocol};
 use febft_messages::timeouts::{RqTimeout, Timeouts};
+use febft_metrics::metrics::metric_duration;
 use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus, ProposerConsensusGuard};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage, ViewChangeMessage};
 use crate::bft::message::serialize::PBFTConsensus;
+use crate::bft::metric::{CONSENSUS_INSTALL_STATE_TIME_ID, MSG_LOG_INSTALL_TIME_ID};
 use crate::bft::msg_log::{Info, initialize_decided_log, initialize_persistent_log};
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::Proof;
@@ -250,7 +253,8 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         let consensus_guard = ProposerConsensusGuard::new(view.clone(), watermark);
 
         let consensus = Consensus::<D, ST>::new_replica(node_id, &sync.view(), executor.clone(),
-                                                        SeqNo::ZERO, watermark, consensus_guard.clone());
+                                                        SeqNo::ZERO, watermark, consensus_guard.clone(),
+                                                        timeouts.clone());
 
         let persistent_log = initialize_persistent_log::<D, String, NoPersistentLog>(executor.clone(), db_path)?;
 
@@ -618,9 +622,17 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
 
         self.synchronizer.install_view(view_info.clone());
 
+        let start = Instant::now();
+
         let res = self.consensus.install_state(state.state().clone(), view_info, &dec_log)?;
 
+        metric_duration(CONSENSUS_INSTALL_STATE_TIME_ID, start.elapsed());
+
+        let start = Instant::now();
+
         self.message_log.install_state(state, dec_log);
+
+        metric_duration(MSG_LOG_INSTALL_TIME_ID, start.elapsed());
 
         Ok(res)
     }

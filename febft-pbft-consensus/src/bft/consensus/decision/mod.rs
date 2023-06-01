@@ -112,7 +112,7 @@ pub struct ConsensusDecision<D: SharedData + 'static, ST: StateTransferMessage +
     /// Accessory to the base consensus state machine
     accessory: ConsensusDecisionAccessory<D, ST>,
     // Metrics about the consensus instance
-    consensus_metrics: ConsensusMetrics
+    consensus_metrics: ConsensusMetrics,
     //TODO: Store things directly into the persistent log as well as delete them when
     // Things go wrong
 }
@@ -144,6 +144,8 @@ impl<O> MessageQueue<O> {
     fn signal(&mut self) {
         self.get_queue = true;
     }
+
+    pub fn is_signalled(&self) -> bool { self.get_queue }
 
     fn queue_pre_prepare(&mut self, message: StoredMessage<ConsensusMessage<O>>) {
         self.pre_prepares.push_back(message);
@@ -370,7 +372,6 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                     // message with the digest of the entire batch
                     DecisionPhase::Preparing(0)
                 } else {
-
                     debug!("{:?} // Received pre prepare message {:?} from {:?}. Current received {:?}",
                         self.node_id, stored_msg.message(), stored_msg.header().from(), received);
 

@@ -58,6 +58,12 @@ pub const PRE_PREPARE_LOG_ANALYSIS_ID: usize = 116;
 pub const OPERATIONS_PROCESSED: &str = "OPS_PER_SECOND";
 pub const OPERATIONS_PROCESSED_ID: usize = 117;
 
+pub const CONSENSUS_INSTALL_STATE_TIME: &str = "CONSENSUS_INSTALL_STATE_TIME";
+pub const CONSENSUS_INSTALL_STATE_TIME_ID: usize = 118;
+
+pub const MSG_LOG_INSTALL_TIME: &str = "MSG_LOG_INSTALL_TIME";
+pub const MSG_LOG_INSTALL_TIME_ID: usize = 119;
+
 /// 120-129: Synchronizer
 pub const SYNC_WATCH_REQUESTS: &str = "SYNC_WATCH_REQUESTS";
 pub const SYNC_WATCH_REQUESTS_ID: usize = 120;
@@ -98,6 +104,8 @@ pub fn metrics() -> Vec<MetricRegistry> {
         (PRE_PREPARE_ANALYSIS_ID, PRE_PREPARE_ANALYSIS.to_string(), MetricKind::Duration).into(),
         (PRE_PREPARE_LOG_ANALYSIS_ID, PRE_PREPARE_LOG_ANALYSIS.to_string(), MetricKind::Duration).into(),
         (OPERATIONS_PROCESSED_ID, OPERATIONS_PROCESSED.to_string(), MetricKind::Counter).into(),
+        (CONSENSUS_INSTALL_STATE_TIME_ID, CONSENSUS_INSTALL_STATE_TIME.to_string(), MetricKind::Duration).into(),
+        (MSG_LOG_INSTALL_TIME_ID, MSG_LOG_INSTALL_TIME.to_string(), MetricKind::Duration).into(),
         (SYNC_WATCH_REQUESTS_ID, SYNC_WATCH_REQUESTS.to_string(), MetricKind::Duration).into(),
         (SYNC_BATCH_RECEIVED_ID, SYNC_BATCH_RECEIVED.to_string(), MetricKind::Duration).into(),
         (SYNC_STOPPED_REQUESTS_ID, SYNC_STOPPED_REQUESTS.to_string(), MetricKind::Duration).into(),
