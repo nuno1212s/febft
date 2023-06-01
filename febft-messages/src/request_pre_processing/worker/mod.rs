@@ -55,7 +55,7 @@ pub struct RequestPreProcessingWorker<O> {
     /// The latest operations seen by this worker.
     /// Since a given session will always be handled by the same worker,
     /// we can use this to filter out duplicates.
-    latest_ops: IntMap<SeqNo>,
+    latest_ops: IntMap<(SeqNo, Option<Digest>)>,
     /// The requests that have not been added to a batch yet.
     pending_requests: HashMap<Digest, StoredRequestMessage<O>>,
 }
@@ -113,21 +113,23 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
     }
 
     /// Checks if we have received a more recent message for a given client/session combo
-    fn has_received_more_recent_and_update(&mut self, header: &Header, message: &RequestMessage<O>) -> bool {
+    fn has_received_more_recent_and_update(&mut self, header: &Header, message: &RequestMessage<O>, unique_digest: &Digest) -> bool {
         let key = operation_key::<O>(header, message);
 
-        let seq_no = {
-            if let Some(seq_no) = self.latest_ops.get_mut(key) {
-                seq_no.clone()
+        let (seq_no, digest) = {
+            if let Some((seq_no, digest)) = self.latest_ops.get_mut(key) {
+                (seq_no.clone(), digest.clone())
             } else {
-                SeqNo::ZERO
+                (SeqNo::ZERO, None)
             }
         };
 
         let has_received_more_recent = seq_no >= message.sequence_number();
 
         if !has_received_more_recent {
-            self.latest_ops.insert(key, message.sequence_number());
+            digest.map(|digest| self.pending_requests.remove(&digest));
+
+            self.latest_ops.insert(key, (message.sequence_number(), Some(unique_digest.clone())));
         }
 
         has_received_more_recent
@@ -136,18 +138,20 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
     fn update_most_recent(&mut self, rq_info: &ClientRqInfo) {
         let key = operation_key_raw(rq_info.sender, rq_info.session);
 
-        let seq_no = {
-            if let Some(seq_no) = self.latest_ops.get_mut(key) {
-                seq_no.clone()
+        let (seq_no, digest) = {
+            if let Some((seq_no, digest)) = self.latest_ops.get_mut(key) {
+                (seq_no.clone(),digest.clone())
             } else {
-                SeqNo::ZERO
+                (SeqNo::ZERO, None)
             }
         };
 
         let has_received_more_recent = seq_no >= rq_info.seq_no;
 
         if !has_received_more_recent {
-            self.latest_ops.insert(key, rq_info.seq_no);
+            digest.map(|digest| self.pending_requests.remove(&digest));
+
+            self.latest_ops.insert(key, (rq_info.seq_no, None));
         }
     }
 
@@ -158,11 +162,11 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
         let processed_rqs = requests.len();
 
         let requests: Vec<StoredRequestMessage<O>> = requests.into_iter().filter(|request| {
-            if self.has_received_more_recent_and_update(request.header(), request.message()) {
+            let digest = request.header().unique_digest();
+
+            if self.has_received_more_recent_and_update(request.header(), request.message(), &digest) {
                 return false;
             }
-
-            let digest = request.header().unique_digest();
 
             self.pending_requests.insert(digest.clone(), request.clone());
 
@@ -182,7 +186,9 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
     /// Process the unordered client pool requests
     fn process_unordered_client_pool_rqs(&mut self, requests: Vec<StoredRequestMessage<O>>) {
         let requests: Vec<StoredRequestMessage<O>> = requests.into_iter().filter(|request| {
-            if self.has_received_more_recent_and_update(request.header(), request.message()) {
+            let digest = request.header().unique_digest();
+
+            if self.has_received_more_recent_and_update(request.header(), request.message(), &digest) {
                 return false;
             }
 
@@ -202,11 +208,12 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
         let initial_size = requests.len();
 
         let requests: Vec<StoredRequestMessage<O>> = requests.into_iter().filter(|request| {
-            if self.has_received_more_recent_and_update(request.header(), request.message()) {
-                return false;
-            }
 
             let digest = request.header().unique_digest();
+
+            if self.has_received_more_recent_and_update(request.header(), request.message(), &digest) {
+                return false;
+            }
 
             self.pending_requests.insert(digest.clone(), request.clone());
 
@@ -236,7 +243,7 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
             let result = if let TimeoutKind::ClientRequestTimeout(rq_info) = timeout.timeout_kind() {
                 let key = operation_key_raw(rq_info.sender, rq_info.session);
 
-                if let Some(seq_no) = self.latest_ops.get(key) {
+                if let Some((seq_no, _)) = self.latest_ops.get(key) {
                     if *seq_no >= rq_info.seq_no {
                         self.pending_requests.contains_key(&rq_info.digest)
                     } else {
@@ -299,11 +306,11 @@ impl<O> RequestPreProcessingWorker<O> where O: Clone {
 
     fn stopped_requests(&mut self, requests: Vec<StoredRequestMessage<O>>) {
         requests.into_iter().for_each(|request| {
-            if self.has_received_more_recent_and_update(request.header(), request.message()) {
+            let digest = request.header().unique_digest();
+
+            if self.has_received_more_recent_and_update(request.header(), request.message(), &digest) {
                 return;
             }
-
-            let digest = request.header().unique_digest();
 
             self.pending_requests.insert(digest.clone(), request.clone());
         })
