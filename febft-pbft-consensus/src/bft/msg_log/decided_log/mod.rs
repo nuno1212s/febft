@@ -1,16 +1,16 @@
 use std::mem::size_of;
 use std::sync::Arc;
 use log::error;
-use febft_common::crypto::hash::{Context, Digest};
+use atlas_common::crypto::hash::{Context, Digest};
 
-use febft_common::error::*;
-use febft_common::globals::ReadOnly;
-use febft_common::node_id::NodeId;
-use febft_common::ordering::{Orderable, SeqNo};
-use febft_communication::message::StoredMessage;
-use febft_execution::app::{Request, Service, State, UpdateBatch};
-use febft_execution::serialize::SharedData;
-use febft_messages::state_transfer::Checkpoint;
+use atlas_common::error::*;
+use atlas_common::globals::ReadOnly;
+use atlas_common::node_id::NodeId;
+use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_communication::message::StoredMessage;
+use atlas_execution::app::{Request, Service, State, UpdateBatch};
+use atlas_execution::serialize::SharedData;
+use atlas_core::state_transfer::Checkpoint;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::msg_log::{Info, operation_key, CHECKPOINT_PERIOD};

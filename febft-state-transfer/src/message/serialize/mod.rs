@@ -3,9 +3,9 @@ mod capnp;
 
 use std::marker::PhantomData;
 use std::time::Instant;
-use febft_execution::serialize::SharedData;
-use febft_messages::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage, StateTransferMessage};
-use febft_messages::state_transfer::{StatefulOrderProtocol, StateTransferProtocol};
+use atlas_execution::serialize::SharedData;
+use atlas_core::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage, StateTransferMessage};
+use atlas_core::state_transfer::{StatefulOrderProtocol, StateTransferProtocol};
 use crate::CollabStateTransfer;
 use crate::message::CstMessage;
 
@@ -15,12 +15,12 @@ impl<D: SharedData, OP: OrderingProtocolMessage, SOP: StatefulOrderProtocolMessa
     type StateTransferMessage = CstMessage<D::State, OP::ViewInfo, SOP::DecLog, SOP::Proof>;
 
     #[cfg(feature = "serialize_capnp")]
-    fn serialize_capnp(builder: febft_capnp::cst_messages_capnp::cst_message::Builder, msg: &Self::StateTransferMessage) -> febft_common::error::Result<()> {
+    fn serialize_capnp(builder: atlas_capnp::cst_messages_capnp::cst_message::Builder, msg: &Self::StateTransferMessage) -> atlas_common::error::Result<()> {
         todo!()
     }
 
     #[cfg(feature = "serialize_capnp")]
-    fn deserialize_capnp(reader: febft_capnp::cst_messages_capnp::cst_message::Reader) -> febft_common::error::Result<Self::StateTransferMessage> {
+    fn deserialize_capnp(reader: atlas_capnp::cst_messages_capnp::cst_message::Reader) -> atlas_common::error::Result<Self::StateTransferMessage> {
         todo!()
     }
 }

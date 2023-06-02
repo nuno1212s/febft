@@ -2,15 +2,15 @@ use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
-use febft_common::error::*;
+use atlas_common::error::*;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
-use febft_common::crypto::hash::Digest;
-use febft_common::globals::ReadOnly;
-use febft_common::ordering::{Orderable, SeqNo};
-use febft_communication::message::StoredMessage;
-use febft_messages::serialize::{OrderProtocolLog, OrderProtocolProof};
+use atlas_common::crypto::hash::Digest;
+use atlas_common::globals::ReadOnly;
+use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_communication::message::StoredMessage;
+use atlas_core::serialize::{OrderProtocolLog, OrderProtocolProof};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::msg_log::deciding_log::CompletedBatch;
 

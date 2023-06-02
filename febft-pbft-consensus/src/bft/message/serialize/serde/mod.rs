@@ -1,5 +1,5 @@
 use std::io::{Read, Write};
-use febft_common::error::*;
+use atlas_common::error::*;
 use crate::bft::message::serialize::SharedData;
 use crate::bft::message::{ConsensusMessage};
 

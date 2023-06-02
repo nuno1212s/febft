@@ -10,18 +10,18 @@ use bytes::Bytes;
 #[cfg(feature = "serialize_serde")]
 use serde::{Serialize, Deserialize};
 
-use febft_common::error::*;
+use atlas_common::error::*;
 
 use futures::io::{
     AsyncWriteExt,
     AsyncWrite,
 };
-use febft_common::crypto::hash::{Context, Digest};
-use febft_common::crypto::signature::{KeyPair, PublicKey, Signature};
-use febft_common::ordering::{Orderable, SeqNo};
-use febft_communication::message::{Header, NetworkMessage, NetworkMessageKind, PingMessage, StoredMessage};
-use febft_execution::serialize::SharedData;
-use febft_messages::messages::{RequestMessage, StoredRequestMessage};
+use atlas_common::crypto::hash::{Context, Digest};
+use atlas_common::crypto::signature::{KeyPair, PublicKey, Signature};
+use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_communication::message::{Header, NetworkMessage, NetworkMessageKind, PingMessage, StoredMessage};
+use atlas_execution::serialize::SharedData;
+use atlas_core::messages::{RequestMessage, StoredRequestMessage};
 
 use crate::bft::sync::LeaderCollects;
 use crate::bft::msg_log::decisions::CollectData;

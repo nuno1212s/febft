@@ -9,18 +9,18 @@
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 use bytes::Bytes;
-use febft_common::error::*;
+use atlas_common::error::*;
 
 use crate::bft::msg_log::persistent::ProofInfo;
 
 #[cfg(feature = "serialize_serde")]
 use ::serde::{Deserialize, Serialize};
-use febft_common::crypto::hash::{Context, Digest};
-use febft_communication::Node;
-use febft_communication::serialize::Serializable;
-use febft_execution::app::Service;
-use febft_execution::serialize::SharedData;
-use febft_messages::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage};
+use atlas_common::crypto::hash::{Context, Digest};
+use atlas_communication::Node;
+use atlas_communication::serialize::Serializable;
+use atlas_execution::app::Service;
+use atlas_execution::serialize::SharedData;
+use atlas_core::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage};
 use crate::bft::message::{ConsensusMessage, PBFTMessage};
 use crate::bft::{PBFT};
 use crate::bft::msg_log::decisions::{DecisionLog, Proof};
@@ -71,22 +71,22 @@ impl<D> OrderingProtocolMessage for PBFTConsensus<D> where D: SharedData {
     type ProtocolMessage = PBFTMessage<D::Request>;
 
     #[cfg(feature = "serialize_capnp")]
-    fn serialize_capnp(builder: febft_capnp::consensus_messages_capnp::protocol_message::Builder, msg: &Self::ProtocolMessage) -> Result<()> {
+    fn serialize_capnp(builder: atlas_capnp::consensus_messages_capnp::protocol_message::Builder, msg: &Self::ProtocolMessage) -> Result<()> {
         capnp::serialize_message::<D>(builder, msg)
     }
 
     #[cfg(feature = "serialize_capnp")]
-    fn deserialize_capnp(reader: febft_capnp::consensus_messages_capnp::protocol_message::Reader) -> Result<Self::ProtocolMessage> {
+    fn deserialize_capnp(reader: atlas_capnp::consensus_messages_capnp::protocol_message::Reader) -> Result<Self::ProtocolMessage> {
         capnp::deserialize_message::<D>(reader)
     }
 
     #[cfg(feature = "serialize_capnp")]
-    fn serialize_view_capnp(builder: febft_capnp::cst_messages_capnp::view_info::Builder, msg: &Self::ViewInfo) -> Result<()> {
+    fn serialize_view_capnp(builder: atlas_capnp::cst_messages_capnp::view_info::Builder, msg: &Self::ViewInfo) -> Result<()> {
         todo!()
     }
 
     #[cfg(feature = "serialize_capnp")]
-    fn deserialize_view_capnp(reader: febft_capnp::cst_messages_capnp::view_info::Reader) -> Result<Self::ViewInfo> {
+    fn deserialize_view_capnp(reader: atlas_capnp::cst_messages_capnp::view_info::Reader) -> Result<Self::ViewInfo> {
         todo!()
     }
 }
@@ -97,23 +97,23 @@ impl<D> StatefulOrderProtocolMessage for PBFTConsensus<D> where D: SharedData {
 
 
     #[cfg(feature = "serialize_capnp")]
-    fn serialize_declog_capnp(builder: febft_capnp::cst_messages_capnp::dec_log::Builder, msg: &Self::DecLog) -> Result<()> {
+    fn serialize_declog_capnp(builder: atlas_capnp::cst_messages_capnp::dec_log::Builder, msg: &Self::DecLog) -> Result<()> {
         todo!()
     }
 
     #[cfg(feature = "serialize_capnp")]
-    fn deserialize_declog_capnp(reader: febft_capnp::cst_messages_capnp::dec_log::Reader) -> Result<Self::DecLog> {
+    fn deserialize_declog_capnp(reader: atlas_capnp::cst_messages_capnp::dec_log::Reader) -> Result<Self::DecLog> {
         todo!()
     }
 
 
     #[cfg(feature = "serialize_capnp")]
-    fn serialize_proof_capnp(builder: febft_capnp::cst_messages_capnp::proof::Builder, msg: &Self::Proof) -> Result<()> {
+    fn serialize_proof_capnp(builder: atlas_capnp::cst_messages_capnp::proof::Builder, msg: &Self::Proof) -> Result<()> {
         todo!()
     }
 
     #[cfg(feature = "serialize_capnp")]
-    fn deserialize_proof_capnp(reader: febft_capnp::cst_messages_capnp::proof::Reader) -> Result<Self::Proof> {
+    fn deserialize_proof_capnp(reader: atlas_capnp::cst_messages_capnp::proof::Reader) -> Result<Self::Proof> {
         todo!()
     }
 }

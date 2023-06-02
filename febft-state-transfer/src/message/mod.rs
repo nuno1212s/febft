@@ -4,7 +4,7 @@ pub mod serialize;
 use std::fmt::{Debug, Formatter};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
-use febft_common::ordering::{Orderable, SeqNo};
+use atlas_common::ordering::{Orderable, SeqNo};
 use crate::RecoveryState;
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]

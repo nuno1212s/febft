@@ -11,19 +11,19 @@ use std::sync::{Arc};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use log::error;
-use febft_common::channel;
-use febft_common::channel::{ChannelSyncRx, ChannelSyncTx, SendError};
-use febft_common::crypto::hash::Digest;
+use atlas_common::channel;
+use atlas_common::channel::{ChannelSyncRx, ChannelSyncTx, SendError};
+use atlas_common::crypto::hash::Digest;
 
-use febft_common::error::*;
-use febft_common::globals::ReadOnly;
-use febft_common::ordering::{Orderable, SeqNo};
-use febft_common::persistentdb::KVDB;
-use febft_communication::message::{Header, StoredMessage};
-use febft_execution::app::{Request, Service, State};
-use febft_execution::ExecutorHandle;
-use febft_execution::serialize::SharedData;
-use febft_messages::state_transfer::Checkpoint;
+use atlas_common::error::*;
+use atlas_common::globals::ReadOnly;
+use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_common::persistentdb::KVDB;
+use atlas_communication::message::{Header, StoredMessage};
+use atlas_execution::app::{Request, Service, State};
+use atlas_execution::ExecutorHandle;
+use atlas_execution::serialize::SharedData;
+use atlas_core::state_transfer::Checkpoint;
 
 use crate::bft::msg_log::persistent::serialization::{make_proof_info};
 
@@ -753,7 +753,7 @@ fn read_latest_state<D: SharedData>(db: &KVDB) -> Result<Option<InstallState<D>>
 
     let dec_log = read_all_present_proofs::<D>(db)?;
 
-    let digest = febft_execution::serialize::digest_state::<D>(state.as_ref().unwrap())?;
+    let digest = atlas_execution::serialize::digest_state::<D>(state.as_ref().unwrap())?;
 
     let checkpoint = Checkpoint::new(first_seq.unwrap(), state.unwrap(), digest);
 

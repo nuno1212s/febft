@@ -1,6 +1,6 @@
 use std::time::Instant;
-use febft_metrics::{MetricLevel, MetricRegistry};
-use febft_metrics::metrics::{metric_duration, metric_duration_end, metric_store_count, MetricKind};
+use atlas_metrics::{MetricLevel, MetricRegistry};
+use atlas_metrics::metrics::{metric_duration, metric_duration_end, metric_store_count, MetricKind};
 
 /// Consensus will take the ID range 1XX, for now
 ///

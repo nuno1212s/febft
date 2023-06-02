@@ -2,13 +2,13 @@ use std::io::Read;
 use std::io::Write;
 use bytes::BytesMut;
 use capnp::message::ReaderOptions;
-use febft_capnp::{consensus_messages_capnp, messages_capnp};
-use febft_common::crypto::hash::Digest;
+use atlas_capnp::{consensus_messages_capnp, messages_capnp};
+use atlas_common::crypto::hash::Digest;
 
-use febft_common::error::*;
-use febft_common::ordering::{Orderable, SeqNo};
-use febft_communication::message::{Header, PingMessage, StoredMessage};
-use febft_messages::serialize::capnp::deserialize_request;
+use atlas_common::error::*;
+use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_communication::message::{Header, PingMessage, StoredMessage};
+use atlas_core::serialize::capnp::deserialize_request;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind,  ObserveEventKind, ObserverMessage, PBFTMessage, RequestMessage, ViewChangeMessage};
 
@@ -154,7 +154,7 @@ pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
 }
 
 fn serialize_consensus_message<S>(
-    mut consensus: febft_capnp::consensus_messages_capnp::consensus::Builder,
+    mut consensus: atlas_capnp::consensus_messages_capnp::consensus::Builder,
     m: &ConsensusMessage<S::Request>,
 ) -> Result<()>
     where

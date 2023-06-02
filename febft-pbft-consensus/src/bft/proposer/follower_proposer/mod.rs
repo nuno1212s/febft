@@ -1,14 +1,14 @@
 use std::marker::PhantomData;
 use std::sync::{atomic::AtomicBool, Arc};
-use febft_common::channel;
-use febft_common::channel::{ChannelSyncRx, ChannelSyncTx};
-use febft_communication::message::StoredMessage;
-use febft_communication::Node;
-use febft_execution::app::Service;
-use febft_execution::ExecutorHandle;
-use febft_execution::serialize::SharedData;
-use febft_messages::messages::{RequestMessage, StoredRequestMessage};
-use febft_messages::serialize::StateTransferMessage;
+use atlas_common::channel;
+use atlas_common::channel::{ChannelSyncRx, ChannelSyncTx};
+use atlas_communication::message::StoredMessage;
+use atlas_communication::Node;
+use atlas_execution::app::Service;
+use atlas_execution::ExecutorHandle;
+use atlas_execution::serialize::SharedData;
+use atlas_core::messages::{RequestMessage, StoredRequestMessage};
+use atlas_core::serialize::StateTransferMessage;
 use crate::bft::PBFT;
 
 pub type BatchType<D: SharedData> = Vec<StoredRequestMessage<D::Request>>;

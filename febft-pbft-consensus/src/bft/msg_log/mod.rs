@@ -3,15 +3,15 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use febft_common::error::*;
-use febft_common::globals::ReadOnly;
-use febft_common::node_id::NodeId;
-use febft_common::ordering::SeqNo;
-use febft_communication::message::{Header, StoredMessage};
-use febft_execution::ExecutorHandle;
-use febft_execution::serialize::SharedData;
-use febft_messages::messages::RequestMessage;
-use febft_messages::state_transfer::Checkpoint;
+use atlas_common::error::*;
+use atlas_common::globals::ReadOnly;
+use atlas_common::node_id::NodeId;
+use atlas_common::ordering::SeqNo;
+use atlas_communication::message::{Header, StoredMessage};
+use atlas_execution::ExecutorHandle;
+use atlas_execution::serialize::SharedData;
+use atlas_core::messages::RequestMessage;
+use atlas_core::state_transfer::Checkpoint;
 
 use crate::bft::message::ConsensusMessage;
 use crate::bft::msg_log::decided_log::Log;

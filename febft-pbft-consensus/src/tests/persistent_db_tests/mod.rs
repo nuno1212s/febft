@@ -3,9 +3,9 @@ pub mod persistent_db_tests {
     use std::convert::TryInto;
 
     use log::kv;
-    use febft_common::node_id::NodeId;
-    use febft_common::ordering::SeqNo;
-    use febft_common::persistentdb::KVDB;
+    use atlas_common::node_id::NodeId;
+    use atlas_common::ordering::SeqNo;
+    use atlas_common::persistentdb::KVDB;
 
     const DB_PATH: &str = "test_db";
 

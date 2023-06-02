@@ -1,8 +1,8 @@
-use febft_common::crypto::hash::Digest;
-use febft_common::ordering::SeqNo;
-use febft_communication::Node;
-use febft_execution::serialize::SharedData;
-use febft_messages::serialize::StateTransferMessage;
+use atlas_common::crypto::hash::Digest;
+use atlas_common::ordering::SeqNo;
+use atlas_communication::Node;
+use atlas_execution::serialize::SharedData;
+use atlas_core::serialize::StateTransferMessage;
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;
 use crate::bft::message::ConsensusMessage;
 use crate::bft::msg_log::deciding_log::DecidingLog;

@@ -8,12 +8,12 @@ use num_bigint::ToBigUint;
 use num_traits::identities::Zero;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
-use febft_common::crypto::hash::Digest;
-use febft_common::ordering::{Orderable, SeqNo};
-use febft_common::error::*;
-use febft_common::node_id::NodeId;
-use febft_execution::system_params::SystemParams;
-use febft_messages::serialize::NetworkView;
+use atlas_common::crypto::hash::Digest;
+use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_common::error::*;
+use atlas_common::node_id::NodeId;
+use atlas_execution::system_params::SystemParams;
+use atlas_core::serialize::NetworkView;
 
 /// This struct contains information related with an
 /// active `febft` view.
