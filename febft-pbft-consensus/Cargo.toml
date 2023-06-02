@@ -2,7 +2,7 @@
 name = "febft-pbft-consensus"
 version = "0.1.0"
 description = "A BFT SMR library in Rust!"
-authors = ["Nuno Neto <up201703898@fc.up.pt>"]
+authors = ["Nuno Neto <nuno.martingo@fc.up.pt>"]
 edition = "2021"
 license = "MIT"
 homepage = "https://github.com/nuno1212s/febft"
@@ -13,23 +13,23 @@ readme = "README.md"
 [features]
 # Consult the crate documentation for more details on the features.
 default = [
-    "febft-common/async_runtime_tokio",
-    "febft-common/threadpool_rayon",
-    "febft-common/socket_tokio_tcp",
-    "febft-common/channel_flume_mpmc",
-    "febft-common/channel_sync_crossbeam",
-    "febft-common/channel_mixed_flume",
-    "febft-common/channel_mult_custom_dump",
-    "febft-common/crypto_signature_ring_ed25519",
-    "febft-common/crypto_hash_blake3_blake3",
-    "febft-common/collections_randomstate_fxhash",
-    "febft-common/persistent_db_rocksdb",
+    "atlas-common/async_runtime_tokio",
+    "atlas-common/threadpool_rayon",
+    "atlas-common/socket_tokio_tcp",
+    "atlas-common/channel_flume_mpmc",
+    "atlas-common/channel_sync_crossbeam",
+    "atlas-common/channel_mixed_flume",
+    "atlas-common/channel_mult_custom_dump",
+    "atlas-common/crypto_signature_ring_ed25519",
+    "atlas-common/crypto_hash_blake3_blake3",
+    "atlas-common/collections_randomstate_fxhash",
+    "atlas-common/persistent_db_rocksdb",
     "serialize_serde"
 ]
 
-serialize_serde = ["febft-capnp", "serde", "serde_bytes", "bincode", "febft-common/serialize_serde",
-    "febft-execution/serialize_serde", "febft-communication/serialize_serde", "febft-messages/serialize_serde"]
-serialize_capnp = ["febft-capnp"]
+serialize_serde = ["atlas-capnp", "serde", "serde_bytes", "bincode", "atlas-common/serialize_serde",
+    "atlas-execution/serialize_serde", "atlas-communication/serialize_serde", "atlas-core/serialize_serde"]
+serialize_capnp = ["atlas-capnp"]
 
 [dev-dependencies]
 bincode = "1"
@@ -38,12 +38,12 @@ mimalloc = { version = "*", default-features = false }
 rand = {version = "0.8.5", features = ["small_rng"] }
 
 [dependencies]
-febft-common = { path = "../febft-common" }
-febft-communication = { path = "../febft-communication" }
-febft-execution = { path = "../febft-execution" }
-febft-messages = { path = "../febft-messages" }
-febft-capnp = { path = "../febft-capnp", optional = true }
-febft-metrics = {path = "../febft-metrics"}
+atlas-common = { path = "../../Atlas/atlas-common" }
+atlas-communication = { path = "../../Atlas/atlas-communication" }
+atlas-execution = { path = "../../Atlas/atlas-execution" }
+atlas-core = { path = "../../Atlas/atlas-core" }
+atlas-capnp = { path = "../../Atlas/atlas-capnp", optional = true }
+atlas-metrics = {path = "../../Atlas/atlas-metrics"}
 
 capnp = { version = "0.16" }
 fastrand = "1.7.0"

@@ -1,38 +1,38 @@
 #![feature(inherent_associated_types)]
 
-pub mod message;
-pub mod config;
-
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
+
 use log::{debug, error, info};
-
-use febft_common::error::*;
-use febft_common::globals::ReadOnly;
-
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+
 use febft_common::collections;
 use febft_common::collections::HashMap;
 use febft_common::crypto::hash::Digest;
+use febft_common::error::*;
+use febft_common::globals::ReadOnly;
 use febft_common::node_id::NodeId;
 use febft_common::ordering::{Orderable, SeqNo};
+use febft_communication::Node;
 use febft_communication::message::{Header, NetworkMessageKind, StoredMessage};
-use febft_communication::{Node};
 use febft_execution::app::{Reply, Request, Service, State};
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::{StateTransfer, SystemMessage};
 use febft_messages::ordering_protocol::{OrderingProtocol, View};
-use febft_messages::serialize::{OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage, NetworkView};
+use febft_messages::serialize::{NetworkView, OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage};
 use febft_messages::state_transfer::{Checkpoint, CstM, DecLog, SerProof, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
 use febft_messages::timeouts::{RqTimeout, TimeoutKind, Timeouts};
-use crate::config::StateTransferConfig;
 
+use crate::config::StateTransferConfig;
 use crate::message::{CstMessage, CstMessageKind};
-use crate::message::serialize::{CSTMsg};
+use crate::message::serialize::CSTMsg;
+
+pub mod message;
+pub mod config;
 
 enum ProtoPhase<S, V, O, P> {
     Init,
@@ -269,8 +269,8 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
         let (header, message) = message.into_inner();
 
         let message = message.into_inner();
-        debug!("{:?} // Off context Message {:?} from {:?} with seq {:?}", self.node.id(), message, header.from(),
-        message.sequence_number());
+        debug!("{:?} // Off context Message {:?} from {:?} with seq {:?}", self.node.id(),
+            message, header.from(), message.sequence_number());
 
         match &message.kind() {
             CstMessageKind::RequestLatestConsensusSeq => {
@@ -310,7 +310,8 @@ impl<D, OP, NT> StateTransferProtocol<D, OP, NT> for CollabStateTransfer<D, OP, 
 
         let message = message.into_inner();
 
-        debug!("{:?} // Message {:?} from {:?} while in phase {:?}", self.node.id(), message, header.from(), self.phase);
+        debug!("{:?} // Message {:?} from {:?} while in phase {:?}", self.node.id(),
+            message, header.from(), self.phase);
 
         match &message.kind() {
             CstMessageKind::RequestLatestConsensusSeq => {
@@ -620,7 +621,6 @@ impl<D, OP, NT> CollabStateTransfer<D, OP, NT>
 
                 match message.kind() {
                     CstMessageKind::ReplyLatestConsensusSeq(proof) => {
-
                         let seq = if let Some((seq, proof)) = proof {
                             if let Ok(verified) = order_protocol.verify_sequence_number(*seq, proof) {
                                 if verified {

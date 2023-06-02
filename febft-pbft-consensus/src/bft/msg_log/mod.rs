@@ -3,24 +3,22 @@
 use std::path::Path;
 use std::sync::Arc;
 
-
 use febft_common::error::*;
 use febft_common::globals::ReadOnly;
 use febft_common::node_id::NodeId;
 use febft_common::ordering::SeqNo;
 use febft_communication::message::{Header, StoredMessage};
-use febft_execution::app::Service;
 use febft_execution::ExecutorHandle;
 use febft_execution::serialize::SharedData;
 use febft_messages::messages::RequestMessage;
 use febft_messages::state_transfer::Checkpoint;
+
 use crate::bft::message::ConsensusMessage;
 use crate::bft::msg_log::decided_log::Log;
-use crate::bft::msg_log::deciding_log::{DecidingLog};
-use crate::bft::msg_log::decisions::{ DecisionLog};
+use crate::bft::msg_log::decisions::DecisionLog;
 
-use self::persistent::{PersistentLog};
-use self::persistent::{PersistentLogModeTrait};
+use self::persistent::PersistentLog;
+use self::persistent::PersistentLogModeTrait;
 
 pub mod persistent;
 pub mod decisions;

@@ -1,5 +1,5 @@
-description = "The FeBFT protocol"
-authors = ["Nuno Neto <up201703898@fc.up.pt>"]
+description = "The FeBFT protocol. An ordering protocol for the Atlas BFT framework"
+authors = ["Nuno Neto <nuno.martingo@fc.up.pt>"]
 license = "MIT"
 homepage = "https://github.com/nuno1212s/febft"
 repository = "https://github.com/nuno1212s/febft"
@@ -9,15 +9,7 @@ readme = "README.md"
 [workspace]
 
 members = [
-    "febft-common",
-    "febft-communication",
     "febft-state-transfer",
-    "febft-capnp",
-    "febft-execution",
-    "febft-metrics",
-    "febft-messages",
-    "febft-replica",
-    "febft-client",
     "febft-pbft-consensus"
 ]
 
