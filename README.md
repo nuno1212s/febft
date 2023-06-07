@@ -2,7 +2,7 @@
 <img width="500" height="500" src="resources/logo.png">
 </p>
 <p align="center">
-A rusty, efficient Byzantine fault tolerant middleware library/framework.
+A rusty, efficient Byzantine fault tolerant ordering protocol.
 <!-- TODO: include crates.io, docs.rs links here, etc -->
 </p>
 
@@ -16,13 +16,6 @@ are responsible for replicating a service, that is usually exposed via a RPC int
 The properties of these systems are such that despite the failure of (up to) `f` nodes
 (due to software bugs, power outages, malicious attackers, etc) the service abstraction
 will continue operating as usual.
-
-Different from prior art in this field, usually implemented in Java, Rust was
-the language of choice to implement all the typical SMR sub-protocols present
-in FeBFT. Many people are (rightfully so!) excited about the use of Rust
-in new (and even older) software, because of its safety properties associated
-with the many compile time checks present in the compiler, that are able to
-hunt down common use-after-free as well as concurrency related bugs.
 
 There are infinitely many use cases for BFT systems, which will undoubtedly improve the
 availability of a digital service. However, a less robust class of systems, called CFT
@@ -39,61 +32,6 @@ consult the following papers:
 
 <!-- TODO: include link to thesis 
 To read more about the architecture of FeBFT, you can check out my MsC thesis.-->
-
-# How to use this library?
-
-Generally, to use this library, you will need to implement the following trait:
-
-```rust
-pub trait Service {
-    /// The data types used by the application and the SMR protocol.
-    ///
-    /// This includes their respective serialization routines.
-    type Data: SharedData;
-
-    /// Returns the initial state of the application.
-    fn initial_state(&mut self) -> Result<State<Self>>;
-
-    /// Process a user request, producing a matching reply,
-    /// meanwhile updating the application state.
-    fn update(
-        &mut self,
-        state: &mut State<Self>,
-        request: Request<Self>,
-    ) -> Reply<Self>;
-}
-```
-
-You may want to check out [client-local.rs](examples/client-local.rs) and
-[replica-local.rs](examples/replica-local.rs) for examples of how to write
-services utilizing FeBFT. Run them with:
-
-```
-# Start the service replicas in a terminal window
-$ cargo run --release --example replica-local
-
-# In another terminal window, start the client(s)
-$ cargo run --release --example client-local
-```
-
-# For contributors
-
-The code is organized as follows:
-
-* `src/bft/core/client` is the main entry point for a client.
-* `src/bft/core/server` is the main entry point for a replica.
-* `src/bft/consensus` implements the normal phase consensus code.
-* `src/bft/consensus/log` implements the message log.
-* `src/bft/sync` implements the view change code.
-* `src/bft/cst` implements the state transfer code.
-* `src/bft/communication` and its sub-modules implement the network code.
-* `src/bft/executable` implements the thread responsible for running the
-  user's application code.
-* `src/bft/ordering` defines code for sequence numbers resistant to overflows.
-
-Other modules should be somewhat self explanatory, especially if you read
-the documentation generated with `cargo doc --features expose_impl` for FeBFT.
-
 # Quick glimpse on performance
 
 We will now take a quick look at the performance versus another similar BFT SMR system, BFT-SMaRt. The test we ran was the microbenchmarks asynchronous test, meant to test the peak performance of the system. 
