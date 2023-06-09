@@ -27,7 +27,7 @@ use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::SharedData;
 use atlas_core::messages::ClientRqInfo;
 use atlas_core::messages::Protocol;
-use atlas_core::ordering_protocol::{OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, View};
+use atlas_core::ordering_protocol::{OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, ProtocolConsensusDecision, View};
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use atlas_core::serialize::{NetworkView, ServiceMsg, StateTransferMessage};
 use atlas_core::state_transfer::{Checkpoint, DecLog, SerProof, StatefulOrderProtocol};
@@ -154,7 +154,7 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
         }
     }
 
-    fn poll(&mut self) -> OrderProtocolPoll<PBFTMessage<D::Request>> {
+    fn poll(&mut self) -> OrderProtocolPoll<PBFTMessage<D::Request>, D::Request> {
         match self.phase {
             ConsensusPhase::NormalPhase => {
                 self.poll_normal_phase()
@@ -165,7 +165,7 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
         }
     }
 
-    fn process_message(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>) -> Result<OrderProtocolExecResult> {
+    fn process_message(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>) -> Result<OrderProtocolExecResult<D::Request>> {
         match self.phase {
             ConsensusPhase::NormalPhase => {
                 self.update_normal_phase(message)
@@ -176,7 +176,7 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
         }
     }
 
-    fn handle_timeout(&mut self, timeout: Vec<RqTimeout>) -> Result<OrderProtocolExecResult> {
+    fn handle_timeout(&mut self, timeout: Vec<RqTimeout>) -> Result<OrderProtocolExecResult<D::Request>> {
         if self.consensus.is_catching_up() {
             warn!("{:?} // Ignoring timeouts while catching up", self.node.id());
 
@@ -297,7 +297,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         Ok(replica)
     }
 
-    fn poll_sync_phase(&mut self) -> OrderProtocolPoll<PBFTMessage<D::Request>> {
+    fn poll_sync_phase(&mut self) -> OrderProtocolPoll<PBFTMessage<D::Request>, D::Request> {
 
         // retrieve a view change message to be processed
         let poll_result = self.synchronizer.poll();
@@ -326,7 +326,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         }
     }
 
-    fn poll_normal_phase(&mut self) -> OrderProtocolPoll<PBFTMessage<D::Request>> {
+    fn poll_normal_phase(&mut self) -> OrderProtocolPoll<PBFTMessage<D::Request>, D::Request> {
         // check if we have STOP messages to be processed,
         // and update our phase when we start installing
         // the new view
@@ -373,14 +373,12 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
                 OrderProtocolPoll::Exec(StoredMessage::new(h, Protocol::new(PBFTMessage::Consensus(m))))
             }
             ConsensusPollStatus::Decided => {
-                self.finalize_all_possible().expect("Failed to finalize all possible decided instances");
-
-                OrderProtocolPoll::RePoll
+                return OrderProtocolPoll::Decided(self.finalize_all_possible().expect("Failed to finalize decisions"));
             }
         }
     }
 
-    fn update_sync_phase(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>) -> Result<OrderProtocolExecResult> {
+    fn update_sync_phase(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>) -> Result<OrderProtocolExecResult<D::Request>> {
         let (header, protocol) = message.into_inner();
 
         match protocol.into_inner() {
@@ -451,7 +449,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         &mut self,
         header: Header,
         message: ConsensusMessage<D::Request>,
-    ) -> Result<OrderProtocolExecResult> {
+    ) -> Result<OrderProtocolExecResult<D::Request>> {
         let seq = self.consensus.sequence_number();
 
         // debug!(
@@ -480,9 +478,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             // attributed by the consensus layer to each op,
             // to execute in order
             ConsensusStatus::Decided => {
-                self.finalize_all_possible()?;
-
-                // When we can no longer finalize then
+                return Ok(OrderProtocolExecResult::Decided(self.finalize_all_possible()?));
             }
         }
 
@@ -497,8 +493,10 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
     }
 
     /// Finalize all possible consensus instances
-    fn finalize_all_possible(&mut self) -> Result<()> {
+    fn finalize_all_possible(&mut self) -> Result<Vec<ProtocolConsensusDecision<D::Request>>> {
         let view = self.synchronizer.view();
+
+        let mut finalized_decisions = Vec::with_capacity(self.consensus.finalizeable_count());
 
         while self.consensus.can_finalize() {
             // This will automatically move the consensus machine to the next consensus instance

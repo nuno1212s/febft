@@ -213,7 +213,7 @@ pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static
     /// The consensus guard that will be used to ensure that the proposer only proposes one batch
     /// for each consensus instance
     consensus_guard: Arc<ProposerConsensusGuard>,
-    // A reference to the timeouts
+    /// A reference to the timeouts
     timeouts: Timeouts,
     /// Check if we are currently recovering from a fault, meaning we should ignore timeouts
     is_recovering: bool,
@@ -429,6 +429,20 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
     /// Are we able to finalize the next consensus instance on the queue?
     pub fn can_finalize(&self) -> bool {
         self.decisions.front().map(|d| d.is_finalizeable()).unwrap_or(false)
+    }
+
+    pub(super) fn finalizeable_count(&self) -> usize {
+        let mut count = 0;
+
+        for decision in &self.decisions {
+            if decision.is_finalizeable() {
+                count += 1;
+            } else {
+                break
+            }
+        }
+
+        count
     }
 
     /// Finalize the next consensus instance if possible

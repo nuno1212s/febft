@@ -344,7 +344,7 @@ impl<D> Log<D> where D: SharedData + 'static {
         // the last executed sequence number
         let f = 1;
 
-        //
+        
         // Finalize the execution and store the proof in the log as a proof
         // instead of an ongoing decision
         self.dec_log.finished_quorum_execution(&completed_batch, seq, f)?;
