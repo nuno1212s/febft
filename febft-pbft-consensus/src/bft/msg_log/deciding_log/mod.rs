@@ -36,10 +36,8 @@ pub struct CompletedBatch<O> {
     prepare_messages: Vec<StoredConsensusMessage<O>>,
     // The commit messages for this batch
     commit_messages: Vec<StoredConsensusMessage<O>>,
-
     // The information of the client requests that are contained in this batch
     client_requests: Vec<ClientRqInfo>,
-
     //The messages that must be persisted for this consensus decision to be executable
     //This should contain the pre prepare, quorum of prepares and quorum of commits
     messages_to_persist: Vec<Digest>,
@@ -181,7 +179,7 @@ impl<O> DecidingLog<O> {
 
         self.current_received_pre_prepares += 1;
 
-        // 
+        //
         self.current_batch_size += batch_rq_digests.len();
 
         self.client_rqs.append(&mut batch_rq_digests);
@@ -228,7 +226,7 @@ impl<O> DecidingLog<O> {
 
     /// Process the message received
     pub(crate) fn process_message(&mut self, message: StoredConsensusMessage<O>) -> Result<()> {
-        match message.message().kind() {
+        match message.message().consensus().kind() {
             ConsensusMessageKind::Prepare(_) => {
                 self.duplicate_detection.insert_prepare_received(message.header().from())?;
             }
@@ -319,7 +317,7 @@ impl<O> OnGoingDecision<O> {
 
     /// Insert a consensus message into this on going decision
     fn insert_message(&mut self, message: StoredConsensusMessage<O>) {
-        match message.message().kind() {
+        match message.message().consensus().kind() {
             ConsensusMessageKind::Prepare(_) => {
                 self.prepare_messages.push(message);
             }
@@ -334,7 +332,7 @@ impl<O> OnGoingDecision<O> {
 
     /// Insert a message from the stored message into this on going decision
     pub fn insert_persisted_msg(&mut self, message: StoredConsensusMessage<O>) -> Result<()> {
-        match message.message().kind() {
+        match message.message().consensus().kind() {
             ConsensusMessageKind::PrePrepare(_) => {
                 let index = pre_prepare_index_from_digest_opt(&self.pre_prepare_digests, message.header().digest())?;
 
@@ -583,7 +581,7 @@ pub fn make_proof_from<O>(proof_meta: ProofMetadata, mut ongoing: OnGoingDecisio
 
 impl<O> From<CompletedBatch<O>> for DecisionInformation<O> {
     fn from(value: CompletedBatch<O>) -> Self {
-        DecisionInformation::new(value.batch_digest, 
+        DecisionInformation::new(value.batch_digest,
                                  value.messages_to_persist,
                                  value.client_requests)
     }

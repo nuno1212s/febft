@@ -12,15 +12,13 @@ use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::SharedData;
 use atlas_core::messages::RequestMessage;
 use atlas_core::state_transfer::Checkpoint;
+use atlas_persistent_log::{PersistentLog, PersistentLogModeTrait};
 
 use crate::bft::message::ConsensusMessage;
+use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::DecisionLog;
 
-use self::persistent::PersistentLog;
-use self::persistent::PersistentLogModeTrait;
-
-pub mod persistent;
 pub mod decisions;
 pub mod deciding_log;
 pub mod decided_log;
@@ -35,13 +33,13 @@ pub const CHECKPOINT_PERIOD: u32 = 50000;
 pub type ReadableConsensusMessage<O> = Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>;
 
 pub fn initialize_persistent_log<D, K, T>(executor: ExecutorHandle<D>, db_path: K)
-                                          -> Result<PersistentLog<D>>
+                                          -> Result<PersistentLog<D, PBFTConsensus<D>>>
     where D: SharedData + 'static, K: AsRef<Path>, T: PersistentLogModeTrait {
     PersistentLog::init_log::<K, T>(executor, db_path)
 }
 
 pub fn initialize_decided_log<D: SharedData + 'static>(node_id: NodeId,
-                                                       persistent_log: PersistentLog<D>,
+                                                       persistent_log: PersistentLog<D, PBFTConsensus<D>>,
                                                        state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<Log<D>> {
     Ok(Log::init_decided_log(node_id, persistent_log, state))
 }

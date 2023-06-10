@@ -33,6 +33,7 @@ use atlas_core::serialize::{NetworkView, ServiceMsg, StateTransferMessage};
 use atlas_core::state_transfer::{Checkpoint, DecLog, SerProof, StatefulOrderProtocol};
 use atlas_core::timeouts::{RqTimeout, Timeouts};
 use atlas_metrics::metrics::metric_duration;
+use atlas_persistent_log::NoPersistentLog;
 use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus, ProposerConsensusGuard};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage, ViewChangeMessage};

@@ -12,12 +12,13 @@ use atlas_core::ordering_protocol::{DecisionInformation, ExecutionResult, Protoc
 use atlas_execution::app::{Request, Service, State, UpdateBatch};
 use atlas_execution::serialize::SharedData;
 use atlas_core::state_transfer::Checkpoint;
+use atlas_persistent_log::{PersistentLog, WriteMode};
 
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
+use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::{Info, operation_key, CHECKPOINT_PERIOD};
 use crate::bft::msg_log::decisions::{CollectData, DecisionLog, Proof, ProofMetadata};
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
-use crate::bft::msg_log::persistent::{InstallState, PersistentLog, WriteMode};
 use crate::bft::sync::view::ViewInfo;
 
 pub(crate) enum CheckpointState<D> {
@@ -56,11 +57,11 @@ pub struct Log<D> where D: SharedData + 'static {
     checkpoint: CheckpointState<D::State>,
 
     // A handle to the persistent log
-    persistent_log: PersistentLog<D>,
+    persistent_log: PersistentLog<D, PBFTConsensus<D>>,
 }
 
 impl<D> Log<D> where D: SharedData + 'static {
-    pub(crate) fn init_decided_log(node_id: NodeId, persistent_log: PersistentLog<D>, state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Self {
+    pub(crate) fn init_decided_log(node_id: NodeId, persistent_log: PersistentLog<D,  PBFTConsensus<D>>, state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Self {
 
         //TODO: Maybe read state from local storage?
         let checkpoint = if let Some(state) = state {
@@ -126,7 +127,7 @@ impl<D> Log<D> where D: SharedData + 'static {
     /// This is mostly used for pre prepares as they contain all the requests and are therefore very expensive to send
     pub fn insert_consensus(
         &mut self,
-        consensus_msg: Arc<ReadOnly<StoredMessage<ConsensusMessage<D::Request>>>>,
+        consensus_msg: Arc<ReadOnly<StoredMessage<PBFTMessage<D::Request>>>>,
     ) {
         if let Err(err) = self
             .persistent_log

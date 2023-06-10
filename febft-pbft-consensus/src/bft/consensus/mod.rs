@@ -27,6 +27,7 @@ use atlas_core::ordering_protocol::ProtocolConsensusDecision;
 use atlas_core::serialize::StateTransferMessage;
 use atlas_core::timeouts::Timeouts;
 use atlas_metrics::metrics::metric_increment;
+use atlas_persistent_log::PersistentLog;
 use crate::bft;
 use crate::bft::msg_log::Info;
 use crate::bft::consensus::decision::{ConsensusDecision, DecisionPhase, DecisionPollStatus, DecisionStatus, MessageQueue};
@@ -35,6 +36,7 @@ use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
 use crate::bft::msg_log::decisions::{DecisionLog, IncompleteProof, Proof, StoredConsensusMessage};
 use crate::bft::{PBFT, SysMsg};
+use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::OPERATIONS_PROCESSED_ID;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::sync::view::ViewInfo;
@@ -218,11 +220,15 @@ pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static
     timeouts: Timeouts,
     /// Check if we are currently recovering from a fault, meaning we should ignore timeouts
     is_recovering: bool,
+
+    persistent_log: PersistentLog<D, PBFTConsensus<D>>,
 }
 
 impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                                    ST: StateTransferMessage + 'static {
-    pub fn new_replica(node_id: NodeId, view: &ViewInfo, executor_handle: ExecutorHandle<D>, seq_no: SeqNo, watermark: u32, consensus_guard: Arc<ProposerConsensusGuard>, timeouts: Timeouts) -> Self {
+    pub fn new_replica(node_id: NodeId, view: &ViewInfo, executor_handle: ExecutorHandle<D>, seq_no: SeqNo,
+                       watermark: u32, consensus_guard: Arc<ProposerConsensusGuard>, timeouts: Timeouts,
+                       persistent_log: PersistentLog<D, PBFTConsensus<D>>) -> Self {
         let mut curr_seq = seq_no;
 
         let mut consensus = Self {
@@ -238,6 +244,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             consensus_guard,
             timeouts,
             is_recovering: false,
+            persistent_log,
         };
 
         // Initialize the consensus instances
@@ -246,6 +253,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                 node_id,
                 curr_seq,
                 view,
+                consensus.persistent_log.clone(),
             );
 
             consensus.enqueue_decision(decision);
@@ -439,7 +447,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             if decision.is_finalizeable() {
                 count += 1;
             } else {
-                break
+                break;
             }
         }
 
@@ -499,7 +507,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         let novel_decision = ConsensusDecision::init_with_msg_log(self.node_id,
                                                                   new_seq_no,
                                                                   view,
-                                                                  queue, );
+                                                                  self.persistent_log.clone(), queue, );
 
         self.enqueue_decision(novel_decision);
 
@@ -571,7 +579,8 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                 let mut sequence_no = novel_seq_no;
 
                 while self.decisions.len() < self.watermark as usize {
-                    let novel_decision = ConsensusDecision::init_decision(self.node_id, sequence_no, view);
+                    let novel_decision = ConsensusDecision::init_decision(self.node_id,
+                                                                          sequence_no, view, self.persistent_log.clone());
 
                     self.enqueue_decision(novel_decision);
 
@@ -622,7 +631,8 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                 while self.tbo_queue.sequence_number() < novel_seq_no && self.decisions.len() < self.watermark as usize {
                     let messages = self.tbo_queue.advance_queue();
 
-                    let decision = ConsensusDecision::init_with_msg_log(self.node_id, sequence_no, view, messages);
+                    let decision = ConsensusDecision::init_with_msg_log(self.node_id, sequence_no, view,
+                                                                        self.persistent_log.clone(), messages);
 
                     debug!("{:?} // Initialized new decision from TBO queue messages {:?}", self.node_id, decision.sequence_number());
 
@@ -632,7 +642,8 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                 }
 
                 while self.decisions.len() < self.watermark as usize {
-                    let decision = ConsensusDecision::init_decision(self.node_id, sequence_no, view);
+                    let decision = ConsensusDecision::init_decision(self.node_id, sequence_no,
+                                                                    view, self.persistent_log.clone());
 
                     self.enqueue_decision(decision);
 
@@ -663,7 +674,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                     let messages = self.tbo_queue.advance_queue();
 
                     let decision = ConsensusDecision::init_with_msg_log(self.node_id, sequence_no,
-                                                                        view, messages);
+                                                                        view, self.persistent_log.clone(), messages);
 
                     self.enqueue_decision(decision);
 
@@ -743,7 +754,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         let mut sequence_no = self.sequence_number();
 
         while self.decisions.len() < self.watermark as usize {
-            let novel_decision = ConsensusDecision::init_decision(self.node_id, sequence_no, view);
+            let novel_decision = ConsensusDecision::init_decision(self.node_id, sequence_no, view, self.persistent_log.clone());
 
             self.enqueue_decision(novel_decision);
 

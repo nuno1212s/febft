@@ -58,6 +58,31 @@ impl<R> Debug for PBFTMessage<R> {
     }
 }
 
+impl<R> PBFTMessage<R> {
+
+    pub fn consensus(&self) -> &ConsensusMessage<R> {
+        match self {
+            PBFTMessage::Consensus(msg) => msg,
+            _ => panic!("Not a consensus message"),
+        }
+    }
+
+    pub fn view_change(&self) -> &ViewChangeMessage<R> {
+        match self {
+            PBFTMessage::ViewChange(msg) => msg,
+            _ => panic!("Not a view change message"),
+        }
+    }
+
+    pub fn observer_message(&self) -> &ObserverMessage {
+        match self {
+            PBFTMessage::ObserverMessage(msg) => msg,
+            _ => panic!("Not an observer message"),
+        }
+    }
+
+}
+
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct ViewChangeMessage<O> {

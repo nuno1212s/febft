@@ -21,9 +21,10 @@ use atlas_communication::serialize::Serializable;
 use atlas_execution::app::Service;
 use atlas_execution::serialize::SharedData;
 use atlas_core::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage};
-use crate::bft::message::{ConsensusMessage, PBFTMessage};
+use atlas_persistent_log::serialize::PersistableStatefulOrderProtocol;
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::{PBFT};
-use crate::bft::msg_log::decisions::{DecisionLog, Proof};
+use crate::bft::msg_log::decisions::{DecisionLog, Proof, ProofMetadata};
 use crate::bft::sync::view::ViewInfo;
 
 #[cfg(feature = "serialize_capnp")]
@@ -114,6 +115,61 @@ impl<D> StatefulOrderProtocolMessage for PBFTConsensus<D> where D: SharedData {
 
     #[cfg(feature = "serialize_capnp")]
     fn deserialize_proof_capnp(reader: atlas_capnp::cst_messages_capnp::proof::Reader) -> Result<Self::Proof> {
+        todo!()
+    }
+}
+
+const CF_PRE_PREPARES: &str = "PRE_PREPARES";
+const CF_PREPARES: &str = "PREPARES";
+const CF_COMMIT: &str = "COMMITS";
+
+
+impl<D> PersistableStatefulOrderProtocol for PBFTConsensus<D> where D: SharedData {
+
+    type OrderProtocolMessage = Self;
+    type StatefulOrderProtocolMessage = Self;
+    type ProofMetadata = ProofMetadata;
+
+    fn message_types() -> Vec<&'static str> {
+        vec![CF_PRE_PREPARES,
+            CF_PREPARES,
+            CF_COMMIT]
+    }
+
+    fn get_type_for_message(msg: &PBFTMessage<D::Request>) -> Result<&str> {
+        match msg {
+            PBFTMessage::Consensus(msg) => {
+                match msg.kind() {
+                    ConsensusMessageKind::PrePrepare(_) => {
+                        Ok(CF_PRE_PREPARES)
+                    }
+                    ConsensusMessageKind::Prepare(_) => {
+                        Ok(CF_PREPARES)
+                    }
+                    ConsensusMessageKind::Commit(_) => {
+                        Ok(CF_COMMIT)
+                    }
+                }
+            }
+            _ => {
+                Err(Error::new(ErrorKind::InvalidData, "Invalid message type"))
+            }
+        }
+    }
+
+    fn init_proof_from(metadata: Self::ProofMetadata, messages: Vec<PBFTMessage<D::Request>>) -> Proof<D::Request> {
+        todo!()
+    }
+
+    fn init_dec_log(proofs: Vec<Proof<D::Request>>) -> DecisionLog<D::Request> {
+        todo!()
+    }
+
+    fn decompose_proof(proof: &Proof<D::Request>) -> (&Self::ProofMetadata, Vec<&PBFTMessage<D::Request>>) {
+        todo!()
+    }
+
+    fn decompose_dec_log(proofs: &DecisionLog<D::Request>) -> Vec<&Proof<D::Request>> {
         todo!()
     }
 }

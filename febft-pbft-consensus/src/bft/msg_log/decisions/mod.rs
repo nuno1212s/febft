@@ -11,10 +11,10 @@ use atlas_common::globals::ReadOnly;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::StoredMessage;
 use atlas_core::serialize::{OrderProtocolLog, OrderProtocolProof};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::msg_log::deciding_log::CompletedBatch;
 
-pub type StoredConsensusMessage<O> = Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>;
+pub type StoredConsensusMessage<O> = Arc<ReadOnly<StoredMessage<PBFTMessage<O>>>>;
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]

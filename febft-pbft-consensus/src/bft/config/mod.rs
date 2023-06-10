@@ -11,7 +11,6 @@ use atlas_core::serialize::{OrderingProtocolMessage, StateTransferMessage, Servi
 use atlas_core::state_transfer::Checkpoint;
 use atlas_core::timeouts::Timeouts;
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::msg_log::persistent::PersistentLogModeTrait;
 use crate::bft::observer::ObserverHandle;
 use crate::bft::sync::view::ViewInfo;
 
