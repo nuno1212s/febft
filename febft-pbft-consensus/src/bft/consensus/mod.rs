@@ -23,6 +23,7 @@ use atlas_communication::Node;
 use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::SharedData;
 use atlas_core::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage, SystemMessage};
+use atlas_core::ordering_protocol::ProtocolConsensusDecision;
 use atlas_core::serialize::StateTransferMessage;
 use atlas_core::timeouts::Timeouts;
 use atlas_metrics::metrics::metric_increment;
@@ -686,31 +687,16 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                               seq: SeqNo,
                               view: &ViewInfo,
                               proof: Proof<D::Request>,
-                              log: &mut Log<D>) -> Result<()> {
+                              log: &mut Log<D>) -> Result<ProtocolConsensusDecision<D::Request>> {
 
         // If this is successful, it means that we are all caught up and can now start executing the
         // batch
-        let should_execute = log.install_proof(seq, proof)?;
-
-        //TODO: Should we remove the requests that are in the proof from the pending request log?
-
-        if let Some(to_execute) = should_execute {
-            let (info, update, _) = to_execute.into();
-
-            match info {
-                Info::Nil => {
-                    self.executor_handle.queue_update(update)
-                }
-                Info::BeginCheckpoint => {
-                    self.executor_handle.queue_update_and_get_appstate(update)
-                }
-            }.unwrap();
-        }
+        let to_execute = log.install_proof(seq, proof)?;
 
         // Move to the next instance as this one has been finalized
         self.next_instance(view);
 
-        Ok(())
+        Ok(to_execute)
     }
 
     /// Create a fake `PRE-PREPARE`. This is useful during the view

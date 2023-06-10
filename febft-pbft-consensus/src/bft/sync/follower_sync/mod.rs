@@ -1,6 +1,8 @@
 use std::{marker::PhantomData, sync::Arc};
 use atlas_common::crypto::hash::Digest;
+use atlas_common::ordering::Orderable;
 use atlas_communication::message::StoredMessage;
+use atlas_core::messages::ClientRqInfo;
 use atlas_execution::app::{Request, Service};
 use atlas_execution::serialize::SharedData;
 
@@ -23,7 +25,7 @@ impl<D: SharedData + 'static> FollowerSynchronizer<D> {
     pub fn watch_request_batch(
         &self,
         pre_prepare: &StoredMessage<ConsensusMessage<D::Request>>,
-    ) -> Vec<Digest> {
+    ) -> Vec<ClientRqInfo> {
 
         let requests = match pre_prepare.message().kind() {
             ConsensusMessageKind::PrePrepare(req) => {req},
@@ -38,7 +40,13 @@ impl<D: SharedData + 'static> FollowerSynchronizer<D> {
             let header = x.header();
             let digest = header.unique_digest();
 
-            digests.push(digest);
+            let seq_no = x.message().sequence_number();
+            let session = x.message().session_id();
+
+            //let request_digest = header.digest().clone();
+            let client_rq_info = ClientRqInfo::new(digest, header.from(), seq_no, session);
+
+            digests.push(client_rq_info);
         }
 
         //If we try to send just the array of the digests contained in the batch (instead of the actual

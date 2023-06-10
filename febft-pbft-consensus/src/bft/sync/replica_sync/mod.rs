@@ -167,7 +167,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         &self,
         pre_prepare: &StoredMessage<ConsensusMessage<D::Request>>,
         timeouts: &Timeouts,
-    ) -> Vec<Digest> {
+    ) -> Vec<ClientRqInfo> {
         let start_time = Instant::now();
 
         let requests = match pre_prepare.message().kind() {
@@ -192,9 +192,10 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             let session = x.message().session_id();
 
             //let request_digest = header.digest().clone();
+            let client_rq_info = ClientRqInfo::new(digest, header.from(), seq_no, session);
 
-            digests.push(digest.clone());
-            timeout_info.push(ClientRqInfo::new(digest, header.from(), seq_no, session));
+            digests.push(client_rq_info.clone());
+            timeout_info.push(client_rq_info);
         }
 
         //Notify the timeouts that we have received the following requests
@@ -260,7 +261,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         base_sync: &Synchronizer<D>,
         my_id: NodeId,
         timed_out_rqs: &Vec<RqTimeout>,
-    ) -> SynchronizerStatus {
+    ) -> SynchronizerStatus<D::Request> {
 
         //// iterate over list of watched pending requests,
         //// and select the ones to be stopped or forwarded

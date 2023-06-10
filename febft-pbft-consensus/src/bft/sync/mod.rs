@@ -29,6 +29,7 @@ use atlas_communication::serialize::Buf;
 use atlas_execution::app::{Reply, Request, Service, State};
 use atlas_execution::serialize::SharedData;
 use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
+use atlas_core::ordering_protocol::ProtocolConsensusDecision;
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use atlas_core::serialize::StateTransferMessage;
 use atlas_core::timeouts::{RqTimeout, Timeouts};
@@ -316,13 +317,13 @@ pub(super) enum ProtoPhase {
 
 // TODO: finish statuses returned from `process_message`
 #[derive(Debug)]
-pub enum SynchronizerStatus {
+pub enum SynchronizerStatus<O> {
     /// We are not running the view change protocol.
     Nil,
     /// The view change protocol is currently running.
     Running,
     /// The view change protocol just finished running.
-    NewView,
+    NewView(Option<ProtocolConsensusDecision<O>>),
     /// Before we finish the view change protocol, we need
     /// to run the CST protocol.
     RunCst,
@@ -1140,7 +1141,7 @@ impl<D> Synchronizer<D>
         timeouts: &Timeouts,
         consensus: &mut Consensus<D, ST>,
         node: &NT,
-    ) -> SynchronizerStatus
+    ) -> SynchronizerStatus<D::Request>
         where ST: StateTransferMessage, NT: Node<PBFT<D, ST>>
     {
         let FinalizeState {
@@ -1163,21 +1164,26 @@ impl<D> Synchronizer<D>
         let last_executed_cid = last_proof.as_ref().map(|p| p.sequence_number()).unwrap_or(SeqNo::ZERO);
 
         //TODO: Install the Last CID that was received in the finalize state
-        if u32::from(log.decision_log().last_execution().unwrap_or(SeqNo::ZERO)) + 1 == u32::from(last_executed_cid) {
+        let to_execute = if u32::from(log.decision_log().last_execution().unwrap_or(SeqNo::ZERO)) + 1 == u32::from(last_executed_cid) {
             warn!("{:?} // Received more recent consensus ID, making quorum aware of it {:?} vs {:?} (Ours)", node.id(),
             curr_cid, log.decision_log().last_execution());
 
             // We are missing the last decision, which should be included in the collect data
             // sent by the leader in the SYNC message
-            if let Some(last_proof) = last_proof {
-                consensus.catch_up_to_quorum(last_proof.seq_no(), &view, last_proof, log)
-                    .expect("Failed to catch up to quorum");
+            let to_execute = if let Some(last_proof) = last_proof {
+                Some(consensus.catch_up_to_quorum(last_proof.seq_no(), &view, last_proof, log).expect("Failed to catch up to quorum"))
+
             } else {
                 // This maybe happens when a checkpoint is done and the first execution after it
                 // fails, leading to a view change? Don't really know how this would be possible
                 // FIXME:
-            }
-        }
+                None
+            };
+
+            to_execute
+        } else {
+            None
+        };
 
         // finalize view change by broadcasting a PREPARE msg
         consensus.finalize_view_change((header, message), self, timeouts, log, node);
@@ -1188,7 +1194,7 @@ impl<D> Synchronizer<D>
         self.phase.replace(ProtoPhase::Init);
 
         // resume normal phase
-        SynchronizerStatus::NewView
+        SynchronizerStatus::NewView(to_execute)
     }
 
     /// Handle a batch of requests received from a Pre prepare message sent by the leader
@@ -1198,7 +1204,7 @@ impl<D> Synchronizer<D>
         &self,
         pre_prepare: &StoredMessage<ConsensusMessage<D::Request>>,
         timeouts: &Timeouts,
-    ) -> Vec<Digest> {
+    ) -> Vec<ClientRqInfo> {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
                 rep.received_request_batch(pre_prepare, timeouts)
@@ -1240,7 +1246,7 @@ impl<D> Synchronizer<D>
         base_sync: &Synchronizer<D>,
         my_id: NodeId,
         seq: &Vec<RqTimeout>,
-    ) -> SynchronizerStatus {
+    ) -> SynchronizerStatus<D::Request> {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {
                 SynchronizerStatus::Nil

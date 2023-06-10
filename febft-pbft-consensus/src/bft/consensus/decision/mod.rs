@@ -11,6 +11,7 @@ use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_communication::Node;
+use atlas_core::messages::ClientRqInfo;
 use atlas_execution::serialize::SharedData;
 use atlas_core::serialize::StateTransferMessage;
 use atlas_core::timeouts::Timeouts;
@@ -586,7 +587,7 @@ fn request_batch_received<D>(
     timeouts: &Timeouts,
     synchronizer: &Synchronizer<D>,
     log: &DecidingLog<D::Request>,
-) -> Vec<Digest>
+) -> Vec<ClientRqInfo>
     where
         D: SharedData + 'static
 {

@@ -30,20 +30,7 @@ pub mod decided_log;
 /// Every `PERIOD` messages, the message log is cleared,
 /// and a new log checkpoint is initiated.
 /// TODO: Move this to an env variable as it can be highly dependent on the service implemented on top of it
-
 pub const CHECKPOINT_PERIOD: u32 = 50000;
-
-/// Information reported after a logging operation.
-pub enum Info {
-    /// Nothing to report.
-    Nil,
-    /// The log became full. We are waiting for the execution layer
-    /// to provide the current serialized application state, so we can
-    /// complete the log's garbage collection and eventually its
-    /// checkpoint.
-    BeginCheckpoint,
-}
-
 
 pub type ReadableConsensusMessage<O> = Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>;
 

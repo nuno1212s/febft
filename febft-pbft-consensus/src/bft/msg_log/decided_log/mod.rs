@@ -8,6 +8,7 @@ use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::StoredMessage;
+use atlas_core::ordering_protocol::{DecisionInformation, ExecutionResult, ProtocolConsensusDecision};
 use atlas_execution::app::{Request, Service, State, UpdateBatch};
 use atlas_execution::serialize::SharedData;
 use atlas_core::state_transfer::Checkpoint;
@@ -56,18 +57,6 @@ pub struct Log<D> where D: SharedData + 'static {
 
     // A handle to the persistent log
     persistent_log: PersistentLog<D>,
-}
-
-/// Execution data for the given batch
-/// Info: Whether we need to ask the executor for a checkpoint in order to reset the current message log
-/// Update Batch: All of the requests that should be executed, in the correct order
-/// Completed Batch: The information collected by the [DecidingLog], if applicable. (We can receive a batch
-/// via a complete proof which means this will be [None] or we can process a batch normally, which means
-/// this will be [Some(CompletedBatch<D>)])
-pub struct BatchExecutionInfo<O> {
-    info: Info,
-    update_batch: UpdateBatch<O>,
-    completed_batch: Option<CompletedBatch<O>>,
 }
 
 impl<D> Log<D> where D: SharedData + 'static {
@@ -151,8 +140,8 @@ impl<D> Log<D> where D: SharedData + 'static {
     /// This is done when we receive the final SYNC message from the leader
     /// which contains all of the collects
     /// If we are missing the request determined by the
-    pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<D::Request>) -> Result<Option<BatchExecutionInfo<D::Request>>> {
-        let batch_execution_info = BatchExecutionInfo::from(&proof);
+    pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<D::Request>) -> Result<ProtocolConsensusDecision<D::Request>> {
+        let batch_execution_info = ProtocolConsensusDecision::from(&proof);
 
         if let Some(decision) = self.decision_log().last_decision() {
             if decision.seq_no() == seq {
@@ -171,8 +160,7 @@ impl<D> Log<D> where D: SharedData + 'static {
             error!("Failed to persist proof {:?}", err);
         }
 
-        // Communicate with the persistent log about persisting this batch and then executing it
-        self.persistent_log.wait_for_proof_persistency_and_execute(batch_execution_info)
+        Ok(batch_execution_info)
     }
 
     /// Clear the occurrences of a seq no from the decision log
@@ -201,7 +189,7 @@ impl<D> Log<D> where D: SharedData + 'static {
         }
     }
 
-    fn begin_checkpoint(&mut self, seq: SeqNo) -> Result<Info> {
+    fn begin_checkpoint(&mut self, seq: SeqNo) -> Result<ExecutionResult> {
         let earlier = std::mem::replace(&mut self.checkpoint, CheckpointState::None);
 
         self.checkpoint = match earlier {
@@ -216,12 +204,12 @@ impl<D> Log<D> where D: SharedData + 'static {
                 error!("Invalid checkpoint state detected");
 
                 self.checkpoint = earlier;
-                
-                return Ok(Info::Nil);
+
+                return Ok(ExecutionResult::Nil);
             }
         };
 
-        Ok(Info::BeginCheckpoint)
+        Ok(ExecutionResult::BeginCheckpoint)
     }
 
     /// End the state of an on-going checkpoint.
@@ -292,7 +280,7 @@ impl<D> Log<D> where D: SharedData + 'static {
         &mut self,
         seq: SeqNo,
         completed_batch: CompletedBatch<D::Request>,
-    ) -> Result<Option<BatchExecutionInfo<D::Request>>> {
+    ) -> Result<ProtocolConsensusDecision<D::Request>> {
         //println!("Finalized batch of OPS seq {:?} on Node {:?}", seq, self.node_id);
 
         let batch = {
@@ -338,25 +326,21 @@ impl<D> Log<D> where D: SharedData + 'static {
             //We check that % == 0 so we don't start multiple checkpoints
             self.begin_checkpoint(seq)?
         } else {
-            Info::Nil
+            ExecutionResult::Nil
         };
 
         // the last executed sequence number
         let f = 1;
 
-        
         // Finalize the execution and store the proof in the log as a proof
         // instead of an ongoing decision
         self.dec_log.finished_quorum_execution(&completed_batch, seq, f)?;
 
-        // Queue the batch for the execution
-        let result = self.persistent_log.wait_for_batch_persistency_and_execute(BatchExecutionInfo {
-            info,
-            update_batch: batch,
-            completed_batch: Some(completed_batch),
-        });
+        let decision = ProtocolConsensusDecision::new(seq, batch,
+                                                      info,
+                                                      Some(DecisionInformation::from(completed_batch)));
 
-        result
+        Ok(decision)
     }
 
     /// Collects the most up to date data we have in store.
@@ -368,25 +352,7 @@ impl<D> Log<D> where D: SharedData + 'static {
     }
 }
 
-impl<O> BatchExecutionInfo<O> {
-    pub fn info(&self) -> &Info {
-        &self.info
-    }
-    pub fn update_batch(&self) -> &UpdateBatch<O> {
-        &self.update_batch
-    }
-    pub fn completed_batch(&self) -> &Option<CompletedBatch<O>> {
-        &self.completed_batch
-    }
-}
-
-impl<O> Into<(Info, UpdateBatch<O>, Option<CompletedBatch<O>>)> for BatchExecutionInfo<O> {
-    fn into(self) -> (Info, UpdateBatch<O>, Option<CompletedBatch<O>>) {
-        (self.info, self.update_batch, self.completed_batch)
-    }
-}
-
-impl<O> From<&Proof<O>> for BatchExecutionInfo<O> where O: Clone {
+impl<O> From<&Proof<O>> for ProtocolConsensusDecision<O> where O: Clone {
     fn from(value: &Proof<O>) -> Self {
         let mut update_batch = UpdateBatch::new(value.seq_no());
 
@@ -415,10 +381,9 @@ impl<O> From<&Proof<O>> for BatchExecutionInfo<O> where O: Clone {
             }
         }
 
-        Self {
-            info: Info::Nil,
-            update_batch,
-            completed_batch: None,
-        }
+        ProtocolConsensusDecision::new(value.seq_no(),
+                                       update_batch,
+                                       ExecutionResult::Nil,
+                                       None)
     }
 }

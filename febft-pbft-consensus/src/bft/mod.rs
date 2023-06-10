@@ -70,10 +70,10 @@ pub enum ConsensusPhase {
 
 /// The result of advancing the sync phase
 #[derive(Debug)]
-pub enum SyncPhaseRes {
+pub enum SyncPhaseRes<O> {
     SyncProtocolNotNeeded,
     RunSyncProtocol,
-    SyncProtocolFinished,
+    SyncProtocolFinished(Option<ProtocolConsensusDecision<O>>),
     RunCSTProtocol,
 }
 
@@ -390,8 +390,15 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
                     SyncPhaseRes::RunSyncProtocol => {
                         OrderProtocolExecResult::Success
                     }
-                    SyncPhaseRes::SyncProtocolFinished => {
-                        OrderProtocolExecResult::Success
+                    SyncPhaseRes::SyncProtocolFinished(to_execute) => {
+                        match to_execute {
+                            None => {
+                                OrderProtocolExecResult::Success
+                            }
+                            Some(to_execute) => {
+                                OrderProtocolExecResult::Decided(vec![to_execute])
+                            }
+                        }
                     }
                     SyncPhaseRes::RunCSTProtocol => {
                         OrderProtocolExecResult::RunCst
@@ -502,40 +509,19 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             // This will automatically move the consensus machine to the next consensus instance
             let completed_batch = self.consensus.finalize(&view)?.unwrap();
 
-            let seq = completed_batch.sequence_number();
-
-            let mut completed_rqs = Vec::with_capacity(completed_batch.request_count());
-
-            completed_batch.pre_prepare_messages().iter().for_each(|m| {
-                if let ConsensusMessageKind::PrePrepare(rqs) = m.message().kind() {
-                    completed_rqs.extend(rqs.iter().map(|rq| ClientRqInfo::from(rq)));
-                }
-            });
-
-            self.pre_processor.send(PreProcessorMessage::DecidedBatch(completed_rqs)).unwrap();
-
             //Should the execution be scheduled here or will it be scheduled by the persistent log?
-            if let Some(exec_info) =
-                self.message_log.finalize_batch(seq, completed_batch)? {
-                let (info, batch, completed_batch) = exec_info.into();
+            let exec_info = self.message_log.finalize_batch(seq, completed_batch)?;
 
-                match info {
-                    Info::Nil => self.executor.queue_update(batch),
-                    // execute and begin local checkpoint
-                    Info::BeginCheckpoint => {
-                        self.executor.queue_update_and_get_appstate(batch)
-                    }
-                }.unwrap();
-            }
+            finalized_decisions.push(exec_info);
         }
 
-        Ok(())
+        Ok(finalized_decisions)
     }
 
 
     /// Advance the sync phase of the algorithm
     fn adv_sync(&mut self, header: Header,
-                message: ViewChangeMessage<D::Request>) -> SyncPhaseRes {
+                message: ViewChangeMessage<D::Request>) -> SyncPhaseRes<D::Request> {
         let status = self.synchronizer.process_message(
             header,
             message,
@@ -551,14 +537,14 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         return match status {
             SynchronizerStatus::Nil => SyncPhaseRes::SyncProtocolNotNeeded,
             SynchronizerStatus::Running => SyncPhaseRes::RunSyncProtocol,
-            SynchronizerStatus::NewView => {
+            SynchronizerStatus::NewView(to_execute) => {
                 //Our current view has been updated and we have no more state operations
                 //to perform. This happens if we are a correct replica and therefore do not need
                 //To update our state or if we are a replica that was incorrect and whose state has
                 //Already been updated from the Cst protocol
                 self.switch_phase(ConsensusPhase::NormalPhase);
 
-                SyncPhaseRes::SyncProtocolFinished
+                SyncPhaseRes::SyncProtocolFinished(to_execute)
             }
             SynchronizerStatus::RunCst => {
                 //This happens when a new view is being introduced and we are not up to date
