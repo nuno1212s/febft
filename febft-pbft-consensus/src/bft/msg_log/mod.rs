@@ -23,16 +23,9 @@ pub mod decisions;
 pub mod deciding_log;
 pub mod decided_log;
 
-/// Checkpoint period.
-///
-/// Every `PERIOD` messages, the message log is cleared,
-/// and a new log checkpoint is initiated.
-/// TODO: Move this to an env variable as it can be highly dependent on the service implemented on top of it
-pub const CHECKPOINT_PERIOD: u32 = 50000;
-
 pub fn initialize_decided_log<D: SharedData + 'static>(node_id: NodeId,
                                                        persistent_log: PersistentLog<D, PBFTConsensus<D>>,
-                                                       state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<Log<D>> {
+                                                       state: Option<DecisionLog<D::Request>>) -> Result<Log<D>> {
     Ok(Log::init_decided_log(node_id, persistent_log, state))
 }
 

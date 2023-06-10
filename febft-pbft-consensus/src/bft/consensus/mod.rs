@@ -515,9 +515,9 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
     }
 
     /// Install the received state into the consensus
-    pub fn install_state(&mut self, state: D::State,
+    pub fn install_state(&mut self,
                          view_info: ViewInfo,
-                         dec_log: &DecisionLog<D::Request>) -> Result<(D::State, Vec<D::Request>)> {
+                         dec_log: &DecisionLog<D::Request>) -> Result<(Vec<D::Request>)> {
 
         // get the latest seq no
         let seq_no = {
@@ -564,7 +564,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             }
         }
 
-        Ok((state, reqs))
+        Ok(reqs)
     }
 
     pub fn install_sequence_number(&mut self, novel_seq_no: SeqNo, view: &ViewInfo) {

@@ -41,7 +41,7 @@ use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::{CONSENSUS_INSTALL_STATE_TIME_ID, MSG_LOG_INSTALL_TIME_ID};
 use crate::bft::msg_log::{Info, initialize_decided_log, initialize_persistent_log};
 use crate::bft::msg_log::decided_log::Log;
-use crate::bft::msg_log::decisions::Proof;
+use crate::bft::msg_log::decisions::{DecisionLog, Proof};
 use crate::bft::msg_log::persistent::NoPersistentLog;
 use crate::bft::proposer::Proposer;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus};
@@ -238,7 +238,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
                                                    ST: StateTransferMessage + 'static,
                                                    NT: Node<PBFT<D, ST>> + 'static {
     fn initialize_protocol(config: PBFTConfig<D, ST>, args: OrderingProtocolArgs<D, NT, PersistentLog<D, PBFTConsensus<D>>>,
-                           initial_state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<Self> {
+                           initial_state: Option<DecisionLog<D::Request>>) -> Result<Self> {
         let PBFTConfig {
             node_id,
             follower_handle,
@@ -564,16 +564,15 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
     }
 }
 
-impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
+impl<D, ST, NT> StatefulOrderProtocol<D, NT, PersistentLog<D, PBFTConsensus<D>>> for PBFTOrderProtocol<D, ST, NT>
     where D: SharedData + 'static,
           ST: StateTransferMessage + 'static,
           NT: Node<PBFT<D, ST>> + 'static {
     type StateSerialization = PBFTConsensus<D>;
 
-
     fn initialize_with_initial_state(config: Self::Config,
                                      args: OrderingProtocolArgs<D, NT, PersistentLog<D, PBFTConsensus<D>>>,
-                                     initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where Self: Sized {
+                                     initial_state: DecisionLog<D>) -> Result<Self> where Self: Sized {
         Self::initialize_protocol(config, args, Some(initial_state))
     }
 
@@ -590,9 +589,9 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
         Ok(true)
     }
 
-    fn install_state(&mut self, state: Arc<ReadOnly<Checkpoint<D::State>>>,
+    fn install_state(&mut self,
                      view_info: View<Self::Serialization>,
-                     dec_log: DecLog<Self::StateSerialization>) -> Result<(D::State, Vec<D::Request>)> {
+                     dec_log: DecLog<Self::StateSerialization>) -> Result<Vec<D::Request>> {
         info!("{:?} // Installing state with Seq No {:?} and View {:?}", self.node.id(),
                 state.sequence_number(), view_info);
 
@@ -608,13 +607,13 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
 
         let start = Instant::now();
 
-        let res = self.consensus.install_state(state.state().clone(), view_info, &dec_log)?;
+        let res = self.consensus.install_state(view_info, &dec_log)?;
 
         metric_duration(CONSENSUS_INSTALL_STATE_TIME_ID, start.elapsed());
 
         let start = Instant::now();
 
-        self.message_log.install_state(state, dec_log);
+        self.message_log.install_state(dec_log);
 
         metric_duration(MSG_LOG_INSTALL_TIME_ID, start.elapsed());
 
@@ -627,12 +626,12 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
         Ok(())
     }
 
-    fn snapshot_log(&mut self) -> Result<(Arc<ReadOnly<Checkpoint<D::State>>>, View<Self::Serialization>, DecLog<Self::StateSerialization>)> {
+    fn snapshot_log(&mut self) -> Result<(View<Self::Serialization>, DecLog<Self::StateSerialization>)> {
         self.message_log.snapshot(self.synchronizer.view())
     }
 
-    fn finalize_checkpoint(&mut self, checkpoint: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()> {
-        self.message_log.finalize_checkpoint(checkpoint)
+    fn checkpointed(&mut self, seq_no: SeqNo) -> Result<()> {
+        self.message_log.finalize_checkpoint(seq_no)
     }
 }
 
