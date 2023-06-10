@@ -528,8 +528,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 return if received == view.params().quorum() {
                     info!("{:?} // Completed commit phase with all commits Seq {:?} with commit from {:?}", node.id(), self.sequence_number(),
                     header.from());
-
-
+                    
                     self.phase = DecisionPhase::Decided;
 
                     self.message_log.batch_meta().lock().unwrap().consensus_decision_time = Utc::now();

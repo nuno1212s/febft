@@ -33,7 +33,7 @@ use atlas_core::serialize::{NetworkView, ServiceMsg, StateTransferMessage};
 use atlas_core::state_transfer::{Checkpoint, DecLog, SerProof, StatefulOrderProtocol};
 use atlas_core::timeouts::{RqTimeout, Timeouts};
 use atlas_metrics::metrics::metric_duration;
-use atlas_persistent_log::NoPersistentLog;
+use atlas_persistent_log::{NoPersistentLog, PersistentLog};
 use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus, ProposerConsensusGuard};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage, ViewChangeMessage};
@@ -120,14 +120,14 @@ impl<D, ST, NT> Orderable for PBFTOrderProtocol<D, ST, NT> where D: 'static + Sh
     }
 }
 
-impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
+impl<D, ST, NT> OrderingProtocol<D, NT, PersistentLog<D, PBFTConsensus<D>>> for PBFTOrderProtocol<D, ST, NT>
     where D: SharedData + 'static,
           ST: StateTransferMessage + 'static,
           NT: Node<PBFT<D, ST>> + 'static, {
     type Serialization = PBFTConsensus<D>;
     type Config = PBFTConfig<D, ST>;
 
-    fn initialize(config: PBFTConfig<D, ST>, args: OrderingProtocolArgs<D, NT>) -> Result<Self> where
+    fn initialize(config: PBFTConfig<D, ST>, args: OrderingProtocolArgs<D, NT, PersistentLog<D, PBFTConsensus<D>>>) -> Result<Self> where
         Self: Sized,
     {
         Self::initialize_protocol(config, args, None)
@@ -237,17 +237,17 @@ impl<D, ST, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
 impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
                                                    ST: StateTransferMessage + 'static,
                                                    NT: Node<PBFT<D, ST>> + 'static {
-    fn initialize_protocol(config: PBFTConfig<D, ST>, args: OrderingProtocolArgs<D, NT>,
+    fn initialize_protocol(config: PBFTConfig<D, ST>, args: OrderingProtocolArgs<D, NT, PersistentLog<D, PBFTConsensus<D>>>,
                            initial_state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<Self> {
         let PBFTConfig {
             node_id,
             follower_handle,
-            view, timeout_dur, db_path,
+            view, timeout_dur,
             proposer_config, watermark, _phantom_data
         } = config;
 
         let OrderingProtocolArgs(executor, timeouts,
-                                 pre_processor, batch_input, node) = args;
+                                 pre_processor, batch_input, node, persistent_log) = args;
 
         let sync = Synchronizer::new_replica(view.clone(), timeout_dur);
 
@@ -255,9 +255,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
 
         let consensus = Consensus::<D, ST>::new_replica(node_id, &sync.view(), executor.clone(),
                                                         SeqNo::ZERO, watermark, consensus_guard.clone(),
-                                                        timeouts.clone());
-
-        let persistent_log = initialize_persistent_log::<D, String, NoPersistentLog>(executor.clone(), db_path)?;
+                                                        timeouts.clone(), persistent_log.clone());
 
         let dec_log = initialize_decided_log::<D>(node_id, persistent_log, initial_state)?;
 
@@ -415,7 +413,7 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
         Ok(OrderProtocolExecResult::Success)
     }
 
-    fn update_normal_phase(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>) -> Result<OrderProtocolExecResult> {
+    fn update_normal_phase(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>) -> Result<OrderProtocolExecResult<D::Request>> {
         let (header, protocol) = message.into_inner();
 
         match protocol.into_inner() {
@@ -573,7 +571,8 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT> for PBFTOrderProtocol<D, ST, NT>
     type StateSerialization = PBFTConsensus<D>;
 
 
-    fn initialize_with_initial_state(config: Self::Config, args: OrderingProtocolArgs<D, NT>,
+    fn initialize_with_initial_state(config: Self::Config,
+                                     args: OrderingProtocolArgs<D, NT, PersistentLog<D, PBFTConsensus<D>>>,
                                      initial_state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<Self> where Self: Sized {
         Self::initialize_protocol(config, args, Some(initial_state))
     }

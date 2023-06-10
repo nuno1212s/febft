@@ -30,14 +30,6 @@ pub mod decided_log;
 /// TODO: Move this to an env variable as it can be highly dependent on the service implemented on top of it
 pub const CHECKPOINT_PERIOD: u32 = 50000;
 
-pub type ReadableConsensusMessage<O> = Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>;
-
-pub fn initialize_persistent_log<D, K, T>(executor: ExecutorHandle<D>, db_path: K)
-                                          -> Result<PersistentLog<D, PBFTConsensus<D>>>
-    where D: SharedData + 'static, K: AsRef<Path>, T: PersistentLogModeTrait {
-    PersistentLog::init_log::<K, T>(executor, db_path)
-}
-
 pub fn initialize_decided_log<D: SharedData + 'static>(node_id: NodeId,
                                                        persistent_log: PersistentLog<D, PBFTConsensus<D>>,
                                                        state: Option<Arc<ReadOnly<Checkpoint<D::State>>>>) -> Result<Log<D>> {
