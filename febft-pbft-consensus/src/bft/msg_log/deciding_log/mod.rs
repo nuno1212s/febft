@@ -163,7 +163,7 @@ impl<O> DecidingLog<O> {
 
         if request_batch.header().from() != self.node_id {
             for request in &batch_rq_digests {
-                if !crate::bft::sync::view::is_request_in_hash_space(request.digest(), slice) {
+                if !crate::bft::sync::view::is_request_in_hash_space(&request.digest(), slice) {
                     return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
                                                       "This batch contains requests that are not in the hash space of the leader."));
                 }
@@ -354,15 +354,15 @@ impl<O> OnGoingDecision<O> {
             let mut buf = Vec::new();
 
             for stored in self.prepare_messages.iter().rev() {
-                match stored.message().sequence_number().cmp(&in_exec) {
+                match stored.message().consensus().sequence_number().cmp(&in_exec) {
                     Ordering::Equal => {
-                        let digest = match stored.message().kind() {
+                        let digest = match stored.message().consensus().kind() {
                             ConsensusMessageKind::Prepare(d) => d.clone(),
                             _ => unreachable!(),
                         };
 
                         buf.push(ViewDecisionPair(
-                            stored.message().view(),
+                            stored.message().consensus().view(),
                             digest,
                         ));
                     }
@@ -383,21 +383,21 @@ impl<O> OnGoingDecision<O> {
             let mut count = 0;
 
             for stored in self.prepare_messages.iter().rev() {
-                match stored.message().sequence_number().cmp(&in_exec) {
+                match stored.message().consensus().sequence_number().cmp(&in_exec) {
                     Ordering::Equal => {
                         match last_view {
                             None => (),
-                            Some(v) if stored.message().view() == v => (),
+                            Some(v) if stored.message().consensus().view() == v => (),
                             _ => count = 0,
                         }
-                        last_view = Some(stored.message().view());
+                        last_view = Some(stored.message().consensus().view());
                         count += 1;
                         if count == quorum {
-                            let digest = match stored.message().kind() {
+                            let digest = match stored.message().consensus().kind() {
                                 ConsensusMessageKind::Prepare(d) => d.clone(),
                                 _ => unreachable!(),
                             };
-                            break 'outer Some(ViewDecisionPair(stored.message().view(), digest));
+                            break 'outer Some(ViewDecisionPair(stored.message().consensus().view(), digest));
                         }
                     }
                     Ordering::Less => break,
@@ -471,7 +471,7 @@ impl<O> CompletedBatch<O> {
     }
 
     pub fn request_count(&self) -> usize {
-        self.request_count
+        self.client_requests.len()
     }
 
     /// Create a proof from the completed batch
@@ -579,7 +579,7 @@ pub fn make_proof_from<O>(proof_meta: ProofMetadata, mut ongoing: OnGoingDecisio
     Ok(Proof::new(proof_meta, pre_prepare_messages, prepare_messages, commit_messages))
 }
 
-impl<O> From<CompletedBatch<O>> for DecisionInformation<O> {
+impl<O> From<CompletedBatch<O>> for DecisionInformation {
     fn from(value: CompletedBatch<O>) -> Self {
         DecisionInformation::new(value.batch_digest,
                                  value.messages_to_persist,

@@ -4,15 +4,12 @@ pub mod accessory;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, BTreeMap, BTreeSet, VecDeque};
 use std::iter;
-use std::os::linux::raw::stat;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::Utc;
 use either::Either;
 use event_listener::Event;
 use log::{debug, error, info, trace, warn};
-use serde::de::Unexpected::Seq;
-use socket2::Protocol;
 use atlas_common::error::*;
 use atlas_common::crypto::hash::Digest;
 use atlas_common::globals::ReadOnly;
@@ -29,7 +26,6 @@ use atlas_core::timeouts::Timeouts;
 use atlas_metrics::metrics::metric_increment;
 use atlas_persistent_log::PersistentLog;
 use crate::bft;
-use crate::bft::msg_log::Info;
 use crate::bft::consensus::decision::{ConsensusDecision, DecisionPhase, DecisionPollStatus, DecisionStatus, MessageQueue};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::msg_log::decided_log::Log;
@@ -549,7 +545,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
             }
 
             for pre_prepare in proof.pre_prepares() {
-                let x: &ConsensusMessage<D::Request> = pre_prepare.message();
+                let x: &ConsensusMessage<D::Request> = pre_prepare.message().consensus();
 
                 match x.kind() {
                     ConsensusMessageKind::PrePrepare(pre_prepare_reqs) => {

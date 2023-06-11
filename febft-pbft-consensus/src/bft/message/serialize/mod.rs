@@ -11,17 +11,16 @@ use std::marker::PhantomData;
 use bytes::Bytes;
 use atlas_common::error::*;
 
-use crate::bft::msg_log::persistent::ProofInfo;
-
 #[cfg(feature = "serialize_serde")]
 use ::serde::{Deserialize, Serialize};
 use atlas_common::crypto::hash::{Context, Digest};
+use atlas_communication::message::StoredMessage;
 use atlas_communication::Node;
 use atlas_communication::serialize::Serializable;
+use atlas_core::persistent_log::PersistableOrderProtocol;
 use atlas_execution::app::Service;
 use atlas_execution::serialize::SharedData;
 use atlas_core::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage};
-use atlas_persistent_log::serialize::PersistableStatefulOrderProtocol;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::{PBFT};
 use crate::bft::msg_log::decisions::{DecisionLog, Proof, ProofMetadata};
@@ -124,7 +123,7 @@ const CF_PREPARES: &str = "PREPARES";
 const CF_COMMIT: &str = "COMMITS";
 
 
-impl<D> PersistableStatefulOrderProtocol for PBFTConsensus<D> where D: SharedData {
+impl<D> PersistableOrderProtocol for PBFTConsensus<D> where D: SharedData {
 
     type OrderProtocolMessage = Self;
     type StatefulOrderProtocolMessage = Self;
@@ -136,7 +135,7 @@ impl<D> PersistableStatefulOrderProtocol for PBFTConsensus<D> where D: SharedDat
             CF_COMMIT]
     }
 
-    fn get_type_for_message(msg: &PBFTMessage<D::Request>) -> Result<&str> {
+    fn get_type_for_message(msg: &PBFTMessage<D::Request>) -> Result<&'static str> {
         match msg {
             PBFTMessage::Consensus(msg) => {
                 match msg.kind() {
@@ -152,12 +151,12 @@ impl<D> PersistableStatefulOrderProtocol for PBFTConsensus<D> where D: SharedDat
                 }
             }
             _ => {
-                Err(Error::new(ErrorKind::InvalidData, "Invalid message type"))
+                Err(Error::simple_with_msg(ErrorKind::MsgLogPersistentSerialization, "Invalid message type"))
             }
         }
     }
 
-    fn init_proof_from(metadata: Self::ProofMetadata, messages: Vec<PBFTMessage<D::Request>>) -> Proof<D::Request> {
+    fn init_proof_from(metadata: Self::ProofMetadata, messages: Vec<StoredMessage<PBFTMessage<D::Request>>>) -> Proof<D::Request> {
         todo!()
     }
 
@@ -165,7 +164,7 @@ impl<D> PersistableStatefulOrderProtocol for PBFTConsensus<D> where D: SharedDat
         todo!()
     }
 
-    fn decompose_proof(proof: &Proof<D::Request>) -> (&Self::ProofMetadata, Vec<&PBFTMessage<D::Request>>) {
+    fn decompose_proof(proof: &Proof<D::Request>) -> (&Self::ProofMetadata, Vec<&StoredMessage<PBFTMessage<D::Request>>>) {
         todo!()
     }
 

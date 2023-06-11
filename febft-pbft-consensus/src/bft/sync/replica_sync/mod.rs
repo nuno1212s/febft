@@ -31,8 +31,7 @@ use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::metric::{SYNC_BATCH_RECEIVED_ID, SYNC_FORWARDED_COUNT_ID, SYNC_FORWARDED_REQUESTS_ID, SYNC_STOPPED_COUNT_ID, SYNC_STOPPED_REQUESTS_ID, SYNC_WATCH_REQUESTS_ID};
 use crate::bft::msg_log::decided_log::Log;
-use crate::bft::msg_log::decisions::CollectData;
-use crate::bft::msg_log::persistent::PersistentLogModeTrait;
+use crate::bft::msg_log::decisions::{CollectData, StoredConsensusMessage};
 use crate::bft::PBFT;
 use crate::bft::sync::view::ViewInfo;
 
@@ -165,12 +164,12 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     /// proposed, they won't timeout
     pub fn received_request_batch(
         &self,
-        pre_prepare: &StoredMessage<ConsensusMessage<D::Request>>,
+        pre_prepare: &StoredConsensusMessage<D::Request>,
         timeouts: &Timeouts,
     ) -> Vec<ClientRqInfo> {
         let start_time = Instant::now();
 
-        let requests = match pre_prepare.message().kind() {
+        let requests = match pre_prepare.message().consensus().kind() {
             ConsensusMessageKind::PrePrepare(req) => { req }
             _ => {
                 error!("Cannot receive a request that is not a PrePrepare");

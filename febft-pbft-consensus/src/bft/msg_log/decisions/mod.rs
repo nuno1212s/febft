@@ -48,6 +48,12 @@ pub struct ProofMetadata {
     pre_prepare_ordering: Vec<Digest>,
 }
 
+impl Orderable for ProofMetadata {
+    fn sequence_number(&self) -> SeqNo {
+        self.seq_no
+    }
+}
+
 /// Represents a single decision from the `DecisionLog`.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 pub struct Proof<O> {
@@ -328,7 +334,7 @@ impl<O> DecisionLog<O> {
             if proof.seq_no <= seq_no {
                 for pre_prepare in &proof.pre_prepares {
                     //Mark the requests contained in this message for removal
-                    decided_request_count += match pre_prepare.message().kind() {
+                    decided_request_count += match pre_prepare.message().consensus().kind() {
                         ConsensusMessageKind::PrePrepare(messages) => messages.len(),
                         _ => 0,
                     };

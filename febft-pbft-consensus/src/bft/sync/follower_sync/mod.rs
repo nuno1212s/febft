@@ -7,7 +7,7 @@ use atlas_execution::app::{Request, Service};
 use atlas_execution::serialize::SharedData;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
-use crate::bft::msg_log::persistent::PersistentLogModeTrait;
+use crate::bft::msg_log::decisions::StoredConsensusMessage;
 
 pub struct FollowerSynchronizer<D: SharedData> {
     _phantom: PhantomData<D>
@@ -24,10 +24,10 @@ impl<D: SharedData + 'static> FollowerSynchronizer<D> {
     /// proposed, they won't timeout
     pub fn watch_request_batch(
         &self,
-        pre_prepare: &StoredMessage<ConsensusMessage<D::Request>>,
+        pre_prepare: &StoredConsensusMessage<D::Request>,
     ) -> Vec<ClientRqInfo> {
 
-        let requests = match pre_prepare.message().kind() {
+        let requests = match pre_prepare.message().consensus().kind() {
             ConsensusMessageKind::PrePrepare(req) => {req},
             _ => {panic!()}
         };

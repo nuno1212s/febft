@@ -28,7 +28,7 @@ default = [
 ]
 
 serialize_serde = ["atlas-capnp", "serde", "serde_bytes", "bincode", "atlas-common/serialize_serde",
-    "atlas-execution/serialize_serde", "atlas-communication/serialize_serde", "atlas-core/serialize_serde"]
+    "atlas-execution/serialize_serde", "atlas-communication/serialize_serde", "atlas-core/serialize_serde", "atlas-persistent-log/serialize_serde"]
 serialize_capnp = ["atlas-capnp"]
 
 [dev-dependencies]

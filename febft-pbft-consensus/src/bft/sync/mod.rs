@@ -36,7 +36,7 @@ use atlas_core::timeouts::{RqTimeout, Timeouts};
 use crate::bft::consensus::Consensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::msg_log::decided_log::Log;
-use crate::bft::msg_log::decisions::{CollectData, Proof, ViewDecisionPair};
+use crate::bft::msg_log::decisions::{CollectData, Proof, StoredConsensusMessage, ViewDecisionPair};
 use crate::bft::PBFT;
 
 use crate::bft::sync::view::ViewInfo;
@@ -505,7 +505,7 @@ impl<D> Synchronizer<D>
         rq_pre_processor: &RequestPreProcessor<D::Request>,
         consensus: &mut Consensus<D, ST>,
         node: &NT,
-    ) -> SynchronizerStatus
+    ) -> SynchronizerStatus<D::Request>
         where ST: StateTransferMessage, NT: Node<PBFT<D, ST>>
     {
         debug!("{:?} // Processing view change message {:?} in phase {:?} from {:?}",
@@ -1202,7 +1202,7 @@ impl<D> Synchronizer<D>
     /// proposed, they won't timeout
     pub fn request_batch_received(
         &self,
-        pre_prepare: &StoredMessage<ConsensusMessage<D::Request>>,
+        pre_prepare: &StoredConsensusMessage<D::Request>,
         timeouts: &Timeouts,
     ) -> Vec<ClientRqInfo> {
         match &self.accessory {
@@ -1579,6 +1579,7 @@ fn highest_proof<'a, D, I, ST, NT>(
                 .iter()
                 .filter(|stored| {
                     stored.message()
+                        .consensus()
                         .has_proposed_digest(&digest)
                         //If he does not have the digest, then it is not valid
                         .unwrap_or(false)
@@ -1593,6 +1594,7 @@ fn highest_proof<'a, D, I, ST, NT>(
                 .filter(|stored| {
                     stored
                         .message()
+                        .consensus()
                         .has_proposed_digest(&digest)
                         //If he does not have the digest, then it is not valid
                         .unwrap_or(false)

@@ -58,9 +58,31 @@ impl<R> Debug for PBFTMessage<R> {
     }
 }
 
-impl<R> PBFTMessage<R> {
+impl<R> Orderable for PBFTMessage<R> {
+    fn sequence_number(&self) -> SeqNo {
+        match self {
+            PBFTMessage::Consensus(consensus) => {
+                consensus.sequence_number()
+            }
+            PBFTMessage::ViewChange(view) => {
+                view.sequence_number()
+            }
+            PBFTMessage::ObserverMessage(obs) => {
+                SeqNo::ZERO
+            }
+        }
+    }
+}
 
+impl<R> PBFTMessage<R> {
     pub fn consensus(&self) -> &ConsensusMessage<R> {
+        match self {
+            PBFTMessage::Consensus(msg) => msg,
+            _ => panic!("Not a consensus message"),
+        }
+    }
+
+    pub fn into_consensus(self) -> ConsensusMessage<R> {
         match self {
             PBFTMessage::Consensus(msg) => msg,
             _ => panic!("Not a consensus message"),
@@ -74,6 +96,13 @@ impl<R> PBFTMessage<R> {
         }
     }
 
+    pub fn into_view_change(self) -> ViewChangeMessage<R> {
+        match self {
+            PBFTMessage::ViewChange(msg) => msg,
+            _ => panic!("Not a view change message"),
+        }
+    }
+
     pub fn observer_message(&self) -> &ObserverMessage {
         match self {
             PBFTMessage::ObserverMessage(msg) => msg,
@@ -81,6 +110,12 @@ impl<R> PBFTMessage<R> {
         }
     }
 
+    pub fn into_observer_message(self) -> ObserverMessage {
+        match self {
+            PBFTMessage::ObserverMessage(msg) => msg,
+            _ => panic!("Not an observer message"),
+        }
+    }
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]

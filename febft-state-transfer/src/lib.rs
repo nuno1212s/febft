@@ -23,6 +23,7 @@ use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::SharedData;
 use atlas_core::messages::{StateTransfer, SystemMessage};
 use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol, View};
+use atlas_core::persistent_log::WriteMode;
 use atlas_core::serialize::{NetworkView, OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage};
 use atlas_core::state_transfer::{Checkpoint, CheckpointState, CstM, DecLog, SerProof, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
@@ -119,7 +120,7 @@ pub fn install_recovery_state<D, NT, OP, PL>(
         log
     } = recovery_state;
 
-    let (state, req) = order_protocol.install_state(checkpoint, view, log)?;
+    let (state, req) = order_protocol.install_state(view, log)?;
 
     Ok((state, req))
 }
@@ -169,7 +170,7 @@ struct ReceivedState<S, V, O> {
 pub struct CollabStateTransfer<D, OP, NT, PL>
     where D: SharedData + 'static, OP: StatefulOrderProtocol<D, NT, PL> {
     curr_seq: SeqNo,
-    current_checkpoint_state: CheckpointState<D>,
+    current_checkpoint_state: CheckpointState<D::State>,
 
     largest_cid: SeqNo,
     cst_seq: SeqNo,
@@ -429,7 +430,7 @@ impl<D, OP, NT, PL> StateTransferProtocol<D, OP, NT, PL> for CollabStateTransfer
             _ => {
                 error!("Invalid checkpoint state detected");
 
-                self.checkpoint = earlier;
+                self.current_checkpoint_state = earlier;
 
                 return Ok(ExecutionResult::Nil);
             }
@@ -489,6 +490,7 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
             largest_cid: SeqNo::ZERO,
             latest_cid_count: 0,
             cst_seq: SeqNo::ZERO,
+            persistent_log: (),
         }
     }
 
@@ -589,8 +591,8 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
             }
         }
 
-        let (state, view, dec_log) = match op.snapshot_log() {
-            Ok((state, view, dec_log)) => { (state, view, dec_log) }
+        let (view, dec_log) = match op.snapshot_log() {
+            Ok((view, dec_log)) => { (view, dec_log) }
             Err(_) => {
                 if let ProtoPhase::WaitingCheckpoint(waiting) = &mut self.phase {
                     waiting.push(StoredMessage::new(header, message));
@@ -858,7 +860,7 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
     /// `Info::BeginCheckpoint`, and the requested application state is received
     /// on the core server task's master channel.
     pub fn finalize_checkpoint(&mut self, checkpoint: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()> {
-        match &self.checkpoint {
+        match &self.current_checkpoint_state {
             CheckpointState::None => {
                 Err("No checkpoint has been initiated yet").wrapped(ErrorKind::MsgLog)
             }

@@ -13,11 +13,10 @@ use atlas_execution::app::{Request, Service, State, UpdateBatch};
 use atlas_execution::serialize::SharedData;
 use atlas_core::state_transfer::Checkpoint;
 use atlas_persistent_log::{PersistentLog, WriteMode};
-use atlas_replica::server::CHECKPOINT_PERIOD;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::msg_log::{Info, operation_key};
+use crate::bft::msg_log::{operation_key};
 use crate::bft::msg_log::decisions::{CollectData, DecisionLog, Proof, ProofMetadata};
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
 use crate::bft::sync::view::ViewInfo;
@@ -53,15 +52,15 @@ impl<D> Log<D> where D: SharedData + 'static {
     /// Read the current state, if existent, from the persistent storage
     ///
     /// FIXME: The view initialization might have to be changed if we want to introduce reconfiguration
-    pub fn read_current_state(&self, n: usize, f: usize) -> Result<Option<(Arc<ReadOnly<Checkpoint<D::State>>>, ViewInfo, DecisionLog<D::Request>)>> {
+    pub fn read_current_state(&self, n: usize, f: usize) -> Result<Option<(ViewInfo, DecisionLog<D::Request>)>> {
         let option = self.persistent_log.read_state()?;
 
         if let Some(state) = option {
-            let (view_seq, checkpoint, dec_log) = state;
+            let (view_seq, dec_log) = state;
 
             let view_seq = ViewInfo::new(view_seq, n, f)?;
 
-            Ok(Some((checkpoint.clone(), view_seq, dec_log)))
+            Ok(Some((view_seq, dec_log)))
         } else {
             Ok(None)
         }
@@ -135,8 +134,7 @@ impl<D> Log<D> where D: SharedData + 'static {
         let last_seq = self.dec_log.last_execution().unwrap_or(SeqNo::ZERO);
 
         if let Err(err) = self.persistent_log
-            .write_install_state(WriteMode::NonBlockingSync(None),
-                                 (last_seq, checkpoint, dec_log)) {
+            .write_install_state(WriteMode::NonBlockingSync(None), (last_seq, dec_log)) {
             error!("Failed to persist message {:?}", err);
         }
     }
@@ -192,7 +190,7 @@ impl<D> Log<D> where D: SharedData + 'static {
 
             for message in completed_batch.pre_prepare_messages() {
                 let reqs = {
-                    if let ConsensusMessageKind::PrePrepare(reqs) = (*message.message().kind()).clone() {
+                    if let ConsensusMessageKind::PrePrepare(reqs) = (*message.message().consensus().kind()).clone() {
                         reqs
                     } else { unreachable!() }
                 };
@@ -258,7 +256,7 @@ impl<O> From<&Proof<O>> for ProtocolConsensusDecision<O> where O: Clone {
         for pre_prepare in value.pre_prepares() {
             let consensus_msg = (*pre_prepare.message()).clone();
 
-            let reqs = match consensus_msg.into_kind() {
+            let reqs = match consensus_msg.into_consensus().into_kind() {
                 ConsensusMessageKind::PrePrepare(reqs) => { reqs }
                 _ => {
                     unreachable!()

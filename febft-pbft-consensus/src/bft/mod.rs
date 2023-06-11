@@ -39,10 +39,9 @@ use crate::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus, Pro
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage, ViewChangeMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::{CONSENSUS_INSTALL_STATE_TIME_ID, MSG_LOG_INSTALL_TIME_ID};
-use crate::bft::msg_log::{Info, initialize_decided_log, initialize_persistent_log};
+use crate::bft::msg_log::{initialize_decided_log};
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::{DecisionLog, Proof};
-use crate::bft::msg_log::persistent::NoPersistentLog;
 use crate::bft::proposer::Proposer;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus};
 
@@ -508,6 +507,8 @@ impl<D, ST, NT> PBFTOrderProtocol<D, ST, NT> where D: SharedData + 'static,
             // This will automatically move the consensus machine to the next consensus instance
             let completed_batch = self.consensus.finalize(&view)?.unwrap();
 
+            let seq = completed_batch.sequence_number();
+
             //Should the execution be scheduled here or will it be scheduled by the persistent log?
             let exec_info = self.message_log.finalize_batch(seq, completed_batch)?;
 
@@ -572,7 +573,7 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT, PersistentLog<D, PBFTConsensus<D>>>
 
     fn initialize_with_initial_state(config: Self::Config,
                                      args: OrderingProtocolArgs<D, NT, PersistentLog<D, PBFTConsensus<D>>>,
-                                     initial_state: DecisionLog<D>) -> Result<Self> where Self: Sized {
+                                     initial_state: DecisionLog<D::Request>) -> Result<Self> where Self: Sized {
         Self::initialize_protocol(config, args, Some(initial_state))
     }
 
@@ -592,8 +593,8 @@ impl<D, ST, NT> StatefulOrderProtocol<D, NT, PersistentLog<D, PBFTConsensus<D>>>
     fn install_state(&mut self,
                      view_info: View<Self::Serialization>,
                      dec_log: DecLog<Self::StateSerialization>) -> Result<Vec<D::Request>> {
-        info!("{:?} // Installing state with Seq No {:?} and View {:?}", self.node.id(),
-                state.sequence_number(), view_info);
+        info!("{:?} // Installing decision log with Seq No {:?} and View {:?}", self.node.id(),
+                dec_log.sequence_number(), view_info);
 
         let last_exec = if let Some(last_exec) = dec_log.last_execution() {
             last_exec

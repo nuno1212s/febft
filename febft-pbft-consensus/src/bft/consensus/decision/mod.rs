@@ -24,7 +24,7 @@ use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::{ConsensusMetrics, PRE_PREPARE_ANALYSIS_ID};
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
-use crate::bft::msg_log::decisions::IncompleteProof;
+use crate::bft::msg_log::decisions::{IncompleteProof, StoredConsensusMessage};
 use crate::bft::PBFT;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::sync::view::ViewInfo;
@@ -598,7 +598,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Orderable for 
 
 #[inline]
 fn request_batch_received<D>(
-    pre_prepare: &StoredMessage<PBFTMessage<D::Request>>,
+    pre_prepare: &StoredConsensusMessage<D::Request>,
     timeouts: &Timeouts,
     synchronizer: &Synchronizer<D>,
     log: &DecidingLog<D::Request>,
@@ -610,7 +610,7 @@ fn request_batch_received<D>(
 
     let mut batch_guard = log.batch_meta().lock().unwrap();
 
-    batch_guard.batch_size += match pre_prepare.message().kind() {
+    batch_guard.batch_size += match pre_prepare.message().consensus().kind() {
         ConsensusMessageKind::PrePrepare(req) => {
             req.len()
         }
