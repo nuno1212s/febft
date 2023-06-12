@@ -69,6 +69,8 @@ pub struct PBFTConsensus<D: SharedData>(PhantomData<D>);
 impl<D> OrderingProtocolMessage for PBFTConsensus<D> where D: SharedData {
     type ViewInfo = ViewInfo;
     type ProtocolMessage = PBFTMessage<D::Request>;
+    type Proof = Proof<D::Request>;
+    type ProofMetadata = ProofMetadata;
 
     #[cfg(feature = "serialize_capnp")]
     fn serialize_capnp(builder: atlas_capnp::consensus_messages_capnp::protocol_message::Builder, msg: &Self::ProtocolMessage) -> Result<()> {
@@ -89,23 +91,6 @@ impl<D> OrderingProtocolMessage for PBFTConsensus<D> where D: SharedData {
     fn deserialize_view_capnp(reader: atlas_capnp::cst_messages_capnp::view_info::Reader) -> Result<Self::ViewInfo> {
         todo!()
     }
-}
-
-impl<D> StatefulOrderProtocolMessage for PBFTConsensus<D> where D: SharedData {
-    type DecLog = DecisionLog<D::Request>;
-    type Proof = Proof<D::Request>;
-
-
-    #[cfg(feature = "serialize_capnp")]
-    fn serialize_declog_capnp(builder: atlas_capnp::cst_messages_capnp::dec_log::Builder, msg: &Self::DecLog) -> Result<()> {
-        todo!()
-    }
-
-    #[cfg(feature = "serialize_capnp")]
-    fn deserialize_declog_capnp(reader: atlas_capnp::cst_messages_capnp::dec_log::Reader) -> Result<Self::DecLog> {
-        todo!()
-    }
-
 
     #[cfg(feature = "serialize_capnp")]
     fn serialize_proof_capnp(builder: atlas_capnp::cst_messages_capnp::proof::Builder, msg: &Self::Proof) -> Result<()> {
@@ -114,6 +99,20 @@ impl<D> StatefulOrderProtocolMessage for PBFTConsensus<D> where D: SharedData {
 
     #[cfg(feature = "serialize_capnp")]
     fn deserialize_proof_capnp(reader: atlas_capnp::cst_messages_capnp::proof::Reader) -> Result<Self::Proof> {
+        todo!()
+    }
+}
+
+impl<D> StatefulOrderProtocolMessage for PBFTConsensus<D> where D: SharedData {
+    type DecLog = DecisionLog<D::Request>;
+
+    #[cfg(feature = "serialize_capnp")]
+    fn serialize_declog_capnp(builder: atlas_capnp::cst_messages_capnp::dec_log::Builder, msg: &Self::DecLog) -> Result<()> {
+        todo!()
+    }
+
+    #[cfg(feature = "serialize_capnp")]
+    fn deserialize_declog_capnp(reader: atlas_capnp::cst_messages_capnp::dec_log::Reader) -> Result<Self::DecLog> {
         todo!()
     }
 }
@@ -127,7 +126,6 @@ impl<D> PersistableOrderProtocol for PBFTConsensus<D> where D: SharedData {
 
     type OrderProtocolMessage = Self;
     type StatefulOrderProtocolMessage = Self;
-    type ProofMetadata = ProofMetadata;
 
     fn message_types() -> Vec<&'static str> {
         vec![CF_PRE_PREPARES,
@@ -156,7 +154,7 @@ impl<D> PersistableOrderProtocol for PBFTConsensus<D> where D: SharedData {
         }
     }
 
-    fn init_proof_from(metadata: Self::ProofMetadata, messages: Vec<StoredMessage<PBFTMessage<D::Request>>>) -> Proof<D::Request> {
+    fn init_proof_from(metadata: ProofMetadata, messages: Vec<StoredMessage<PBFTMessage<D::Request>>>) -> Proof<D::Request> {
         todo!()
     }
 
@@ -164,7 +162,7 @@ impl<D> PersistableOrderProtocol for PBFTConsensus<D> where D: SharedData {
         todo!()
     }
 
-    fn decompose_proof(proof: &Proof<D::Request>) -> (&Self::ProofMetadata, Vec<&StoredMessage<PBFTMessage<D::Request>>>) {
+    fn decompose_proof(proof: &Proof<D::Request>) -> (&ProofMetadata, Vec<&StoredMessage<PBFTMessage<D::Request>>>) {
         todo!()
     }
 

@@ -12,7 +12,6 @@ use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::SharedData;
 use atlas_core::messages::RequestMessage;
 use atlas_core::state_transfer::Checkpoint;
-use atlas_persistent_log::{PersistentLog, PersistentLogModeTrait};
 
 use crate::bft::message::ConsensusMessage;
 use crate::bft::message::serialize::PBFTConsensus;
@@ -23,9 +22,9 @@ pub mod decisions;
 pub mod deciding_log;
 pub mod decided_log;
 
-pub fn initialize_decided_log<D: SharedData + 'static>(node_id: NodeId,
-                                                       persistent_log: PersistentLog<D, PBFTConsensus<D>>,
-                                                       state: Option<DecisionLog<D::Request>>) -> Result<Log<D>> {
+pub fn initialize_decided_log<D: SharedData + 'static, PL>(node_id: NodeId,
+                                                       persistent_log: PL,
+                                                       state: Option<DecisionLog<D::Request>>) -> Result<Log<D, PL>> {
     Ok(Log::init_decided_log(node_id, persistent_log, state))
 }
 

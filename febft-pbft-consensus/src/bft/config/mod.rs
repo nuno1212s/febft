@@ -10,7 +10,6 @@ use atlas_core::followers::FollowerHandle;
 use atlas_core::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg};
 use atlas_core::state_transfer::Checkpoint;
 use atlas_core::timeouts::Timeouts;
-use atlas_persistent_log::PersistentLog;
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::observer::ObserverHandle;
 use crate::bft::sync::view::ViewInfo;

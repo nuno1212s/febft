@@ -30,14 +30,16 @@ use atlas_execution::app::{Reply, Request, Service, State};
 use atlas_execution::serialize::SharedData;
 use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
 use atlas_core::ordering_protocol::ProtocolConsensusDecision;
+use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use atlas_core::serialize::StateTransferMessage;
 use atlas_core::timeouts::{RqTimeout, Timeouts};
 use crate::bft::consensus::Consensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
+use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::{CollectData, Proof, StoredConsensusMessage, ViewDecisionPair};
-use crate::bft::PBFT;
+use crate::bft::{PBFT, PBFTOrderProtocol};
 
 use crate::bft::sync::view::ViewInfo;
 
@@ -223,7 +225,6 @@ impl<O> TboQueue<O> {
                 unreachable!("How can we possibly go back in time?");
             }
         };
-
     }
 
     /// Signal this `TboQueue` that it may be able to extract new
@@ -496,17 +497,19 @@ impl<D> Synchronizer<D>
     /// Advances the state of the view change state machine.
     //
     // TODO: retransmit STOP msgs
-    pub fn process_message<ST, NT>(
+    pub fn process_message<ST, NT, PL>(
         &self,
         header: Header,
         message: ViewChangeMessage<D::Request>,
         timeouts: &Timeouts,
-        log: &mut Log<D>,
+        log: &mut Log<D, PL>,
         rq_pre_processor: &RequestPreProcessor<D::Request>,
-        consensus: &mut Consensus<D, ST>,
+        consensus: &mut Consensus<D, ST, PL>,
         node: &NT,
     ) -> SynchronizerStatus<D::Request>
-        where ST: StateTransferMessage, NT: Node<PBFT<D, ST>>
+        where ST: StateTransferMessage,
+              NT: Node<PBFT<D, ST>>,
+              PL: OrderingProtocolLog<PBFTConsensus<D>>
     {
         debug!("{:?} // Processing view change message {:?} in phase {:?} from {:?}",
                node.id(),
@@ -625,7 +628,6 @@ impl<D> Synchronizer<D>
                 // NOTE: we only take this branch of the code before
                 // we have sent our own STOP message
                 if let ProtoPhase::Stopping(_i) = self.phase.get() {
-
                     return if i > current_view.params().f() {
                         self.begin_view_change(None, node, timeouts, log);
                         SynchronizerStatus::Running
@@ -749,7 +751,6 @@ impl<D> Synchronizer<D>
                                     //Since we are the current leader and are waiting for stop data,
                                     //This must be related to another view.
                                     guard.queue_sync(header, message);
-
                                 }
 
                                 debug!("{:?} // Received sync message while in stopping data phase. Queueing", node.id());
@@ -1015,14 +1016,15 @@ impl<D> Synchronizer<D>
     }
 
     /// Resume the view change protocol after running the CST protocol.
-    pub fn resume_view_change<ST, NT>(
+    pub fn resume_view_change<ST, NT, PL>(
         &self,
-        log: &mut Log<D>,
+        log: &mut Log<D, PL>,
         timeouts: &Timeouts,
-        consensus: &mut Consensus<D, ST>,
+        consensus: &mut Consensus<D, ST, PL>,
         node: &NT,
     ) -> Option<()>
-        where ST: StateTransferMessage, NT: Node<PBFT<D, ST>>
+        where ST: StateTransferMessage, NT: Node<PBFT<D, ST>>,
+              PL: OrderingProtocolLog<PBFTConsensus<D>>
     {
         let state = self.finalize_state.borrow_mut().take()?;
 
@@ -1049,15 +1051,16 @@ impl<D> Synchronizer<D>
     /// that have timed out on the current replica.
     /// If the timed out requests are None, that means that the view change
     /// originated in the other replicas.
-    pub fn begin_view_change<ST, NT>(
+    pub fn begin_view_change<ST, NT, PL>(
         &self,
         timed_out: Option<Vec<StoredRequestMessage<D::Request>>>,
         node: &NT,
         timeouts: &Timeouts,
-        _log: &Log<D>,
+        _log: &Log<D, PL>,
     )
         where ST: StateTransferMessage + 'static,
-              NT: Node<PBFT<D, ST>>
+              NT: Node<PBFT<D, ST>>,
+              PL: OrderingProtocolLog<PBFTConsensus<D>>
     {
         match (self.phase.get(), &timed_out) {
             // we have received STOP messages from peer nodes,
@@ -1102,13 +1105,14 @@ impl<D> Synchronizer<D>
 
     // this function mostly serves the purpose of consuming
     // values with immutable references, to allow borrowing data mutably
-    fn pre_finalize(
+    fn pre_finalize< PL>(
         &self,
         state: FinalizeState<D::Request>,
         proof: Option<&Proof<D::Request>>,
         _normalized_collects: Vec<Option<&CollectData<D::Request>>>,
-        log: &Log<D>,
+        log: &Log<D, PL>,
     ) -> FinalizeStatus<D::Request>
+        where PL: OrderingProtocolLog<PBFTConsensus<D>>
     {
         let last_executed_cid = proof.as_ref().map(|p| p.sequence_number()).unwrap_or(SeqNo::ZERO);
 
@@ -1134,15 +1138,17 @@ impl<D> Synchronizer<D>
 
     /// Finalize a view change and install the new view in the other
     /// state machines (Consensus)
-    fn finalize<ST, NT>(
+    fn finalize<ST, NT, PL>(
         &self,
         state: FinalizeState<D::Request>,
-        log: &mut Log<D>,
+        log: &mut Log<D, PL>,
         timeouts: &Timeouts,
-        consensus: &mut Consensus<D, ST>,
+        consensus: &mut Consensus<D, ST, PL>,
         node: &NT,
     ) -> SynchronizerStatus<D::Request>
-        where ST: StateTransferMessage, NT: Node<PBFT<D, ST>>
+        where ST: StateTransferMessage,
+              NT: Node<PBFT<D, ST>>,
+              PL: OrderingProtocolLog<PBFTConsensus<D>>
     {
         let FinalizeState {
             curr_cid,
@@ -1172,7 +1178,6 @@ impl<D> Synchronizer<D>
             // sent by the leader in the SYNC message
             let to_execute = if let Some(last_proof) = last_proof {
                 Some(consensus.catch_up_to_quorum(last_proof.seq_no(), &view, last_proof, log).expect("Failed to catch up to quorum"))
-
             } else {
                 // This maybe happens when a checkpoint is done and the first execution after it
                 // fails, leading to a view change? Don't really know how this would be possible
@@ -1365,7 +1370,6 @@ fn binds<O>(
     normalized_collects: &[Option<&CollectData<O>>],
 ) -> bool {
     if normalized_collects.len() < curr_view.params().quorum() {
-
         debug!("Not enough collects to bind. Need {:?}, have {:?}.", curr_view.params().quorum(), normalized_collects.len());
 
         false
@@ -1380,7 +1384,6 @@ fn binds<O>(
 
 fn unbound<O>(curr_view: &ViewInfo, normalized_collects: &[Option<&CollectData<O>>]) -> bool {
     if normalized_collects.len() < curr_view.params().quorum() {
-
         debug!("Not enough collects to unbound. Need {:?}, have {:?}.", curr_view.params().quorum(), normalized_collects.len());
 
         false
@@ -1425,7 +1428,6 @@ fn quorum_highest<O>(
     value: &Digest,
     normalized_collects: &[Option<&CollectData<O>>],
 ) -> bool {
-
     let appears = normalized_collects
         .iter()
         .filter_map(Option::as_ref)
@@ -1448,10 +1450,10 @@ fn quorum_highest<O>(
                 .incomplete_proof()
                 .quorum_prepares()
                 .map(|ViewDecisionPair(other_ts, other_value)| match other_ts.cmp(&ts) {
-                        Ordering::Less => true,
-                        Ordering::Equal if other_value == value => true,
-                        _ => false,
-                    },
+                    Ordering::Less => true,
+                    Ordering::Equal if other_value == value => true,
+                    _ => false,
+                },
                 )
                 .unwrap_or(false)
         })

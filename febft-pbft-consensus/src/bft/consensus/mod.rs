@@ -21,10 +21,10 @@ use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::SharedData;
 use atlas_core::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage, SystemMessage};
 use atlas_core::ordering_protocol::ProtocolConsensusDecision;
+use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
 use atlas_core::serialize::StateTransferMessage;
 use atlas_core::timeouts::Timeouts;
 use atlas_metrics::metrics::metric_increment;
-use atlas_persistent_log::PersistentLog;
 use crate::bft;
 use crate::bft::consensus::decision::{ConsensusDecision, DecisionPhase, DecisionPollStatus, DecisionStatus, MessageQueue};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
@@ -186,7 +186,7 @@ pub struct Signals {
 
 /// The consensus handler. Responsible for multiplexing consensus instances and keeping track
 /// of missing messages
-pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static> {
+pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static, PL: Clone> {
     node_id: NodeId,
     /// The handle to the executor of the function
     executor_handle: ExecutorHandle<D>,
@@ -201,7 +201,7 @@ pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static
     /// The consensus instances that are currently being processed
     /// A given consensus instance n will only be finished when all consensus instances
     /// j, where j < n have already been processed, in order to maintain total ordering
-    decisions: VecDeque<ConsensusDecision<D, ST>>,
+    decisions: VecDeque<ConsensusDecision<D, ST, PL>>,
     /// The queue for messages that sit outside the range seq_no + watermark
     /// These messages cannot currently be processed since they sit outside the allowed
     /// zone but they will be processed once the seq no moves forward enough to include them
@@ -217,14 +217,15 @@ pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static
     /// Check if we are currently recovering from a fault, meaning we should ignore timeouts
     is_recovering: bool,
 
-    persistent_log: PersistentLog<D, PBFTConsensus<D>>,
+    persistent_log: PL,
 }
 
-impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
-                                   ST: StateTransferMessage + 'static {
+impl<D, ST, PL> Consensus<D, ST, PL> where D: SharedData + 'static,
+                                           ST: StateTransferMessage + 'static,
+                                           PL: Clone {
     pub fn new_replica(node_id: NodeId, view: &ViewInfo, executor_handle: ExecutorHandle<D>, seq_no: SeqNo,
                        watermark: u32, consensus_guard: Arc<ProposerConsensusGuard>, timeouts: Timeouts,
-                       persistent_log: PersistentLog<D, PBFTConsensus<D>>) -> Self {
+                       persistent_log: PL) -> Self {
         let mut curr_seq = seq_no;
 
         let mut consensus = Self {
@@ -364,9 +365,10 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                                message: ConsensusMessage<D::Request>,
                                synchronizer: &Synchronizer<D>,
                                timeouts: &Timeouts,
-                               log: &mut Log<D>,
+                               log: &mut Log<D, PL>,
                                node: &NT) -> Result<ConsensusStatus>
-        where NT: Node<PBFT<D, ST>> {
+        where NT: Node<PBFT<D, ST>>,
+              PL: OrderingProtocolLog<PBFTConsensus<D>> {
         let message_seq = message.sequence_number();
 
         let view_seq = message.view();
@@ -478,7 +480,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
     /// Advance to the next instance of the consensus
     /// This will also create the necessary new decision to keep the pending decisions
     /// equal to the water mark
-    pub fn next_instance(&mut self, view: &ViewInfo) -> ConsensusDecision<D, ST> {
+    pub fn next_instance(&mut self, view: &ViewInfo) -> ConsensusDecision<D, ST, PL> {
         let decision = self.decisions.pop_front().unwrap();
 
         self.seq_no = self.seq_no.next();
@@ -694,7 +696,8 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
                               seq: SeqNo,
                               view: &ViewInfo,
                               proof: Proof<D::Request>,
-                              log: &mut Log<D>) -> Result<ProtocolConsensusDecision<D::Request>> {
+                              log: &mut Log<D, PL>) -> Result<ProtocolConsensusDecision<D::Request>>
+        where PL: OrderingProtocolLog<PBFTConsensus<D>> {
 
         // If this is successful, it means that we are all caught up and can now start executing the
         // batch
@@ -797,9 +800,10 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
         (header, message): (Header, ConsensusMessage<D::Request>),
         synchronizer: &Synchronizer<D>,
         timeouts: &Timeouts,
-        log: &mut Log<D>,
+        log: &mut Log<D, PL>,
         node: &NT,
-    ) where NT: Node<PBFT<D, ST>> {
+    ) where NT: Node<PBFT<D, ST>>,
+            PL: OrderingProtocolLog<PBFTConsensus<D>> {
         let view = synchronizer.view();
         //Prepare the algorithm as we are already entering this phase
 
@@ -841,7 +845,7 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
     }
 
     /// Enqueue a decision onto our overlapping decision log
-    fn enqueue_decision(&mut self, decision: ConsensusDecision<D, ST>) {
+    fn enqueue_decision(&mut self, decision: ConsensusDecision<D, ST, PL>) {
         self.signalled.push_signalled(decision.sequence_number());
 
         self.decisions.push_back(decision);
@@ -863,7 +867,8 @@ impl<D, ST> Consensus<D, ST> where D: SharedData + 'static,
     }
 }
 
-impl<D, ST> Orderable for Consensus<D, ST> where D: SharedData + 'static, ST: StateTransferMessage + 'static {
+impl<D, ST, PL> Orderable for Consensus<D, ST, PL> where D: SharedData + 'static, ST: StateTransferMessage + 'static,
+                                                         PL: Clone  {
     fn sequence_number(&self) -> SeqNo {
         self.seq_no
     }

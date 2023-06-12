@@ -12,11 +12,11 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_communication::Node;
 use atlas_core::messages::ClientRqInfo;
+use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog, WriteMode};
 use atlas_execution::serialize::SharedData;
 use atlas_core::serialize::StateTransferMessage;
 use atlas_core::timeouts::Timeouts;
 use atlas_metrics::metrics::{metric_duration};
-use atlas_persistent_log::{PersistentLog, WriteMode};
 use crate::bft::consensus::accessory::{AccessoryConsensus, ConsensusDecisionAccessory};
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
@@ -102,7 +102,7 @@ pub struct MessageQueue<O> {
 }
 
 /// The information needed to make a decision on a batch of requests.
-pub struct ConsensusDecision<D: SharedData + 'static, ST: StateTransferMessage + 'static> {
+pub struct ConsensusDecision<D: SharedData + 'static, ST: StateTransferMessage + 'static, PL> {
     node_id: NodeId,
     /// The sequence number of this consensus decision
     seq: SeqNo,
@@ -113,7 +113,7 @@ pub struct ConsensusDecision<D: SharedData + 'static, ST: StateTransferMessage +
     /// The log of messages for this consensus instance
     message_log: DecidingLog<D::Request>,
     /// Persistent log reference
-    persistent_log: PersistentLog<D, PBFTConsensus<D>>,
+    persistent_log: PL,
     /// Accessory to the base consensus state machine
     accessory: ConsensusDecisionAccessory<D, ST>,
     // Metrics about the consensus instance
@@ -171,8 +171,8 @@ impl<O> MessageQueue<O> {
     }
 }
 
-impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecision<D, ST> {
-    pub fn init_decision(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo, persistent_log: PersistentLog<D, PBFTConsensus<D>>) -> Self {
+impl<D: SharedData + 'static, ST: StateTransferMessage + 'static, PL> ConsensusDecision<D, ST, PL> {
+    pub fn init_decision(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo, persistent_log: PL) -> Self {
         Self {
             node_id,
             seq: seq_no,
@@ -186,7 +186,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
     }
 
     pub fn init_with_msg_log(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo,
-                             persistent_log: PersistentLog<D, PBFTConsensus<D>>,
+                             persistent_log: PL,
                              message_queue: MessageQueue<D::Request>) -> Self {
         Self {
             node_id,
@@ -257,13 +257,14 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
 
     /// Process a message relating to this consensus instance
     pub fn process_message<NT>(&mut self,
-                               header: Header,
-                               message: ConsensusMessage<D::Request>,
-                               synchronizer: &Synchronizer<D>,
-                               timeouts: &Timeouts,
-                               log: &mut Log<D>,
-                               node: &NT) -> Result<DecisionStatus>
-        where NT: Node<PBFT<D, ST>> {
+                                   header: Header,
+                                   message: ConsensusMessage<D::Request>,
+                                   synchronizer: &Synchronizer<D>,
+                                   timeouts: &Timeouts,
+                                   log: &mut Log<D, PL>,
+                                   node: &NT) -> Result<DecisionStatus>
+        where NT: Node<PBFT<D, ST>>,
+              PL: OrderingProtocolLog<PBFTConsensus<D>> {
         let view = synchronizer.view();
 
         return match self.phase {
@@ -528,7 +529,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
                 return if received == view.params().quorum() {
                     info!("{:?} // Completed commit phase with all commits Seq {:?} with commit from {:?}", node.id(), self.sequence_number(),
                     header.from());
-                    
+
                     self.phase = DecisionPhase::Decided;
 
                     self.message_log.batch_meta().lock().unwrap().consensus_decision_time = Utc::now();
@@ -590,7 +591,7 @@ impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> ConsensusDecis
     }
 }
 
-impl<D: SharedData + 'static, ST: StateTransferMessage + 'static> Orderable for ConsensusDecision<D, ST> {
+impl<D: SharedData + 'static, ST: StateTransferMessage + 'static, PL> Orderable for ConsensusDecision<D, ST, PL> {
     fn sequence_number(&self) -> SeqNo {
         self.seq
     }

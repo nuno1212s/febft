@@ -21,6 +21,7 @@ use atlas_communication::{Node};
 use atlas_execution::app::{Request, Service};
 use atlas_execution::serialize::SharedData;
 use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
+use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use atlas_core::serialize::StateTransferMessage;
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, TimeoutPhase, Timeouts};
@@ -62,17 +63,18 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     ///
     /// Therefore, we start by clearing our stopped requests and treating them as
     /// newly proposed requests (by resetting their timer)
-    pub(super) fn handle_stopping_quorum<ST, NT>(
+    pub(super) fn handle_stopping_quorum<ST, NT, PL>(
         &self,
         base_sync: &Synchronizer<D>,
         previous_view: ViewInfo,
-        consensus: &Consensus<D, ST>,
-        log: &Log<D>,
+        consensus: &Consensus<D, ST, PL>,
+        log: &Log<D, PL>,
         pre_processor: &RequestPreProcessor<D::Request>,
         timeouts: &Timeouts,
         node: &NT,
     )
-        where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
+        where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>>,
+              PL: OrderingProtocolLog<PBFTConsensus<D>> {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
         // - add requests from STOP into client requests
