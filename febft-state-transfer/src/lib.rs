@@ -22,10 +22,10 @@ use atlas_execution::app::{Reply, Request, Service, State};
 use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::SharedData;
 use atlas_core::messages::{StateTransfer, SystemMessage};
-use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol, View};
-use atlas_core::persistent_log::WriteMode;
+use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol, SerProof, View};
+use atlas_core::persistent_log::{StateTransferProtocolLog, WriteMode};
 use atlas_core::serialize::{NetworkView, OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage};
-use atlas_core::state_transfer::{Checkpoint, CheckpointState, CstM, DecLog, SerProof, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
+use atlas_core::state_transfer::{Checkpoint, CstM, DecLog, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
 
 use crate::config::StateTransferConfig;
@@ -101,7 +101,8 @@ pub fn install_recovery_state<D, NT, OP, PL>(
 ) -> Result<(D::State, Vec<D::Request>)>
     where
         D: SharedData + 'static,
-        OP: StatefulOrderProtocol<D, NT, PL>
+        OP: StatefulOrderProtocol<D, NT, PL>,
+        PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D>
 {
     // TODO: maybe try to optimize this, to avoid clone(),
     // which may be quite expensive depending on the size
@@ -120,7 +121,9 @@ pub fn install_recovery_state<D, NT, OP, PL>(
         log
     } = recovery_state;
 
-    let (state, req) = order_protocol.install_state(view, log)?;
+    let req = order_protocol.install_state(view, log)?;
+
+    let state = checkpoint.state().clone();
 
     Ok((state, req))
 }
@@ -183,7 +186,7 @@ pub struct CollabStateTransfer<D, OP, NT, PL>
     //voted: HashSet<NodeId>,
     node: Arc<NT>,
     received_states: HashMap<Digest, ReceivedState<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>>>,
-    phase: ProtoPhase<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>, SerProof<OP::StateSerialization>>,
+    phase: ProtoPhase<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>, SerProof<OP::Serialization>>,
 
     persistent_log: PL,
 }
@@ -280,10 +283,11 @@ impl<D, OP, NT, PL> StateTransferProtocol<D, OP, NT, PL> for CollabStateTransfer
             timeout_duration
         } = config;
 
-        Ok(CollabStateTransfer::<D, OP, NT, PL>::new(node, timeout_duration, timeouts))
+        Ok(CollabStateTransfer::<D, OP, NT, PL>::new(node, timeout_duration, timeouts, persistent_log))
     }
 
-    fn request_latest_state(&mut self, order_protocol: &mut OP) -> Result<()> where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> {
+    fn request_latest_state(&mut self, order_protocol: &mut OP) -> Result<()> where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>,
+                                                                                    PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D> {
         self.request_latest_consensus_seq_no(order_protocol);
 
         Ok(())
@@ -292,7 +296,8 @@ impl<D, OP, NT, PL> StateTransferProtocol<D, OP, NT, PL> for CollabStateTransfer
     fn handle_off_ctx_message(&mut self, order_protocol: &mut OP,
                               message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
                               -> Result<()>
-        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> {
+        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>,
+              PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D> {
         let (header, message) = message.into_inner();
 
         let message = message.into_inner();
@@ -332,7 +337,8 @@ impl<D, OP, NT, PL> StateTransferProtocol<D, OP, NT, PL> for CollabStateTransfer
     fn process_message(&mut self, order_protocol: &mut OP,
                        message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
                        -> Result<STResult<D>>
-        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> {
+        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>,
+              PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D> {
         let (header, message) = message.into_inner();
 
         let message = message.into_inner();
@@ -416,7 +422,9 @@ impl<D, OP, NT, PL> StateTransferProtocol<D, OP, NT, PL> for CollabStateTransfer
         Ok(STResult::CstRunning)
     }
 
-    fn handle_app_state_requested(&mut self, seq: SeqNo) -> Result<ExecutionResult> where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> {
+    fn handle_app_state_requested(&mut self, seq: SeqNo) -> Result<ExecutionResult>
+        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>,
+              PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D> {
         let earlier = std::mem::replace(&mut self.current_checkpoint_state, CheckpointState::None);
 
         self.current_checkpoint_state = match earlier {
@@ -440,7 +448,8 @@ impl<D, OP, NT, PL> StateTransferProtocol<D, OP, NT, PL> for CollabStateTransfer
     }
 
     fn handle_state_received_from_app(&mut self, order_protocol: &mut OP, state: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()>
-        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> {
+        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>,
+              PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D> {
         order_protocol.checkpointed(state.sequence_number())?;
 
         self.finalize_checkpoint(state)?;
@@ -457,7 +466,8 @@ impl<D, OP, NT, PL> StateTransferProtocol<D, OP, NT, PL> for CollabStateTransfer
     }
 
     fn handle_timeout(&mut self, order_protocol: &mut OP, timeout: Vec<RqTimeout>) -> Result<STTimeoutResult>
-        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>> {
+        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>,
+              PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D> {
         for cst_seq in timeout {
             if let TimeoutKind::Cst(cst_seq) = cst_seq.timeout_kind() {
                 if self.cst_request_timed_out(cst_seq.clone(), order_protocol) {
@@ -477,7 +487,7 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
         OP: StatefulOrderProtocol<D, NT, PL>
 {
     /// Create a new instance of `CollabStateTransfer`.
-    pub fn new(node: Arc<NT>, base_timeout: Duration, timeouts: Timeouts) -> Self {
+    pub fn new(node: Arc<NT>, base_timeout: Duration, timeouts: Timeouts, persistent_log: PL) -> Self {
         Self {
             current_checkpoint_state: CheckpointState::None,
             curr_seq: SeqNo::ZERO,
@@ -490,7 +500,7 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
             largest_cid: SeqNo::ZERO,
             latest_cid_count: 0,
             cst_seq: SeqNo::ZERO,
-            persistent_log: (),
+            persistent_log,
         }
     }
 
@@ -505,11 +515,12 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
     fn process_request_seq(
         &mut self,
         header: Header,
-        message: CstMessage<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>, SerProof<OP::StateSerialization>>,
+        message: CstMessage<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>, SerProof<OP::Serialization>>,
         order_protocol: &mut OP, )
         where
             OP: StatefulOrderProtocol<D, NT, PL>,
-            NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>
+            NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>,
+            PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D>
     {
         let proof = match order_protocol.sequence_number_with_proof() {
             Ok(res) => {
@@ -539,11 +550,12 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
     fn process_pending_state_requests(&mut self, order_protocol: &mut OP)
         where
             OP: StatefulOrderProtocol<D, NT, PL>,
-            NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>> {
+            NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>,
+            PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D>  {
         let waiting = std::mem::replace(&mut self.phase, ProtoPhase::Init);
 
         if let ProtoPhase::WaitingCheckpoint(reqs) = waiting {
-            let mut map: HashMap<NodeId, StoredMessage<CstMessage<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>, SerProof<OP::StateSerialization>>>> = collections::hash_map();
+            let mut map: HashMap<NodeId, StoredMessage<CstMessage<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>, SerProof<OP::Serialization>>>> = collections::hash_map();
 
             for request in reqs {
                 // We only want to reply to the most recent requests from each of the nodes
@@ -572,11 +584,12 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
     fn process_request_state(
         &mut self,
         header: Header,
-        message: CstMessage<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>, SerProof<OP::StateSerialization>>,
+        message: CstMessage<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>, SerProof<OP::Serialization>>,
         op: &mut OP,
     ) where
         OP: StatefulOrderProtocol<D, NT, PL>,
-        NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>
+        NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>,
+        PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D>
     {
         match &mut self.phase {
             ProtoPhase::Init => {}
@@ -590,6 +603,22 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
                 return;
             }
         }
+
+        let state = match &self.current_checkpoint_state {
+            CheckpointState::PartialWithEarlier { earlier, seq } => { earlier.clone() }
+            CheckpointState::Complete(checkpoint) => {
+                checkpoint.clone()
+            }
+            _ => {
+                if let ProtoPhase::WaitingCheckpoint(waiting) = &mut self.phase {
+                    waiting.push(StoredMessage::new(header, message));
+                } else {
+                    self.phase = ProtoPhase::WaitingCheckpoint(vec![StoredMessage::new(header, message)]);
+                }
+
+                return;
+            }
+        };
 
         let (view, dec_log) = match op.snapshot_log() {
             Ok((view, dec_log)) => { (view, dec_log) }
@@ -622,12 +651,13 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
     /// Advances the state of the CST state machine.
     pub fn process_message(
         &mut self,
-        progress: CstProgress<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>, SerProof<OP::StateSerialization>>,
+        progress: CstProgress<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>, SerProof<OP::Serialization>>,
         order_protocol: &mut OP,
     ) -> CstStatus<D::State, View<OP::Serialization>, DecLog<OP::StateSerialization>>
         where
             OP: StatefulOrderProtocol<D, NT, PL>,
-            NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>
+            NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>,
+            PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D>
     {
         match self.phase {
             ProtoPhase::WaitingCheckpoint(_) => {
@@ -859,7 +889,8 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
     /// This method should only be called when `finalize_request()` reports
     /// `Info::BeginCheckpoint`, and the requested application state is received
     /// on the core server task's master channel.
-    pub fn finalize_checkpoint(&mut self, checkpoint: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()> {
+    pub fn finalize_checkpoint(&mut self, checkpoint: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()> where
+    PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D>  {
         match &self.current_checkpoint_state {
             CheckpointState::None => {
                 Err("No checkpoint has been initiated yet").wrapped(ErrorKind::MsgLog)
@@ -896,7 +927,8 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
                                  order_protocol: &OP) -> bool
         where
             OP: StatefulOrderProtocol<D, NT, PL> + 'static,
-            NT: Node<ServiceMsg<D, OP::Serialization, Serialization<Self, D, OP, NT, PL>>> {
+            NT: Node<ServiceMsg<D, OP::Serialization, Serialization<Self, D, OP, NT, PL>>>,
+            PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D>  {
         let status = self.timed_out(seq);
 
         match status {
@@ -956,7 +988,8 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
         order_protocol: &OP,
     ) where
         OP: StatefulOrderProtocol<D, NT, PL> + 'static,
-        NT: Node<ServiceMsg<D, OP::Serialization, Serialization<Self, D, OP, NT, PL>>>
+        NT: Node<ServiceMsg<D, OP::Serialization, Serialization<Self, D, OP, NT, PL>>>,
+        PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D>
     {
 
         // reset state of latest seq no. request
@@ -990,7 +1023,8 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
         order_protocol: &OP,
     ) where
         OP: StatefulOrderProtocol<D, NT, PL> + 'static,
-        NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>
+        NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>,
+        PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D>
     {
         // reset hashmap of received states
         self.received_states.clear();
