@@ -8,19 +8,23 @@
 
 use std::io::{Read, Write};
 use std::marker::PhantomData;
+use std::sync::Arc;
 use bytes::Bytes;
 use atlas_common::error::*;
 
 #[cfg(feature = "serialize_serde")]
 use ::serde::{Deserialize, Serialize};
 use atlas_common::crypto::hash::{Context, Digest};
+use atlas_common::globals::ReadOnly;
 use atlas_communication::message::StoredMessage;
 use atlas_communication::Node;
 use atlas_communication::serialize::Serializable;
+use atlas_core::ordering_protocol::{ProtocolMessage, SerProof, SerProofMetadata};
 use atlas_core::persistent_log::PersistableOrderProtocol;
 use atlas_execution::app::Service;
 use atlas_execution::serialize::SharedData;
 use atlas_core::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage};
+use atlas_core::state_transfer::DecLog;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::{PBFT};
 use crate::bft::msg_log::decisions::{DecisionLog, Proof, ProofMetadata};
@@ -122,18 +126,16 @@ const CF_PREPARES: &str = "PREPARES";
 const CF_COMMIT: &str = "COMMITS";
 
 
-impl<D> PersistableOrderProtocol for PBFTConsensus<D> where D: SharedData {
-
-    type OrderProtocolMessage = Self;
-    type StatefulOrderProtocolMessage = Self;
-
+impl<D> PersistableOrderProtocol<Self, Self> for PBFTConsensus<D>
+    where D: SharedData, {
     fn message_types() -> Vec<&'static str> {
-        vec![CF_PRE_PREPARES,
-            CF_PREPARES,
-            CF_COMMIT]
+        vec![
+            CF_PRE_PREPARES,
+            CF_PREPARES, CF_COMMIT,
+        ]
     }
 
-    fn get_type_for_message(msg: &PBFTMessage<D::Request>) -> Result<&'static str> {
+    fn get_type_for_message(msg: &ProtocolMessage<Self>) -> Result<&'static str> {
         match msg {
             PBFTMessage::Consensus(msg) => {
                 match msg.kind() {
@@ -154,19 +156,57 @@ impl<D> PersistableOrderProtocol for PBFTConsensus<D> where D: SharedData {
         }
     }
 
-    fn init_proof_from(metadata: ProofMetadata, messages: Vec<StoredMessage<PBFTMessage<D::Request>>>) -> Proof<D::Request> {
-        todo!()
+    fn init_proof_from(metadata: SerProofMetadata<Self>, messages: Vec<StoredMessage<ProtocolMessage<Self>>>) -> SerProof<Self> {
+        let mut pre_prepares = Vec::with_capacity(messages.len() / 2);
+        let mut prepares = Vec::with_capacity(messages.len() / 2);
+        let mut commits = Vec::with_capacity(messages.len() / 2);
+
+        for message in messages {
+            match message.message() {
+                PBFTMessage::Consensus(cons) => {
+                    match cons.kind() {
+                        ConsensusMessageKind::PrePrepare(_) => {
+                            pre_prepares.push(Arc::new(ReadOnly::new(message)));
+                        }
+                        ConsensusMessageKind::Prepare(_) => {
+                            prepares.push(Arc::new(ReadOnly::new(message)));
+                        }
+                        ConsensusMessageKind::Commit(_) => {
+                            commits.push(Arc::new(ReadOnly::new(message)));
+                        }
+                    }
+                }
+                PBFTMessage::ViewChange(_) => { unreachable!() }
+                PBFTMessage::ObserverMessage(_) => { unreachable!() }
+            }
+        }
+
+        Proof::new(metadata, pre_prepares, prepares, commits)
     }
 
-    fn init_dec_log(proofs: Vec<Proof<D::Request>>) -> DecisionLog<D::Request> {
-        todo!()
+    fn init_dec_log(proofs: Vec<SerProof<Self>>) -> DecLog<Self> {
+        DecisionLog::from_proofs(proofs)
     }
 
-    fn decompose_proof(proof: &Proof<D::Request>) -> (&ProofMetadata, Vec<&StoredMessage<PBFTMessage<D::Request>>>) {
-        todo!()
+    fn decompose_proof(proof: &SerProof<Self>) -> (&SerProofMetadata<Self>, Vec<&StoredMessage<ProtocolMessage<Self>>>) {
+        let mut messages = Vec::new();
+
+        for message in proof.pre_prepares() {
+            messages.push(&**message.as_ref());
+        }
+
+        for message in proof.prepares() {
+            messages.push(&**message.as_ref());
+        }
+
+        for message in proof.commits() {
+            messages.push(&**message.as_ref());
+        }
+
+        (proof.metadata(), messages)
     }
 
-    fn decompose_dec_log(proofs: &DecisionLog<D::Request>) -> Vec<&Proof<D::Request>> {
-        todo!()
+    fn decompose_dec_log(proofs: &DecLog<Self>) -> Vec<&SerProof<Self>> {
+        proofs.proofs().iter().collect()
     }
 }

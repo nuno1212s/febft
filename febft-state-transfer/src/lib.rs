@@ -286,8 +286,9 @@ impl<D, OP, NT, PL> StateTransferProtocol<D, OP, NT, PL> for CollabStateTransfer
         Ok(CollabStateTransfer::<D, OP, NT, PL>::new(node, timeout_duration, timeouts, persistent_log))
     }
 
-    fn request_latest_state(&mut self, order_protocol: &mut OP) -> Result<()> where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>,
-                                                                                    PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D> {
+    fn request_latest_state(&mut self, order_protocol: &mut OP) -> Result<()>
+        where NT: Node<ServiceMsg<D, OP::Serialization, Self::Serialization>>,
+              PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D> {
         self.request_latest_consensus_seq_no(order_protocol);
 
         Ok(())
@@ -551,7 +552,7 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
         where
             OP: StatefulOrderProtocol<D, NT, PL>,
             NT: Node<ServiceMsg<D, OP::Serialization, CSTMsg<D, OP::Serialization, OP::StateSerialization>>>,
-            PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D>  {
+            PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D> {
         let waiting = std::mem::replace(&mut self.phase, ProtoPhase::Init);
 
         if let ProtoPhase::WaitingCheckpoint(reqs) = waiting {
@@ -890,7 +891,7 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
     /// `Info::BeginCheckpoint`, and the requested application state is received
     /// on the core server task's master channel.
     pub fn finalize_checkpoint(&mut self, checkpoint: Arc<ReadOnly<Checkpoint<D::State>>>) -> Result<()> where
-    PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D>  {
+        PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D> {
         match &self.current_checkpoint_state {
             CheckpointState::None => {
                 Err("No checkpoint has been initiated yet").wrapped(ErrorKind::MsgLog)
@@ -928,7 +929,7 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
         where
             OP: StatefulOrderProtocol<D, NT, PL> + 'static,
             NT: Node<ServiceMsg<D, OP::Serialization, Serialization<Self, D, OP, NT, PL>>>,
-            PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D>  {
+            PL: StateTransferProtocolLog<OP::Serialization, OP::StateSerialization, D> {
         let status = self.timed_out(seq);
 
         match status {

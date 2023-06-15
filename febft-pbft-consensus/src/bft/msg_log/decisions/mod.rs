@@ -11,6 +11,7 @@ use atlas_common::globals::ReadOnly;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::StoredMessage;
 use atlas_core::serialize::{OrderProtocolLog, OrderProtocolProof};
+use atlas_execution::serialize::SharedData;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::msg_log::deciding_log::CompletedBatch;
 
@@ -62,6 +63,7 @@ pub struct Proof<O> {
     prepares: Vec<StoredConsensusMessage<O>>,
     commits: Vec<StoredConsensusMessage<O>>,
 }
+
 
 /// Contains a collection of `ViewDecisionPair` values,
 /// pertaining to a particular consensus instance.
@@ -130,6 +132,10 @@ impl<O> Proof<O> {
             prepares,
             commits,
         }
+    }
+
+    pub(crate) fn metadata(&self) -> &ProofMetadata {
+        &self.metadata
     }
 
     /// Returns the `PRE-PREPARE` message of this `Proof`.
@@ -283,6 +289,18 @@ impl<O> DecisionLog<O> {
     pub fn from_decided(last_exec: SeqNo, proofs: Vec<Proof<O>>) -> Self {
         Self {
             last_exec: Some(last_exec),
+            decided: proofs,
+        }
+    }
+    
+    pub fn from_proofs(mut proofs: Vec<Proof<O>>) -> Self { 
+        
+        proofs.sort_by(|a, b| a.sequence_number().cmp(&b.sequence_number()).reverse());
+        
+        let last_decided = proofs.first().map(|proof| proof.sequence_number());
+        
+        Self {
+            last_exec: last_decided,
             decided: proofs,
         }
     }
