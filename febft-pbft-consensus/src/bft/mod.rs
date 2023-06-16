@@ -27,8 +27,8 @@ use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::SharedData;
 use atlas_core::messages::ClientRqInfo;
 use atlas_core::messages::Protocol;
-use atlas_core::ordering_protocol::{OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, ProtocolConsensusDecision, SerProof, View};
-use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
+use atlas_core::ordering_protocol::{OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, ProtocolConsensusDecision, ProtocolMessage, SerProof, SerProofMetadata, View};
+use atlas_core::persistent_log::{OrderingProtocolLog, PersistableOrderProtocol, StatefulOrderingProtocolLog};
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use atlas_core::serialize::{NetworkView, ServiceMsg, StateTransferMessage};
 use atlas_core::state_transfer::{Checkpoint, DecLog, StatefulOrderProtocol};
@@ -709,5 +709,95 @@ impl<D, ST, NT, PL> PBFTOrderProtocol<D, ST, NT, PL>
             }@
             */
         }
+    }
+}
+
+const CF_PRE_PREPARES: &str = "PRE_PREPARES";
+const CF_PREPARES: &str = "PREPARES";
+const CF_COMMIT: &str = "COMMITS";
+
+impl<D, ST, NT, PL> PersistableOrderProtocol<PBFTConsensus<D>, PBFTConsensus<D>> for PBFTOrderProtocol<D, ST, NT, PL>
+    where D: SharedData, ST: StateTransferMessage, NT: Node<PBFT<D, ST>>, PL: Clone {
+
+    fn message_types() -> Vec<&'static str> {
+        vec![
+            CF_PRE_PREPARES,
+            CF_PREPARES, CF_COMMIT,
+        ]
+    }
+
+    fn get_type_for_message(msg: &ProtocolMessage<PBFTConsensus<D>>) -> Result<&'static str> {
+        match msg {
+            PBFTMessage::Consensus(msg) => {
+                match msg.kind() {
+                    ConsensusMessageKind::PrePrepare(_) => {
+                        Ok(CF_PRE_PREPARES)
+                    }
+                    ConsensusMessageKind::Prepare(_) => {
+                        Ok(CF_PREPARES)
+                    }
+                    ConsensusMessageKind::Commit(_) => {
+                        Ok(CF_COMMIT)
+                    }
+                }
+            }
+            _ => {
+                Err(Error::simple_with_msg(ErrorKind::MsgLogPersistentSerialization, "Invalid message type"))
+            }
+        }
+    }
+
+    fn init_proof_from(metadata: SerProofMetadata<PBFTConsensus<D>>, messages: Vec<StoredMessage<ProtocolMessage<PBFTConsensus<D>>>>) -> SerProof<PBFTConsensus<D>> {
+        let mut pre_prepares = Vec::with_capacity(messages.len() / 2);
+        let mut prepares = Vec::with_capacity(messages.len() / 2);
+        let mut commits = Vec::with_capacity(messages.len() / 2);
+
+        for message in messages {
+            match message.message() {
+                PBFTMessage::Consensus(cons) => {
+                    match cons.kind() {
+                        ConsensusMessageKind::PrePrepare(_) => {
+                            pre_prepares.push(Arc::new(ReadOnly::new(message)));
+                        }
+                        ConsensusMessageKind::Prepare(_) => {
+                            prepares.push(Arc::new(ReadOnly::new(message)));
+                        }
+                        ConsensusMessageKind::Commit(_) => {
+                            commits.push(Arc::new(ReadOnly::new(message)));
+                        }
+                    }
+                }
+                PBFTMessage::ViewChange(_) => { unreachable!() }
+                PBFTMessage::ObserverMessage(_) => { unreachable!() }
+            }
+        }
+
+        Proof::new(metadata, pre_prepares, prepares, commits)
+    }
+
+    fn init_dec_log(proofs: Vec<SerProof<PBFTConsensus<D>>>) -> DecLog<PBFTConsensus<D>> {
+        DecisionLog::from_proofs(proofs)
+    }
+
+    fn decompose_proof(proof: &SerProof<PBFTConsensus<D>>) -> (&SerProofMetadata<PBFTConsensus<D>>, Vec<&StoredMessage<ProtocolMessage<PBFTConsensus<D>>>>) {
+        let mut messages = Vec::new();
+
+        for message in proof.pre_prepares() {
+            messages.push(&**message.as_ref());
+        }
+
+        for message in proof.prepares() {
+            messages.push(&**message.as_ref());
+        }
+
+        for message in proof.commits() {
+            messages.push(&**message.as_ref());
+        }
+
+        (proof.metadata(), messages)
+    }
+
+    fn decompose_dec_log(proofs: &DecLog<PBFTConsensus<D>>) -> Vec<&SerProof<PBFTConsensus<D>>> {
+        proofs.proofs().iter().collect()
     }
 }

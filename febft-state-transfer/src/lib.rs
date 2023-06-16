@@ -23,7 +23,7 @@ use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::SharedData;
 use atlas_core::messages::{StateTransfer, SystemMessage};
 use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol, SerProof, View};
-use atlas_core::persistent_log::{StateTransferProtocolLog, WriteMode};
+use atlas_core::persistent_log::{PersistableStateTransferProtocol, StateTransferProtocolLog, WriteMode};
 use atlas_core::serialize::{NetworkView, OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage};
 use atlas_core::state_transfer::{Checkpoint, CstM, DecLog, StatefulOrderProtocol, StateTransferProtocol, STResult, STTimeoutResult};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
@@ -1049,3 +1049,9 @@ impl<D, OP, NT, PL> CollabStateTransfer<D, OP, NT, PL>
         self.node.broadcast(NetworkMessageKind::from(SystemMessage::from_state_transfer_message(message)), targets);
     }
 }
+
+impl<D, OP, NT, PL> PersistableStateTransferProtocol for CollabStateTransfer<D, OP, NT, PL>
+    where
+        D: SharedData + 'static,
+        OP: StatefulOrderProtocol<D, NT, PL>,
+        NT: Send, PL: Send {}
