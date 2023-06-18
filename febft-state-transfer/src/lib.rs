@@ -351,12 +351,12 @@ impl<D, OP, NT, PL> StateTransferProtocol<D, OP, NT, PL> for CollabStateTransfer
             CstMessageKind::RequestLatestConsensusSeq => {
                 self.process_request_seq(header, message, order_protocol);
 
-                return Ok(STResult::CstRunning);
+                return Ok(STResult::StateTransferRunning);
             }
             CstMessageKind::RequestState => {
                 self.process_request_state(header, message, order_protocol);
 
-                return Ok(STResult::CstRunning);
+                return Ok(STResult::StateTransferRunning);
             }
             _ => {}
         }
@@ -379,7 +379,7 @@ impl<D, OP, NT, PL> StateTransferProtocol<D, OP, NT, PL> for CollabStateTransfer
 
                 // If we were in the middle of performing a view change, then continue that
                 // View change. If not, then proceed to the normal phase
-                return Ok(STResult::CstFinished(state, requests));
+                return Ok(STResult::StateTransferFinished(state, requests));
             }
             CstStatus::SeqNo(seq) => {
                 if order_protocol.sequence_number() < seq {
@@ -399,7 +399,7 @@ impl<D, OP, NT, PL> StateTransferProtocol<D, OP, NT, PL> for CollabStateTransfer
                     );
                 } else {
                     debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), order_protocol.sequence_number(), seq);
-                    return Ok(STResult::CstNotNeeded);
+                    return Ok(STResult::StateTransferNotNeeded);
                 }
             }
             CstStatus::RequestLatestCid => {
@@ -420,7 +420,7 @@ impl<D, OP, NT, PL> StateTransferProtocol<D, OP, NT, PL> for CollabStateTransfer
             }
         }
 
-        Ok(STResult::CstRunning)
+        Ok(STResult::StateTransferRunning)
     }
 
     fn handle_app_state_requested(&mut self, seq: SeqNo) -> Result<ExecutionResult>
