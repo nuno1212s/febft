@@ -19,12 +19,12 @@ use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::Node;
 use atlas_communication::message::{Header, NetworkMessageKind, StoredMessage};
-use atlas_execution::app::{Application, Reply, Request, Service, State};
+use atlas_execution::app::{Application, Reply, Request};
 use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::{StateTransfer, SystemMessage};
 use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol, SerProof, View};
-use atlas_core::persistent_log::{MonolithicStateLog, PersistableStateTransferProtocol, StateTransferProtocolLog, WriteMode};
+use atlas_core::persistent_log::{MonolithicStateLog, PersistableStateTransferProtocol, WriteMode};
 use atlas_core::serialize::{LogTransferMessage, NetworkView, OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage};
 use atlas_core::state_transfer::{Checkpoint, CstM, StateTransferProtocol, STResult, STTimeoutResult};
 use atlas_core::state_transfer::monolithic_state::MonolithicStateTransfer;
@@ -329,7 +329,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
 
                     self.request_latest_state(view);
                 } else {
-                    debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), order_protocol.sequence_number(), seq);
+                    debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), self.current_checkpoint_state.sequence_number(), seq);
                     return Ok(STResult::StateTransferNotNeeded(seq));
                 }
             }
@@ -484,14 +484,14 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
             }
         };
 
-        let kind = CstMessageKind::ReplyStateCid(seq);
+        let kind = CstMessageKind::ReplyStateCid(seq.clone());
 
         let reply = CstMessage::new(message.sequence_number(), kind);
 
         let network_msg = NetworkMessageKind::from(SystemMessage::from_state_transfer_message(reply));
 
         debug!("{:?} // Replying to {:?} seq {:?} with seq no {:?}", self.node.id(),
-            header.from(), message.sequence_number(), order_protocol.sequence_number());
+            header.from(), message.sequence_number(), seq);
 
         self.node.send(network_msg, header.from(), true);
     }
@@ -644,7 +644,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
                     CstMessageKind::ReplyStateCid(state_cid) => {
                         todo!();
 
-                        debug!("{:?} // Received CID vote {:?} from {:?}", self.node.id(), seq, header.from());
+                        /*debug!("{:?} // Received CID vote {:?} from {:?}", self.node.id(), seq, header.from());
 
                         match seq.cmp(&self.largest_cid) {
                             Ordering::Greater => {
@@ -656,6 +656,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
                             }
                             Ordering::Less => (),
                         }
+                         */
                     }
                     CstMessageKind::RequestLatestConsensusSeq => {
                         self.process_request_seq(header, message);

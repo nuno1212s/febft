@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::time::Instant;
 use atlas_execution::serialize::ApplicationData;
 use atlas_core::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage, StateTransferMessage};
-use atlas_core::state_transfer::{StatefulOrderProtocol, StateTransferProtocol};
+use atlas_core::state_transfer::{StateTransferProtocol};
 use crate::CollabStateTransfer;
 use crate::message::CstMessage;
 
