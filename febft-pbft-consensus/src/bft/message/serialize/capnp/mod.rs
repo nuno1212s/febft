@@ -15,7 +15,7 @@ use crate::bft::message::{ConsensusMessage, ConsensusMessageKind,  ObserveEventK
 use crate::bft::msg_log::persistent::ProofInfo;
 use crate::bft::sync::view::ViewInfo;
 
-use super::{Buf, SharedData};
+use super::{Buf, ApplicationData};
 
 /// This module is meant to handle the serialization of the SMR messages, to allow for the users of this library to only
 /// Have to serialize (and declare) their request, reply and state, instead of also having to do so for all message
@@ -24,7 +24,7 @@ use super::{Buf, SharedData};
 const DEFAULT_SERIALIZE_BUFFER_SIZE: usize = 1024;
 
 pub fn serialize_message<D>(mut pbft_message: consensus_messages_capnp::protocol_message::Builder,
-                            m: &PBFTMessage<D::Request>) -> Result<()> where D: SharedData {
+                            m: &PBFTMessage<D::Request>) -> Result<()> where D: ApplicationData {
     match m {
         PBFTMessage::Consensus(consensus_msg) => {
             let mut consensus_builder = pbft_message.init_consensus_message();
@@ -48,7 +48,7 @@ pub fn serialize_message<D>(mut pbft_message: consensus_messages_capnp::protocol
 }
 
 pub fn deserialize_message<D>(pbft_reader: consensus_messages_capnp::protocol_message::Reader) -> Result<PBFTMessage<D::Request>> where
-    D: SharedData {
+    D: ApplicationData {
     let which = pbft_reader.which().wrapped(ErrorKind::CommunicationSerialize)?;
 
     match which {
@@ -77,7 +77,7 @@ fn deserialize_consensus_message<D>(
     consensus_msg: consensus_messages_capnp::consensus::Reader,
 ) -> Result<ConsensusMessage<D::Request>>
     where
-        D: SharedData,
+        D: ApplicationData,
 {
     let seq_no: SeqNo = consensus_msg.get_seq_no().into();
     let view: SeqNo = consensus_msg.get_view().into();
@@ -138,7 +138,7 @@ fn deserialize_consensus_message<D>(
 pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
     where
         R: Read,
-        D: SharedData,
+        D: ApplicationData,
 {
     let reader = capnp::serialize::read_message(r, Default::default()).wrapped_msg(
         ErrorKind::CommunicationSerialize,
@@ -158,7 +158,7 @@ fn serialize_consensus_message<S>(
     m: &ConsensusMessage<S::Request>,
 ) -> Result<()>
     where
-        S: SharedData,
+        S: ApplicationData,
 {
     consensus.set_seq_no(m.sequence_number().into());
     consensus.set_view(m.view().into());
@@ -206,7 +206,7 @@ fn serialize_consensus_message<S>(
 pub fn serialize_consensus<W, S>(w: &mut W, message: &ConsensusMessage<S::Request>) -> Result<()>
     where
         W: Write,
-        S: SharedData,
+        S: ApplicationData,
 {
     let mut root = capnp::message::Builder::new(capnp::message::HeapAllocator::new());
 
@@ -221,13 +221,13 @@ pub fn serialize_consensus<W, S>(w: &mut W, message: &ConsensusMessage<S::Reques
 }
 
 fn serialize_view_change<D>(mut view_change: consensus_messages_capnp::view_change::Builder,
-                            msg: &ViewChangeMessage<D::Request>) -> Result<()> where D: SharedData {
+                            msg: &ViewChangeMessage<D::Request>) -> Result<()> where D: ApplicationData {
     Ok(())
 }
 
 fn deserialize_view_change<D>(view_change: consensus_messages_capnp::view_change::Reader)
                               -> Result<ViewChangeMessage<D::Request>>
-    where D: SharedData {
+    where D: ApplicationData {
     Err(Error::simple(ErrorKind::CommunicationSerialize))
 }
 

@@ -11,7 +11,7 @@ use atlas_common::globals::ReadOnly;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::StoredMessage;
 use atlas_core::serialize::{OrderProtocolLog, OrderProtocolProof};
-use atlas_execution::serialize::SharedData;
+use atlas_execution::serialize::ApplicationData;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::msg_log::deciding_log::CompletedBatch;
 
@@ -374,7 +374,11 @@ impl<O> Orderable for DecisionLog<O> {
     }
 }
 
-impl<O> OrderProtocolLog for DecisionLog<O> {}
+impl<O> OrderProtocolLog for DecisionLog<O> {
+    fn first_seq(&self) -> Option<SeqNo> {
+        self.proofs().first().map(|p| p.sequence_number())
+    }
+}
 
 impl<O> OrderProtocolProof for Proof<O> {}
 

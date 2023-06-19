@@ -20,7 +20,7 @@ use atlas_common::crypto::hash::{Context, Digest};
 use atlas_common::crypto::signature::{KeyPair, PublicKey, Signature};
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{Header, NetworkMessage, NetworkMessageKind, PingMessage, StoredMessage};
-use atlas_execution::serialize::SharedData;
+use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::{RequestMessage, StoredRequestMessage};
 
 use crate::bft::sync::LeaderCollects;

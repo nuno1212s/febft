@@ -12,8 +12,8 @@ use atlas_communication::Node;
 use atlas_core::ordering_protocol::{DecisionInformation, ExecutionResult, ProtocolConsensusDecision};
 use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog, WriteMode};
 use atlas_core::serialize::StateTransferMessage;
-use atlas_execution::app::{Request, Service, State, UpdateBatch};
-use atlas_execution::serialize::SharedData;
+use atlas_execution::app::{Request, UpdateBatch};
+use atlas_execution::serialize::ApplicationData;
 use atlas_core::state_transfer::Checkpoint;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
@@ -26,7 +26,7 @@ use crate::bft::sync::view::ViewInfo;
 
 /// The log of decisions that have already been processed by the consensus
 /// algorithm
-pub struct Log<D, PL> where D: SharedData + 'static {
+pub struct Log<D, PL> where D: ApplicationData + 'static {
     // The log for all of the already decided consensus instances
     dec_log: DecisionLog<D::Request>,
 
@@ -34,7 +34,7 @@ pub struct Log<D, PL> where D: SharedData + 'static {
     persistent_log: PL,
 }
 
-impl<D, PL> Log<D, PL> where D: SharedData + 'static {
+impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     pub(crate) fn init_decided_log(node_id: NodeId, persistent_log: PL,
                                    dec_log: Option<DecisionLog<D::Request>>) -> Self {
         Self {

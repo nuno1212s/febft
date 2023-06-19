@@ -21,10 +21,8 @@ use atlas_communication::Node;
 use atlas_communication::serialize::Serializable;
 use atlas_core::ordering_protocol::{ProtocolMessage, SerProof, SerProofMetadata};
 use atlas_core::persistent_log::PersistableOrderProtocol;
-use atlas_execution::app::Service;
-use atlas_execution::serialize::SharedData;
+use atlas_execution::serialize::ApplicationData;
 use atlas_core::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage};
-use atlas_core::state_transfer::DecLog;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::{PBFT};
 use crate::bft::msg_log::decisions::{DecisionLog, Proof, ProofMetadata};
@@ -42,7 +40,7 @@ pub type Buf = Bytes;
 pub fn serialize_consensus<W, D>(w: &mut W, message: &ConsensusMessage<D::Request>) -> Result<()>
     where
         W: Write + AsRef<[u8]> + AsMut<[u8]>,
-        D: SharedData,
+        D: ApplicationData,
 {
     #[cfg(feature = "serialize_capnp")]
     capnp::serialize_consensus::<W, D>(w, message)?;
@@ -56,7 +54,7 @@ pub fn serialize_consensus<W, D>(w: &mut W, message: &ConsensusMessage<D::Reques
 pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
     where
         R: Read + AsRef<[u8]>,
-        D: SharedData,
+        D: ApplicationData,
 {
     #[cfg(feature = "serialize_capnp")]
         let result = capnp::deserialize_consensus::<R, D>(r)?;
@@ -68,9 +66,9 @@ pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
 }
 
 /// The serializable type, to be used to appease the compiler and it's requirements
-pub struct PBFTConsensus<D: SharedData>(PhantomData<D>);
+pub struct PBFTConsensus<D: ApplicationData>(PhantomData<D>);
 
-impl<D> OrderingProtocolMessage for PBFTConsensus<D> where D: SharedData {
+impl<D> OrderingProtocolMessage for PBFTConsensus<D> where D: ApplicationData {
     type ViewInfo = ViewInfo;
     type ProtocolMessage = PBFTMessage<D::Request>;
     type Proof = Proof<D::Request>;
@@ -107,7 +105,7 @@ impl<D> OrderingProtocolMessage for PBFTConsensus<D> where D: SharedData {
     }
 }
 
-impl<D> StatefulOrderProtocolMessage for PBFTConsensus<D> where D: SharedData {
+impl<D> StatefulOrderProtocolMessage for PBFTConsensus<D> where D: ApplicationData {
     type DecLog = DecisionLog<D::Request>;
 
     #[cfg(feature = "serialize_capnp")]

@@ -18,12 +18,12 @@ use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{NetworkMessageKind, StoredMessage, System};
 use atlas_communication::{Node};
-use atlas_execution::app::{Request, Service};
-use atlas_execution::serialize::SharedData;
+use atlas_execution::app::{Request};
+use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
 use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
-use atlas_core::serialize::StateTransferMessage;
+use atlas_core::serialize::{LogTransferMessage, StateTransferMessage};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, TimeoutPhase, Timeouts};
 use atlas_metrics::metrics::{metric_duration, metric_increment};
 use crate::bft::consensus::Consensus;
@@ -43,12 +43,12 @@ use super::{AbstractSynchronizer, Synchronizer, SynchronizerStatus};
 // - TboQueue for sync phase messages
 // This synchronizer will only move forward on replica messages
 
-pub struct ReplicaSynchronizer<D: SharedData> {
+pub struct ReplicaSynchronizer<D: ApplicationData> {
     timeout_dur: Cell<Duration>,
     _phantom: PhantomData<D>,
 }
 
-impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
+impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     pub fn new(timeout_dur: Duration) -> Self {
         Self {
             timeout_dur: Cell::new(timeout_dur),
@@ -63,17 +63,19 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     ///
     /// Therefore, we start by clearing our stopped requests and treating them as
     /// newly proposed requests (by resetting their timer)
-    pub(super) fn handle_stopping_quorum<ST, NT, PL>(
+    pub(super) fn handle_stopping_quorum<ST, LP, NT, PL>(
         &self,
         base_sync: &Synchronizer<D>,
         previous_view: ViewInfo,
-        consensus: &Consensus<D, ST, PL>,
+        consensus: &Consensus<D, ST, LP, PL>,
         log: &Log<D, PL>,
         pre_processor: &RequestPreProcessor<D::Request>,
         timeouts: &Timeouts,
         node: &NT,
     )
-        where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>>,
+        where ST: StateTransferMessage + 'static,
+              LP: LogTransferMessage + 'static,
+              NT: Node<PBFT<D, ST, LP>>,
               PL: OrderingProtocolLog<PBFTConsensus<D>> {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
@@ -113,13 +115,15 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     /// Start a new view change
     /// Receives the requests that it should send to the other
     /// nodes in its STOP message
-    pub(super) fn handle_begin_view_change<ST, NT>(
+    pub(super) fn handle_begin_view_change<ST, LP, NT>(
         &self,
         base_sync: &Synchronizer<D>,
         timeouts: &Timeouts,
         node: &NT,
         timed_out: Option<Vec<StoredRequestMessage<D::Request>>>,
-    ) where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
+    ) where ST: StateTransferMessage + 'static,
+            LP: LogTransferMessage + 'static,
+            NT: Node<PBFT<D, ST, LP>> {
         // stop all timers
         self.unwatch_all_requests(timeouts);
 
@@ -332,12 +336,14 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 
     /// Forward the requests that timed out, `timed_out`, to all the nodes in the
     /// current view.
-    pub fn forward_requests<ST, NT>(
+    pub fn forward_requests<ST, LP, NT>(
         &self,
         base_sync: &Synchronizer<D>,
         timed_out: Vec<StoredRequestMessage<D::Request>>,
         node: &NT,
-    ) where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
+    ) where ST: StateTransferMessage + 'static,
+            LP: LogTransferMessage + 'static,
+            NT: Node<PBFT<D, ST, LP>> {
         let message = SystemMessage::ForwardedRequestMessage(ForwardedRequestsMessage::new(timed_out));
         let targets = NodeId::targets(0..base_sync.view().params().n());
         node.broadcast(NetworkMessageKind::from(message), targets);
@@ -432,4 +438,4 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 /// So we protect collects, watching and tbo as those are the fields that are going to be
 /// accessed by both those threads.
 /// Since the other fields are going to be accessed by just 1 thread, we just need them to be Send, which they are
-unsafe impl<D: SharedData> Sync for ReplicaSynchronizer<D> {}
+unsafe impl<D: ApplicationData> Sync for ReplicaSynchronizer<D> {}

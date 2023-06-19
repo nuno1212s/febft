@@ -9,7 +9,7 @@ use atlas_common::node_id::NodeId;
 use atlas_common::ordering::SeqNo;
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_execution::ExecutorHandle;
-use atlas_execution::serialize::SharedData;
+use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::RequestMessage;
 use atlas_core::state_transfer::Checkpoint;
 
@@ -22,9 +22,9 @@ pub mod decisions;
 pub mod deciding_log;
 pub mod decided_log;
 
-pub fn initialize_decided_log<D: SharedData + 'static, PL>(node_id: NodeId,
-                                                       persistent_log: PL,
-                                                       state: Option<DecisionLog<D::Request>>) -> Result<Log<D, PL>> {
+pub fn initialize_decided_log<D: ApplicationData + 'static, PL>(node_id: NodeId,
+                                                                persistent_log: PL,
+                                                                state: Option<DecisionLog<D::Request>>) -> Result<Log<D, PL>> {
     Ok(Log::init_decided_log(node_id, persistent_log, state))
 }
 

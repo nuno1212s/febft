@@ -5,7 +5,7 @@ use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
 use atlas_communication::Node;
 use atlas_execution::ExecutorHandle;
-use atlas_execution::serialize::SharedData;
+use atlas_execution::serialize::ApplicationData;
 use atlas_core::followers::FollowerHandle;
 use atlas_core::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg};
 use atlas_core::state_transfer::Checkpoint;
@@ -14,7 +14,7 @@ use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::observer::ObserverHandle;
 use crate::bft::sync::view::ViewInfo;
 
-pub struct PBFTConfig<D: SharedData, ST> {
+pub struct PBFTConfig<D: ApplicationData, ST> {
     pub node_id: NodeId,
     // pub observer_handle: ObserverHandle,
     pub follower_handle: Option<FollowerHandle<PBFTConsensus<D>>>,
@@ -25,7 +25,7 @@ pub struct PBFTConfig<D: SharedData, ST> {
     pub _phantom_data: PhantomData<ST>,
 }
 
-impl<D: SharedData + 'static,
+impl<D: ApplicationData + 'static,
     ST: StateTransferMessage + 'static> PBFTConfig<D, ST> {
     pub fn new(node_id: NodeId,
                follower_handle: Option<FollowerHandle<PBFTConsensus<D>>>,

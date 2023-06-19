@@ -17,12 +17,12 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::threadpool;
 use atlas_communication::message::{NetworkMessage, NetworkMessageKind, StoredMessage};
 use atlas_communication::Node;
-use atlas_execution::app::{Request, Service, UnorderedBatch};
+use atlas_execution::app::{Request, UnorderedBatch};
 use atlas_execution::ExecutorHandle;
-use atlas_execution::serialize::SharedData;
+use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage, SystemMessage};
 use atlas_core::request_pre_processing::{BatchOutput, PreProcessorMessage, PreProcessorOutputMessage};
-use atlas_core::serialize::StateTransferMessage;
+use atlas_core::serialize::{LogTransferMessage, StateTransferMessage};
 use atlas_core::timeouts::Timeouts;
 use atlas_metrics::metrics::{metric_duration, metric_increment, metric_local_duration_end, metric_local_duration_start, metric_store_count};
 use crate::bft::config::ProposerConfig;
@@ -40,7 +40,7 @@ pub type BatchType<R> = Vec<StoredRequestMessage<R>>;
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
 pub struct Proposer<D, NT>
-    where D: SharedData + 'static {
+    where D: ApplicationData + 'static {
     /// Channel for the reception of batches from the pre processing module
     batch_reception: BatchOutput<D::Request>,
     /// Network Node
@@ -65,12 +65,12 @@ pub struct Proposer<D, NT>
 const TIMEOUT: Duration = Duration::from_micros(10);
 const PRINT_INTERVAL: usize = 10000;
 
-struct ProposeBuilder<D> where D: SharedData {
+struct ProposeBuilder<D> where D: ApplicationData {
     currently_accumulated: Vec<StoredRequestMessage<D::Request>>,
     last_proposal: Instant,
 }
 
-impl<D> ProposeBuilder<D> where D: SharedData {
+impl<D> ProposeBuilder<D> where D: ApplicationData {
     pub fn new(target_size: usize) -> Self {
         Self { currently_accumulated: Vec::with_capacity(target_size), last_proposal: Instant::now() }
     }
@@ -79,7 +79,7 @@ impl<D> ProposeBuilder<D> where D: SharedData {
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
 
-impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
+impl<D, NT> Proposer<D, NT> where D: ApplicationData + 'static {
     pub fn new(
         node: Arc<NT>,
         batch_input: BatchOutput<D::Request>,
@@ -108,9 +108,10 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
     }
 
     ///Start this work
-    pub fn start<ST>(self: Arc<Self>) -> JoinHandle<()>
+    pub fn start<ST, LP>(self: Arc<Self>) -> JoinHandle<()>
         where ST: StateTransferMessage + 'static,
-              NT: Node<PBFT<D, ST>> + 'static {
+              LP: LogTransferMessage + 'static,
+              NT: Node<PBFT<D, ST, LP>> + 'static {
         std::thread::Builder::new()
             .name(format!("Proposer thread"))
             .spawn(move || {
@@ -220,7 +221,6 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                                         digest_vec.push(ClientRqInfo::new(digest, message.header().from(), message.message().sequence_number(), message.message().session_id()));
                                     }
                                 }
-
                             }
                             PreProcessorOutputMessage::DeDupedUnorderedRequests(mut messages) => {
                                 unordered_propose.currently_accumulated.append(&mut messages);
@@ -263,11 +263,12 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
     /// Attempt to propose an unordered request batch
     /// Fails if the batch is not large enough or the timeout
     /// Has not yet occurred
-    fn propose_unordered<ST>(
+    fn propose_unordered<ST, LP>(
         &self,
         propose: &mut ProposeBuilder<D>,
     ) -> bool where ST: StateTransferMessage + 'static,
-            NT: Node<PBFT<D, ST>> {
+                    LP: LogTransferMessage + 'static,
+                    NT: Node<PBFT<D, ST, LP>> {
         if !propose.currently_accumulated.is_empty() {
             let current_batch_size = propose.currently_accumulated.len();
 
@@ -333,11 +334,12 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
 
     /// attempt to propose the ordered requests that we have collected
     /// Returns true if a batch was proposed
-    fn propose_ordered<ST>(&self,
+    fn propose_ordered<ST, LP>(&self,
                            is_leader: bool,
                            propose: &mut ProposeBuilder<D>, ) -> bool
         where ST: StateTransferMessage + 'static,
-              NT: Node<PBFT<D, ST>> {
+              LP: LogTransferMessage + 'static,
+              NT: Node<PBFT<D, ST, LP>> {
 
         //Now let's deal with ordered requests
         if is_leader {
@@ -389,14 +391,14 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
 
     /// Proposes a new batch.
     /// (Basically broadcasts it to all of the members)
-    fn propose<ST>(
+    fn propose<ST, LP>(
         &self,
         seq: SeqNo,
         view: &ViewInfo,
         mut currently_accumulated: Vec<StoredRequestMessage<D::Request>>,
     ) where ST: StateTransferMessage + 'static,
-            NT: Node<PBFT<D, ST>> {
-
+            LP: LogTransferMessage + 'static,
+            NT: Node<PBFT<D, ST, LP>> {
         let has_pending_messages = self.consensus_guard.has_pending_view_change_reqs();
 
         let is_view_change_empty = {

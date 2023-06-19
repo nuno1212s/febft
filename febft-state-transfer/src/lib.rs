@@ -21,7 +21,7 @@ use atlas_communication::Node;
 use atlas_communication::message::{Header, NetworkMessageKind, StoredMessage};
 use atlas_execution::app::{Application, Reply, Request, Service, State};
 use atlas_execution::ExecutorHandle;
-use atlas_execution::serialize::SharedData;
+use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::{StateTransfer, SystemMessage};
 use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol, SerProof, View};
 use atlas_core::persistent_log::{MonolithicStateLog, PersistableStateTransferProtocol, StateTransferProtocolLog, WriteMode};
@@ -228,7 +228,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
     type Serialization = CSTMsg<S>;
 
     fn request_latest_state<D, OP, LP, V>(&mut self, view: V) -> Result<()>
-        where D: SharedData + 'static,
+        where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage,
               LP: LogTransferMessage,
               NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
@@ -240,7 +240,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
 
     fn handle_off_ctx_message<D, OP, LP, V>(&mut self, view: V, message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
                                             -> Result<()>
-        where D: SharedData + 'static,
+        where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage,
               LP: LogTransferMessage,
               NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
@@ -285,7 +285,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
                                      view: V,
                                      message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
                                      -> Result<STResult>
-        where D: SharedData + 'static,
+        where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage,
               LP: LogTransferMessage,
               NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
@@ -351,7 +351,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
     }
 
     fn handle_app_state_requested<D, OP, LP, V>(&mut self, view: V, seq: SeqNo) -> Result<ExecutionResult>
-        where D: SharedData + 'static,
+        where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage,
               LP: LogTransferMessage,
               NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>, V: NetworkView {
@@ -378,7 +378,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
     }
 
     fn handle_timeout<D, OP, LP, V>(&mut self, view: V, timeout: Vec<RqTimeout>) -> Result<STTimeoutResult>
-        where D: SharedData + 'static,
+        where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage,
               LP: LogTransferMessage,
               NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
@@ -412,7 +412,7 @@ impl<S, NT, PL> MonolithicStateTransfer<S, NT, PL> for CollabStateTransfer<S, NT
     }
 
     fn handle_state_received_from_app<D, OP, LP, V>(&mut self, view: V, state: Arc<ReadOnly<Checkpoint<S>>>) -> Result<()>
-        where D: SharedData + 'static,
+        where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage,
               LP: LogTransferMessage,
               NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
@@ -467,7 +467,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         &mut self,
         header: Header,
         message: CstMessage<S>)
-        where D: SharedData + 'static,
+        where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage,
               LP: LogTransferMessage,
               NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>
@@ -500,7 +500,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     /// Process the entire list of pending state transfer requests
     /// This will only reply to the latest request sent by each of the replicas
     fn process_pending_state_requests<D, OP, LP>(&mut self)
-        where D: SharedData + 'static,
+        where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage,
               LP: LogTransferMessage,
               NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>> {
@@ -537,7 +537,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         &mut self,
         header: Header,
         message: CstMessage<S>,
-    ) where D: SharedData + 'static,
+    ) where D: ApplicationData + 'static,
             OP: OrderingProtocolMessage,
             LP: LogTransferMessage,
             NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>
@@ -589,7 +589,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         view: V,
         progress: CstProgress<S>,
     ) -> CstStatus<S>
-        where D: SharedData + 'static,
+        where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage,
               LP: LogTransferMessage,
               NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
@@ -848,7 +848,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     /// Returns a bool to signify if we must move to the Retrieving state
     /// If the timeout is no longer relevant, returns false (Can remain in current phase)
     pub fn cst_request_timed_out<D, OP, LP, V>(&mut self, seq: SeqNo, view: V) -> bool
-        where D: SharedData + 'static,
+        where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage,
               LP: LogTransferMessage,
               NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>, V: NetworkView {
@@ -905,7 +905,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     pub fn request_latest_consensus_seq_no<D, OP, LP, V>(
         &mut self,
         view: V,
-    ) where D: SharedData + 'static,
+    ) where D: ApplicationData + 'static,
             OP: OrderingProtocolMessage,
             LP: LogTransferMessage,
             NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
@@ -939,7 +939,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     /// Used by a recovering node to retrieve the latest state.
     pub fn request_latest_state<D, OP, LP, V>(
         &mut self, view: V,
-    ) where D: SharedData + 'static,
+    ) where D: ApplicationData + 'static,
             OP: OrderingProtocolMessage,
             LP: LogTransferMessage,
             NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
