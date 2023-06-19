@@ -9,11 +9,11 @@ use atlas_core::state_transfer::{StatefulOrderProtocol, StateTransferProtocol};
 use crate::CollabStateTransfer;
 use crate::message::CstMessage;
 
-pub struct CSTMsg<D: SharedData, OP: OrderingProtocolMessage, SOP: StatefulOrderProtocolMessage>(PhantomData<(D, OP, SOP)>);
+pub struct CSTMsg<S>(PhantomData<(S)>);
 
-impl<D: SharedData, OP: OrderingProtocolMessage, SOP: StatefulOrderProtocolMessage> StateTransferMessage for CSTMsg<D, OP, SOP> {
+impl<S> StateTransferMessage for CSTMsg<S> {
 
-    type StateTransferMessage = CstMessage<D::State, OP::ViewInfo, SOP::DecLog, OP::Proof>;
+    type StateTransferMessage = CstMessage<S>;
 
     #[cfg(feature = "serialize_capnp")]
     fn serialize_capnp(builder: atlas_capnp::cst_messages_capnp::cst_message::Builder, msg: &Self::StateTransferMessage) -> atlas_common::error::Result<()> {
