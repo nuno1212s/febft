@@ -6,12 +6,13 @@ use std::time::Instant;
 use atlas_execution::serialize::ApplicationData;
 use atlas_core::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage, StateTransferMessage};
 use atlas_core::state_transfer::{StateTransferProtocol};
+use atlas_execution::state::monolithic_state::MonolithicState;
 use crate::CollabStateTransfer;
 use crate::message::CstMessage;
 
-pub struct CSTMsg<S>(PhantomData<(S)>);
+pub struct CSTMsg<S: MonolithicState>(PhantomData<(S)>);
 
-impl<S> StateTransferMessage for CSTMsg<S> {
+impl<S: MonolithicState> StateTransferMessage for CSTMsg<S> {
 
     type StateTransferMessage = CstMessage<S>;
 
