@@ -220,8 +220,6 @@ macro_rules! getmessage {
     }};
 }
 
-type Serialization<S, OP, NT> = <S as StateTransferProtocol<S, OP, NT>>::Serialization;
-
 impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, PL>
     where S: MonolithicState + 'static,
 {
@@ -431,6 +429,8 @@ impl<S, NT, PL> MonolithicStateTransfer<S, NT, PL> for CollabStateTransfer<S, NT
     }
 }
 
+type Ser<ST: StateTransferProtocol<S, NT, PL>, S, NT, PL> = <ST as StateTransferProtocol<S, NT, PL>>::Serialization;
+
 // TODO: request timeouts
 impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     where
@@ -470,7 +470,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage,
               LP: LogTransferMessage,
-              NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>
+              NT: Node<ServiceMsg<D, OP, Ser<Self, S, OP, NT>, LP>>
     {
         let seq = match &self.current_checkpoint_state {
             CheckpointState::PartialWithEarlier { seq, earlier, } => {
@@ -503,7 +503,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage,
               LP: LogTransferMessage,
-              NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>> {
+              NT: Node<ServiceMsg<D, OP, Ser<Self, S, OP, NT>, LP>> {
         let waiting = std::mem::replace(&mut self.phase, ProtoPhase::Init);
 
         if let ProtoPhase::WaitingCheckpoint(reqs) = waiting {
@@ -540,7 +540,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     ) where D: ApplicationData + 'static,
             OP: OrderingProtocolMessage,
             LP: LogTransferMessage,
-            NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>
+            NT: Node<ServiceMsg<D, OP, Ser<Self, S, OP, NT>, LP>>
     {
         match &mut self.phase {
             ProtoPhase::Init => {}
@@ -592,7 +592,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage,
               LP: LogTransferMessage,
-              NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
+              NT: Node<ServiceMsg<D, OP, Ser<Self, S, OP, NT>, LP>>,
               V: NetworkView
     {
         match self.phase {
@@ -852,7 +852,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage,
               LP: LogTransferMessage,
-              NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>, V: NetworkView {
+              NT: Node<ServiceMsg<D, OP, Ser<Self, S, OP, NT>, LP>>, V: NetworkView {
         let status = self.timed_out(seq);
 
         match status {
@@ -909,7 +909,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     ) where D: ApplicationData + 'static,
             OP: OrderingProtocolMessage,
             LP: LogTransferMessage,
-            NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
+            NT: Node<ServiceMsg<D, OP,Ser<Self, S, OP, NT>, LP>>,
             V: NetworkView
     {
 
@@ -943,7 +943,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     ) where D: ApplicationData + 'static,
             OP: OrderingProtocolMessage,
             LP: LogTransferMessage,
-            NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
+            NT: Node<ServiceMsg<D, OP, Ser<Self, S, OP, NT>, LP>>,
             V: NetworkView
     {
         // reset hashmap of received states
