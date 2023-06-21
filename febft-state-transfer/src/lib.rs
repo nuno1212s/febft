@@ -116,6 +116,10 @@ struct ReceivedState<S> {
     state: RecoveryState<S>,
 }
 
+struct ReceivedStateCid {
+    cid: SeqNo,
+    count: usize,
+}
 
 // NOTE: in this module, we may use cid interchangeably with
 // consensus sequence number
@@ -125,9 +129,9 @@ struct ReceivedState<S> {
 /// Durable State Machine Replication», by A. Bessani et al.
 pub struct CollabStateTransfer<S, NT, PL>
     where S: MonolithicState + 'static {
+    curr_seq: SeqNo,
     current_checkpoint_state: CheckpointState<S>,
     largest_cid: SeqNo,
-    cst_seq: SeqNo,
     latest_cid_count: usize,
     base_timeout: Duration,
     curr_timeout: Duration,
@@ -137,6 +141,7 @@ pub struct CollabStateTransfer<S, NT, PL>
     //voted: HashSet<NodeId>,
     node: Arc<NT>,
     received_states: HashMap<Digest, ReceivedState<S>>,
+    received_state_ids: HashMap<Digest, ReceivedStateCid>,
     phase: ProtoPhase<S>,
 
     install_channel: ChannelSyncTx<InstallStateMessage<S>>,
@@ -447,10 +452,11 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
             timeouts,
             node,
             received_states: collections::hash_map(),
+            received_state_ids: collections::hash_map(),
             phase: ProtoPhase::Init,
             largest_cid: SeqNo::ZERO,
             latest_cid_count: 0,
-            cst_seq: SeqNo::ZERO,
+            curr_seq: SeqNo::ZERO,
             persistent_log,
             install_channel,
         }
@@ -626,11 +632,11 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
                 let (header, message) = getmessage!(progress, CstStatus::RequestStateCid);
 
                 debug!("{:?} // Received Cid with {} responses from {:?} for CST Seq {:?} vs Ours {:?}", self.node.id(),
-                   i, header.from(), message.sequence_number(), self.cst_seq);
+                   i, header.from(), message.sequence_number(), self.curr_seq);
 
                 // drop cst messages with invalid seq no
-                if message.sequence_number() != self.cst_seq {
-                    debug!("{:?} // Wait what? {:?} {:?}", self.node.id(), self.cst_seq, message.sequence_number());
+                if message.sequence_number() != self.curr_seq {
+                    debug!("{:?} // Wait what? {:?} {:?}", self.node.id(), self.curr_seq, message.sequence_number());
                     // FIXME: how to handle old or newer messages?
                     // BFT-SMaRt simply ignores messages with a
                     // value of `queryID` different from the current
@@ -643,6 +649,12 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
                 match message.kind() {
                     CstMessageKind::ReplyStateCid(state_cid) => {
+
+                        if let Some((cid, digest)) = state_cid {
+
+                        } else {
+
+                        }
                         todo!();
 
                         /*debug!("{:?} // Received CID vote {:?} from {:?}", self.node.id(), seq, header.from());
@@ -681,7 +693,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
                 debug!("{:?} // Quorum count {}, i: {}, cst_seq {:?}. Current Latest Cid: {:?}. Current Latest Cid Count: {}",
                         self.node.id(), view.quorum(), i,
-                        self.cst_seq, self.largest_cid, self.latest_cid_count);
+                        self.curr_seq, self.largest_cid, self.latest_cid_count);
 
                 if i == view.quorum() {
                     self.phase = ProtoPhase::Init;
@@ -706,7 +718,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
             ProtoPhase::ReceivingState(i) => {
                 let (header, mut message) = getmessage!(progress, CstStatus::RequestState);
 
-                if message.sequence_number() != self.cst_seq {
+                if message.sequence_number() != self.curr_seq {
                     // NOTE: check comment above, on ProtoPhase::ReceivingCid
                     return CstStatus::Running;
                 }
@@ -837,13 +849,13 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     }
 
     fn curr_seq(&mut self) -> SeqNo {
-        self.cst_seq
+        self.curr_seq
     }
 
     fn next_seq(&mut self) -> SeqNo {
-        self.cst_seq = self.cst_seq.next();
+        self.curr_seq = self.curr_seq.next();
 
-        self.cst_seq
+        self.curr_seq
     }
 
     /// Handle a timeout received from the timeouts layer.
@@ -873,7 +885,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     }
 
     fn timed_out(&mut self, seq: SeqNo) -> CstStatus<S> {
-        if seq != self.cst_seq {
+        if seq != self.curr_seq {
             // the timeout we received is for a request
             // that has already completed, therefore we ignore it
             //
