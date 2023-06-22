@@ -23,4 +23,3 @@ atlas-execution = { path = "../../Atlas/atlas-execution" }
 atlas-common = { path = "../../Atlas/atlas-common" }
 atlas-communication = { path = "../../Atlas/atlas-communication" }
 atlas-core = { path = "../../Atlas/atlas-core" }
-atlas-persistent-log = { path = "../../Atlas/atlas-persistent-log" }

@@ -510,7 +510,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>{
+              NT: Node<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>> {
         let waiting = std::mem::replace(&mut self.phase, ProtoPhase::Init);
 
         if let ProtoPhase::WaitingCheckpoint(reqs) = waiting {
@@ -649,27 +649,27 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
                 match message.kind() {
                     CstMessageKind::ReplyStateCid(state_cid) => {
-
                         if let Some((cid, digest)) = state_cid {
+                            let received_state_cid = self.received_state_ids.entry(digest.clone()).or_insert_with(|| {
+                                ReceivedStateCid {
+                                    cid: *cid,
+                                    count: 0,
+                                }
+                            });
 
-                        } else {
+                            if *cid > received_state_cid.cid {
+                                info!("{:?} // Received newer state for old cid {:?} vs new cid {:?} with digest {:?}.",
+                                    self.node.id(), received_state_cid.cid, *cid, digest);
 
-                        }
-                        todo!();
+                                received_state_cid.cid = *cid;
+                                received_state_cid.count = 1;
+                            } else if cid == received_state_cid.cid {
+                                info!("{:?} // Received matching state for cid {:?} with digest {:?}. Count {}",
+                                self.node.id(), received_state_cid.cid, digest, received_state_cid.count + 1);
 
-                        /*debug!("{:?} // Received CID vote {:?} from {:?}", self.node.id(), seq, header.from());
-
-                        match seq.cmp(&self.largest_cid) {
-                            Ordering::Greater => {
-                                self.largest_cid = seq;
-                                self.latest_cid_count = 1;
+                                received_state_cid.count += 1;
                             }
-                            Ordering::Equal => {
-                                self.latest_cid_count += 1;
-                            }
-                            Ordering::Less => (),
                         }
-                         */
                     }
                     CstMessageKind::RequestStateCid => {
                         self.process_request_seq(header, message);
