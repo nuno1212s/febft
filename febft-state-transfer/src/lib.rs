@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use log::{debug, error, info};
 #[cfg(feature = "serialize_serde")]
@@ -30,13 +30,16 @@ use atlas_core::state_transfer::{Checkpoint, CstM, StateTransferProtocol, STResu
 use atlas_core::state_transfer::monolithic_state::MonolithicStateTransfer;
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
 use atlas_execution::state::monolithic_state::{InstallStateMessage, MonolithicState};
+use atlas_metrics::metrics::metric_duration;
 
 use crate::config::StateTransferConfig;
 use crate::message::{CstMessage, CstMessageKind};
 use crate::message::serialize::CSTMsg;
+use crate::metrics::STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID;
 
 pub mod message;
 pub mod config;
+pub mod metrics;
 
 /// The state of the checkpoint
 pub enum CheckpointState<D> {
@@ -323,7 +326,11 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
         match status {
             CstStatus::Running => (),
             CstStatus::State(state) => {
+                let start = Instant::now();
+
                 self.install_channel.send(InstallStateMessage::new(state.checkpoint.state().clone())).unwrap();
+
+                metric_duration(STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID, start.elapsed());
 
                 return Ok(STResult::StateTransferFinished(state.checkpoint.sequence_number()));
             }
@@ -344,10 +351,10 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
                 self.request_latest_state(view);
             }
             CstStatus::Nil => {
-// No actions are required for the CST
-// This can happen for example when we already received the a quorum of sequence number replies
-// And therefore we are already in the Init phase and we are still receiving replies
-// And have not yet processed the
+                // No actions are required for the CST
+                // This can happen for example when we already received the a quorum of sequence number replies
+                // And therefore we are already in the Init phase and we are still receiving replies
+                // And have not yet processed the
             }
         }
 
