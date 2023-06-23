@@ -24,7 +24,7 @@ use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::{StateTransfer, SystemMessage};
 use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol, SerProof, View};
-use atlas_core::persistent_log::{MonolithicStateLog, PersistableStateTransferProtocol, WriteMode};
+use atlas_core::persistent_log::{MonolithicStateLog, PersistableStateTransferProtocol, OperationMode};
 use atlas_core::serialize::{LogTransferMessage, NetworkView, OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage};
 use atlas_core::state_transfer::{Checkpoint, CstM, StateTransferProtocol, STResult, STTimeoutResult};
 use atlas_core::state_transfer::monolithic_state::MonolithicStateTransfer;
@@ -848,7 +848,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
                 self.current_checkpoint_state = checkpoint_state;
 
-                self.persistent_log.write_checkpoint(WriteMode::NonBlockingSync(None), checkpoint)?;
+                self.persistent_log.write_checkpoint(OperationMode::NonBlockingSync(None), checkpoint)?;
 
                 Ok(())
             }

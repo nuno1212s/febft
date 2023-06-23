@@ -10,7 +10,7 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::StoredMessage;
 use atlas_communication::Node;
 use atlas_core::ordering_protocol::{DecisionInformation, ExecutionResult, ProtocolConsensusDecision};
-use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog, WriteMode};
+use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog, OperationMode};
 use atlas_core::serialize::StateTransferMessage;
 use atlas_execution::app::{Request, UpdateBatch};
 use atlas_execution::serialize::ApplicationData;
@@ -58,7 +58,7 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     /// FIXME: The view initialization might have to be changed if we want to introduce reconfiguration
     pub fn read_current_state(&self, n: usize, f: usize) -> Result<Option<(ViewInfo, DecisionLog<D::Request>)>>
         where PL: StatefulOrderingProtocolLog<PBFTConsensus<D>, PBFTConsensus<D>> {
-        let option = self.persistent_log.read_state(WriteMode::BlockingSync)?;
+        let option = self.persistent_log.read_state(OperationMode::BlockingSync)?;
 
         if let Some((view, dec_log)) = option {
             Ok(Some((view, dec_log)))
@@ -87,7 +87,7 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     {
         if let Err(err) = self
             .persistent_log
-            .write_message(WriteMode::NonBlockingSync(None), consensus_msg)
+            .write_message(OperationMode::NonBlockingSync(None), consensus_msg)
         {
             error!("Failed to persist message {:?}", err);
         }
@@ -114,7 +114,7 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
         }
 
         if let Err(err) = self.persistent_log
-            .write_proof(WriteMode::NonBlockingSync(None), proof) {
+            .write_proof(OperationMode::NonBlockingSync(None), proof) {
             error!("Failed to persist proof {:?}", err);
         }
 
@@ -125,7 +125,7 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     pub fn clear_last_occurrence(&mut self, seq: SeqNo)
         where
             PL: OrderingProtocolLog<PBFTConsensus<D>> {
-        if let Err(err) = self.persistent_log.write_invalidate(WriteMode::NonBlockingSync(None), seq) {
+        if let Err(err) = self.persistent_log.write_invalidate(OperationMode::NonBlockingSync(None), seq) {
             error!("Failed to invalidate last occurrence {:?}", err);
         }
     }
@@ -140,7 +140,7 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
         let last_seq = self.dec_log.last_execution().unwrap_or(SeqNo::ZERO);
 
         if let Err(err) = self.persistent_log
-            .write_install_state(WriteMode::NonBlockingSync(None), view, dec_log) {
+            .write_install_state(OperationMode::NonBlockingSync(None), view, dec_log) {
             error!("Failed to persist message {:?}", err);
         }
     }
@@ -169,7 +169,7 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     /// Basically persists the metadata for a given consensus num
     pub fn all_batches_received(&mut self, metadata: ProofMetadata) where
         PL: OrderingProtocolLog<PBFTConsensus<D>> {
-        self.persistent_log.write_proof_metadata(WriteMode::NonBlockingSync(None),
+        self.persistent_log.write_proof_metadata(OperationMode::NonBlockingSync(None),
                                                  metadata).unwrap();
     }
 
