@@ -12,7 +12,7 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_communication::Node;
 use atlas_core::messages::ClientRqInfo;
-use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog, WriteMode};
+use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog, OperationMode};
 use atlas_execution::serialize::ApplicationData;
 use atlas_core::serialize::{LogTransferMessage, StateTransferMessage};
 use atlas_core::timeouts::Timeouts;
@@ -351,7 +351,7 @@ impl<D, ST, LP, PL> ConsensusDecision<D, ST, LP, PL>
                                                                           stored_msg.header().digest().clone(),
                                                                           digests)?;
 
-                self.persistent_log.write_message(WriteMode::NonBlockingSync(None), stored_msg.clone())?;
+                self.persistent_log.write_message(OperationMode::NonBlockingSync(None), stored_msg.clone())?;
 
                 let mut result = DecisionStatus::Deciding;
 
@@ -454,7 +454,7 @@ impl<D, ST, LP, PL> ConsensusDecision<D, ST, LP, PL>
 
                 self.message_log.process_message(stored_msg.clone())?;
 
-                self.persistent_log.write_message(WriteMode::NonBlockingSync(None), stored_msg.clone())?;
+                self.persistent_log.write_message(OperationMode::NonBlockingSync(None), stored_msg.clone())?;
 
                 let mut result = DecisionStatus::Deciding;
 
@@ -529,7 +529,7 @@ impl<D, ST, LP, PL> ConsensusDecision<D, ST, LP, PL>
 
                 self.message_log.process_message(stored_msg.clone())?;
 
-                self.persistent_log.write_message(WriteMode::NonBlockingSync(None), stored_msg.clone())?;
+                self.persistent_log.write_message(OperationMode::NonBlockingSync(None), stored_msg.clone())?;
 
                 return if received == view.params().quorum() {
                     info!("{:?} // Completed commit phase with all commits Seq {:?} with commit from {:?}", node.id(), self.sequence_number(),

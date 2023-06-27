@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use log::{debug, error, info};
 #[cfg(feature = "serialize_serde")]
@@ -24,19 +24,22 @@ use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::{StateTransfer, SystemMessage};
 use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol, SerProof, View};
-use atlas_core::persistent_log::{MonolithicStateLog, PersistableStateTransferProtocol, WriteMode};
+use atlas_core::persistent_log::{MonolithicStateLog, PersistableStateTransferProtocol, OperationMode};
 use atlas_core::serialize::{LogTransferMessage, NetworkView, OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage};
 use atlas_core::state_transfer::{Checkpoint, CstM, StateTransferProtocol, STResult, STTimeoutResult};
 use atlas_core::state_transfer::monolithic_state::MonolithicStateTransfer;
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
 use atlas_execution::state::monolithic_state::{InstallStateMessage, MonolithicState};
+use atlas_metrics::metrics::metric_duration;
 
 use crate::config::StateTransferConfig;
 use crate::message::{CstMessage, CstMessageKind};
 use crate::message::serialize::CSTMsg;
+use crate::metrics::STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID;
 
 pub mod message;
 pub mod config;
+pub mod metrics;
 
 /// The state of the checkpoint
 pub enum CheckpointState<D> {
@@ -278,7 +281,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
             CstStatus::Nil => (),
 // should not happen...
             _ => {
-                return Err("Invalid state reached!").wrapped(ErrorKind::CoreServer);
+                return Err(format!("Invalid state reached while state transfer processing message! {:?}", status)).wrapped(ErrorKind::CoreServer);
             }
         }
 
@@ -323,7 +326,11 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
         match status {
             CstStatus::Running => (),
             CstStatus::State(state) => {
+                let start = Instant::now();
+
                 self.install_channel.send(InstallStateMessage::new(state.checkpoint.state().clone())).unwrap();
+
+                metric_duration(STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID, start.elapsed());
 
                 return Ok(STResult::StateTransferFinished(state.checkpoint.sequence_number()));
             }
@@ -344,10 +351,10 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
                 self.request_latest_state(view);
             }
             CstStatus::Nil => {
-// No actions are required for the CST
-// This can happen for example when we already received the a quorum of sequence number replies
-// And therefore we are already in the Init phase and we are still receiving replies
-// And have not yet processed the
+                // No actions are required for the CST
+                // This can happen for example when we already received the a quorum of sequence number replies
+                // And therefore we are already in the Init phase and we are still receiving replies
+                // And have not yet processed the
             }
         }
 
@@ -510,7 +517,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>{
+              NT: Node<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>> {
         let waiting = std::mem::replace(&mut self.phase, ProtoPhase::Init);
 
         if let ProtoPhase::WaitingCheckpoint(reqs) = waiting {
@@ -649,27 +656,27 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
                 match message.kind() {
                     CstMessageKind::ReplyStateCid(state_cid) => {
-
                         if let Some((cid, digest)) = state_cid {
+                            let received_state_cid = self.received_state_ids.entry(digest.clone()).or_insert_with(|| {
+                                ReceivedStateCid {
+                                    cid: *cid,
+                                    count: 0,
+                                }
+                            });
 
-                        } else {
+                            if *cid > received_state_cid.cid {
+                                info!("{:?} // Received newer state for old cid {:?} vs new cid {:?} with digest {:?}.",
+                                    self.node.id(), received_state_cid.cid, *cid, digest);
 
-                        }
-                        todo!();
+                                received_state_cid.cid = *cid;
+                                received_state_cid.count = 1;
+                            } else if *cid == received_state_cid.cid {
+                                info!("{:?} // Received matching state for cid {:?} with digest {:?}. Count {}",
+                                self.node.id(), received_state_cid.cid, digest, received_state_cid.count + 1);
 
-                        /*debug!("{:?} // Received CID vote {:?} from {:?}", self.node.id(), seq, header.from());
-
-                        match seq.cmp(&self.largest_cid) {
-                            Ordering::Greater => {
-                                self.largest_cid = seq;
-                                self.latest_cid_count = 1;
+                                received_state_cid.count += 1;
                             }
-                            Ordering::Equal => {
-                                self.latest_cid_count += 1;
-                            }
-                            Ordering::Less => (),
                         }
-                         */
                     }
                     CstMessageKind::RequestStateCid => {
                         self.process_request_seq(header, message);
@@ -701,7 +708,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
                     // reset timeout, since req was successful
                     self.curr_timeout = self.base_timeout;
 
-                    info!("{:?} // Identified the latest consensus seq no as {:?} with {} votes.",
+                    info!("{:?} // Identified the latest state seq no as {:?} with {} votes.",
                             self.node.id(),
                             self.largest_cid, self.latest_cid_count);
 
@@ -841,7 +848,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
                 self.current_checkpoint_state = checkpoint_state;
 
-                self.persistent_log.write_checkpoint(WriteMode::NonBlockingSync(None), checkpoint)?;
+                self.persistent_log.write_checkpoint(OperationMode::NonBlockingSync(None), checkpoint)?;
 
                 Ok(())
             }
@@ -930,9 +937,11 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         self.largest_cid = SeqNo::ZERO;
         self.latest_cid_count = 0;
 
+        self.next_seq();
+
         let cst_seq = self.curr_seq();
 
-        info!("{:?} // Requesting latest consensus seq no with seq {:?}", self.node.id(), cst_seq);
+        info!("{:?} // Requesting latest state seq no with seq {:?}", self.node.id(), cst_seq);
 
         self.timeouts.timeout_cst_request(self.curr_timeout,
                                           view.quorum() as u32,
@@ -961,6 +970,8 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     {
         // reset hashmap of received states
         self.received_states.clear();
+
+        self.next_seq();
 
         let cst_seq = self.curr_seq();
 
