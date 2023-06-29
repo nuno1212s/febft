@@ -829,7 +829,7 @@ impl<D> Synchronizer<D>
                             let (header, message) = {
                                 let mut buf = Vec::new();
 
-                                info!("{:?} // Forged pre-prepare: {} {:?}", node.id(), p.len(), p);
+                                info!("{:?} // Forged pre-prepare: {}", node.id(), p.len());
 
                                 let forged_pre_prepare = consensus.forge_propose(p, self);
 

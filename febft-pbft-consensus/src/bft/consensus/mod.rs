@@ -926,6 +926,8 @@ impl ProposerConsensusGuard {
     /// Lock the consensus, making it impossible for the proposer to propose any requests
     pub fn lock_consensus(&self) {
         self.can_propose.store(false, Ordering::Relaxed);
+
+        debug!("Locked consensus");
     }
 
     /// Unlock the consensus instance
@@ -933,6 +935,8 @@ impl ProposerConsensusGuard {
         self.can_propose.store(true, Ordering::Relaxed);
 
         self.event_waker.notify(usize::MAX);
+
+        debug!("Unlocking consensus")
     }
 
     /// Get the next sequence number to propose to

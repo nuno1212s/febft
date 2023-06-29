@@ -140,6 +140,28 @@ impl<D, NT> Proposer<D, NT> where D: ApplicationData + 'static {
                         info!("{:?} // Resuming proposer as we are now able to propose again.", self.node_ref.id());
                     }
 
+                    //We do this as we don't want to get stuck waiting for requests that might never arrive
+                    //Or even just waiting for any type of request. We want to minimize the amount of time the
+                    //Consensus is waiting for new requests
+
+                    //We don't need to do this for non leader replicas, as that would cause unnecessary strain as the
+                    //Thread is in an infinite loop
+                    // Receive the requests from the clients and process them
+                    let opt_msgs: Option<PreProcessorOutputMessage<D::Request>> = match self.batch_reception.try_recv() {
+                        Ok(res) => { Some(res) }
+                        Err(err) => {
+                            match err {
+                                TryRecvError::ChannelDc => {
+                                    error!("{:?} // Failed to receive requests from pre processing module because {:?}", self.node_ref.id(), err);
+                                    break;
+                                }
+                                _ => {
+                                    None
+                                }
+                            }
+                        }
+                    };
+
                     //TODO: Maybe not use this as it can spam the lock on synchronizer?
                     let info = self.synchronizer.view();
 
@@ -149,45 +171,6 @@ impl<D, NT> Proposer<D, NT> where D: ApplicationData + 'static {
 
                     let our_slice = info.hash_space_division()
                         .get(&self.node_ref.id()).cloned().clone();
-
-                    //We do this as we don't want to get stuck waiting for requests that might never arrive
-                    //Or even just waiting for any type of request. We want to minimize the amount of time the
-                    //Consensus is waiting for new requests
-
-                    //We don't need to do this for non leader replicas, as that would cause unnecessary strain as the
-                    //Thread is in an infinite loop
-                    // Receive the requests from the clients and process them
-                    let opt_msgs: Option<PreProcessorOutputMessage<D::Request>> = if is_leader {
-                        match self.batch_reception.try_recv() {
-                            Ok(res) => { Some(res) }
-                            Err(err) => {
-                                match err {
-                                    TryRecvError::ChannelDc => {
-                                        error!("{:?} // Failed to receive requests from pre processing module because {:?}", self.node_ref.id(), err);
-                                        break;
-                                    }
-                                    _ => {
-                                        None
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        match self.batch_reception.recv_timeout(Duration::from_micros(self.global_batch_time_limit as u64)) {
-                            Ok(res) => { Some(res) }
-                            Err(err) => {
-                                match err {
-                                    TryRecvError::Timeout | TryRecvError::ChannelEmpty => {
-                                        None
-                                    }
-                                    TryRecvError::ChannelDc => {
-                                        error!("{:?} // Failed to receive requests from pre processing module because {:?}", self.node_ref.id(), err);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    };
 
                     let discovered_requests;
 
@@ -335,8 +318,8 @@ impl<D, NT> Proposer<D, NT> where D: ApplicationData + 'static {
     /// attempt to propose the ordered requests that we have collected
     /// Returns true if a batch was proposed
     fn propose_ordered<ST, LP>(&self,
-                           is_leader: bool,
-                           propose: &mut ProposeBuilder<D>, ) -> bool
+                               is_leader: bool,
+                               propose: &mut ProposeBuilder<D>, ) -> bool
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
               NT: Node<PBFT<D, ST, LP>> {
@@ -413,6 +396,9 @@ impl<D, NT> Proposer<D, NT> where D: ApplicationData + 'static {
             currently_accumulated.retain(|msg| {
                 if self.check_if_has_been_proposed(msg, &mut view_change_msg) {
                     // if it has been proposed, then we do not want to retain it
+
+                    let info1 = ClientRqInfo::from(msg);
+                    debug!("{:?} // Request {:?} has already been proposed, not retaining it", info1, self.node_ref.id());
                     return false;
                 }
                 true
