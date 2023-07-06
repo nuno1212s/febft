@@ -16,7 +16,6 @@ use log4rs::{
     encode::pattern::PatternEncoder,
 };
 
-
 use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::ordering::{Orderable, SeqNo};
@@ -28,11 +27,11 @@ use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::ClientRqInfo;
 use atlas_core::messages::Protocol;
 use atlas_core::ordering_protocol::{OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, ProtocolConsensusDecision, ProtocolMessage, SerProof, SerProofMetadata, View};
+use atlas_core::ordering_protocol::stateful_order_protocol::{DecLog, StatefulOrderProtocol};
 use atlas_core::persistent_log::{OrderingProtocolLog, PersistableOrderProtocol, StatefulOrderingProtocolLog};
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use atlas_core::serialize::{LogTransferMessage, NetworkView, ServiceMsg, StateTransferMessage};
 use atlas_core::state_transfer::{Checkpoint};
-use atlas_core::state_transfer::log_transfer::{DecLog, StatefulOrderProtocol};
 use atlas_core::timeouts::{RqTimeout, Timeouts};
 use atlas_metrics::metrics::metric_duration;
 use crate::bft::config::PBFTConfig;

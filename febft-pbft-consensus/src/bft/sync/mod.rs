@@ -822,7 +822,7 @@ impl<D> Synchronizer<D>
                             }
 
                             let p = rq_pre_processor.collect_all_pending_rqs();
-                            let node_sign = node.pk_crypto().sign_detached();
+                            let node_sign = node.pk_crypto().get_key_pair().clone();
 
                             //We create the pre-prepare here as we are the new leader,
                             //And we sign it right now
@@ -852,7 +852,7 @@ impl<D> Synchronizer<D>
                                     buf,
                                     prng_state.next_state(),
                                     Some(digest),
-                                    Some(node_sign.key_pair()),
+                                    Some(&*node_sign),
                                 ).into_inner();
 
                                 if let PBFTMessage::Consensus(consensus) = forged_pre_prepare.into_system().into_protocol_message() {

@@ -45,7 +45,7 @@ impl<D, ST, LP> AccessoryConsensus<D, ST, LP> for ReplicaAccessory<D, ST, LP>
         let view_seq = view.sequence_number();
         let current_digest = deciding_log.current_digest().unwrap();
 
-        let sign_detached = node.pk_crypto().sign_detached();
+        let key_pair = node.pk_crypto().get_key_pair().clone();
         let n = view.params().n();
 
         let seq = deciding_log.sequence_number();
@@ -84,7 +84,7 @@ impl<D, ST, LP> AccessoryConsensus<D, ST, LP> for ReplicaAccessory<D, ST, LP>
                     // PRE-PREPARE message
                     0,
                     Some(digest),
-                    Some(sign_detached.key_pair()),
+                    Some(&*key_pair),
                 ).into_inner();
 
                 // store serialized header + message
