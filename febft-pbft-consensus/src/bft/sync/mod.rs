@@ -833,7 +833,7 @@ impl<D> Synchronizer<D>
 
                                 let forged_pre_prepare = consensus.forge_propose(p, self);
 
-                                let forged_pre_prepare = NetworkMessageKind::from(forged_pre_prepare);
+                                let forged_pre_prepare = NetworkMessageKind::from_system(forged_pre_prepare);
 
                                 let digest = serialize::serialize_digest::<Vec<u8>, PBFT<D, ST, LP>>(
                                     &forged_pre_prepare,
@@ -880,7 +880,7 @@ impl<D> Synchronizer<D>
                             let targets = NodeId::targets(0..current_view.params().n())
                                 .filter(move |&id| id != node_id);
 
-                            node.broadcast(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
+                            node.broadcast(NetworkMessageKind::from_system(SystemMessage::from_protocol_message(message)), targets);
 
                             let state = FinalizeState {
                                 curr_cid,

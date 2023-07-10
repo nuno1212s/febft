@@ -109,7 +109,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
             ViewChangeMessageKind::StopData(collect),
         ));
 
-        node.send_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), current_leader, true);
+        node.send_signed(NetworkMessageKind::from_system(SystemMessage::from_protocol_message(message)), current_leader, true);
     }
 
     /// Start a new view change
@@ -146,7 +146,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
 
         let targets = NodeId::targets(0..current_view.params().n());
 
-        node.broadcast(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
+        node.broadcast(NetworkMessageKind::from_system(SystemMessage::from_protocol_message(message)), targets);
     }
 
     /// Watch a vector of requests received
@@ -346,7 +346,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
             NT: Node<PBFT<D, ST, LP>> {
         let message = SystemMessage::ForwardedRequestMessage(ForwardedRequestsMessage::new(timed_out));
         let targets = NodeId::targets(0..base_sync.view().params().n());
-        node.broadcast(NetworkMessageKind::from(message), targets);
+        node.broadcast(NetworkMessageKind::from_system(message), targets);
     }
 
     /// Obtain the requests that we know have timed out so we can send out a stop message

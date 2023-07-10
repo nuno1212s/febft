@@ -423,7 +423,7 @@ impl<D, NT> Proposer<D, NT> where D: ApplicationData + 'static {
 
         let targets = view.quorum_members().iter().copied();
 
-        self.node_ref.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
+        self.node_ref.broadcast_signed(NetworkMessageKind::from_system(SystemMessage::from_protocol_message(message)), targets);
 
         metric_increment(PROPOSER_BATCHES_MADE_ID, Some(1));
     }

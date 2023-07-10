@@ -53,7 +53,7 @@ impl<D, ST, LP> AccessoryConsensus<D, ST, LP> for ReplicaAccessory<D, ST, LP>
         let speculative_commits = Arc::clone(&self.speculative_commits);
 
         threadpool::execute(move || {
-            let message = NetworkMessageKind::from(
+            let message = NetworkMessageKind::from_system(
                 SystemMessage::from_protocol_message(
                     PBFTMessage::Consensus(ConsensusMessage::new(
                         seq,
@@ -115,7 +115,7 @@ impl<D, ST, LP> AccessoryConsensus<D, ST, LP> for ReplicaAccessory<D, ST, LP>
 
         let targets = NodeId::targets(0..view.params().n());
 
-        node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
+        node.broadcast_signed(NetworkMessageKind::from_system(SystemMessage::from_protocol_message(message)), targets);
     }
 
     fn handle_preparing_no_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
@@ -151,7 +151,7 @@ impl<D, ST, LP> AccessoryConsensus<D, ST, LP> for ReplicaAccessory<D, ST, LP>
 
             let targets = NodeId::targets(0..view.params().n());
 
-            node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
+            node.broadcast_signed(NetworkMessageKind::from_system(SystemMessage::from_protocol_message(message)), targets);
         }
 
         debug!("{:?} // Broadcasted commit consensus message {:?}",

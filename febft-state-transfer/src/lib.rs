@@ -502,7 +502,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
         let reply = CstMessage::new(message.sequence_number(), kind);
 
-        let network_msg = NetworkMessageKind::from(SystemMessage::from_state_transfer_message(reply));
+        let network_msg = NetworkMessageKind::from_system(SystemMessage::from_state_transfer_message(reply));
 
         debug!("{:?} // Replying to {:?} seq {:?} with seq no {:?}", self.node.id(),
             header.from(), message.sequence_number(), seq);
@@ -592,7 +592,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
             }),
         );
 
-        let network_msg = NetworkMessageKind::from(SystemMessage::from_state_transfer_message(reply));
+        let network_msg = NetworkMessageKind::from_system(SystemMessage::from_state_transfer_message(reply));
 
         self.node.send(network_msg, header.from(), true).unwrap();
     }
@@ -956,7 +956,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
         let targets = NodeId::targets(0..view.n());
 
-        self.node.broadcast(NetworkMessageKind::from(SystemMessage::from_state_transfer_message(message)), targets);
+        self.node.broadcast(NetworkMessageKind::from_system(SystemMessage::from_state_transfer_message(message)), targets);
     }
 
     /// Used by a recovering node to retrieve the latest state.
@@ -988,7 +988,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         let message = CstMessage::new(cst_seq, CstMessageKind::RequestState);
         let targets = NodeId::targets(0..view.n()).filter(|id| *id != self.node.id());
 
-        self.node.broadcast(NetworkMessageKind::from(SystemMessage::from_state_transfer_message(message)), targets);
+        self.node.broadcast(NetworkMessageKind::from_system(SystemMessage::from_state_transfer_message(message)), targets);
     }
 }
 
