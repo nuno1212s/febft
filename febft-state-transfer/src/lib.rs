@@ -17,8 +17,8 @@ use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_communication::Node;
 use atlas_communication::message::{Header, NetworkMessageKind, StoredMessage};
+use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_execution::app::{Application, Reply, Request};
 use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::ApplicationData;
@@ -238,7 +238,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
+              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Self::Serialization, LP>>,
               V: NetworkView {
         self.request_latest_consensus_seq_no::<D, OP, LP, V>(view);
 
@@ -250,7 +250,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
+              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Self::Serialization, LP>>,
               V: NetworkView {
         let (header, message) = message.into_inner();
 
@@ -295,7 +295,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
+              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Self::Serialization, LP>>,
               V: NetworkView {
         let (header, message) = message.into_inner();
 
@@ -365,7 +365,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>, V: NetworkView {
+              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Self::Serialization, LP>>, V: NetworkView {
         let earlier = std::mem::replace(&mut self.current_checkpoint_state, CheckpointState::None);
 
         self.current_checkpoint_state = match earlier {
@@ -392,7 +392,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
+              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Self::Serialization, LP>>,
               V: NetworkView {
         for cst_seq in timeout {
             if let TimeoutKind::Cst(cst_seq) = cst_seq.timeout_kind() {
@@ -426,7 +426,7 @@ impl<S, NT, PL> MonolithicStateTransfer<S, NT, PL> for CollabStateTransfer<S, NT
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<ServiceMsg<D, OP, Self::Serialization, LP>>,
+              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Self::Serialization, LP>>,
               V: NetworkView {
         self.finalize_checkpoint(state)?;
 
@@ -484,7 +484,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>
+              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>
     {
         let seq = match &self.current_checkpoint_state {
             CheckpointState::PartialWithEarlier { seq, earlier, } => {
@@ -502,7 +502,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
         let reply = CstMessage::new(message.sequence_number(), kind);
 
-        let network_msg = NetworkMessageKind::from_system(SystemMessage::from_state_transfer_message(reply));
+        let network_msg = SystemMessage::from_state_transfer_message(reply);
 
         debug!("{:?} // Replying to {:?} seq {:?} with seq no {:?}", self.node.id(),
             header.from(), message.sequence_number(), seq);
@@ -517,7 +517,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>> {
+              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>> {
         let waiting = std::mem::replace(&mut self.phase, ProtoPhase::Init);
 
         if let ProtoPhase::WaitingCheckpoint(reqs) = waiting {
@@ -554,7 +554,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     ) where D: ApplicationData + 'static,
             OP: OrderingProtocolMessage + 'static,
             LP: LogTransferMessage + 'static,
-            NT: Node<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>
+            NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>
     {
         match &mut self.phase {
             ProtoPhase::Init => {}
@@ -592,7 +592,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
             }),
         );
 
-        let network_msg = NetworkMessageKind::from_system(SystemMessage::from_state_transfer_message(reply));
+        let network_msg = SystemMessage::from_state_transfer_message(reply);
 
         self.node.send(network_msg, header.from(), true).unwrap();
     }
@@ -606,7 +606,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>,
+              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>,
               V: NetworkView
     {
         match self.phase {
@@ -872,7 +872,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         where D: ApplicationData + 'static,
               OP: OrderingProtocolMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>, V: NetworkView {
+              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>, V: NetworkView {
         let status = self.timed_out(seq);
 
         match status {
@@ -929,7 +929,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     ) where D: ApplicationData + 'static,
             OP: OrderingProtocolMessage + 'static,
             LP: LogTransferMessage + 'static,
-            NT: Node<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>,
+            NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>,
             V: NetworkView
     {
 
@@ -956,7 +956,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
         let targets = NodeId::targets(0..view.n());
 
-        self.node.broadcast(NetworkMessageKind::from_system(SystemMessage::from_state_transfer_message(message)), targets);
+        self.node.broadcast(SystemMessage::from_state_transfer_message(message), targets);
     }
 
     /// Used by a recovering node to retrieve the latest state.
@@ -965,7 +965,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     ) where D: ApplicationData + 'static,
             OP: OrderingProtocolMessage + 'static,
             LP: LogTransferMessage + 'static,
-            NT: Node<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>,
+            NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>,
             V: NetworkView
     {
         // reset hashmap of received states
@@ -988,7 +988,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         let message = CstMessage::new(cst_seq, CstMessageKind::RequestState);
         let targets = NodeId::targets(0..view.n()).filter(|id| *id != self.node.id());
 
-        self.node.broadcast(NetworkMessageKind::from_system(SystemMessage::from_state_transfer_message(message)), targets);
+        self.node.broadcast(SystemMessage::from_state_transfer_message(message), targets);
     }
 }
 
