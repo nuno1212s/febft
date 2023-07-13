@@ -6,19 +6,14 @@
 use std::cell::Cell;
 
 use std::marker::PhantomData;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use std::time::{Duration, Instant};
 use log::{debug, error, info};
 use atlas_common::collections;
-use atlas_common::collections::ConcurrentHashMap;
-use atlas_common::crypto::hash::Digest;
 use atlas_common::node_id::NodeId;
-use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_communication::message::{NetworkMessageKind, StoredMessage, System};
-use atlas_communication::{Node};
-use atlas_execution::app::{Request};
+use atlas_common::ordering::{Orderable};
+use atlas_communication::message::{NetworkMessageKind};
+use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
 use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
@@ -75,7 +70,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     )
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<PBFT<D, ST, LP>>,
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP>>,
               PL: OrderingProtocolLog<PBFTConsensus<D>> {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
@@ -109,7 +104,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
             ViewChangeMessageKind::StopData(collect),
         ));
 
-        node.send_signed(NetworkMessageKind::from_system(SystemMessage::from_protocol_message(message)), current_leader, true);
+        node.send_signed(SystemMessage::from_protocol_message(message), current_leader, true);
     }
 
     /// Start a new view change
@@ -123,7 +118,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
         timed_out: Option<Vec<StoredRequestMessage<D::Request>>>,
     ) where ST: StateTransferMessage + 'static,
             LP: LogTransferMessage + 'static,
-            NT: Node<PBFT<D, ST, LP>> {
+            NT: ProtocolNetworkNode<PBFT<D, ST, LP>> {
         // stop all timers
         self.unwatch_all_requests(timeouts);
 
@@ -146,7 +141,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
 
         let targets = NodeId::targets(0..current_view.params().n());
 
-        node.broadcast(NetworkMessageKind::from_system(SystemMessage::from_protocol_message(message)), targets);
+        node.broadcast(SystemMessage::from_protocol_message(message), targets);
     }
 
     /// Watch a vector of requests received
@@ -343,10 +338,10 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
         node: &NT,
     ) where ST: StateTransferMessage + 'static,
             LP: LogTransferMessage + 'static,
-            NT: Node<PBFT<D, ST, LP>> {
+            NT: ProtocolNetworkNode<PBFT<D, ST, LP>> {
         let message = SystemMessage::ForwardedRequestMessage(ForwardedRequestsMessage::new(timed_out));
         let targets = NodeId::targets(0..base_sync.view().params().n());
-        node.broadcast(NetworkMessageKind::from_system(message), targets);
+        node.broadcast(message, targets);
     }
 
     /// Obtain the requests that we know have timed out so we can send out a stop message

@@ -20,7 +20,7 @@ use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{Header, StoredMessage};
-use atlas_communication::Node;
+use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_communication::serialize::Serializable;
 use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::ApplicationData;
@@ -83,7 +83,7 @@ pub struct PBFTOrderProtocol<D, ST, LP, NT, PL>
         D: ApplicationData + 'static,
         ST: StateTransferMessage + 'static,
         LP: LogTransferMessage + 'static,
-        NT: Node<PBFT<D, ST, LP>> + 'static,
+        NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static,
         PL: Clone {
     // What phase of the consensus algorithm are we currently executing
     phase: ConsensusPhase,
@@ -115,7 +115,7 @@ pub struct PBFTOrderProtocol<D, ST, LP, NT, PL>
 }
 
 impl<D, ST, LP, NT, PL> Orderable for PBFTOrderProtocol<D, ST, LP, NT, PL> where D: 'static + ApplicationData,
-                                                                                 NT: 'static + Node<PBFT<D, ST, LP>>,
+                                                                                 NT: 'static + ProtocolNetworkNode<PBFT<D, ST, LP>>,
                                                                                  ST: 'static + StateTransferMessage,
                                                                                  LP: 'static + LogTransferMessage,
                                                                                  PL: Clone {
@@ -128,7 +128,7 @@ impl<D, ST, LP, NT, PL> OrderingProtocol<D, NT, PL> for PBFTOrderProtocol<D, ST,
     where D: ApplicationData + 'static,
           ST: StateTransferMessage + 'static,
           LP: LogTransferMessage + 'static,
-          NT: Node<PBFT<D, ST, LP>> + 'static,
+          NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static,
           PL: Clone {
     type Serialization = PBFTConsensus<D>;
     type Config = PBFTConfig<D, ST>;
@@ -266,7 +266,7 @@ impl<D, ST, LP, NT, PL> OrderingProtocol<D, NT, PL> for PBFTOrderProtocol<D, ST,
 impl<D, ST, LP, NT, PL> PBFTOrderProtocol<D, ST, LP, NT, PL> where D: ApplicationData + 'static,
                                                                    ST: StateTransferMessage + 'static,
                                                                    LP: LogTransferMessage + 'static,
-                                                                   NT: Node<PBFT<D, ST, LP>> + 'static,
+                                                                   NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static,
                                                                    PL: Clone {
     fn initialize_protocol(config: PBFTConfig<D, ST>, args: OrderingProtocolArgs<D, NT, PL>,
                            initial_state: Option<DecisionLog<D::Request>>) -> Result<Self> {
@@ -347,7 +347,7 @@ impl<D, ST, LP, NT, PL> PBFTOrderProtocol<D, ST, LP, NT, PL> where D: Applicatio
                     &mut self.message_log,
                     &self.timeouts,
                     &mut self.consensus,
-                    &*self.node,
+                    &self.node,
                 );
 
                 self.switch_phase(ConsensusPhase::NormalPhase);
@@ -463,7 +463,7 @@ impl<D, ST, LP, NT, PL> PBFTOrderProtocol<D, ST, LP, NT, PL> where D: Applicatio
                     &mut self.message_log,
                     &self.pre_processor,
                     &mut self.consensus,
-                    &*self.node,
+                    &self.node,
                 );
 
                 self.synchronizer.signal();
@@ -506,7 +506,7 @@ impl<D, ST, LP, NT, PL> PBFTOrderProtocol<D, ST, LP, NT, PL> where D: Applicatio
             &self.synchronizer,
             &self.timeouts,
             &mut self.message_log,
-            &*self.node,
+            &self.node,
         )?;
 
         match status {
@@ -567,7 +567,7 @@ impl<D, ST, LP, NT, PL> PBFTOrderProtocol<D, ST, LP, NT, PL> where D: Applicatio
             &mut self.message_log,
             &self.pre_processor,
             &mut self.consensus,
-            &*self.node,
+            &self.node,
         );
 
         self.synchronizer.signal();
@@ -607,7 +607,7 @@ impl<D, ST, LP, NT, PL> StatefulOrderProtocol<D, NT, PL> for PBFTOrderProtocol<D
     where D: ApplicationData + 'static,
           ST: StateTransferMessage + 'static,
           LP: LogTransferMessage + 'static,
-          NT: Node<PBFT<D, ST, LP>> + 'static,
+          NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static,
           PL: Clone {
     type StateSerialization = PBFTConsensus<D>;
 
@@ -671,7 +671,7 @@ impl<D, ST, LP, NT, PL> PBFTOrderProtocol<D, ST, LP, NT, PL>
     where D: ApplicationData + 'static,
           ST: StateTransferMessage + 'static,
           LP: LogTransferMessage + 'static,
-          NT: Node<PBFT<D, ST, LP>> + 'static,
+          NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static,
           PL: Clone {
     pub(crate) fn switch_phase(&mut self, new_phase: ConsensusPhase) {
         info!("{:?} // Switching from phase {:?} to phase {:?}", self.node.id(), self.phase, new_phase);
@@ -735,7 +735,7 @@ impl<D, ST, LP, NT, PL> PersistableOrderProtocol<PBFTConsensus<D>, PBFTConsensus
     where D: ApplicationData + 'static,
           ST: StateTransferMessage + 'static,
           LP: LogTransferMessage + 'static,
-          NT: Node<PBFT<D, ST, LP>>, PL: Clone {
+          NT: ProtocolNetworkNode<PBFT<D, ST, LP>>, PL: Clone {
     fn message_types() -> Vec<&'static str> {
         vec![
             CF_PRE_PREPARES,

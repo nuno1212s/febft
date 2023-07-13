@@ -1,41 +1,39 @@
-pub mod decision;
-pub mod accessory;
-
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, BTreeMap, BTreeSet, VecDeque};
-use std::iter;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
-use chrono::Utc;
+
 use either::Either;
 use event_listener::Event;
 use log::{debug, error, info, trace, warn};
+
 use atlas_common::error::*;
-use atlas_common::crypto::hash::Digest;
-use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
-use atlas_common::ordering::{InvalidSeqNo, Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message};
+use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message};
 use atlas_communication::message::{Header, StoredMessage};
-use atlas_communication::Node;
-use atlas_execution::ExecutorHandle;
-use atlas_execution::serialize::ApplicationData;
+use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_core::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage, SystemMessage};
 use atlas_core::ordering_protocol::ProtocolConsensusDecision;
 use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
 use atlas_core::serialize::{LogTransferMessage, StateTransferMessage};
 use atlas_core::timeouts::Timeouts;
+use atlas_execution::ExecutorHandle;
+use atlas_execution::serialize::ApplicationData;
 use atlas_metrics::metrics::metric_increment;
-use crate::bft;
-use crate::bft::consensus::decision::{ConsensusDecision, DecisionPhase, DecisionPollStatus, DecisionStatus, MessageQueue};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
-use crate::bft::msg_log::decided_log::Log;
-use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
-use crate::bft::msg_log::decisions::{DecisionLog, IncompleteProof, Proof, StoredConsensusMessage};
+
 use crate::bft::{PBFT, SysMsg};
+use crate::bft::consensus::decision::{ConsensusDecision, DecisionPollStatus, DecisionStatus, MessageQueue};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::OPERATIONS_PROCESSED_ID;
+use crate::bft::msg_log::decided_log::Log;
+use crate::bft::msg_log::deciding_log::CompletedBatch;
+use crate::bft::msg_log::decisions::{DecisionLog, IncompleteProof, Proof};
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::sync::view::ViewInfo;
+
+pub mod decision;
+pub mod accessory;
 
 #[derive(Debug, Clone)]
 /// Status returned from processing a consensus message.
@@ -371,8 +369,8 @@ impl<D, ST, LP, PL> Consensus<D, ST, LP, PL> where D: ApplicationData + 'static,
                                    synchronizer: &Synchronizer<D>,
                                    timeouts: &Timeouts,
                                    log: &mut Log<D, PL>,
-                                   node: &NT) -> Result<ConsensusStatus>
-        where NT: Node<PBFT<D, ST, LP>>,
+                                   node: &Arc<NT>) -> Result<ConsensusStatus>
+        where NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static,
               PL: OrderingProtocolLog<PBFTConsensus<D>> {
         let message_seq = message.sequence_number();
 
@@ -806,8 +804,8 @@ impl<D, ST, LP, PL> Consensus<D, ST, LP, PL> where D: ApplicationData + 'static,
         synchronizer: &Synchronizer<D>,
         timeouts: &Timeouts,
         log: &mut Log<D, PL>,
-        node: &NT,
-    ) where NT: Node<PBFT<D, ST, LP>>,
+        node: &Arc<NT>,
+    ) where NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static,
             PL: OrderingProtocolLog<PBFTConsensus<D>> {
         let view = synchronizer.view();
         //Prepare the algorithm as we are already entering this phase

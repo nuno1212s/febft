@@ -8,23 +8,18 @@
 
 use std::io::{Read, Write};
 use std::marker::PhantomData;
-use std::sync::Arc;
-use bytes::Bytes;
-use atlas_common::error::*;
 
 #[cfg(feature = "serialize_serde")]
 use ::serde::{Deserialize, Serialize};
-use atlas_common::crypto::hash::{Context, Digest};
-use atlas_common::globals::ReadOnly;
-use atlas_communication::message::StoredMessage;
-use atlas_communication::Node;
+use bytes::Bytes;
+
+use atlas_common::error::*;
 use atlas_communication::serialize::Serializable;
-use atlas_core::ordering_protocol::{ProtocolMessage, SerProof, SerProofMetadata};
 use atlas_core::persistent_log::PersistableOrderProtocol;
-use atlas_execution::serialize::ApplicationData;
 use atlas_core::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
-use crate::bft::{PBFT};
+use atlas_execution::serialize::ApplicationData;
+
+use crate::bft::message::{ConsensusMessage, PBFTMessage};
 use crate::bft::msg_log::decisions::{DecisionLog, Proof, ProofMetadata};
 use crate::bft::sync::view::ViewInfo;
 

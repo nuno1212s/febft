@@ -1,27 +1,23 @@
-use std::mem::size_of;
 use std::sync::Arc;
+
 use log::error;
-use atlas_common::crypto::hash::{Context, Digest};
 
 use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::StoredMessage;
-use atlas_communication::Node;
-use atlas_core::ordering_protocol::{DecisionInformation, ExecutionResult, ProtocolConsensusDecision};
-use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog, OperationMode};
+use atlas_core::ordering_protocol::{DecisionInformation, ProtocolConsensusDecision};
+use atlas_core::persistent_log::{OperationMode, OrderingProtocolLog, StatefulOrderingProtocolLog};
 use atlas_core::serialize::StateTransferMessage;
-use atlas_execution::app::{Request, UpdateBatch};
+use atlas_execution::app::UpdateBatch;
 use atlas_execution::serialize::ApplicationData;
-use atlas_core::state_transfer::Checkpoint;
 
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
+use crate::bft::message::{ConsensusMessageKind, PBFTMessage};
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::msg_log::{operation_key};
-use crate::bft::msg_log::decisions::{CollectData, DecisionLog, Proof, ProofMetadata};
-use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
-use crate::bft::{PBFT, PBFTOrderProtocol};
+use crate::bft::msg_log::operation_key;
+use crate::bft::msg_log::deciding_log::CompletedBatch;
+use crate::bft::msg_log::decisions::{DecisionLog, Proof, ProofMetadata};
 use crate::bft::sync::view::ViewInfo;
 
 /// The log of decisions that have already been processed by the consensus

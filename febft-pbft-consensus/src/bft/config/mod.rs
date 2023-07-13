@@ -1,17 +1,12 @@
 use std::marker::PhantomData;
-use std::sync::Arc;
 use std::time::Duration;
-use atlas_common::globals::ReadOnly;
+
 use atlas_common::node_id::NodeId;
-use atlas_communication::Node;
-use atlas_execution::ExecutorHandle;
-use atlas_execution::serialize::ApplicationData;
 use atlas_core::followers::FollowerHandle;
-use atlas_core::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg};
-use atlas_core::state_transfer::Checkpoint;
-use atlas_core::timeouts::Timeouts;
+use atlas_core::serialize::{OrderingProtocolMessage, StateTransferMessage};
+use atlas_execution::serialize::ApplicationData;
+
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::observer::ObserverHandle;
 use crate::bft::sync::view::ViewInfo;
 
 pub struct PBFTConfig<D: ApplicationData, ST> {

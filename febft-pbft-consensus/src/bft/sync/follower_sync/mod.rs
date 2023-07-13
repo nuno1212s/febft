@@ -1,12 +1,9 @@
-use std::{marker::PhantomData, sync::Arc};
-use atlas_common::crypto::hash::Digest;
+use std::{marker::PhantomData};
 use atlas_common::ordering::Orderable;
-use atlas_communication::message::StoredMessage;
 use atlas_core::messages::ClientRqInfo;
-use atlas_execution::app::{Request};
 use atlas_execution::serialize::ApplicationData;
 
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
+use crate::bft::message::{ConsensusMessageKind};
 use crate::bft::msg_log::decisions::StoredConsensusMessage;
 
 pub struct FollowerSynchronizer<D: ApplicationData> {

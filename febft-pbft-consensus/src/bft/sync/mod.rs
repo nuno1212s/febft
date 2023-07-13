@@ -7,10 +7,7 @@ use std::{
 };
 use std::cell::Cell;
 use std::fmt::{Debug, Formatter};
-use std::sync::MutexGuard;
-use bytes::BytesMut;
 use either::Either;
-use futures::SinkExt;
 
 use self::{follower_sync::FollowerSynchronizer, replica_sync::ReplicaSynchronizer};
 
@@ -24,7 +21,9 @@ use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_qu
 use atlas_common::{collections, prng};
 use atlas_common::node_id::NodeId;
 use atlas_communication::message::{Header, NetworkMessageKind, StoredMessage, System, WireMessage};
-use atlas_communication::{Node, NodePK, serialize};
+use atlas_communication::{ serialize};
+use atlas_communication::protocol_node::ProtocolNetworkNode;
+use atlas_communication::reconfiguration_node::NetworkInformationProvider;
 use atlas_communication::serialize::Buf;
 use atlas_execution::app::{Reply, Request};
 use atlas_execution::serialize::ApplicationData;
@@ -505,11 +504,11 @@ impl<D> Synchronizer<D>
         log: &mut Log<D, PL>,
         rq_pre_processor: &RequestPreProcessor<D::Request>,
         consensus: &mut Consensus<D, ST, LP, PL>,
-        node: &NT,
+        node: &Arc<NT>,
     ) -> SynchronizerStatus<D::Request>
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<PBFT<D, ST, LP>>,
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static,
               PL: OrderingProtocolLog<PBFTConsensus<D>>
     {
         debug!("{:?} // Processing view change message {:?} in phase {:?} from {:?}",
@@ -630,7 +629,7 @@ impl<D> Synchronizer<D>
                 // we have sent our own STOP message
                 if let ProtoPhase::Stopping(_i) = self.phase.get() {
                     return if i > current_view.params().f() {
-                        self.begin_view_change(None, node, timeouts, log);
+                        self.begin_view_change(None, &**node, timeouts, log);
                         SynchronizerStatus::Running
                     } else {
                         self.phase.replace(ProtoPhase::Stopping(i));
@@ -656,7 +655,7 @@ impl<D> Synchronizer<D>
                     match &self.accessory {
                         SynchronizerAccessory::Replica(rep) => {
                             rep.handle_stopping_quorum(self, previous_view, consensus,
-                                                       log, rq_pre_processor, timeouts, node)
+                                                       log, rq_pre_processor, timeouts, &**node)
                         }
                         SynchronizerAccessory::Follower(_) => {}
                     }
@@ -789,7 +788,7 @@ impl<D> Synchronizer<D>
                             let previous_view_ref = previous_view.as_ref().unwrap_or(&current_view);
 
                             let proof = Self::highest_proof(&*collects_guard,
-                                                            previous_view_ref, node);
+                                                            previous_view_ref, &**node);
 
                             info!("{:?} // Highest proof: {:?}", node.id(), proof);
 
@@ -822,25 +821,18 @@ impl<D> Synchronizer<D>
                             }
 
                             let p = rq_pre_processor.collect_all_pending_rqs();
-                            let node_sign = node.pk_crypto().get_key_pair().clone();
+                            let node_sign = node.network_info_provider().get_key_pair().clone();
 
                             //We create the pre-prepare here as we are the new leader,
                             //And we sign it right now
                             let (header, message) = {
-                                let mut buf = Vec::new();
-
                                 info!("{:?} // Forged pre-prepare: {}", node.id(), p.len());
 
                                 let forged_pre_prepare = consensus.forge_propose(p, self);
 
-                                let forged_pre_prepare = NetworkMessageKind::from_system(forged_pre_prepare);
+                                let (message, digest) = node.serialize_digest_message(forged_pre_prepare).unwrap();
 
-                                let digest = serialize::serialize_digest::<Vec<u8>, PBFT<D, ST, LP>>(
-                                    &forged_pre_prepare,
-                                    &mut buf,
-                                ).unwrap();
-
-                                let buf = Buf::from(buf);
+                                let (message, buf) = message.into_inner();
 
                                 let mut prng_state = prng::State::new();
 
@@ -855,7 +847,7 @@ impl<D> Synchronizer<D>
                                     Some(&*node_sign),
                                 ).into_inner();
 
-                                if let PBFTMessage::Consensus(consensus) = forged_pre_prepare.into_system().into_protocol_message() {
+                                if let PBFTMessage::Consensus(consensus) = message.into_protocol_message() {
                                     (h, consensus)
                                 } else {
                                     //This is basically impossible
@@ -880,7 +872,7 @@ impl<D> Synchronizer<D>
                             let targets = NodeId::targets(0..current_view.params().n())
                                 .filter(move |&id| id != node_id);
 
-                            node.broadcast(NetworkMessageKind::from_system(SystemMessage::from_protocol_message(message)), targets);
+                            node.broadcast(SystemMessage::from_protocol_message(message), targets);
 
                             let state = FinalizeState {
                                 curr_cid,
@@ -967,9 +959,9 @@ impl<D> Synchronizer<D>
 
                 // leader has already performed this computation in the
                 // STOP-DATA phase of Mod-SMaRt
-                let signed: Vec<_> = signed_collects::<D, _, _, _>(node, collects);
+                let signed: Vec<_> = signed_collects::<D, _, _, _>(&**node, collects);
 
-                let proof = highest_proof::<D, _, _, _, _>(&current_view, node, signed.iter());
+                let proof = highest_proof::<D, _, _, _, _>(&current_view, &**node, signed.iter());
 
                 let curr_cid = proof
                     .map(|p| p.sequence_number())
@@ -1022,11 +1014,11 @@ impl<D> Synchronizer<D>
         log: &mut Log<D, PL>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<D, ST, LP, PL>,
-        node: &NT,
+        node: &Arc<NT>,
     ) -> Option<()>
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<PBFT<D, ST, LP>>,
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static,
               PL: OrderingProtocolLog<PBFTConsensus<D>>
     {
         let state = self.finalize_state.borrow_mut().take()?;
@@ -1063,7 +1055,7 @@ impl<D> Synchronizer<D>
     )
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<PBFT<D, ST, LP>>,
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP>>,
               PL: OrderingProtocolLog<PBFTConsensus<D>>
     {
         match (self.phase.get(), &timed_out) {
@@ -1148,11 +1140,11 @@ impl<D> Synchronizer<D>
         log: &mut Log<D, PL>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<D, ST, LP, PL>,
-        node: &NT,
+        node: &Arc<NT>,
     ) -> SynchronizerStatus<D::Request>
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<PBFT<D, ST, LP>>,
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static,
               PL: OrderingProtocolLog<PBFTConsensus<D>>
     {
         let FinalizeState {
@@ -1242,7 +1234,7 @@ impl<D> Synchronizer<D>
                                         node: &NT)
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<PBFT<D, ST, LP>> {
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP>> {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {}
             SynchronizerAccessory::Replica(rep) => {
@@ -1294,7 +1286,7 @@ impl<D> Synchronizer<D>
     ) -> Option<&'a Proof<D::Request>>
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<PBFT<D, ST, LP>>
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP>>
     {
         highest_proof::<D, _, _, _, _>(&view, node, guard.values())
     }
@@ -1529,7 +1521,7 @@ fn signed_collects<D, ST, LP, NT>(
         D: ApplicationData + 'static,
         ST: StateTransferMessage + 'static,
         LP: LogTransferMessage + 'static,
-        NT: Node<PBFT<D, ST, LP>>
+        NT: ProtocolNetworkNode<PBFT<D, ST, LP>>
 {
     collects
         .into_iter()
@@ -1542,7 +1534,7 @@ fn validate_signature<'a, D, M, ST, LP, NT>(node: &'a NT, stored: &'a StoredMess
         D: ApplicationData + 'static,
         ST: StateTransferMessage + 'static,
         LP: LogTransferMessage + 'static,
-        NT: Node<PBFT<D, ST, LP>>
+        NT: ProtocolNetworkNode<PBFT<D, ST, LP>>
 {
     //TODO: Fix this as I believe it will always be false
     let wm = match WireMessage::from_header(*stored.header()) {
@@ -1556,7 +1548,7 @@ fn validate_signature<'a, D, M, ST, LP, NT>(node: &'a NT, stored: &'a StoredMess
 
     // check if we even have the public key of the node that claims
     // to have sent this particular message
-    let key = match node.pk_crypto().get_public_key(&stored.header().from()) {
+    let key = match node.network_info_provider().get_public_key(&stored.header().from()) {
         Some(k) => k,
         None => {
             error!("{:?} // Failed to get public key for node {:?}", node.id(), stored.header().from());
@@ -1578,7 +1570,7 @@ fn highest_proof<'a, D, I, ST, LP, NT>(
         I: Iterator<Item=&'a StoredMessage<ViewChangeMessage<D::Request>>>,
         ST: StateTransferMessage + 'static,
         LP: LogTransferMessage + 'static,
-        NT: Node<PBFT<D, ST, LP>>
+        NT: ProtocolNetworkNode<PBFT<D, ST, LP>>
 {
     collect_data(collects)
         // fetch proofs

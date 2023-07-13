@@ -2,21 +2,23 @@ use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
+
 use chrono::Utc;
 use log::{debug, info, warn};
-use atlas_common::crypto::hash::Digest;
+
 use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{Header, StoredMessage};
-use atlas_communication::Node;
+use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_core::messages::ClientRqInfo;
-use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog, OperationMode};
-use atlas_execution::serialize::ApplicationData;
+use atlas_core::persistent_log::{OperationMode, OrderingProtocolLog};
 use atlas_core::serialize::{LogTransferMessage, StateTransferMessage};
 use atlas_core::timeouts::Timeouts;
-use atlas_metrics::metrics::{metric_duration};
+use atlas_execution::serialize::ApplicationData;
+use atlas_metrics::metrics::metric_duration;
+
 use crate::bft::consensus::accessory::{AccessoryConsensus, ConsensusDecisionAccessory};
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
@@ -267,8 +269,8 @@ impl<D, ST, LP, PL> ConsensusDecision<D, ST, LP, PL>
                                synchronizer: &Synchronizer<D>,
                                timeouts: &Timeouts,
                                log: &mut Log<D, PL>,
-                               node: &NT) -> Result<DecisionStatus>
-        where NT: Node<PBFT<D, ST, LP>>,
+                               node: &Arc<NT>) -> Result<DecisionStatus>
+        where NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static,
               PL: OrderingProtocolLog<PBFTConsensus<D>> {
         let view = synchronizer.view();
 
@@ -395,7 +397,7 @@ impl<D, ST, LP, PL> ConsensusDecision<D, ST, LP, PL>
                         self.node_id, stored_msg.message(), stored_msg.header().from(), received);
 
                     self.accessory.handle_partial_pre_prepare(&self.message_log,
-                                                              &view, stored_msg.clone(), node);
+                                                              &view, stored_msg.clone(), &**node);
 
                     DecisionPhase::PrePreparing(received)
                 };
@@ -468,7 +470,7 @@ impl<D, ST, LP, PL> ConsensusDecision<D, ST, LP, PL>
                     let current_digest = self.message_log.current_digest().unwrap();
 
                     self.accessory.handle_preparing_quorum(&self.message_log, &view,
-                                                           stored_msg.clone(), node);
+                                                           stored_msg.clone(), &**node);
 
                     self.message_queue.signal();
 
@@ -480,7 +482,7 @@ impl<D, ST, LP, PL> ConsensusDecision<D, ST, LP, PL>
                         self.node_id, stored_msg.message().sequence_number(), header.from(), received);
 
                     self.accessory.handle_preparing_no_quorum(&self.message_log, &view,
-                                                              stored_msg.clone(), node);
+                                                              stored_msg.clone(), &**node);
 
                     DecisionPhase::Preparing(received)
                 };
@@ -542,7 +544,7 @@ impl<D, ST, LP, PL> ConsensusDecision<D, ST, LP, PL>
                     self.consensus_metrics.commit_quorum_recvd();
 
                     self.accessory.handle_committing_quorum(&self.message_log, &view,
-                                                            stored_msg.clone(), node);
+                                                            stored_msg.clone(), &**node);
 
                     Ok(DecisionStatus::Decided)
                 } else {
@@ -552,7 +554,7 @@ impl<D, ST, LP, PL> ConsensusDecision<D, ST, LP, PL>
                     self.phase = DecisionPhase::Committing(received);
 
                     self.accessory.handle_committing_no_quorum(&self.message_log, &view,
-                                                               stored_msg.clone(), node);
+                                                               stored_msg.clone(), &**node);
 
                     Ok(DecisionStatus::Deciding)
                 };

@@ -1,38 +1,36 @@
-pub mod follower_proposer;
-
-use std::cmp::max;
 use std::collections::BTreeMap;
-use std::marker::PhantomData;
-use std::ops::Div;
-use log::{error, warn, debug, info, trace};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
-use atlas_common::channel::{ChannelSyncRx, TryRecvError};
+use log::{debug, error, info, warn};
+
+use atlas_common::channel::TryRecvError;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::threadpool;
-use atlas_communication::message::{NetworkMessage, NetworkMessageKind, StoredMessage};
-use atlas_communication::Node;
-use atlas_execution::app::{Request, UnorderedBatch};
-use atlas_execution::ExecutorHandle;
-use atlas_execution::serialize::ApplicationData;
-use atlas_core::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage, SystemMessage};
-use atlas_core::request_pre_processing::{BatchOutput, PreProcessorMessage, PreProcessorOutputMessage};
+use atlas_communication::message::NetworkMessageKind;
+use atlas_communication::protocol_node::ProtocolNetworkNode;
+use atlas_core::messages::{ClientRqInfo, StoredRequestMessage, SystemMessage};
+use atlas_core::request_pre_processing::{BatchOutput, PreProcessorOutputMessage};
 use atlas_core::serialize::{LogTransferMessage, StateTransferMessage};
 use atlas_core::timeouts::Timeouts;
-use atlas_metrics::metrics::{metric_duration, metric_increment, metric_local_duration_end, metric_local_duration_start, metric_store_count};
+use atlas_execution::app::UnorderedBatch;
+use atlas_execution::ExecutorHandle;
+use atlas_execution::serialize::ApplicationData;
+use atlas_metrics::metrics::{metric_duration, metric_increment, metric_store_count};
+
 use crate::bft::config::ProposerConfig;
 use crate::bft::consensus::ProposerConsensusGuard;
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, PBFTMessage};
-use crate::bft::metric::{CLIENT_POOL_BATCH_SIZE_ID, PROPOSER_BATCHES_MADE_ID, PROPOSER_FWD_REQUESTS_ID, PROPOSER_LATENCY_ID, PROPOSER_PROPOSE_TIME_ID, PROPOSER_REQUEST_FILTER_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUEST_TIME_ITERATIONS_ID, PROPOSER_REQUESTS_COLLECTED_ID};
-use crate::bft::observer::{ConnState, MessageType, ObserverHandle};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
+use crate::bft::metric::{CLIENT_POOL_BATCH_SIZE_ID, PROPOSER_BATCHES_MADE_ID, PROPOSER_LATENCY_ID, PROPOSER_PROPOSE_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUEST_TIME_ITERATIONS_ID, PROPOSER_REQUESTS_COLLECTED_ID};
 use crate::bft::PBFT;
 use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
-use super::sync::{Synchronizer, AbstractSynchronizer};
+
+use super::sync::{AbstractSynchronizer, Synchronizer};
+
+pub mod follower_proposer;
 
 pub type BatchType<R> = Vec<StoredRequestMessage<R>>;
 
@@ -111,7 +109,7 @@ impl<D, NT> Proposer<D, NT> where D: ApplicationData + 'static {
     pub fn start<ST, LP>(self: Arc<Self>) -> JoinHandle<()>
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<PBFT<D, ST, LP>> + 'static {
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static {
         std::thread::Builder::new()
             .name(format!("Proposer thread"))
             .spawn(move || {
@@ -251,7 +249,7 @@ impl<D, NT> Proposer<D, NT> where D: ApplicationData + 'static {
         propose: &mut ProposeBuilder<D>,
     ) -> bool where ST: StateTransferMessage + 'static,
                     LP: LogTransferMessage + 'static,
-                    NT: Node<PBFT<D, ST, LP>> {
+                    NT: ProtocolNetworkNode<PBFT<D, ST, LP>> {
         if !propose.currently_accumulated.is_empty() {
             let current_batch_size = propose.currently_accumulated.len();
 
@@ -322,7 +320,7 @@ impl<D, NT> Proposer<D, NT> where D: ApplicationData + 'static {
                                propose: &mut ProposeBuilder<D>, ) -> bool
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: Node<PBFT<D, ST, LP>> {
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP>> {
 
         //Now let's deal with ordered requests
         if is_leader {
@@ -381,7 +379,7 @@ impl<D, NT> Proposer<D, NT> where D: ApplicationData + 'static {
         mut currently_accumulated: Vec<StoredRequestMessage<D::Request>>,
     ) where ST: StateTransferMessage + 'static,
             LP: LogTransferMessage + 'static,
-            NT: Node<PBFT<D, ST, LP>> {
+            NT: ProtocolNetworkNode<PBFT<D, ST, LP>> {
         let has_pending_messages = self.consensus_guard.has_pending_view_change_reqs();
 
         let is_view_change_empty = {
@@ -423,7 +421,7 @@ impl<D, NT> Proposer<D, NT> where D: ApplicationData + 'static {
 
         let targets = view.quorum_members().iter().copied();
 
-        self.node_ref.broadcast_signed(NetworkMessageKind::from_system(SystemMessage::from_protocol_message(message)), targets);
+        self.node_ref.broadcast_signed(SystemMessage::from_protocol_message(message), targets);
 
         metric_increment(PROPOSER_BATCHES_MADE_ID, Some(1));
     }
