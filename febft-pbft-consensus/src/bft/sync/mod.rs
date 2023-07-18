@@ -3,45 +3,42 @@ use std::{
     cmp::Ordering,
     collections::VecDeque,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use std::cell::Cell;
 use std::fmt::{Debug, Formatter};
+
 use either::Either;
-
-use self::{follower_sync::FollowerSynchronizer, replica_sync::ReplicaSynchronizer};
-
 use intmap::IntMap;
 use log::{debug, error, info, warn};
-
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
-use atlas_common::crypto::hash::Digest;
-use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_queue_message, tbo_pop_message, InvalidSeqNo};
+
 use atlas_common::{collections, prng};
+use atlas_common::crypto::hash::Digest;
+use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
-use atlas_communication::message::{Header, NetworkMessageKind, StoredMessage, System, WireMessage};
-use atlas_communication::{ serialize};
+use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_pop_message, tbo_queue_message};
+use atlas_communication::message::{Header, StoredMessage, WireMessage};
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
-use atlas_communication::serialize::Buf;
-use atlas_execution::app::{Reply, Request};
-use atlas_execution::serialize::ApplicationData;
-use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
+use atlas_core::messages::{ClientRqInfo, StoredRequestMessage, SystemMessage};
 use atlas_core::ordering_protocol::ProtocolConsensusDecision;
 use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
-use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
+use atlas_core::request_pre_processing::RequestPreProcessor;
 use atlas_core::serialize::{LogTransferMessage, StateTransferMessage};
 use atlas_core::timeouts::{RqTimeout, Timeouts};
+use atlas_execution::serialize::ApplicationData;
+
+use crate::bft::PBFT;
 use crate::bft::consensus::Consensus;
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
+use crate::bft::message::{ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::{CollectData, Proof, StoredConsensusMessage, ViewDecisionPair};
-use crate::bft::{PBFT, PBFTOrderProtocol};
-
 use crate::bft::sync::view::ViewInfo;
 
+use self::{follower_sync::FollowerSynchronizer, replica_sync::ReplicaSynchronizer};
 
 pub mod follower_sync;
 pub mod replica_sync;
@@ -440,6 +437,25 @@ impl<D> Synchronizer<D>
             finalize_state: RefCell::new(None),
             accessory: SynchronizerAccessory::Replica(ReplicaSynchronizer::new(timeout_dur)),
         })
+    }
+
+    /// Initialize a new `Synchronizer` with the given quorum members.
+    pub fn initialize_with_quorum(seq_no: SeqNo, quorum_members: Vec<NodeId>, timeout_dur: Duration) -> Result<Arc<Self>> {
+
+        let n = quorum_members.len();
+
+        let f = (n - 1) / 3;
+
+        let view_info = ViewInfo::new(seq_no, n ,f)?;
+
+        Ok(Arc::new(Self {
+            phase: Cell::new(ProtoPhase::Init),
+            tbo: Mutex::new(TboQueue::new(view_info)),
+            stopped: RefCell::new(Default::default()),
+            collects: Mutex::new(Default::default()),
+            finalize_state: RefCell::new(None),
+            accessory: SynchronizerAccessory::Replica(ReplicaSynchronizer::new(timeout_dur)),
+        }))
     }
 
     fn previous_view(&self) -> Option<ViewInfo> { self.tbo.lock().unwrap().previous_view().clone() }
@@ -869,7 +885,8 @@ impl<D> Synchronizer<D>
                             ));
 
                             let node_id = node.id();
-                            let targets = NodeId::targets(0..current_view.params().n())
+
+                            let targets = current_view.quorum_members().clone().into_iter()
                                 .filter(move |&id| id != node_id);
 
                             node.broadcast(SystemMessage::from_protocol_message(message), targets);

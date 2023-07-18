@@ -111,9 +111,9 @@ impl<D, ST, LP> AccessoryConsensus<D, ST, LP> for ReplicaAccessory<D, ST, LP>
             ConsensusMessageKind::Prepare(current_digest),
         ));
 
-        let targets = NodeId::targets(0..view.params().n());
+        let targets = view.quorum_members().clone();
 
-        node.broadcast_signed(SystemMessage::from_protocol_message(message), targets);
+        node.broadcast_signed(SystemMessage::from_protocol_message(message), targets.into_iter());
     }
 
     fn handle_preparing_no_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
@@ -147,9 +147,9 @@ impl<D, ST, LP> AccessoryConsensus<D, ST, LP> for ReplicaAccessory<D, ST, LP>
             debug!("{:?} // Broadcasting commit consensus message {:?}",
                         node_id, message);
 
-            let targets = NodeId::targets(0..view.params().n());
+            let targets = view.quorum_members().clone();
 
-            node.broadcast_signed(SystemMessage::from_protocol_message(message), targets);
+            node.broadcast_signed(SystemMessage::from_protocol_message(message), targets.into_iter());
         }
 
         debug!("{:?} // Broadcasted commit consensus message {:?}",

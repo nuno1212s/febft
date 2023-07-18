@@ -139,9 +139,9 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
             ViewChangeMessageKind::Stop(requests),
         ));
 
-        let targets = NodeId::targets(0..current_view.params().n());
+        let targets = current_view.quorum_members().clone();
 
-        node.broadcast(SystemMessage::from_protocol_message(message), targets);
+        node.broadcast(SystemMessage::from_protocol_message(message), targets.into_iter());
     }
 
     /// Watch a vector of requests received
@@ -340,8 +340,11 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
             LP: LogTransferMessage + 'static,
             NT: ProtocolNetworkNode<PBFT<D, ST, LP>> {
         let message = SystemMessage::ForwardedRequestMessage(ForwardedRequestsMessage::new(timed_out));
-        let targets = NodeId::targets(0..base_sync.view().params().n());
-        node.broadcast(message, targets);
+        let view = base_sync.view();
+
+        let targets = view.quorum_members().clone();
+
+        node.broadcast(message, targets.into_iter());
     }
 
     /// Obtain the requests that we know have timed out so we can send out a stop message

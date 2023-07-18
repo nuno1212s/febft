@@ -290,7 +290,7 @@ impl<D, ST, LP, NT, PL> PBFTOrderProtocol<D, ST, LP, NT, PL> where D: Applicatio
 
         let dec_log = initialize_decided_log::<D, PL>(node_id, persistent_log, initial_state)?;
 
-        let proposer = Proposer::<D, NT>::new(node.clone(), batch_input, sync.clone(), timeouts.clone(),
+        let proposer = Proposer::<D, NT, RP>::new(node.clone(), batch_input, sync.clone(), timeouts.clone(),
                                               executor.clone(), consensus_guard.clone(),
                                               proposer_config);
 

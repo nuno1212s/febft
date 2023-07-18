@@ -13,6 +13,7 @@ use atlas_common::threadpool;
 use atlas_communication::message::NetworkMessageKind;
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_core::messages::{ClientRqInfo, StoredRequestMessage, SystemMessage};
+use atlas_core::reconfiguration_protocol::ReconfigurationProtocol;
 use atlas_core::request_pre_processing::{BatchOutput, PreProcessorOutputMessage};
 use atlas_core::serialize::{LogTransferMessage, StateTransferMessage};
 use atlas_core::timeouts::Timeouts;
@@ -77,7 +78,8 @@ impl<D> ProposeBuilder<D> where D: ApplicationData {
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
 
-impl<D, NT> Proposer<D, NT> where D: ApplicationData + 'static {
+impl<D, NT> Proposer<D, NT>
+    where D: ApplicationData + 'static, {
     pub fn new(
         node: Arc<NT>,
         batch_input: BatchOutput<D::Request>,
@@ -87,6 +89,7 @@ impl<D, NT> Proposer<D, NT> where D: ApplicationData + 'static {
         consensus_guard: Arc<ProposerConsensusGuard>,
         proposer_config: ProposerConfig,
     ) -> Arc<Self> {
+
         let ProposerConfig {
             target_batch_size, max_batch_size, batch_timeout
         } = proposer_config;
@@ -377,9 +380,10 @@ impl<D, NT> Proposer<D, NT> where D: ApplicationData + 'static {
         seq: SeqNo,
         view: &ViewInfo,
         mut currently_accumulated: Vec<StoredRequestMessage<D::Request>>,
-    ) where ST: StateTransferMessage + 'static,
-            LP: LogTransferMessage + 'static,
-            NT: ProtocolNetworkNode<PBFT<D, ST, LP>> {
+    ) where
+        ST: StateTransferMessage + 'static,
+        LP: LogTransferMessage + 'static,
+        NT: ProtocolNetworkNode<PBFT<D, ST, LP>> {
         let has_pending_messages = self.consensus_guard.has_pending_view_change_reqs();
 
         let is_view_change_empty = {
@@ -419,9 +423,9 @@ impl<D, NT> Proposer<D, NT> where D: ApplicationData + 'static {
             ConsensusMessageKind::PrePrepare(currently_accumulated),
         ));
 
-        let targets = view.quorum_members().iter().copied();
+        let targets = view.quorum_members().clone();
 
-        self.node_ref.broadcast_signed(SystemMessage::from_protocol_message(message), targets);
+        self.node_ref.broadcast_signed(SystemMessage::from_protocol_message(message), targets.into_iter());
 
         metric_increment(PROPOSER_BATCHES_MADE_ID, Some(1));
     }

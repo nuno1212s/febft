@@ -954,7 +954,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
             CstMessageKind::RequestStateCid,
         );
 
-        let targets = NodeId::targets(0..view.n());
+        let targets = view.quorum_members().clone().into_iter().filter(|id| *id != self.node.id());
 
         self.node.broadcast(SystemMessage::from_state_transfer_message(message), targets);
     }
@@ -986,7 +986,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         //TODO: Maybe attempt to use followers to rebuild state and avoid
         // Overloading the replicas
         let message = CstMessage::new(cst_seq, CstMessageKind::RequestState);
-        let targets = NodeId::targets(0..view.n()).filter(|id| *id != self.node.id());
+        let targets = view.quorum_members().clone().into_iter().filter(|id| *id != self.node.id());
 
         self.node.broadcast(SystemMessage::from_state_transfer_message(message), targets);
     }
