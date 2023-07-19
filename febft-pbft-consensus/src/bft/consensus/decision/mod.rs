@@ -14,7 +14,7 @@ use atlas_communication::message::{Header, StoredMessage};
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_core::messages::ClientRqInfo;
 use atlas_core::persistent_log::{OperationMode, OrderingProtocolLog};
-use atlas_core::serialize::{LogTransferMessage, StateTransferMessage};
+use atlas_core::serialize::{LogTransferMessage, ReconfigurationProtocolMessage, StateTransferMessage};
 use atlas_core::timeouts::Timeouts;
 use atlas_execution::serialize::ApplicationData;
 use atlas_metrics::metrics::metric_duration;
@@ -104,9 +104,10 @@ pub struct MessageQueue<O> {
 }
 
 /// The information needed to make a decision on a batch of requests.
-pub struct ConsensusDecision<D, ST, LP, PL> where D: ApplicationData + 'static,
-                                                  ST: StateTransferMessage + 'static,
-                                                  LP: LogTransferMessage + 'static {
+pub struct ConsensusDecision<D, ST, LP, PL, RP> where D: ApplicationData + 'static,
+                                                      ST: StateTransferMessage + 'static,
+                                                      LP: LogTransferMessage + 'static,
+                                                      RP: ReconfigurationProtocolMessage + 'static {
     node_id: NodeId,
     /// The sequence number of this consensus decision
     seq: SeqNo,
@@ -119,7 +120,7 @@ pub struct ConsensusDecision<D, ST, LP, PL> where D: ApplicationData + 'static,
     /// Persistent log reference
     persistent_log: PL,
     /// Accessory to the base consensus state machine
-    accessory: ConsensusDecisionAccessory<D, ST, LP>,
+    accessory: ConsensusDecisionAccessory<D, ST, LP, RP>,
     // Metrics about the consensus instance
     consensus_metrics: ConsensusMetrics,
     //TODO: Store things directly into the persistent log as well as delete them when
@@ -175,10 +176,11 @@ impl<O> MessageQueue<O> {
     }
 }
 
-impl<D, ST, LP, PL> ConsensusDecision<D, ST, LP, PL>
+impl<D, ST, LP, PL, RP> ConsensusDecision<D, ST, LP, PL, RP>
     where D: ApplicationData + 'static,
           ST: StateTransferMessage + 'static,
-          LP: LogTransferMessage + 'static {
+          LP: LogTransferMessage + 'static,
+          RP: ReconfigurationProtocolMessage + 'static {
     pub fn init_decision(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo, persistent_log: PL) -> Self {
         Self {
             node_id,
@@ -266,12 +268,12 @@ impl<D, ST, LP, PL> ConsensusDecision<D, ST, LP, PL>
     pub fn process_message<NT>(&mut self,
                                header: Header,
                                message: ConsensusMessage<D::Request>,
-                               synchronizer: &Synchronizer<D>,
+                               synchronizer: &Synchronizer<D, RP>,
                                timeouts: &Timeouts,
                                log: &mut Log<D, PL>,
                                node: &Arc<NT>) -> Result<DecisionStatus>
-        where NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static,
-              PL: OrderingProtocolLog<PBFTConsensus<D>> {
+        where NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> + 'static,
+              PL: OrderingProtocolLog<PBFTConsensus<D, RP>> {
         let view = synchronizer.view();
 
         return match self.phase {
@@ -337,8 +339,6 @@ impl<D, ST, LP, PL> ConsensusDecision<D, ST, LP, PL>
                 }
 
                 let pre_prepare_received_time = Utc::now();
-
-                let message = PBFTMessage::Consensus(message);
 
                 let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
 
@@ -452,7 +452,7 @@ impl<D, ST, LP, PL> ConsensusDecision<D, ST, LP, PL>
                     self.consensus_metrics.first_prepare_recvd();
                 }
 
-                let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header, PBFTMessage::Consensus(message))));
+                let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
 
                 self.message_log.process_message(stored_msg.clone())?;
 
@@ -526,8 +526,7 @@ impl<D, ST, LP, PL> ConsensusDecision<D, ST, LP, PL>
                     self.consensus_metrics.first_commit_recvd();
                 }
 
-                let stored_msg = Arc::new(ReadOnly::new(
-                    StoredMessage::new(header, PBFTMessage::Consensus(message))));
+                let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header,message)));
 
                 self.message_log.process_message(stored_msg.clone())?;
 
@@ -598,27 +597,32 @@ impl<D, ST, LP, PL> ConsensusDecision<D, ST, LP, PL>
     }
 }
 
-impl<D: ApplicationData + 'static, ST: StateTransferMessage + 'static, LP: LogTransferMessage + 'static, PL> Orderable for ConsensusDecision<D, ST, LP, PL> {
+impl<D, ST, LP, PL, RP> Orderable for ConsensusDecision<D, ST, LP, PL, RP>
+    where D: ApplicationData + 'static,
+          ST: StateTransferMessage + 'static,
+          LP: LogTransferMessage + 'static,
+          RP: ReconfigurationProtocolMessage + 'static {
     fn sequence_number(&self) -> SeqNo {
         self.seq
     }
 }
 
 #[inline]
-fn request_batch_received<D>(
+fn request_batch_received<D, RP>(
     pre_prepare: &StoredConsensusMessage<D::Request>,
     timeouts: &Timeouts,
-    synchronizer: &Synchronizer<D>,
+    synchronizer: &Synchronizer<D, RP>,
     log: &DecidingLog<D::Request>,
 ) -> Vec<ClientRqInfo>
     where
-        D: ApplicationData + 'static
+        D: ApplicationData + 'static,
+        RP: ReconfigurationProtocolMessage + 'static
 {
     let start = Instant::now();
 
     let mut batch_guard = log.batch_meta().lock().unwrap();
 
-    batch_guard.batch_size += match pre_prepare.message().consensus().kind() {
+    batch_guard.batch_size += match pre_prepare.message().kind() {
         ConsensusMessageKind::PrePrepare(req) => {
             req.len()
         }

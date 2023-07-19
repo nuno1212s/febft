@@ -16,7 +16,8 @@ use bytes::Bytes;
 use atlas_common::error::*;
 use atlas_communication::serialize::Serializable;
 use atlas_core::persistent_log::PersistableOrderProtocol;
-use atlas_core::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage};
+use atlas_core::reconfiguration_protocol::QuorumJoinCert;
+use atlas_core::serialize::{OrderingProtocolMessage, ReconfigurationProtocolMessage, StatefulOrderProtocolMessage};
 use atlas_execution::serialize::ApplicationData;
 
 use crate::bft::message::{ConsensusMessage, PBFTMessage};
@@ -61,11 +62,14 @@ pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
 }
 
 /// The serializable type, to be used to appease the compiler and it's requirements
-pub struct PBFTConsensus<D: ApplicationData>(PhantomData<D>);
+pub struct PBFTConsensus<D: ApplicationData, RP: ReconfigurationProtocolMessage>(PhantomData<(D, RP)>);
 
-impl<D> OrderingProtocolMessage for PBFTConsensus<D> where D: ApplicationData {
+impl<D, RP> OrderingProtocolMessage for PBFTConsensus<D, RP>
+    where D: ApplicationData,
+          RP: ReconfigurationProtocolMessage {
     type ViewInfo = ViewInfo;
-    type ProtocolMessage = PBFTMessage<D::Request>;
+    type ProtocolMessage = PBFTMessage<D::Request, QuorumJoinCert<RP>>;
+    type LoggableMessage = ConsensusMessage<D::Request>;
     type Proof = Proof<D::Request>;
     type ProofMetadata = ProofMetadata;
 
@@ -100,7 +104,8 @@ impl<D> OrderingProtocolMessage for PBFTConsensus<D> where D: ApplicationData {
     }
 }
 
-impl<D> StatefulOrderProtocolMessage for PBFTConsensus<D> where D: ApplicationData {
+impl<D, RP> StatefulOrderProtocolMessage for PBFTConsensus<D, RP>
+    where D: ApplicationData, RP: ReconfigurationProtocolMessage {
     type DecLog = DecisionLog<D::Request>;
 
     #[cfg(feature = "serialize_capnp")]

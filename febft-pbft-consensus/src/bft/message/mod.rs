@@ -18,6 +18,7 @@ use futures::io::{
 };
 use atlas_common::crypto::hash::{Context, Digest};
 use atlas_common::crypto::signature::{KeyPair, PublicKey, Signature};
+use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{Header, NetworkMessage, NetworkMessageKind, PingMessage, StoredMessage};
 use atlas_execution::serialize::ApplicationData;
@@ -33,16 +34,16 @@ pub mod serialize;
 /// PBFT protocol messages
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub enum PBFTMessage<R> {
+pub enum PBFTMessage<R, JC> {
     /// Consensus message
     Consensus(ConsensusMessage<R>),
     /// View change messages
-    ViewChange(ViewChangeMessage<R>),
+    ViewChange(ViewChangeMessage<R, JC>),
     //Observer related messages
     ObserverMessage(ObserverMessage),
 }
 
-impl<R> Debug for PBFTMessage<R> {
+impl<R, JC> Debug for PBFTMessage<R, JC> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             PBFTMessage::Consensus(_) => {
@@ -58,7 +59,7 @@ impl<R> Debug for PBFTMessage<R> {
     }
 }
 
-impl<R> Orderable for PBFTMessage<R> {
+impl<R, JC> Orderable for PBFTMessage<R, JC> {
     fn sequence_number(&self) -> SeqNo {
         match self {
             PBFTMessage::Consensus(consensus) => {
@@ -74,7 +75,7 @@ impl<R> Orderable for PBFTMessage<R> {
     }
 }
 
-impl<R> PBFTMessage<R> {
+impl<R, JC> PBFTMessage<R, JC> {
     pub fn consensus(&self) -> &ConsensusMessage<R> {
         match self {
             PBFTMessage::Consensus(msg) => msg,
@@ -89,14 +90,14 @@ impl<R> PBFTMessage<R> {
         }
     }
 
-    pub fn view_change(&self) -> &ViewChangeMessage<R> {
+    pub fn view_change(&self) -> &ViewChangeMessage<R, JC> {
         match self {
             PBFTMessage::ViewChange(msg) => msg,
             _ => panic!("Not a view change message"),
         }
     }
 
-    pub fn into_view_change(self) -> ViewChangeMessage<R> {
+    pub fn into_view_change(self) -> ViewChangeMessage<R, JC> {
         match self {
             PBFTMessage::ViewChange(msg) => msg,
             _ => panic!("Not a view change message"),
@@ -120,19 +121,19 @@ impl<R> PBFTMessage<R> {
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct ViewChangeMessage<O> {
+pub struct ViewChangeMessage<O, JC> {
     view: SeqNo,
-    kind: ViewChangeMessageKind<O>,
+    kind: ViewChangeMessageKind<O, JC>,
 }
 
-impl<O> Orderable for ViewChangeMessage<O> {
+impl<O, JC> Orderable for ViewChangeMessage<O, JC> {
     /// Returns the sequence number of the view this message refers to.
     fn sequence_number(&self) -> SeqNo {
         self.view
     }
 }
 
-impl<O> Debug for ViewChangeMessage<O> {
+impl<O, JC> Debug for ViewChangeMessage<O, JC> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "View {:?}", self.view)?;
 
@@ -146,29 +147,32 @@ impl<O> Debug for ViewChangeMessage<O> {
             ViewChangeMessageKind::Sync(_) => {
                 write!(f, "Sync Message")
             }
+            ViewChangeMessageKind::NodeQuorumJoin(node_id, _) => {
+                write!(f, "Node quorum join {:?}", node_id)
+            }
         }
     }
 }
 
-impl<O> ViewChangeMessage<O> {
+impl<O, JC> ViewChangeMessage<O, JC> {
     /// Creates a new `ViewChangeMessage`, pertaining to the view
     /// with sequence number `view`, and of the kind `kind`.
-    pub fn new(view: SeqNo, kind: ViewChangeMessageKind<O>) -> Self {
+    pub fn new(view: SeqNo, kind: ViewChangeMessageKind<O, JC>) -> Self {
         Self { view, kind }
     }
 
     /// Returns a reference to the view change message kind.
-    pub fn kind(&self) -> &ViewChangeMessageKind<O> {
+    pub fn kind(&self) -> &ViewChangeMessageKind<O, JC> {
         &self.kind
     }
 
     /// Returns an owned view change message kind.
-    pub fn into_kind(self) -> ViewChangeMessageKind<O> {
+    pub fn into_kind(self) -> ViewChangeMessageKind<O, JC> {
         self.kind
     }
 
     /// Takes the collects embedded in this view change message, if they are available.
-    pub fn take_collects(self) -> Option<LeaderCollects<O>> {
+    pub fn take_collects(self) -> Option<LeaderCollects<O, JC>> {
         match self.kind {
             ViewChangeMessageKind::Sync(collects) => Some(collects),
             _ => {
@@ -180,10 +184,11 @@ impl<O> ViewChangeMessage<O> {
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub enum ViewChangeMessageKind<O> {
+pub enum ViewChangeMessageKind<O, JC> {
+    NodeQuorumJoin(NodeId, JC),
     Stop(Vec<StoredRequestMessage<O>>),
     StopData(CollectData<O>),
-    Sync(LeaderCollects<O>),
+    Sync(LeaderCollects<O, JC>),
 }
 
 /// Represents a message from the consensus sub-protocol.

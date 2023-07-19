@@ -4,19 +4,19 @@ use std::iter;
 use std::iter::zip;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
 use atlas_common::crypto::hash::{Context, Digest};
-use atlas_common::globals::ReadOnly;
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_communication::message::StoredMessage;
 use atlas_core::messages::ClientRqInfo;
 use atlas_core::ordering_protocol::DecisionInformation;
 use atlas_metrics::benchmarks::BatchMeta;
 use atlas_metrics::metrics::metric_duration;
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
+
+use crate::bft::message::ConsensusMessageKind;
 use crate::bft::metric::PRE_PREPARE_LOG_ANALYSIS_ID;
-use crate::bft::msg_log::decisions::{IncompleteProof, Proof, ProofMetadata, StoredConsensusMessage, ViewDecisionPair, PrepareSet};
+use crate::bft::msg_log::decisions::{IncompleteProof, PrepareSet, Proof, ProofMetadata, StoredConsensusMessage, ViewDecisionPair};
 use crate::bft::sync::view::ViewInfo;
 
 /// A batch that has been decided by the consensus instance and is now ready to be delivered to the
@@ -226,7 +226,7 @@ impl<O> DecidingLog<O> {
 
     /// Process the message received
     pub(crate) fn process_message(&mut self, message: StoredConsensusMessage<O>) -> Result<()> {
-        match message.message().consensus().kind() {
+        match message.message().kind() {
             ConsensusMessageKind::Prepare(_) => {
                 self.duplicate_detection.insert_prepare_received(message.header().from())?;
             }
@@ -317,7 +317,7 @@ impl<O> OnGoingDecision<O> {
 
     /// Insert a consensus message into this on going decision
     fn insert_message(&mut self, message: StoredConsensusMessage<O>) {
-        match message.message().consensus().kind() {
+        match message.message().kind() {
             ConsensusMessageKind::Prepare(_) => {
                 self.prepare_messages.push(message);
             }
@@ -332,7 +332,7 @@ impl<O> OnGoingDecision<O> {
 
     /// Insert a message from the stored message into this on going decision
     pub fn insert_persisted_msg(&mut self, message: StoredConsensusMessage<O>) -> Result<()> {
-        match message.message().consensus().kind() {
+        match message.message().kind() {
             ConsensusMessageKind::PrePrepare(_) => {
                 let index = pre_prepare_index_from_digest_opt(&self.pre_prepare_digests, message.header().digest())?;
 
@@ -354,15 +354,15 @@ impl<O> OnGoingDecision<O> {
             let mut buf = Vec::new();
 
             for stored in self.prepare_messages.iter().rev() {
-                match stored.message().consensus().sequence_number().cmp(&in_exec) {
+                match stored.message().sequence_number().cmp(&in_exec) {
                     Ordering::Equal => {
-                        let digest = match stored.message().consensus().kind() {
+                        let digest = match stored.message().kind() {
                             ConsensusMessageKind::Prepare(d) => d.clone(),
                             _ => unreachable!(),
                         };
 
                         buf.push(ViewDecisionPair(
-                            stored.message().consensus().view(),
+                            stored.message().view(),
                             digest,
                         ));
                     }
@@ -383,21 +383,21 @@ impl<O> OnGoingDecision<O> {
             let mut count = 0;
 
             for stored in self.prepare_messages.iter().rev() {
-                match stored.message().consensus().sequence_number().cmp(&in_exec) {
+                match stored.message().sequence_number().cmp(&in_exec) {
                     Ordering::Equal => {
                         match last_view {
                             None => (),
-                            Some(v) if stored.message().consensus().view() == v => (),
+                            Some(v) if stored.message().view() == v => (),
                             _ => count = 0,
                         }
-                        last_view = Some(stored.message().consensus().view());
+                        last_view = Some(stored.message().view());
                         count += 1;
                         if count == quorum {
-                            let digest = match stored.message().consensus().kind() {
+                            let digest = match stored.message().kind() {
                                 ConsensusMessageKind::Prepare(d) => d.clone(),
                                 _ => unreachable!(),
                             };
-                            break 'outer Some(ViewDecisionPair(stored.message().consensus().view(), digest));
+                            break 'outer Some(ViewDecisionPair(stored.message().view(), digest));
                         }
                     }
                     Ordering::Less => break,

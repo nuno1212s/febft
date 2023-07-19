@@ -18,7 +18,7 @@ use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
 use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
-use atlas_core::serialize::{LogTransferMessage, StateTransferMessage};
+use atlas_core::serialize::{LogTransferMessage, ReconfigurationProtocolMessage, StateTransferMessage};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, TimeoutPhase, Timeouts};
 use atlas_metrics::metrics::{metric_duration, metric_increment};
 use crate::bft::consensus::Consensus;
@@ -58,11 +58,11 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     ///
     /// Therefore, we start by clearing our stopped requests and treating them as
     /// newly proposed requests (by resetting their timer)
-    pub(super) fn handle_stopping_quorum<ST, LP, NT, PL>(
+    pub(super) fn handle_stopping_quorum<ST, LP, NT, PL, RP>(
         &self,
-        base_sync: &Synchronizer<D>,
+        base_sync: &Synchronizer<D, RP>,
         previous_view: ViewInfo,
-        consensus: &Consensus<D, ST, LP, PL>,
+        consensus: &Consensus<D, ST, LP, PL, RP>,
         log: &Log<D, PL>,
         pre_processor: &RequestPreProcessor<D::Request>,
         timeouts: &Timeouts,
@@ -70,8 +70,9 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     )
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<PBFT<D, ST, LP>>,
-              PL: OrderingProtocolLog<PBFTConsensus<D>> {
+              RP: ReconfigurationProtocolMessage + 'static,
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>>,
+              PL: OrderingProtocolLog<PBFTConsensus<D, RP>> {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
         // - add requests from STOP into client requests
@@ -110,15 +111,16 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     /// Start a new view change
     /// Receives the requests that it should send to the other
     /// nodes in its STOP message
-    pub(super) fn handle_begin_view_change<ST, LP, NT>(
+    pub(super) fn handle_begin_view_change<ST, LP, NT, RP>(
         &self,
-        base_sync: &Synchronizer<D>,
+        base_sync: &Synchronizer<D, RP>,
         timeouts: &Timeouts,
         node: &NT,
         timed_out: Option<Vec<StoredRequestMessage<D::Request>>>,
     ) where ST: StateTransferMessage + 'static,
             LP: LogTransferMessage + 'static,
-            NT: ProtocolNetworkNode<PBFT<D, ST, LP>> {
+            RP: ReconfigurationProtocolMessage + 'static,
+            NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> {
         // stop all timers
         self.unwatch_all_requests(timeouts);
 
@@ -170,7 +172,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     ) -> Vec<ClientRqInfo> {
         let start_time = Instant::now();
 
-        let requests = match pre_prepare.message().consensus().kind() {
+        let requests = match pre_prepare.message().kind() {
             ConsensusMessageKind::PrePrepare(req) => { req }
             _ => {
                 error!("Cannot receive a request that is not a PrePrepare");
@@ -208,9 +210,10 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     }
 
     /// Register all of the requests that are missing from the view change
-    fn take_stopped_requests_and_register_them(&self, base_sync: &Synchronizer<D>,
-                                               pre_processor: &RequestPreProcessor<D::Request>,
-                                               timeouts: &Timeouts) {
+    fn take_stopped_requests_and_register_them<RP>(&self, base_sync: &Synchronizer<D, RP>,
+                                                   pre_processor: &RequestPreProcessor<D::Request>,
+                                                   timeouts: &Timeouts)
+        where RP: ReconfigurationProtocolMessage + 'static {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
 
@@ -256,12 +259,13 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     // have surpassed their defined timeout period, after the timeout event
     // is fired on the master channel of the core server task
     //
-    pub fn client_requests_timed_out(
+    pub fn client_requests_timed_out<RP>(
         &self,
-        base_sync: &Synchronizer<D>,
+        base_sync: &Synchronizer<D, RP>,
         my_id: NodeId,
         timed_out_rqs: &Vec<RqTimeout>,
-    ) -> SynchronizerStatus<D::Request> {
+    ) -> SynchronizerStatus<D::Request>
+        where RP: ReconfigurationProtocolMessage + 'static {
 
         //// iterate over list of watched pending requests,
         //// and select the ones to be stopped or forwarded
@@ -331,14 +335,15 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
 
     /// Forward the requests that timed out, `timed_out`, to all the nodes in the
     /// current view.
-    pub fn forward_requests<ST, LP, NT>(
+    pub fn forward_requests<ST, LP, NT, RP>(
         &self,
-        base_sync: &Synchronizer<D>,
+        base_sync: &Synchronizer<D, RP>,
         timed_out: Vec<StoredRequestMessage<D::Request>>,
         node: &NT,
     ) where ST: StateTransferMessage + 'static,
             LP: LogTransferMessage + 'static,
-            NT: ProtocolNetworkNode<PBFT<D, ST, LP>> {
+            RP: ReconfigurationProtocolMessage + 'static,
+            NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> {
         let message = SystemMessage::ForwardedRequestMessage(ForwardedRequestsMessage::new(timed_out));
         let view = base_sync.view();
 
@@ -351,11 +356,12 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     /// to other nodes
     ///
     /// Clones all the nodes in the `stopped` list
-    fn stopped_requests(
+    fn stopped_requests<RP>(
         &self,
-        base_sync: &Synchronizer<D>,
+        base_sync: &Synchronizer<D, RP>,
         requests: Option<Vec<StoredRequestMessage<D::Request>>>,
-    ) -> Vec<StoredRequestMessage<D::Request>> {
+    ) -> Vec<StoredRequestMessage<D::Request>>
+        where RP: ReconfigurationProtocolMessage + 'static {
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
         let mut all_reqs = collections::hash_map();
 
@@ -380,11 +386,12 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
         all_reqs.drain().map(|(_, stop)| stop).collect()
     }
 
-    fn stopped_request_digests(
+    fn stopped_request_digests<RP>(
         &self,
-        base_sync: &Synchronizer<D>,
+        base_sync: &Synchronizer<D, RP>,
         requests: Option<Vec<StoredRequestMessage<D::Request>>>,
-    ) -> Vec<ClientRqInfo> {
+    ) -> Vec<ClientRqInfo>
+        where RP: ReconfigurationProtocolMessage + 'static {
 
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
         let mut all_reqs = collections::hash_set();
@@ -409,8 +416,9 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     }
 
     /// Drain our current received stopped messages
-    fn drain_stopped_request(&self, base_sync: &Synchronizer<D>) ->
-    Vec<StoredRequestMessage<D::Request>> {
+    fn drain_stopped_request<RP>(&self, base_sync: &Synchronizer<D, RP>) ->
+    Vec<StoredRequestMessage<D::Request>>
+        where RP: ReconfigurationProtocolMessage + 'static {
 
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
         let mut all_reqs = collections::hash_map();

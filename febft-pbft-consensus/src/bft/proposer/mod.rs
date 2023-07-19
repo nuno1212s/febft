@@ -10,12 +10,11 @@ use atlas_common::channel::TryRecvError;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::threadpool;
-use atlas_communication::message::NetworkMessageKind;
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_core::messages::{ClientRqInfo, StoredRequestMessage, SystemMessage};
 use atlas_core::reconfiguration_protocol::ReconfigurationProtocol;
 use atlas_core::request_pre_processing::{BatchOutput, PreProcessorOutputMessage};
-use atlas_core::serialize::{LogTransferMessage, StateTransferMessage};
+use atlas_core::serialize::{LogTransferMessage, ReconfigurationProtocolMessage, StateTransferMessage};
 use atlas_core::timeouts::Timeouts;
 use atlas_execution::app::UnorderedBatch;
 use atlas_execution::ExecutorHandle;
@@ -31,20 +30,21 @@ use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
 
 use super::sync::{AbstractSynchronizer, Synchronizer};
 
-pub mod follower_proposer;
+//pub mod follower_proposer;
 
 pub type BatchType<R> = Vec<StoredRequestMessage<R>>;
 
 ///Handles taking requests from the client pools and storing the requests in the log,
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
-pub struct Proposer<D, NT>
-    where D: ApplicationData + 'static {
+pub struct Proposer<D, NT, RP>
+    where D: ApplicationData + 'static,
+          RP: ReconfigurationProtocolMessage + 'static {
     /// Channel for the reception of batches from the pre processing module
     batch_reception: BatchOutput<D::Request>,
     /// Network Node
     node_ref: Arc<NT>,
-    synchronizer: Arc<Synchronizer<D>>,
+    synchronizer: Arc<Synchronizer<D, RP>>,
     timeouts: Timeouts,
     consensus_guard: Arc<ProposerConsensusGuard>,
     // Should we shut down?
@@ -78,18 +78,18 @@ impl<D> ProposeBuilder<D> where D: ApplicationData {
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
 
-impl<D, NT> Proposer<D, NT>
-    where D: ApplicationData + 'static, {
+impl<D, NT, RP> Proposer<D, NT, RP>
+    where D: ApplicationData + 'static,
+          RP: ReconfigurationProtocolMessage + 'static {
     pub fn new(
         node: Arc<NT>,
         batch_input: BatchOutput<D::Request>,
-        sync: Arc<Synchronizer<D>>,
+        sync: Arc<Synchronizer<D, RP>>,
         timeouts: Timeouts,
         executor_handle: ExecutorHandle<D>,
         consensus_guard: Arc<ProposerConsensusGuard>,
         proposer_config: ProposerConfig,
     ) -> Arc<Self> {
-
         let ProposerConfig {
             target_batch_size, max_batch_size, batch_timeout
         } = proposer_config;
@@ -112,7 +112,7 @@ impl<D, NT> Proposer<D, NT>
     pub fn start<ST, LP>(self: Arc<Self>) -> JoinHandle<()>
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static {
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> + 'static {
         std::thread::Builder::new()
             .name(format!("Proposer thread"))
             .spawn(move || {
@@ -252,7 +252,7 @@ impl<D, NT> Proposer<D, NT>
         propose: &mut ProposeBuilder<D>,
     ) -> bool where ST: StateTransferMessage + 'static,
                     LP: LogTransferMessage + 'static,
-                    NT: ProtocolNetworkNode<PBFT<D, ST, LP>> {
+                    NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> {
         if !propose.currently_accumulated.is_empty() {
             let current_batch_size = propose.currently_accumulated.len();
 
@@ -323,7 +323,7 @@ impl<D, NT> Proposer<D, NT>
                                propose: &mut ProposeBuilder<D>, ) -> bool
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<PBFT<D, ST, LP>> {
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> {
 
         //Now let's deal with ordered requests
         if is_leader {
@@ -383,7 +383,7 @@ impl<D, NT> Proposer<D, NT>
     ) where
         ST: StateTransferMessage + 'static,
         LP: LogTransferMessage + 'static,
-        NT: ProtocolNetworkNode<PBFT<D, ST, LP>> {
+        NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> {
         let has_pending_messages = self.consensus_guard.has_pending_view_change_reqs();
 
         let is_view_change_empty = {

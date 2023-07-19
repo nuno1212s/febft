@@ -1,21 +1,21 @@
-use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
-use atlas_common::error::*;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+
 use atlas_common::crypto::hash::Digest;
+use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::StoredMessage;
 use atlas_core::serialize::{OrderProtocolLog, OrderProtocolProof};
-use atlas_execution::serialize::ApplicationData;
+
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::msg_log::deciding_log::CompletedBatch;
 
-pub type StoredConsensusMessage<O> = Arc<ReadOnly<StoredMessage<PBFTMessage<O>>>>;
+pub type StoredConsensusMessage<O> = Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>;
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
@@ -352,7 +352,7 @@ impl<O> DecisionLog<O> {
             if proof.seq_no <= seq_no {
                 for pre_prepare in &proof.pre_prepares {
                     //Mark the requests contained in this message for removal
-                    decided_request_count += match pre_prepare.message().consensus().kind() {
+                    decided_request_count += match pre_prepare.message().kind() {
                         ConsensusMessageKind::PrePrepare(messages) => messages.len(),
                         _ => 0,
                     };

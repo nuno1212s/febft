@@ -25,8 +25,9 @@ use atlas_communication::reconfiguration_node::NetworkInformationProvider;
 use atlas_core::messages::{ClientRqInfo, StoredRequestMessage, SystemMessage};
 use atlas_core::ordering_protocol::ProtocolConsensusDecision;
 use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
+use atlas_core::reconfiguration_protocol::QuorumJoinCert;
 use atlas_core::request_pre_processing::RequestPreProcessor;
-use atlas_core::serialize::{LogTransferMessage, StateTransferMessage};
+use atlas_core::serialize::{LogTransferMessage, ReconfigurationProtocolMessage, StateTransferMessage};
 use atlas_core::timeouts::{RqTimeout, Timeouts};
 use atlas_execution::serialize::ApplicationData;
 
@@ -49,12 +50,12 @@ pub mod view;
 /// The code provided in the first argument gets executed
 /// The first T is the type of message that we should expect to be returned from the queue
 macro_rules! extract_msg {
-    ($t:ty => $g:expr, $q:expr) => {
-        extract_msg!($t => {}, $g, $q)
+    ($t:ty, $t2:ty => $g:expr, $q:expr) => {
+        extract_msg!($t, $t2 => {}, $g, $q)
     };
 
-    ($t:ty => $opt:block, $g:expr, $q:expr) => {
-        if let Some(stored) = tbo_pop_message::<StoredMessage<ViewChangeMessage<$t>>>($q) {
+    ($t:ty, $t2:ty => $opt:block, $g:expr, $q:expr) => {
+        if let Some(stored) = tbo_pop_message::<StoredMessage<ViewChangeMessage<$t, $t2>>>($q) {
             $opt
             let (header, message) = stored.into_inner();
             SynchronizerPollStatus::NextMessage(header, message)
@@ -111,21 +112,21 @@ macro_rules! finalize_view_change {
 /// of the view change protocol, as well as a value to be proposed in the `SYNC` message.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
-pub struct LeaderCollects<O> {
+pub struct LeaderCollects<O, JC> {
     //The pre prepare message, created and signed by the leader to be executed when the view change is
     // Done
     proposed: FwdConsensusMessage<O>,
     // The collect messages the leader has received.
-    collects: Vec<StoredMessage<ViewChangeMessage<O>>>,
+    collects: Vec<StoredMessage<ViewChangeMessage<O, JC>>>,
 }
 
-impl<O> LeaderCollects<O> {
+impl<O, JC> LeaderCollects<O, JC> {
     /// Gives up ownership of the inner values of this `LeaderCollects`.
     pub fn into_inner(
         self,
     ) -> (
         FwdConsensusMessage<O>,
-        Vec<StoredMessage<ViewChangeMessage<O>>>,
+        Vec<StoredMessage<ViewChangeMessage<O, JC>>>,
     ) {
         (self.proposed, self.collects)
     }
@@ -168,7 +169,7 @@ impl Sound {
 }
 
 /// Represents a queue of view change messages that arrive out of context into a node.
-pub struct TboQueue<O> {
+pub struct TboQueue<O, JC> {
     // the current view
     view: ViewInfo,
     // Stores the previous view, for useful information when changing views
@@ -177,14 +178,14 @@ pub struct TboQueue<O> {
     // fetching them from the network
     get_queue: bool,
     // stores all STOP messages for the next view
-    stop: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
+    stop: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O, JC>>>>,
     // stores all STOP-DATA messages for the next view
-    stop_data: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
+    stop_data: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O, JC>>>>,
     // stores all SYNC messages for the next view
-    sync: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
+    sync: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O, JC>>>>,
 }
 
-impl<O> TboQueue<O> {
+impl<O, JC> TboQueue<O, JC> {
     pub(crate) fn new(view: ViewInfo) -> Self {
         Self {
             view,
@@ -237,7 +238,7 @@ impl<O> TboQueue<O> {
 
     /// Queues a view change message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
-    pub fn queue(&mut self, h: Header, m: ViewChangeMessage<O>) {
+    pub fn queue(&mut self, h: Header, m: ViewChangeMessage<O, JC>) {
         match m.kind() {
             ViewChangeMessageKind::Stop(_) => self.queue_stop(h, m),
             ViewChangeMessageKind::StopData(_) => self.queue_stop_data(h, m),
@@ -256,7 +257,7 @@ impl<O> TboQueue<O> {
 
     /// Queues a `STOP` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
-    fn queue_stop(&mut self, h: Header, m: ViewChangeMessage<O>) {
+    fn queue_stop(&mut self, h: Header, m: ViewChangeMessage<O, JC>) {
         // NOTE: we use next() because we want to retrieve messages
         // for v+1, as we haven't started installing the new view yet
         let seq = self.view.sequence_number().next();
@@ -265,14 +266,14 @@ impl<O> TboQueue<O> {
 
     /// Queues a `STOP-DATA` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
-    fn queue_stop_data(&mut self, h: Header, m: ViewChangeMessage<O>) {
+    fn queue_stop_data(&mut self, h: Header, m: ViewChangeMessage<O, JC>) {
         let seq = self.view.sequence_number();
         tbo_queue_message(seq, &mut self.stop_data, StoredMessage::new(h, m))
     }
 
     /// Queues a `SYNC` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
-    fn queue_sync(&mut self, h: Header, m: ViewChangeMessage<O>) {
+    fn queue_sync(&mut self, h: Header, m: ViewChangeMessage<O, JC>) {
         let seq = self.view.sequence_number();
         tbo_queue_message(seq, &mut self.sync, StoredMessage::new(h, m))
     }
@@ -336,21 +337,21 @@ pub enum SynchronizerStatus<O> {
 
 /// Represents the status of calling `poll()` on a `Synchronizer`.
 #[derive(Clone)]
-pub enum SynchronizerPollStatus<O> {
+pub enum SynchronizerPollStatus<O, JC> {
     /// The `Replica` associated with this `Synchronizer` should
     /// poll its network channel for more messages, as it has no messages
     /// That can be processed in cache
     Recv,
     /// A new view change message is available to be processed, retrieved from the
     /// Ordered queue
-    NextMessage(Header, ViewChangeMessage<O>),
+    NextMessage(Header, ViewChangeMessage<O, JC>),
     /// We need to resume the view change protocol, after
     /// running the CST protocol.
     ResumeViewChange,
 }
 
 ///A trait describing some of the necessary methods for the synchronizer
-pub trait AbstractSynchronizer<D: ApplicationData + 'static> {
+pub trait AbstractSynchronizer<D, RP> where D: ApplicationData + 'static, RP: ReconfigurationProtocolMessage + 'static {
     /// Returns information regarding the current view, such as
     /// the number of faulty replicas the system can tolerate.
     fn view(&self) -> ViewInfo;
@@ -359,23 +360,23 @@ pub trait AbstractSynchronizer<D: ApplicationData + 'static> {
     /// running the view change protocol.
     fn install_view(&self, view: ViewInfo);
 
-    fn queue(&self, header: Header, message: ViewChangeMessage<D::Request>);
+    fn queue(&self, header: Header, message: ViewChangeMessage<D::Request, QuorumJoinCert<RP>>);
 }
 
-type CollectsType<D: ApplicationData> = IntMap<StoredMessage<ViewChangeMessage<D::Request>>>;
+type CollectsType<D: ApplicationData, JC> = IntMap<StoredMessage<ViewChangeMessage<D::Request, JC>>>;
 
 ///The synchronizer for the SMR protocol
 /// This part of the protocol is responsible for handling the changing of views and
 /// for keeping track of any timed out client requests
-pub struct Synchronizer<D: ApplicationData> {
+pub struct Synchronizer<D: ApplicationData, RP: ReconfigurationProtocolMessage> {
     phase: Cell<ProtoPhase>,
     //Tbo queue, keeps track of the current view and keeps messages arriving in order
-    tbo: Mutex<TboQueue<D::Request>>,
+    tbo: Mutex<TboQueue<D::Request, QuorumJoinCert<RP>>>,
     //Stores currently received requests from other nodes
     stopped: RefCell<IntMap<Vec<StoredRequestMessage<D::Request>>>>,
     //TODO: This does not require a Mutex I believe since it's only accessed when
     // Processing messages (which is always done in the replica thread)
-    collects: Mutex<CollectsType<D>>,
+    collects: Mutex<CollectsType<D, QuorumJoinCert<RP>>>,
     // Used to store the finalize state when we are forced to run the CST protocol
     finalize_state: RefCell<Option<FinalizeState<D::Request>>>,
     accessory: SynchronizerAccessory<D>,
@@ -387,9 +388,11 @@ pub struct Synchronizer<D: ApplicationData> {
 /// So we protect collects, watching and tbo as those are the fields that are going to be
 /// accessed by both those threads.
 /// Since the other fields are going to be accessed by just 1 thread, we just need them to be Send, which they are
-unsafe impl<D: ApplicationData> Sync for Synchronizer<D> {}
+unsafe impl<D: ApplicationData, RP: ReconfigurationProtocolMessage> Sync for Synchronizer<D, RP> {}
 
-impl<D: ApplicationData + 'static> AbstractSynchronizer<D> for Synchronizer<D> {
+impl<D, RP> AbstractSynchronizer<D, RP> for Synchronizer<D, RP>
+    where D: ApplicationData + 'static,
+          RP: ReconfigurationProtocolMessage + 'static {
     /// Returns some information regarding the current view, such as
     /// the number of faulty replicas the system can tolerate.
     fn view(&self) -> ViewInfo {
@@ -408,14 +411,15 @@ impl<D: ApplicationData + 'static> AbstractSynchronizer<D> for Synchronizer<D> {
         }
     }
 
-    fn queue(&self, header: Header, message: ViewChangeMessage<D::Request>) {
+    fn queue(&self, header: Header, message: ViewChangeMessage<D::Request, QuorumJoinCert<RP>>) {
         self.tbo.lock().unwrap().queue(header, message)
     }
 }
 
-impl<D> Synchronizer<D>
+impl<D, RP> Synchronizer<D, RP>
     where
-        D: ApplicationData + 'static
+        D: ApplicationData + 'static,
+        RP: ReconfigurationProtocolMessage + 'static
 {
     pub fn new_follower(view: ViewInfo) -> Arc<Self> {
         Arc::new(Self {
@@ -441,12 +445,11 @@ impl<D> Synchronizer<D>
 
     /// Initialize a new `Synchronizer` with the given quorum members.
     pub fn initialize_with_quorum(seq_no: SeqNo, quorum_members: Vec<NodeId>, timeout_dur: Duration) -> Result<Arc<Self>> {
-
         let n = quorum_members.len();
 
         let f = (n - 1) / 3;
 
-        let view_info = ViewInfo::new(seq_no, n ,f)?;
+        let view_info = ViewInfo::new(seq_no, n, f)?;
 
         Ok(Arc::new(Self {
             phase: Cell::new(ProtoPhase::Init),
@@ -475,32 +478,32 @@ impl<D> Synchronizer<D>
     /// Check if we can process new view change messages.
     /// If there are pending messages that are now processable (but weren't when we received them)
     /// We return them. If there are no pending messages then we will wait for new messages from other replicas
-    pub fn poll(&self) -> SynchronizerPollStatus<D::Request> {
+    pub fn poll(&self) -> SynchronizerPollStatus<D::Request, QuorumJoinCert<RP>> {
         let mut tbo_guard = self.tbo.lock().unwrap();
         match self.phase.get() {
             _ if !tbo_guard.get_queue => SynchronizerPollStatus::Recv,
             ProtoPhase::Init => {
                 //If we are in the init phase and there is a pending request, move to the stopping phase
-                extract_msg!(D::Request =>
+                extract_msg!(D::Request, QuorumJoinCert<RP>  =>
                     { self.phase.replace(ProtoPhase::Stopping(0)); },
                     &mut tbo_guard.get_queue,
                     &mut tbo_guard.stop
                 )
             }
             ProtoPhase::Stopping(_) | ProtoPhase::Stopping2(_) => {
-                extract_msg!(D::Request =>
+                extract_msg!(D::Request, QuorumJoinCert<RP> =>
                     &mut tbo_guard.get_queue,
                     &mut tbo_guard.stop
                 )
             }
             ProtoPhase::StoppingData(_) => {
-                extract_msg!(D::Request  =>
+                extract_msg!(D::Request, QuorumJoinCert<RP>  =>
                     &mut tbo_guard.get_queue,
                     &mut tbo_guard.stop_data
                 )
             }
             ProtoPhase::Syncing => {
-                extract_msg!(D::Request  =>
+                extract_msg!(D::Request, QuorumJoinCert<RP>  =>
                     &mut tbo_guard.get_queue,
                     &mut tbo_guard.sync
                 )
@@ -515,17 +518,17 @@ impl<D> Synchronizer<D>
     pub fn process_message<ST, LP, NT, PL>(
         &self,
         header: Header,
-        message: ViewChangeMessage<D::Request>,
+        message: ViewChangeMessage<D::Request, QuorumJoinCert<RP>>,
         timeouts: &Timeouts,
         log: &mut Log<D, PL>,
         rq_pre_processor: &RequestPreProcessor<D::Request>,
-        consensus: &mut Consensus<D, ST, LP, PL>,
+        consensus: &mut Consensus<D, ST, LP, PL, RP>,
         node: &Arc<NT>,
     ) -> SynchronizerStatus<D::Request>
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static,
-              PL: OrderingProtocolLog<PBFTConsensus<D>>
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> + 'static,
+              PL: OrderingProtocolLog<PBFTConsensus<D, RP>>
     {
         debug!("{:?} // Processing view change message {:?} in phase {:?} from {:?}",
                node.id(),
@@ -976,9 +979,9 @@ impl<D> Synchronizer<D>
 
                 // leader has already performed this computation in the
                 // STOP-DATA phase of Mod-SMaRt
-                let signed: Vec<_> = signed_collects::<D, _, _, _>(&**node, collects);
+                let signed: Vec<_> = signed_collects::<D, _, _, _, _>(&**node, collects);
 
-                let proof = highest_proof::<D, _, _, _, _>(&current_view, &**node, signed.iter());
+                let proof = highest_proof::<D, _, _, _, _, _>(&current_view, &**node, signed.iter());
 
                 let curr_cid = proof
                     .map(|p| p.sequence_number())
@@ -1030,13 +1033,13 @@ impl<D> Synchronizer<D>
         &self,
         log: &mut Log<D, PL>,
         timeouts: &Timeouts,
-        consensus: &mut Consensus<D, ST, LP, PL>,
+        consensus: &mut Consensus<D, ST, LP, PL, RP>,
         node: &Arc<NT>,
     ) -> Option<()>
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static,
-              PL: OrderingProtocolLog<PBFTConsensus<D>>
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> + 'static,
+              PL: OrderingProtocolLog<PBFTConsensus<D, RP>>
     {
         let state = self.finalize_state.borrow_mut().take()?;
 
@@ -1072,8 +1075,8 @@ impl<D> Synchronizer<D>
     )
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<PBFT<D, ST, LP>>,
-              PL: OrderingProtocolLog<PBFTConsensus<D>>
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>>,
+              PL: OrderingProtocolLog<PBFTConsensus<D, RP>>
     {
         match (self.phase.get(), &timed_out) {
             // we have received STOP messages from peer nodes,
@@ -1125,7 +1128,7 @@ impl<D> Synchronizer<D>
         _normalized_collects: Vec<Option<&CollectData<D::Request>>>,
         log: &Log<D, PL>,
     ) -> FinalizeStatus<D::Request>
-        where PL: OrderingProtocolLog<PBFTConsensus<D>>
+        where PL: OrderingProtocolLog<PBFTConsensus<D, RP>>
     {
         let last_executed_cid = proof.as_ref().map(|p| p.sequence_number()).unwrap_or(SeqNo::ZERO);
 
@@ -1156,13 +1159,13 @@ impl<D> Synchronizer<D>
         state: FinalizeState<D::Request>,
         log: &mut Log<D, PL>,
         timeouts: &Timeouts,
-        consensus: &mut Consensus<D, ST, LP, PL>,
+        consensus: &mut Consensus<D, ST, LP, PL, RP>,
         node: &Arc<NT>,
     ) -> SynchronizerStatus<D::Request>
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<PBFT<D, ST, LP>> + 'static,
-              PL: OrderingProtocolLog<PBFTConsensus<D>>
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> + 'static,
+              PL: OrderingProtocolLog<PBFTConsensus<D, RP>>
     {
         let FinalizeState {
             curr_cid,
@@ -1251,7 +1254,7 @@ impl<D> Synchronizer<D>
                                         node: &NT)
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<PBFT<D, ST, LP>> {
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {}
             SynchronizerAccessory::Replica(rep) => {
@@ -1264,7 +1267,7 @@ impl<D> Synchronizer<D>
     /// Requests that have timed out
     pub fn client_requests_timed_out(
         &self,
-        base_sync: &Synchronizer<D>,
+        base_sync: &Synchronizer<D, RP>,
         my_id: NodeId,
         seq: &Vec<RqTimeout>,
     ) -> SynchronizerStatus<D::Request> {
@@ -1284,7 +1287,7 @@ impl<D> Synchronizer<D>
     // may be executing the same CID when there is a leader change
     #[inline]
     fn normalized_collects<'a>(
-        collects: &'a IntMap<StoredMessage<ViewChangeMessage<D::Request>>>,
+        collects: &'a IntMap<StoredMessage<ViewChangeMessage<D::Request, QuorumJoinCert<RP>>>>,
         in_exec: SeqNo,
     ) -> impl Iterator<Item=Option<&'a CollectData<D::Request>>> {
         let values = collects.values();
@@ -1297,15 +1300,15 @@ impl<D> Synchronizer<D>
     // TODO: quorum sizes may differ when we implement reconfiguration
     #[inline]
     fn highest_proof<'a, ST, LP, NT>(
-        guard: &'a IntMap<StoredMessage<ViewChangeMessage<D::Request>>>,
+        guard: &'a IntMap<StoredMessage<ViewChangeMessage<D::Request, QuorumJoinCert<RP>>>>,
         view: &ViewInfo,
         node: &NT,
     ) -> Option<&'a Proof<D::Request>>
         where ST: StateTransferMessage + 'static,
               LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<PBFT<D, ST, LP>>
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>>
     {
-        highest_proof::<D, _, _, _, _>(&view, node, guard.values())
+        highest_proof::<D, _, _, _, _, _>(&view, node, guard.values())
     }
 }
 
@@ -1508,8 +1511,8 @@ fn certified_value<O>(
     count > curr_view.params().f()
 }
 
-fn collect_data<'a, O: 'a>(
-    collects: impl Iterator<Item=&'a StoredMessage<ViewChangeMessage<O>>>,
+fn collect_data<'a, O: 'a, JC: 'a>(
+    collects: impl Iterator<Item=&'a StoredMessage<ViewChangeMessage<O, JC>>>,
 ) -> impl Iterator<Item=&'a CollectData<O>> {
     collects.filter_map(|stored| match stored.message().kind() {
         ViewChangeMessageKind::StopData(collects) => Some(collects),
@@ -1530,28 +1533,30 @@ fn normalized_collects<'a, O: 'a>(
     })
 }
 
-fn signed_collects<D, ST, LP, NT>(
+fn signed_collects<D, ST, LP, NT, RP>(
     node: &NT,
-    collects: Vec<StoredMessage<ViewChangeMessage<D::Request>>>,
-) -> Vec<StoredMessage<ViewChangeMessage<D::Request>>>
+    collects: Vec<StoredMessage<ViewChangeMessage<D::Request, QuorumJoinCert<RP>>>>,
+) -> Vec<StoredMessage<ViewChangeMessage<D::Request, QuorumJoinCert<RP>>>>
     where
         D: ApplicationData + 'static,
         ST: StateTransferMessage + 'static,
         LP: LogTransferMessage + 'static,
-        NT: ProtocolNetworkNode<PBFT<D, ST, LP>>
+        RP: ReconfigurationProtocolMessage + 'static,
+        NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>>
 {
     collects
         .into_iter()
-        .filter(|stored| validate_signature::<D, _, _, _, _>(node, stored))
+        .filter(|stored| validate_signature::<D, _, _, _, _, _>(node, stored))
         .collect()
 }
 
-fn validate_signature<'a, D, M, ST, LP, NT>(node: &'a NT, stored: &'a StoredMessage<M>) -> bool
+fn validate_signature<'a, D, M, ST, LP, NT, RP>(node: &'a NT, stored: &'a StoredMessage<M>) -> bool
     where
         D: ApplicationData + 'static,
         ST: StateTransferMessage + 'static,
         LP: LogTransferMessage + 'static,
-        NT: ProtocolNetworkNode<PBFT<D, ST, LP>>
+        RP: ReconfigurationProtocolMessage + 'static,
+        NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>>
 {
     //TODO: Fix this as I believe it will always be false
     let wm = match WireMessage::from_header(*stored.header()) {
@@ -1577,17 +1582,18 @@ fn validate_signature<'a, D, M, ST, LP, NT>(node: &'a NT, stored: &'a StoredMess
     wm.is_valid(Some(&key), false)
 }
 
-fn highest_proof<'a, D, I, ST, LP, NT>(
+fn highest_proof<'a, D, I, ST, LP, NT, RP>(
     view: &ViewInfo,
     node: &NT,
     collects: I,
 ) -> Option<&'a Proof<D::Request>>
     where
         D: ApplicationData + 'static,
-        I: Iterator<Item=&'a StoredMessage<ViewChangeMessage<D::Request>>>,
+        I: Iterator<Item=&'a StoredMessage<ViewChangeMessage<D::Request, QuorumJoinCert<RP>>>>,
+        RP: ReconfigurationProtocolMessage + 'static,
         ST: StateTransferMessage + 'static,
         LP: LogTransferMessage + 'static,
-        NT: ProtocolNetworkNode<PBFT<D, ST, LP>>
+        NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>>
 {
     collect_data(collects)
         // fetch proofs
@@ -1602,13 +1608,12 @@ fn highest_proof<'a, D, I, ST, LP, NT>(
                 .iter()
                 .filter(|stored| {
                     stored.message()
-                        .consensus()
                         .has_proposed_digest(&digest)
                         //If he does not have the digest, then it is not valid
                         .unwrap_or(false)
                 })
                 .filter(move |&stored|
-                    { validate_signature::<D, _, _, _, _>(node, stored) })
+                    { validate_signature::<D, _, _, _, _, _>(node, stored) })
                 .count() >= view.params().quorum();
 
             let prepares_valid = proof
@@ -1617,13 +1622,12 @@ fn highest_proof<'a, D, I, ST, LP, NT>(
                 .filter(|stored| {
                     stored
                         .message()
-                        .consensus()
                         .has_proposed_digest(&digest)
                         //If he does not have the digest, then it is not valid
                         .unwrap_or(false)
                 })
                 .filter(move |&stored|
-                    { validate_signature::<D, _, _, _, _>(node, stored) })
+                    { validate_signature::<D, _, _, _, _, _>(node, stored) })
                 .count() >= view.params().quorum();
 
             debug!("{:?} // Proof {:?} is valid? commits valid: {:?} &&  prepares_valid: {:?}",
@@ -1635,7 +1639,7 @@ fn highest_proof<'a, D, I, ST, LP, NT>(
 }
 
 
-impl<O> Debug for SynchronizerPollStatus<O> {
+impl<O, JC> Debug for SynchronizerPollStatus<O, JC> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             SynchronizerPollStatus::Recv => {

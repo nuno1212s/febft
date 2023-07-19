@@ -24,7 +24,7 @@ impl<D: ApplicationData + 'static> FollowerSynchronizer<D> {
         pre_prepare: &StoredConsensusMessage<D::Request>,
     ) -> Vec<ClientRqInfo> {
 
-        let requests = match pre_prepare.message().consensus().kind() {
+        let requests = match pre_prepare.message().kind() {
             ConsensusMessageKind::PrePrepare(req) => {req},
             _ => {panic!()}
         };
