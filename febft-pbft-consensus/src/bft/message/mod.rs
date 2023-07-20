@@ -185,8 +185,13 @@ impl<O, JC> ViewChangeMessage<O, JC> {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub enum ViewChangeMessageKind<O, JC> {
+    /// A message, broadcast by the node attempting to join the quorum
     NodeQuorumJoin(NodeId, JC),
+    /// A STOP message, broadcast when we want to call a view change due to requests getting timed out
     Stop(Vec<StoredRequestMessage<O>>),
+    /// A STOP message, broadcast when we want to call a view change due to us having received a Node Quorum Join message
+    StopQuorumJoin(NodeId, JC),
+    // Each of the latest decisions from the sender, so the new leader can sync
     StopData(CollectData<O>),
     Sync(LeaderCollects<O, JC>),
 }
@@ -437,6 +442,25 @@ impl Debug for ObserveEventKind {
             }
             ObserveEventKind::Executed(seq) => {
                 write!(f, "Executed the consensus instance {:?}", seq)
+            }
+        }
+    }
+}
+
+impl<O, JC> Debug for ViewChangeMessageKind<O, JC> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ViewChangeMessageKind::NodeQuorumJoin(node, _) => {
+                write!(f, "Node quorum join {:?}", node)
+            }
+            ViewChangeMessageKind::Stop(_) => {
+                write!(f, "Stop message")
+            }
+            ViewChangeMessageKind::StopData(_) => {
+                write!(f, "Stop data message")
+            }
+            ViewChangeMessageKind::Sync(_) => {
+                write!(f, "Sync message")
             }
         }
     }

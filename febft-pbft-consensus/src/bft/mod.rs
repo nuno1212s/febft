@@ -27,6 +27,7 @@ use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::ClientRqInfo;
 use atlas_core::messages::Protocol;
 use atlas_core::ordering_protocol::{LoggableMessage, OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, ProtocolConsensusDecision, ProtocolMessage, SerProof, SerProofMetadata, View};
+use atlas_core::ordering_protocol::reconfigurable_order_protocol::{ReconfigurableOrderProtocol, ReconfigurationAttemptResult};
 use atlas_core::ordering_protocol::stateful_order_protocol::{DecLog, StatefulOrderProtocol};
 use atlas_core::persistent_log::{OrderingProtocolLog, PersistableOrderProtocol, StatefulOrderingProtocolLog};
 use atlas_core::reconfiguration_protocol::{QuorumJoinCert, ReconfigurationProtocol};
@@ -811,5 +812,15 @@ impl<D, ST, LP, NT, PL, RP> PersistableOrderProtocol<PBFTConsensus<D, RP>, PBFTC
 
     fn decompose_dec_log(proofs: &DecLog<PBFTConsensus<D, RP>>) -> Vec<&SerProof<PBFTConsensus<D, RP>>> {
         proofs.proofs().iter().collect()
+    }
+}
+
+impl<D, ST, LP, NT, PL, RP> ReconfigurableOrderProtocol<RP, NT> for PBFTOrderProtocol<D, ST, LP, NT, PL, RP>
+    where D: ApplicationData + 'static,
+          ST: StateTransferMessage + 'static,
+          LP: LogTransferMessage + 'static, {
+    fn attempt_network_view_change(&mut self, join_certificate: QuorumJoinCert<RP>) -> Result<ReconfigurationAttemptResult> {
+
+        Ok(self.synchronizer.attempt_join_quorum(join_certificate, &self.node, &self.timeouts))
     }
 }

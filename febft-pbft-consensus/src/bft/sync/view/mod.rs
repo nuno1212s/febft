@@ -153,6 +153,14 @@ impl ViewInfo {
         Self::new(self.seq.next(), self.params.n(), self.params.f()).unwrap()
     }
 
+    pub fn next_view_with_new_node(&self, joined_node: NodeId) -> ViewInfo {
+        let mut quorum_members = self.quorum_members().clone();
+
+        quorum_members.push(joined_node);
+
+        Self::from_quorum(self.seq.next(), quorum_members).unwrap()
+    }
+
     /// Returns a new view with the specified sequence number.
     pub fn peek(&self, seq: SeqNo) -> ViewInfo {
         Self::new(seq, self.params.n(), self.params.f()).unwrap()

@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 use std::cell::Cell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Formatter};
 
 use either::Either;
@@ -24,6 +25,7 @@ use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
 use atlas_core::messages::{ClientRqInfo, StoredRequestMessage, SystemMessage};
 use atlas_core::ordering_protocol::ProtocolConsensusDecision;
+use atlas_core::ordering_protocol::reconfigurable_order_protocol::ReconfigurationAttemptResult;
 use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
 use atlas_core::reconfiguration_protocol::QuorumJoinCert;
 use atlas_core::request_pre_processing::RequestPreProcessor;
@@ -177,6 +179,8 @@ pub struct TboQueue<O, JC> {
     // probe messages from this queue instead of
     // fetching them from the network
     get_queue: bool,
+    // stores all Node Quorum Update messages for the next view
+    quorum_join: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O, JC>>>>,
     // stores all STOP messages for the next view
     stop: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O, JC>>>>,
     // stores all STOP-DATA messages for the next view
@@ -191,6 +195,7 @@ impl<O, JC> TboQueue<O, JC> {
             view,
             previous_view: None,
             get_queue: false,
+            quorum_join: VecDeque::new(),
             stop: VecDeque::new(),
             stop_data: VecDeque::new(),
             sync: VecDeque::new(),
@@ -231,6 +236,7 @@ impl<O, JC> TboQueue<O, JC> {
     }
 
     fn next_instance_queue(&mut self) {
+        tbo_advance_message_queue(&mut self.quorum_join);
         tbo_advance_message_queue(&mut self.stop);
         tbo_advance_message_queue(&mut self.stop_data);
         tbo_advance_message_queue(&mut self.sync);
@@ -240,9 +246,12 @@ impl<O, JC> TboQueue<O, JC> {
     /// immediately if it pertains to an older view change instance.
     pub fn queue(&mut self, h: Header, m: ViewChangeMessage<O, JC>) {
         match m.kind() {
-            ViewChangeMessageKind::Stop(_) => self.queue_stop(h, m),
+            ViewChangeMessageKind::Stop(_) | ViewChangeMessageKind::StopQuorumJoin(_, _) => self.queue_stop(h, m),
             ViewChangeMessageKind::StopData(_) => self.queue_stop_data(h, m),
             ViewChangeMessageKind::Sync(_) => self.queue_sync(h, m),
+            ViewChangeMessageKind::NodeQuorumJoin(_, _) => {
+                self.queue_node_quorum_join(h, m)
+            }
         }
     }
 
@@ -253,6 +262,12 @@ impl<O, JC> TboQueue<O, JC> {
             .get(0)
             .map(|deque| deque.len() > 0)
             .unwrap_or(false)
+    }
+
+    fn queue_node_quorum_join(&mut self, h: Header, m: ViewChangeMessage<O, JC>) {
+        let seq = self.view.sequence_number().next();
+
+        tbo_queue_message(seq, &mut self.quorum_join, StoredMessage::new(h, m))
     }
 
     /// Queues a `STOP` message for later processing, or drops it
@@ -303,6 +318,12 @@ pub(super) enum ProtoPhase {
     // this is effectively an implementation detail,
     // and not a real phase of Mod-SMaRt!
     Stopping2(usize),
+    // we are running the STOP-QUORUM-JOIN phase
+    ViewStopping(usize),
+    // we are running the STOP-QUORUM-JOIN phase
+    // but we have already locally triggered the view change
+    // Or we have received at least f+1 STOP-QUORUM-JOIN messages.
+    ViewStopping2(usize),
     // we are running the STOP-DATA phase of Mod-SMaRt
     StoppingData(usize),
     // we are running the SYNC phase of Mod-SMaRt
@@ -374,6 +395,8 @@ pub struct Synchronizer<D: ApplicationData, RP: ReconfigurationProtocolMessage> 
     tbo: Mutex<TboQueue<D::Request, QuorumJoinCert<RP>>>,
     //Stores currently received requests from other nodes
     stopped: RefCell<IntMap<Vec<StoredRequestMessage<D::Request>>>>,
+    //Stores currently received requests from other nodes
+    currently_adding_node: Cell<Option<NodeId>>,
     //TODO: This does not require a Mutex I believe since it's only accessed when
     // Processing messages (which is always done in the replica thread)
     collects: Mutex<CollectsType<D, QuorumJoinCert<RP>>>,
@@ -425,6 +448,7 @@ impl<D, RP> Synchronizer<D, RP>
         Arc::new(Self {
             phase: Cell::new(ProtoPhase::Init),
             stopped: RefCell::new(Default::default()),
+            currently_adding_node: Cell::new(None),
             collects: Mutex::new(Default::default()),
             tbo: Mutex::new(TboQueue::new(view)),
             finalize_state: RefCell::new(None),
@@ -436,6 +460,7 @@ impl<D, RP> Synchronizer<D, RP>
         Arc::new(Self {
             phase: Cell::new(ProtoPhase::Init),
             stopped: RefCell::new(Default::default()),
+            currently_adding_node: Cell::new(None),
             collects: Mutex::new(Default::default()),
             tbo: Mutex::new(TboQueue::new(view)),
             finalize_state: RefCell::new(None),
@@ -455,6 +480,7 @@ impl<D, RP> Synchronizer<D, RP>
             phase: Cell::new(ProtoPhase::Init),
             tbo: Mutex::new(TboQueue::new(view_info)),
             stopped: RefCell::new(Default::default()),
+            currently_adding_node: Cell::new(None),
             collects: Mutex::new(Default::default()),
             finalize_state: RefCell::new(None),
             accessory: SynchronizerAccessory::Replica(ReplicaSynchronizer::new(timeout_dur)),
@@ -484,17 +510,28 @@ impl<D, RP> Synchronizer<D, RP>
             _ if !tbo_guard.get_queue => SynchronizerPollStatus::Recv,
             ProtoPhase::Init => {
                 //If we are in the init phase and there is a pending request, move to the stopping phase
-                extract_msg!(D::Request, QuorumJoinCert<RP>  =>
+                let result = extract_msg!(D::Request, QuorumJoinCert<RP>  =>
                     { self.phase.replace(ProtoPhase::Stopping(0)); },
                     &mut tbo_guard.get_queue,
                     &mut tbo_guard.stop
-                )
+                );
+
+                match result {
+                    SynchronizerPollStatus::Recv => {
+                        // if we don't have any pending stop messages, check the join quorum
+                        extract_msg!(D::Request, QuorumJoinCert<RP> => {self.phase.replace(ProtoPhase::ViewStopping(0));},
+                            &mut tbo_guard.get_queue, &mut tbo_guard.quorum_join)
+                    }
+                    _ => {
+                        result
+                    }
+                }
             }
-            ProtoPhase::Stopping(_) | ProtoPhase::Stopping2(_) => {
-                extract_msg!(D::Request, QuorumJoinCert<RP> =>
+            ProtoPhase::Stopping(_) | ProtoPhase::Stopping2(_) | ProtoPhase::ViewStopping(_) | ProtoPhase::ViewStopping2(_) => {
+                let result = extract_msg!(D::Request, QuorumJoinCert<RP> =>
                     &mut tbo_guard.get_queue,
                     &mut tbo_guard.stop
-                )
+                );
             }
             ProtoPhase::StoppingData(_) => {
                 extract_msg!(D::Request, QuorumJoinCert<RP>  =>
@@ -539,12 +576,21 @@ impl<D, RP> Synchronizer<D, RP>
         match self.phase.get() {
             ProtoPhase::Init => {
                 return match message.kind() {
-                    ViewChangeMessageKind::Stop(_) => {
+                    ViewChangeMessageKind::NodeQuorumJoin(_, _) => {
+                        let mut guard = self.tbo.lock().unwrap();
+
+                        guard.queue_node_join(header, message);
+
+                        debug!("{:?} // Received {:?} message while in init state. Queueing", message.kind(), node.id());
+
+                        SynchronizerStatus::Nil
+                    }
+                    ViewChangeMessageKind::Stop(_) | ViewChangeMessageKind::StopQuorumJoin(_, _) => {
                         let mut guard = self.tbo.lock().unwrap();
 
                         guard.queue_stop(header, message);
 
-                        debug!("{:?} // Received stop message while in init state. Queueing", node.id());
+                        debug!("{:?} // Received {:?} message while in init state. Queueing", message.kind(), node.id());
 
                         SynchronizerStatus::Nil
                     }
@@ -582,7 +628,16 @@ impl<D, RP> Synchronizer<D, RP>
                 let next_seq = current_view.sequence_number().next();
 
                 let i = match message.kind() {
-                    ViewChangeMessageKind::Stop(_) if msg_seq != next_seq => {
+                    ViewChangeMessageKind::NodeQuorumJoin(_, _) => {
+                        let mut guard = self.tbo.lock().unwrap();
+
+                        guard.queue_node_join(header, message);
+
+                        debug!("{:?} // Received node join message while in stopping state. Queueing", node.id());
+
+                        return stop_status!(i, &current_view);
+                    }
+                    ViewChangeMessageKind::Stop(_) | ViewChangeMessageKind::StopQuorumJoin(_, _) if msg_seq != next_seq => {
                         debug!("{:?} // Received stop message {:?} that does not match up to our local view {:?}", node.id(), message, current_view);
 
                         let mut guard = self.tbo.lock().unwrap();
@@ -591,14 +646,17 @@ impl<D, RP> Synchronizer<D, RP>
 
                         return stop_status!(i, &current_view);
                     }
-                    ViewChangeMessageKind::Stop(_)
-                    if self.stopped.borrow().contains_key(header.from().into()) =>
-                        {
-                            warn!("{:?} // Received double stop message from node {:?}", node.id(), header.from());
+                    ViewChangeMessageKind::Stop(_) if self.stopped.borrow().contains_key(header.from().into()) => {
+                        warn!("{:?} // Received double stop message from node {:?}", node.id(), header.from());
 
-                            // drop attempts to vote twice
-                            return stop_status!(i, &current_view);
-                        }
+                        // drop attempts to vote twice
+                        return stop_status!(i, &current_view);
+                    }
+                    ViewChangeMessageKind::StopQuorumJoin(_, _) => {
+                        warn!("{:?} // Received stop quorum join message while in stopping state. Ignoring", node.id());
+
+                        return stop_status!(i, &current_view);
+                    }
                     ViewChangeMessageKind::Stop(_) => i + 1,
                     ViewChangeMessageKind::StopData(_) => {
                         match &self.accessory {
@@ -693,6 +751,130 @@ impl<D, RP> Synchronizer<D, RP>
 
                 SynchronizerStatus::Running
             }
+            ProtoPhase::ViewStopping(received) | ProtoPhase::ViewStopping2(received) => {
+                let msg_seq = message.sequence_number();
+                let current_view = self.view();
+                let next_seq = current_view.sequence_number().next();
+
+                let (received, node, jc) = match message.kind() {
+                    ViewChangeMessageKind::NodeQuorumJoin(_, _) => {
+                        let mut guard = self.tbo.lock().unwrap();
+
+                        guard.queue_node_join(header, message);
+
+                        debug!("{:?} // Received node join message while in stopping state. Queueing", node.id());
+
+                        return stop_status!(received, &current_view);
+                    }
+                    ViewChangeMessageKind::Stop(_) | ViewChangeMessageKind::StopQuorumJoin(_, _) if msg_seq != next_seq => {
+                        debug!("{:?} // Received stop message {:?} that does not match up to our local view {:?}", node.id(), message, current_view);
+
+                        let mut guard = self.tbo.lock().unwrap();
+
+                        guard.queue_stop(header, message);
+
+                        return stop_status!(received, &current_view);
+                    }
+                    ViewChangeMessageKind::Stop(requests) => {
+                        let mut guard = self.tbo.lock().unwrap();
+
+                        warn!("{:?} // Received stop message while in View Stopping state. Since STOP takes precendence over the quorum updating, we will now change to stopping phase ", node.id());
+
+                        guard.queue_stop(header, message);
+
+                        self.phase.replace(ProtoPhase::Stopping(0));
+
+                        return SynchronizerStatus::Running;
+                    }
+                    ViewChangeMessageKind::StopQuorumJoin(node, join_cert)
+                    if self.currently_adding_node.get().is_some() && self.currently_adding_node.get().unwrap() != *node => {
+                        error!("{:?} // Received stop quorum join message with node that does not match the current received ", node.id());
+
+                        return SynchronizerStatus::Running;
+                    }
+                    ViewChangeMessageKind::StopQuorumJoin(node, join_cert) => (received + 1, *node, join_cert),
+                    ViewChangeMessageKind::StopData(_) => {
+                        match &self.accessory {
+                            SynchronizerAccessory::Follower(_) => {
+                                //Ignore stop data messages as followers can never reach this state
+                                return stop_status!(received, &current_view);
+                            }
+                            SynchronizerAccessory::Replica(_) => {
+                                {
+                                    let mut guard = self.tbo.lock().unwrap();
+
+                                    guard.queue_stop_data(header, message);
+
+                                    debug!("{:?} // Received stop data message while in stopping state. Queueing", node.id());
+                                }
+
+                                return stop_status!(received, &current_view);
+                            }
+                        }
+                    }
+                    ViewChangeMessageKind::Sync(_) => {
+                        {
+                            let mut guard = self.tbo.lock().unwrap();
+
+                            guard.queue_sync(header, message);
+
+                            debug!("{:?} // Received sync message while in init state. Queueing", node.id());
+                        }
+
+                        return stop_status!(received, &current_view);
+                    }
+                };
+
+                //TODO: Verify that the node join certificate is valid
+
+                if let ProtoPhase::ViewStopping(_received) = self.phase.get() {
+                    return if received > current_view.params().f() {
+                        self.begin_quorum_view_change(None, &**node, timeouts, log);
+
+                        SynchronizerStatus::Running
+                    } else {
+                        self.phase.replace(ProtoPhase::ViewStopping(received));
+
+                        SynchronizerStatus::Nil
+                    };
+                }
+
+                if received >= current_view.params().quorum() {
+                    let next_view = current_view.next_view_with_new_node(self.currently_adding_node.get().unwrap());
+
+                    let previous_view = current_view.clone();
+
+                    //We have received the necessary amount of stopping requests
+                    //To now that we should move to the next view
+
+                    let next_leader = next_view.leader();
+
+                    warn!("{:?} // Stopping quorum reached, moving to next view {:?}. ", node.id(), next_view);
+
+                    self.install_view(next_view);
+
+                    match &self.accessory {
+                        SynchronizerAccessory::Replica(rep) => {
+                            rep.handle_stopping_quorum(self, previous_view, consensus,
+                                                       log, rq_pre_processor, timeouts, &**node)
+                        }
+                        SynchronizerAccessory::Follower(_) => {}
+                    }
+
+                    if next_leader == node.id() {
+                        warn!("{:?} // I am the new leader, moving to the stopping data phase.", node.id());
+
+                        //Move to the stopping data phase as we are the new leader
+                        self.phase.replace(ProtoPhase::StoppingData(0));
+                    } else {
+                        self.phase.replace(ProtoPhase::Syncing);
+                    }
+                } else {
+                    self.phase.replace(ProtoPhase::ViewStopping2(received));
+                }
+
+                SynchronizerStatus::Running
+            }
             ProtoPhase::StoppingData(i) => {
                 match &self.accessory {
                     SynchronizerAccessory::Follower(_) => {
@@ -711,7 +893,18 @@ impl<D, RP> Synchronizer<D, RP>
                         let mut collects_guard = self.collects.lock().unwrap();
 
                         let i = match message.kind() {
-                            ViewChangeMessageKind::Stop(_) => {
+                            ViewChangeMessageKind::NodeQuorumJoin(_, _) => {
+                                {
+                                    let mut guard = self.tbo.lock().unwrap();
+
+                                    guard.queue_node_quorum_join(header, message);
+
+                                    debug!("{:?} // Received stop message while in stopping data state. Queueing", node.id());
+                                }
+
+                                return SynchronizerStatus::Running;
+                            }
+                            ViewChangeMessageKind::Stop(_) | ViewChangeMessageKind::StopQuorumJoin(_, _) => {
                                 {
                                     let mut guard = self.tbo.lock().unwrap();
 
@@ -788,7 +981,7 @@ impl<D, RP> Synchronizer<D, RP>
                         collects_guard
                             .insert(header.from().into(), StoredMessage::new(header, message));
 
-                        if i != current_view.params().quorum() {
+                        if i < current_view.params().quorum() {
                             self.phase.replace(ProtoPhase::StoppingData(i));
 
                             return SynchronizerStatus::Running;
@@ -1060,6 +1253,74 @@ impl<D, RP> Synchronizer<D, RP>
         Some(())
     }
 
+    pub fn begin_quorum_view_change<ST, LP, NT, PL>(
+        &self,
+        join_cert: Option<QuorumJoinCert<RP>>,
+        node: &NT,
+        timeouts: &Timeouts,
+        _log: &Log<D, PL>, )
+        where ST: StateTransferMessage + 'static,
+              LP: LogTransferMessage + 'static,
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>>,
+              PL: OrderingProtocolLog<PBFTConsensus<D, RP>>
+    {
+        match (self.phase.get(), &join_cert) {
+            (ProtoPhase::ViewStopping(i), None) => {
+                self.phase.replace(ProtoPhase::ViewStopping2(i + 1));
+            }
+            (ProtoPhase::ViewStopping(i), _) => {
+                // We have ourselves received a join certificate message from the node, so we will now
+                // Have to broadcast a STOP Quorum Join message. As such, we don't want to increment
+                // The amount of messages received (since we have not actually received any messages)
+                self.phase.replace(ProtoPhase::ViewStopping2(i));
+            }
+            (ProtoPhase::StoppingData(_), _) | (ProtoPhase::Syncing, _) | (ProtoPhase::Stopping2(_), _) => {
+                // we have already started a view change protocol
+                return;
+            }
+            _ => {
+                self.node_join_certificates.borrow_mut().clear();
+            }
+        }
+    }
+
+    pub fn attempt_join_quorum<ST, LP, NT>(&self, join_certificate: QuorumJoinCert<RP>,
+                                           node: &NT,
+                                           timeouts: &Timeouts) -> ReconfigurationAttemptResult
+        where ST: StateTransferMessage + 'static,
+              LP: LogTransferMessage + 'static,
+              NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>>, {
+        let current_view = self.view();
+
+        if current_view.quorum_members().contains(&node.id()) {
+            //We are already a part of the quorum, so we don't need to do anything
+            info!("{:?} // Attempted to join quorum, but we are already a part of it", node.id());
+            return ReconfigurationAttemptResult::AlreadyPartOfQuorum;
+        }
+
+        let message = ViewChangeMessage::new(
+            current_view.sequence_number().next(),
+            ViewChangeMessageKind::NodeQuorumJoin(node.id(), join_certificate),
+        );
+
+        node.broadcast_signed(PBFTMessage::ViewChange(message), current_view.quorum_members().clone().into_iter());
+
+        // Simulate that we were accepted into the quorum
+        let view = current_view.next_view_with_new_node(node.id());
+
+        if view.leader() == node.id() {
+            // If we are the leader of the next view, then we should move to the stopping data phase and wait
+            // For the rest of the nodes to send us the information
+            self.phase.replace(ProtoPhase::StoppingData(0));
+        } else {
+            self.phase.replace(ProtoPhase::Syncing);
+        }
+
+        self.install_view(view);
+
+        return ReconfigurationAttemptResult::InProgress;
+    }
+
     /// Trigger a view change locally.
     ///
     /// The value `timed_out` corresponds to a list of client requests
@@ -1092,6 +1353,18 @@ impl<D, RP> Synchronizer<D, RP>
             (ProtoPhase::Stopping(i), _) => {
                 self.phase.replace(ProtoPhase::Stopping2(i));
             }
+            (ProtoPhase::ViewStopping(_), None) | (ProtoPhase::ViewStopping2(_), None) => {
+                // We are currently in the quorum alteration view change protocol. Since we have received
+                // A timeout and we know that timeouts take precedence over quorum alteration, we will
+                // Stop this current view stopping protocol and start the normal view change protocol
+                self.phase.replace(ProtoPhase::Stopping(1));
+            }
+            (ProtoPhase::ViewStopping(_), _) | (ProtoPhase::ViewStopping2(_), _) => {
+                // We are currently in the quorum alteration view change protocol. Since we have received
+                // A timeout and we know that timeouts take precedence over quorum alteration, we will
+                // Stop this current view stopping protocol and start the normal view change protocol
+                self.phase.replace(ProtoPhase::Stopping2(0));
+            }
             (ProtoPhase::StoppingData(_), _) | (ProtoPhase::Syncing, _) | (ProtoPhase::Stopping2(_), _) => {
                 // we have already started a view change protocol
                 return;
@@ -1105,6 +1378,7 @@ impl<D, RP> Synchronizer<D, RP>
                 // clear state from previous views
                 self.stopped.borrow_mut().clear();
                 self.collects.lock().unwrap().clear();
+                self.currently_adding_node.replace(None);
 
                 //Set the new state to be stopping
                 self.phase.replace(ProtoPhase::Stopping2(0));
@@ -1120,7 +1394,7 @@ impl<D, RP> Synchronizer<D, RP>
     }
 
     // this function mostly serves the purpose of consuming
-    // values with immutable references, to allow borrowing data mutably
+// values with immutable references, to allow borrowing data mutably
     fn pre_finalize<PL>(
         &self,
         state: FinalizeState<D::Request>,
@@ -1282,9 +1556,9 @@ impl<D, RP> Synchronizer<D, RP>
     }
 
     // collects whose in execution cid is different from the given `in_exec` become `None`
-    // A set of collects is considered normalized if or when
-    // all collects are related to the same CID. This is important because not all replicas
-    // may be executing the same CID when there is a leader change
+// A set of collects is considered normalized if or when
+// all collects are related to the same CID. This is important because not all replicas
+// may be executing the same CID when there is a leader change
     #[inline]
     fn normalized_collects<'a>(
         collects: &'a IntMap<StoredMessage<ViewChangeMessage<D::Request, QuorumJoinCert<RP>>>>,
