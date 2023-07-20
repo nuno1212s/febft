@@ -135,22 +135,7 @@ impl<O, JC> Orderable for ViewChangeMessage<O, JC> {
 
 impl<O, JC> Debug for ViewChangeMessage<O, JC> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "View {:?}", self.view)?;
-
-        match self.kind {
-            ViewChangeMessageKind::Stop(_) => {
-                write!(f, "Stop Message")
-            }
-            ViewChangeMessageKind::StopData(_) => {
-                write!(f, "Stop Data Message")
-            }
-            ViewChangeMessageKind::Sync(_) => {
-                write!(f, "Sync Message")
-            }
-            ViewChangeMessageKind::NodeQuorumJoin(node_id, _) => {
-                write!(f, "Node quorum join {:?}", node_id)
-            }
-        }
+        write!(f, "View {:?}, {:?}", self.view, self.kind)
     }
 }
 
@@ -461,6 +446,9 @@ impl<O, JC> Debug for ViewChangeMessageKind<O, JC> {
             }
             ViewChangeMessageKind::Sync(_) => {
                 write!(f, "Sync message")
+            }
+            ViewChangeMessageKind::StopQuorumJoin(node, _) => {
+                write!(f, "Stop quorum join message {:?}", node)
             }
         }
     }

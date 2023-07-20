@@ -528,10 +528,10 @@ impl<D, RP> Synchronizer<D, RP>
                 }
             }
             ProtoPhase::Stopping(_) | ProtoPhase::Stopping2(_) | ProtoPhase::ViewStopping(_) | ProtoPhase::ViewStopping2(_) => {
-                let result = extract_msg!(D::Request, QuorumJoinCert<RP> =>
+                extract_msg!(D::Request, QuorumJoinCert<RP> =>
                     &mut tbo_guard.get_queue,
                     &mut tbo_guard.stop
-                );
+                )
             }
             ProtoPhase::StoppingData(_) => {
                 extract_msg!(D::Request, QuorumJoinCert<RP>  =>
@@ -579,18 +579,18 @@ impl<D, RP> Synchronizer<D, RP>
                     ViewChangeMessageKind::NodeQuorumJoin(_, _) => {
                         let mut guard = self.tbo.lock().unwrap();
 
-                        guard.queue_node_join(header, message);
+                        debug!("{:?} // Received {:?} message while in init state. Queueing",  node.id(), message);
 
-                        debug!("{:?} // Received {:?} message while in init state. Queueing", message.kind(), node.id());
+                        guard.queue_node_quorum_join(header, message);
 
                         SynchronizerStatus::Nil
                     }
                     ViewChangeMessageKind::Stop(_) | ViewChangeMessageKind::StopQuorumJoin(_, _) => {
                         let mut guard = self.tbo.lock().unwrap();
 
-                        guard.queue_stop(header, message);
+                        debug!("{:?} // Received {:?} message while in init state. Queueing", node.id(), message);
 
-                        debug!("{:?} // Received {:?} message while in init state. Queueing", message.kind(), node.id());
+                        guard.queue_stop(header, message);
 
                         SynchronizerStatus::Nil
                     }
@@ -602,10 +602,9 @@ impl<D, RP> Synchronizer<D, RP>
                             }
                             SynchronizerAccessory::Replica(_) => {
                                 let mut guard = self.tbo.lock().unwrap();
+                                debug!("{:?} // Received stop data {:?} message while in init state. Queueing", node.id(), message);
 
                                 guard.queue_stop_data(header, message);
-
-                                debug!("{:?} // Received stop data message while in init state. Queueing", node.id());
 
                                 SynchronizerStatus::Nil
                             }
@@ -631,7 +630,7 @@ impl<D, RP> Synchronizer<D, RP>
                     ViewChangeMessageKind::NodeQuorumJoin(_, _) => {
                         let mut guard = self.tbo.lock().unwrap();
 
-                        guard.queue_node_join(header, message);
+                        guard.queue_node_quorum_join(header, message);
 
                         debug!("{:?} // Received node join message while in stopping state. Queueing", node.id());
 
@@ -756,11 +755,11 @@ impl<D, RP> Synchronizer<D, RP>
                 let current_view = self.view();
                 let next_seq = current_view.sequence_number().next();
 
-                let (received, node, jc) = match message.kind() {
+                let (received, node_id, jc) = match message.kind() {
                     ViewChangeMessageKind::NodeQuorumJoin(_, _) => {
                         let mut guard = self.tbo.lock().unwrap();
 
-                        guard.queue_node_join(header, message);
+                        guard.queue_node_quorum_join(header, message);
 
                         debug!("{:?} // Received node join message while in stopping state. Queueing", node.id());
 
@@ -1115,7 +1114,18 @@ impl<D, RP> Synchronizer<D, RP>
 
                 // reject SYNC messages if these were not sent by the leader
                 let (proposed, collects) = match message.kind() {
-                    ViewChangeMessageKind::Stop(_) => {
+                    ViewChangeMessageKind::NodeQuorumJoin(_, _) => {
+                        {
+                            let mut guard = self.tbo.lock().unwrap();
+
+                            guard.queue_node_quorum_join(header, message);
+
+                            debug!("{:?} // Received node join message while in syncing state. Queueing", node.id());
+                        }
+
+                        return SynchronizerStatus::Running;
+                    }
+                    ViewChangeMessageKind::Stop(_) | ViewChangeMessageKind::StopQuorumJoin(_, _) => {
                         {
                             let mut guard = self.tbo.lock().unwrap();
 
@@ -1279,7 +1289,7 @@ impl<D, RP> Synchronizer<D, RP>
                 return;
             }
             _ => {
-                self.node_join_certificates.borrow_mut().clear();
+                self.currently_adding_node.replace(None);
             }
         }
     }
@@ -1303,7 +1313,7 @@ impl<D, RP> Synchronizer<D, RP>
             ViewChangeMessageKind::NodeQuorumJoin(node.id(), join_certificate),
         );
 
-        node.broadcast_signed(PBFTMessage::ViewChange(message), current_view.quorum_members().clone().into_iter());
+        node.broadcast_signed(SystemMessage::from_protocol_message(PBFTMessage::ViewChange(message)), current_view.quorum_members().clone().into_iter());
 
         // Simulate that we were accepted into the quorum
         let view = current_view.next_view_with_new_node(node.id());

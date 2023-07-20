@@ -283,9 +283,10 @@ impl<D, ST, LP, NT, PL, RP> PBFTOrderProtocol<D, ST, LP, NT, PL, RP>
         } = config;
 
         let OrderingProtocolArgs(executor, timeouts,
-                                 pre_processor, batch_input, node, persistent_log) = args;
+                                 pre_processor, batch_input,
+                                 node, persistent_log, quorum) = args;
 
-        let sync = Synchronizer::new_replica(view.clone(), timeout_dur);
+        let sync = Synchronizer::initialize_with_quorum(view.sequence_number(), quorum, timeout_dur)?;
 
         let consensus_guard = ProposerConsensusGuard::new(view.clone(), watermark);
 
@@ -818,9 +819,11 @@ impl<D, ST, LP, NT, PL, RP> PersistableOrderProtocol<PBFTConsensus<D, RP>, PBFTC
 impl<D, ST, LP, NT, PL, RP> ReconfigurableOrderProtocol<RP, NT> for PBFTOrderProtocol<D, ST, LP, NT, PL, RP>
     where D: ApplicationData + 'static,
           ST: StateTransferMessage + 'static,
-          LP: LogTransferMessage + 'static, {
+          LP: LogTransferMessage + 'static,
+          RP: ReconfigurationProtocolMessage + 'static,
+          NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> + 'static,
+          PL: Clone {
     fn attempt_network_view_change(&mut self, join_certificate: QuorumJoinCert<RP>) -> Result<ReconfigurationAttemptResult> {
-
-        Ok(self.synchronizer.attempt_join_quorum(join_certificate, &self.node, &self.timeouts))
+        Ok(self.synchronizer.attempt_join_quorum(join_certificate, &*self.node, &self.timeouts))
     }
 }
