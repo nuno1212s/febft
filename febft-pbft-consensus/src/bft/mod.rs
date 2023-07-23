@@ -26,7 +26,7 @@ use atlas_execution::ExecutorHandle;
 use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::ClientRqInfo;
 use atlas_core::messages::Protocol;
-use atlas_core::ordering_protocol::{LoggableMessage, OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, ProtocolConsensusDecision, ProtocolMessage, SerProof, SerProofMetadata, View};
+use atlas_core::ordering_protocol::{LoggableMessage, OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, OrderProtocolTolerance, ProtocolConsensusDecision, ProtocolMessage, SerProof, SerProofMetadata, View};
 use atlas_core::ordering_protocol::reconfigurable_order_protocol::{ReconfigurableOrderProtocol, ReconfigurationAttemptResult};
 use atlas_core::ordering_protocol::stateful_order_protocol::{DecLog, StatefulOrderProtocol};
 use atlas_core::persistent_log::{OrderingProtocolLog, PersistableOrderProtocol, StatefulOrderingProtocolLog};
@@ -123,6 +123,12 @@ impl<D, ST, LP, NT, PL, RP> Orderable for PBFTOrderProtocol<D, ST, LP, NT, PL, R
                                                                                          PL: Clone {
     fn sequence_number(&self) -> SeqNo {
         self.consensus.sequence_number()
+    }
+}
+
+impl<D, ST, LP, NT, PL, RP> OrderProtocolTolerance for PBFTOrderProtocol<D, ST, LP, NT, PL, RP> where D: 'static + ApplicationData, LP: 'static + LogTransferMessage, NT: 'static + ProtocolNetworkNode<PBFT<D, ST, LP, RP>>, PL: Clone, RP: 'static + ReconfigurationProtocolMessage, ST: 'static + StateTransferMessage {
+    fn get_n_for_f(f: usize) -> usize {
+        3 * f + 1
     }
 }
 
@@ -286,7 +292,7 @@ impl<D, ST, LP, NT, PL, RP> PBFTOrderProtocol<D, ST, LP, NT, PL, RP>
                                  pre_processor, batch_input,
                                  node, persistent_log, quorum) = args;
 
-        let sync = Synchronizer::initialize_with_quorum(view.sequence_number(), quorum, timeout_dur)?;
+        let sync = Synchronizer::initialize_with_quorum(view.sequence_number(), quorum.clone(), timeout_dur)?;
 
         let consensus_guard = ProposerConsensusGuard::new(view.clone(), watermark);
 
@@ -324,8 +330,8 @@ impl<D, ST, LP, NT, PL, RP> PBFTOrderProtocol<D, ST, LP, NT, PL, RP>
 
         info!("{:?} // Watermark: {}", replica.node.id(), watermark);
 
-        println!("{:?} // Leader count: {}, Leader set: {:?}", replica.node.id(),
-                 crr_view.leader_set().len(), crr_view.leader_set());
+        println!("{:?} // Leader count: {}, Leader set: {:?}, Quorum: {:?}", replica.node.id(),
+                 crr_view.leader_set().len(), crr_view.leader_set(), quorum);
         println!("{:?} // Watermark: {}", replica.node.id(), watermark);
 
         replica.proposer.clone().start();
