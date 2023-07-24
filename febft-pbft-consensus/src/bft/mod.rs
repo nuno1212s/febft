@@ -822,7 +822,7 @@ impl<D, ST, LP, NT, PL, RP> PersistableOrderProtocol<PBFTConsensus<D, RP>, PBFTC
     }
 }
 
-impl<D, ST, LP, NT, PL, RP> ReconfigurableOrderProtocol<RP, NT> for PBFTOrderProtocol<D, ST, LP, NT, PL, RP>
+impl<D, ST, LP, NT, PL, RP> ReconfigurableOrderProtocol<RP> for PBFTOrderProtocol<D, ST, LP, NT, PL, RP>
     where D: ApplicationData + 'static,
           ST: StateTransferMessage + 'static,
           LP: LogTransferMessage + 'static,
