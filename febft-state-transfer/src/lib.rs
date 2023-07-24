@@ -28,6 +28,7 @@ use atlas_core::persistent_log::{MonolithicStateLog, PersistableStateTransferPro
 use atlas_core::serialize::{LogTransferMessage, NetworkView, OrderingProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage, StateTransferMessage};
 use atlas_core::state_transfer::{Checkpoint, CstM, StateTransferProtocol, STResult, STTimeoutResult};
 use atlas_core::state_transfer::monolithic_state::MonolithicStateTransfer;
+use atlas_core::state_transfer::networking::StateTransferSendNode;
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
 use atlas_execution::state::monolithic_state::{InstallStateMessage, MonolithicState};
 use atlas_metrics::metrics::metric_duration;
@@ -230,28 +231,21 @@ macro_rules! getmessage {
 
 impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, PL>
     where S: MonolithicState + 'static,
-          PL: MonolithicStateLog<S> + 'static
+          PL: MonolithicStateLog<S> + 'static,
+          NT: StateTransferSendNode<CSTMsg<S>> + 'static
 {
     type Serialization = CSTMsg<S>;
 
-    fn request_latest_state<D, OP, LP, V>(&mut self, view: V) -> Result<()>
-        where D: ApplicationData + 'static,
-              OP: OrderingProtocolMessage + 'static,
-              LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Self::Serialization, LP>>,
-              V: NetworkView {
-        self.request_latest_consensus_seq_no::<D, OP, LP, V>(view);
+    fn request_latest_state<V>(&mut self, view: V) -> Result<()>
+        where V: NetworkView {
+        self.request_latest_consensus_seq_no::<V>(view);
 
         Ok(())
     }
 
-    fn handle_off_ctx_message<D, OP, LP, V>(&mut self, view: V, message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
-                                            -> Result<()>
-        where D: ApplicationData + 'static,
-              OP: OrderingProtocolMessage + 'static,
-              LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Self::Serialization, LP>>,
-              V: NetworkView {
+    fn handle_off_ctx_message<V>(&mut self, view: V, message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
+                                 -> Result<()>
+        where V: NetworkView {
         let (header, message) = message.into_inner();
 
         let message = message.into_inner();
@@ -288,15 +282,9 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
         Ok(())
     }
 
-    fn process_message<D, OP, LP, V>(&mut self,
-                                     view: V,
-                                     message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
-                                     -> Result<STResult>
-        where D: ApplicationData + 'static,
-              OP: OrderingProtocolMessage + 'static,
-              LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Self::Serialization, LP>>,
-              V: NetworkView {
+    fn process_message<V>(&mut self, view: V,
+                          message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
+                          -> Result<STResult> where V: NetworkView {
         let (header, message) = message.into_inner();
 
         let message = message.into_inner();
@@ -361,11 +349,8 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
         Ok(STResult::StateTransferRunning)
     }
 
-    fn handle_app_state_requested<D, OP, LP, V>(&mut self, view: V, seq: SeqNo) -> Result<ExecutionResult>
-        where D: ApplicationData + 'static,
-              OP: OrderingProtocolMessage + 'static,
-              LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Self::Serialization, LP>>, V: NetworkView {
+    fn handle_app_state_requested<V>(&mut self, view: V, seq: SeqNo) -> Result<ExecutionResult>
+        where V: NetworkView {
         let earlier = std::mem::replace(&mut self.current_checkpoint_state, CheckpointState::None);
 
         self.current_checkpoint_state = match earlier {
@@ -388,12 +373,8 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
         Ok(ExecutionResult::BeginCheckpoint)
     }
 
-    fn handle_timeout<D, OP, LP, V>(&mut self, view: V, timeout: Vec<RqTimeout>) -> Result<STTimeoutResult>
-        where D: ApplicationData + 'static,
-              OP: OrderingProtocolMessage + 'static,
-              LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Self::Serialization, LP>>,
-              V: NetworkView {
+    fn handle_timeout<V>(&mut self, view: V, timeout: Vec<RqTimeout>) -> Result<STTimeoutResult>
+        where V: NetworkView {
         for cst_seq in timeout {
             if let TimeoutKind::Cst(cst_seq) = cst_seq.timeout_kind() {
                 if self.cst_request_timed_out(cst_seq.clone(), view.clone()) {
@@ -408,7 +389,8 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
 
 impl<S, NT, PL> MonolithicStateTransfer<S, NT, PL> for CollabStateTransfer<S, NT, PL>
     where S: MonolithicState + 'static,
-          PL: MonolithicStateLog<S> + 'static {
+          PL: MonolithicStateLog<S> + 'static,
+          NT: StateTransferSendNode<CSTMsg<S>> + 'static {
     type Config = StateTransferConfig;
 
     fn initialize(config: Self::Config, timeouts: Timeouts, node: Arc<NT>,
@@ -422,12 +404,8 @@ impl<S, NT, PL> MonolithicStateTransfer<S, NT, PL> for CollabStateTransfer<S, NT
         Ok(Self::new(node, timeout_duration, timeouts, log, executor_handle))
     }
 
-    fn handle_state_received_from_app<D, OP, LP, V>(&mut self, view: V, state: Arc<ReadOnly<Checkpoint<S>>>) -> Result<()>
-        where D: ApplicationData + 'static,
-              OP: OrderingProtocolMessage + 'static,
-              LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Self::Serialization, LP>>,
-              V: NetworkView {
+    fn handle_state_received_from_app<V>(&mut self, view: V, state: Arc<ReadOnly<Checkpoint<S>>>) -> Result<()>
+        where V: NetworkView {
         self.finalize_checkpoint(state)?;
 
         if self.needs_checkpoint() {
@@ -449,6 +427,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     where
         S: MonolithicState + 'static,
         PL: MonolithicStateLog<S> + 'static,
+        NT: StateTransferSendNode<CSTMsg<S>> + 'static
 {
     /// Create a new instance of `CollabStateTransfer`.
     pub fn new(node: Arc<NT>, base_timeout: Duration, timeouts: Timeouts, persistent_log: PL, install_channel: ChannelSyncTx<InstallStateMessage<S>>) -> Self {
@@ -477,15 +456,11 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         matches!(self.phase, ProtoPhase::WaitingCheckpoint(_))
     }
 
-    fn process_request_seq<D, OP, LP>(
+    fn process_request_seq<>(
         &mut self,
         header: Header,
         message: CstMessage<S>)
-        where D: ApplicationData + 'static,
-              OP: OrderingProtocolMessage + 'static,
-              LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>
-    {
+        where {
         let seq = match &self.current_checkpoint_state {
             CheckpointState::PartialWithEarlier { seq, earlier, } => {
                 Some((earlier.sequence_number(), earlier.digest().clone()))
@@ -502,22 +477,17 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
         let reply = CstMessage::new(message.sequence_number(), kind);
 
-        let network_msg = SystemMessage::from_state_transfer_message(reply);
-
         debug!("{:?} // Replying to {:?} seq {:?} with seq no {:?}", self.node.id(),
             header.from(), message.sequence_number(), seq);
 
-        self.node.send(network_msg, header.from(), true);
+        self.node.send(reply, header.from(), true);
     }
 
 
     /// Process the entire list of pending state transfer requests
     /// This will only reply to the latest request sent by each of the replicas
-    fn process_pending_state_requests<D, OP, LP>(&mut self)
-        where D: ApplicationData + 'static,
-              OP: OrderingProtocolMessage + 'static,
-              LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>> {
+    fn process_pending_state_requests(&mut self)
+        where {
         let waiting = std::mem::replace(&mut self.phase, ProtoPhase::Init);
 
         if let ProtoPhase::WaitingCheckpoint(reqs) = waiting {
@@ -542,19 +512,16 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
             map.into_values().for_each(|req| {
                 let (header, message) = req.into_inner();
 
-                self.process_request_state::<D, OP, LP>(header, message);
+                self.process_request_state(header, message);
             });
         }
     }
 
-    fn process_request_state<D, OP, LP>(
+    fn process_request_state(
         &mut self,
         header: Header,
         message: CstMessage<S>,
-    ) where D: ApplicationData + 'static,
-            OP: OrderingProtocolMessage + 'static,
-            LP: LogTransferMessage + 'static,
-            NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>
+    ) where
     {
         match &mut self.phase {
             ProtoPhase::Init => {}
@@ -592,22 +559,16 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
             }),
         );
 
-        let network_msg = SystemMessage::from_state_transfer_message(reply);
-
-        self.node.send(network_msg, header.from(), true).unwrap();
+        self.node.send(reply, header.from(), true).unwrap();
     }
 
     /// Advances the state of the CST state machine.
-    pub fn process_message<D, OP, LP, V>(
+    pub fn process_message<V>(
         &mut self,
         view: V,
         progress: CstProgress<S>,
     ) -> CstStatus<S>
-        where D: ApplicationData + 'static,
-              OP: OrderingProtocolMessage + 'static,
-              LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>,
-              V: NetworkView
+        where V: NetworkView
     {
         match self.phase {
             ProtoPhase::WaitingCheckpoint(_) => {
@@ -868,11 +829,8 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
     /// Handle a timeout received from the timeouts layer.
     /// Returns a bool to signify if we must move to the Retrieving state
     /// If the timeout is no longer relevant, returns false (Can remain in current phase)
-    pub fn cst_request_timed_out<D, OP, LP, V>(&mut self, seq: SeqNo, view: V) -> bool
-        where D: ApplicationData + 'static,
-              OP: OrderingProtocolMessage + 'static,
-              LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>, V: NetworkView {
+    pub fn cst_request_timed_out<V>(&mut self, seq: SeqNo, view: V) -> bool
+        where V: NetworkView {
         let status = self.timed_out(seq);
 
         match status {
@@ -923,14 +881,10 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
     /// Used by a recovering node to retrieve the latest sequence number
     /// attributed to a client request by the consensus layer.
-    pub fn request_latest_consensus_seq_no<D, OP, LP, V>(
+    pub fn request_latest_consensus_seq_no<V>(
         &mut self,
         view: V,
-    ) where D: ApplicationData + 'static,
-            OP: OrderingProtocolMessage + 'static,
-            LP: LogTransferMessage + 'static,
-            NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>,
-            V: NetworkView
+    ) where V: NetworkView
     {
 
         // reset state of latest seq no. request
@@ -956,17 +910,13 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
         let targets = view.quorum_members().clone().into_iter().filter(|id| *id != self.node.id());
 
-        self.node.broadcast(SystemMessage::from_state_transfer_message(message), targets);
+        self.node.broadcast(message, targets);
     }
 
     /// Used by a recovering node to retrieve the latest state.
-    pub fn request_latest_state<D, OP, LP, V>(
+    pub fn request_latest_state<V>(
         &mut self, view: V,
-    ) where D: ApplicationData + 'static,
-            OP: OrderingProtocolMessage + 'static,
-            LP: LogTransferMessage + 'static,
-            NT: ProtocolNetworkNode<ServiceMsg<D, OP, Ser<Self, S, NT, PL>, LP>>,
-            V: NetworkView
+    ) where V: NetworkView
     {
         // reset hashmap of received states
         self.received_states.clear();
@@ -988,7 +938,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         let message = CstMessage::new(cst_seq, CstMessageKind::RequestState);
         let targets = view.quorum_members().clone().into_iter().filter(|id| *id != self.node.id());
 
-        self.node.broadcast(SystemMessage::from_state_transfer_message(message), targets);
+        self.node.broadcast(message, targets);
     }
 }
 
