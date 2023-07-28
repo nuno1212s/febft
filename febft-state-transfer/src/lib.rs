@@ -305,7 +305,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
             _ => {}
         }
 
-// Notify timeouts that we have received this message
+        // Notify timeouts that we have received this message
         self.timeouts.received_cst_request(header.from(), message.sequence_number());
 
         let status = self.process_message(view.clone(),
