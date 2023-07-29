@@ -13,6 +13,7 @@ use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_ad
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_core::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage, SystemMessage};
+use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::ProtocolConsensusDecision;
 use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
 use atlas_core::serialize::{LogTransferMessage, ReconfigurationProtocolMessage, StateTransferMessage};
@@ -184,10 +185,8 @@ pub struct Signals {
 
 /// The consensus handler. Responsible for multiplexing consensus instances and keeping track
 /// of missing messages
-pub struct Consensus<D, ST, LP, PL, RP>
+pub struct Consensus<D, PL, RP>
     where D: ApplicationData + 'static,
-          ST: StateTransferMessage + 'static,
-          LP: LogTransferMessage + 'static,
           RP: ReconfigurationProtocolMessage + 'static,
           PL: Clone {
     node_id: NodeId,
@@ -204,7 +203,7 @@ pub struct Consensus<D, ST, LP, PL, RP>
     /// The consensus instances that are currently being processed
     /// A given consensus instance n will only be finished when all consensus instances
     /// j, where j < n have already been processed, in order to maintain total ordering
-    decisions: VecDeque<ConsensusDecision<D, ST, LP, PL, RP>>,
+    decisions: VecDeque<ConsensusDecision<D, PL, RP>>,
     /// The queue for messages that sit outside the range seq_no + watermark
     /// These messages cannot currently be processed since they sit outside the allowed
     /// zone but they will be processed once the seq no moves forward enough to include them
@@ -223,11 +222,9 @@ pub struct Consensus<D, ST, LP, PL, RP>
     persistent_log: PL,
 }
 
-impl<D, ST, LP, PL, RP> Consensus<D, ST, LP, PL, RP> where D: ApplicationData + 'static,
-                                                           ST: StateTransferMessage + 'static,
-                                                           LP: LogTransferMessage + 'static,
-                                                           RP: ReconfigurationProtocolMessage + 'static,
-                                                           PL: Clone {
+impl<D, PL, RP> Consensus<D, PL, RP> where D: ApplicationData + 'static,
+                                           RP: ReconfigurationProtocolMessage + 'static,
+                                           PL: Clone {
     pub fn new_replica(node_id: NodeId, view: &ViewInfo, executor_handle: ExecutorHandle<D>, seq_no: SeqNo,
                        watermark: u32, consensus_guard: Arc<ProposerConsensusGuard>, timeouts: Timeouts,
                        persistent_log: PL) -> Self {
@@ -372,7 +369,7 @@ impl<D, ST, LP, PL, RP> Consensus<D, ST, LP, PL, RP> where D: ApplicationData + 
                                timeouts: &Timeouts,
                                log: &mut Log<D, PL>,
                                node: &Arc<NT>) -> Result<ConsensusStatus>
-        where NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> + 'static,
+        where NT: OrderProtocolSendNode<D, PBFT<D, RP>> + 'static,
               PL: OrderingProtocolLog<PBFTConsensus<D, RP>>, {
         let message_seq = message.sequence_number();
 
@@ -485,7 +482,7 @@ impl<D, ST, LP, PL, RP> Consensus<D, ST, LP, PL, RP> where D: ApplicationData + 
     /// Advance to the next instance of the consensus
     /// This will also create the necessary new decision to keep the pending decisions
     /// equal to the water mark
-    pub fn next_instance(&mut self, view: &ViewInfo) -> ConsensusDecision<D, ST, LP, PL, RP> {
+    pub fn next_instance(&mut self, view: &ViewInfo) -> ConsensusDecision<D, PL, RP> {
         let decision = self.decisions.pop_front().unwrap();
 
         self.seq_no = self.seq_no.next();
@@ -721,15 +718,15 @@ impl<D, ST, LP, PL, RP> Consensus<D, ST, LP, PL, RP> where D: ApplicationData + 
         &self,
         requests: Vec<StoredRequestMessage<D::Request>>,
         synchronizer: &K,
-    ) -> SysMsg<D, ST, LP, RP>
+    ) -> SysMsg<D, RP>
         where
             K: AbstractSynchronizer<D, RP>,
     {
-        SystemMessage::from_protocol_message(PBFTMessage::Consensus(ConsensusMessage::new(
+        PBFTMessage::Consensus(ConsensusMessage::new(
             self.sequence_number(),
             synchronizer.view().sequence_number(),
             ConsensusMessageKind::PrePrepare(requests),
-        )))
+        ))
     }
 
     /// Install a given view into the current consensus decisions.
@@ -809,7 +806,7 @@ impl<D, ST, LP, PL, RP> Consensus<D, ST, LP, PL, RP> where D: ApplicationData + 
         log: &mut Log<D, PL>,
         node: &Arc<NT>,
     ) where
-        NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> + 'static,
+        NT: OrderProtocolSendNode<D, PBFT<D, RP>> + 'static,
         PL: OrderingProtocolLog<PBFTConsensus<D, RP>> {
         let view = synchronizer.view();
         //Prepare the algorithm as we are already entering this phase
@@ -852,7 +849,7 @@ impl<D, ST, LP, PL, RP> Consensus<D, ST, LP, PL, RP> where D: ApplicationData + 
     }
 
     /// Enqueue a decision onto our overlapping decision log
-    fn enqueue_decision(&mut self, decision: ConsensusDecision<D, ST, LP, PL, RP>) {
+    fn enqueue_decision(&mut self, decision: ConsensusDecision<D, PL, RP>) {
         self.signalled.push_signalled(decision.sequence_number());
 
         self.decisions.push_back(decision);
@@ -874,10 +871,8 @@ impl<D, ST, LP, PL, RP> Consensus<D, ST, LP, PL, RP> where D: ApplicationData + 
     }
 }
 
-impl<D, ST, LP, PL, RP> Orderable for Consensus<D, ST, LP, PL, RP>
+impl<D, PL, RP> Orderable for Consensus<D, PL, RP>
     where D: ApplicationData + 'static,
-          ST: StateTransferMessage + 'static,
-          LP: LogTransferMessage + 'static,
           RP: ReconfigurationProtocolMessage + 'static,
           PL: Clone {
     fn sequence_number(&self) -> SeqNo {

@@ -13,6 +13,7 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_core::messages::ClientRqInfo;
+use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::persistent_log::{OperationMode, OrderingProtocolLog};
 use atlas_core::serialize::{LogTransferMessage, ReconfigurationProtocolMessage, StateTransferMessage};
 use atlas_core::timeouts::Timeouts;
@@ -104,10 +105,8 @@ pub struct MessageQueue<O> {
 }
 
 /// The information needed to make a decision on a batch of requests.
-pub struct ConsensusDecision<D, ST, LP, PL, RP> where D: ApplicationData + 'static,
-                                                      ST: StateTransferMessage + 'static,
-                                                      LP: LogTransferMessage + 'static,
-                                                      RP: ReconfigurationProtocolMessage + 'static {
+pub struct ConsensusDecision<D, PL, RP> where D: ApplicationData + 'static,
+                                              RP: ReconfigurationProtocolMessage + 'static {
     node_id: NodeId,
     /// The sequence number of this consensus decision
     seq: SeqNo,
@@ -120,7 +119,7 @@ pub struct ConsensusDecision<D, ST, LP, PL, RP> where D: ApplicationData + 'stat
     /// Persistent log reference
     persistent_log: PL,
     /// Accessory to the base consensus state machine
-    accessory: ConsensusDecisionAccessory<D, ST, LP, RP>,
+    accessory: ConsensusDecisionAccessory<D, RP>,
     // Metrics about the consensus instance
     consensus_metrics: ConsensusMetrics,
     //TODO: Store things directly into the persistent log as well as delete them when
@@ -176,10 +175,8 @@ impl<O> MessageQueue<O> {
     }
 }
 
-impl<D, ST, LP, PL, RP> ConsensusDecision<D, ST, LP, PL, RP>
+impl<D, PL, RP> ConsensusDecision<D, PL, RP>
     where D: ApplicationData + 'static,
-          ST: StateTransferMessage + 'static,
-          LP: LogTransferMessage + 'static,
           RP: ReconfigurationProtocolMessage + 'static {
     pub fn init_decision(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo, persistent_log: PL) -> Self {
         Self {
@@ -272,7 +269,7 @@ impl<D, ST, LP, PL, RP> ConsensusDecision<D, ST, LP, PL, RP>
                                timeouts: &Timeouts,
                                log: &mut Log<D, PL>,
                                node: &Arc<NT>) -> Result<DecisionStatus>
-        where NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> + 'static,
+        where NT: OrderProtocolSendNode<D, PBFT<D, RP>> + 'static,
               PL: OrderingProtocolLog<PBFTConsensus<D, RP>> {
         let view = synchronizer.view();
 
@@ -526,7 +523,7 @@ impl<D, ST, LP, PL, RP> ConsensusDecision<D, ST, LP, PL, RP>
                     self.consensus_metrics.first_commit_recvd();
                 }
 
-                let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header,message)));
+                let stored_msg = Arc::new(ReadOnly::new(StoredMessage::new(header, message)));
 
                 self.message_log.process_message(stored_msg.clone())?;
 
@@ -597,10 +594,8 @@ impl<D, ST, LP, PL, RP> ConsensusDecision<D, ST, LP, PL, RP>
     }
 }
 
-impl<D, ST, LP, PL, RP> Orderable for ConsensusDecision<D, ST, LP, PL, RP>
+impl<D, PL, RP> Orderable for ConsensusDecision<D, PL, RP>
     where D: ApplicationData + 'static,
-          ST: StateTransferMessage + 'static,
-          LP: LogTransferMessage + 'static,
           RP: ReconfigurationProtocolMessage + 'static {
     fn sequence_number(&self) -> SeqNo {
         self.seq

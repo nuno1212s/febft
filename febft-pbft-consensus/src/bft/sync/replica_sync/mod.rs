@@ -16,6 +16,7 @@ use atlas_communication::message::{NetworkMessageKind};
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
+use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use atlas_core::serialize::{LogTransferMessage, ReconfigurationProtocolMessage, StateTransferMessage};
@@ -58,20 +59,18 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     ///
     /// Therefore, we start by clearing our stopped requests and treating them as
     /// newly proposed requests (by resetting their timer)
-    pub(super) fn handle_stopping_quorum<ST, LP, NT, PL, RP>(
+    pub(super) fn handle_stopping_quorum<NT, PL, RP>(
         &self,
         base_sync: &Synchronizer<D, RP>,
         previous_view: ViewInfo,
-        consensus: &Consensus<D, ST, LP, PL, RP>,
+        consensus: &Consensus<D, PL, RP>,
         log: &Log<D, PL>,
         pre_processor: &RequestPreProcessor<D::Request>,
         timeouts: &Timeouts,
         node: &NT,
     )
-        where ST: StateTransferMessage + 'static,
-              LP: LogTransferMessage + 'static,
-              RP: ReconfigurationProtocolMessage + 'static,
-              NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>>,
+        where RP: ReconfigurationProtocolMessage + 'static,
+              NT: OrderProtocolSendNode<D, PBFT<D, RP>>,
               PL: OrderingProtocolLog<PBFTConsensus<D, RP>> {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
@@ -105,22 +104,20 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
             ViewChangeMessageKind::StopData(collect),
         ));
 
-        node.send_signed(SystemMessage::from_protocol_message(message), current_leader, true);
+        node.send_signed(message, current_leader, true);
     }
 
     /// Start a new view change
     /// Receives the requests that it should send to the other
     /// nodes in its STOP message
-    pub(super) fn handle_begin_view_change<ST, LP, NT, RP>(
+    pub(super) fn handle_begin_view_change<NT, RP>(
         &self,
         base_sync: &Synchronizer<D, RP>,
         timeouts: &Timeouts,
         node: &NT,
         timed_out: Option<Vec<StoredRequestMessage<D::Request>>>,
-    ) where ST: StateTransferMessage + 'static,
-            LP: LogTransferMessage + 'static,
-            RP: ReconfigurationProtocolMessage + 'static,
-            NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> {
+    ) where RP: ReconfigurationProtocolMessage + 'static,
+            NT: OrderProtocolSendNode<D, PBFT<D, RP>> {
         // stop all timers
         self.unwatch_all_requests(timeouts);
 
@@ -143,7 +140,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
 
         let targets = current_view.quorum_members().clone();
 
-        node.broadcast(SystemMessage::from_protocol_message(message), targets.into_iter());
+        node.broadcast(message, targets.into_iter());
     }
 
     /// Watch a vector of requests received
@@ -335,21 +332,19 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
 
     /// Forward the requests that timed out, `timed_out`, to all the nodes in the
     /// current view.
-    pub fn forward_requests<ST, LP, NT, RP>(
+    pub fn forward_requests<NT, RP>(
         &self,
         base_sync: &Synchronizer<D, RP>,
         timed_out: Vec<StoredRequestMessage<D::Request>>,
         node: &NT,
-    ) where ST: StateTransferMessage + 'static,
-            LP: LogTransferMessage + 'static,
-            RP: ReconfigurationProtocolMessage + 'static,
-            NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> {
-        let message = SystemMessage::ForwardedRequestMessage(ForwardedRequestsMessage::new(timed_out));
+    ) where RP: ReconfigurationProtocolMessage + 'static,
+            NT: OrderProtocolSendNode<D, PBFT<D, RP>> {
+        let message = ForwardedRequestsMessage::new(timed_out);
         let view = base_sync.view();
 
         let targets = view.quorum_members().clone();
 
-        node.broadcast(message, targets.into_iter());
+        node.forward_requests(message, targets.into_iter());
     }
 
     /// Obtain the requests that we know have timed out so we can send out a stop message

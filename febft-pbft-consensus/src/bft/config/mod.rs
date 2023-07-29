@@ -9,7 +9,7 @@ use atlas_execution::serialize::ApplicationData;
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::sync::view::ViewInfo;
 
-pub struct PBFTConfig<D, ST, RP>
+pub struct PBFTConfig<D, RP>
     where D: ApplicationData, RP: ReconfigurationProtocolMessage + 'static {
     pub node_id: NodeId,
     // pub observer_handle: ObserverHandle,
@@ -18,12 +18,10 @@ pub struct PBFTConfig<D, ST, RP>
     pub timeout_dur: Duration,
     pub proposer_config: ProposerConfig,
     pub watermark: u32,
-    pub _phantom_data: PhantomData<ST>,
 }
 
 impl<D: ApplicationData + 'static,
-    ST: StateTransferMessage + 'static,
-    RP: ReconfigurationProtocolMessage + 'static> PBFTConfig<D, ST, RP> {
+    RP: ReconfigurationProtocolMessage + 'static> PBFTConfig<D, RP> {
     pub fn new(node_id: NodeId,
                follower_handle: Option<FollowerHandle<PBFTConsensus<D, RP>>>,
                view: ViewInfo, timeout_dur: Duration,
@@ -36,7 +34,6 @@ impl<D: ApplicationData + 'static,
             timeout_dur,
             proposer_config,
             watermark,
-            _phantom_data: Default::default(),
         }
     }
 }

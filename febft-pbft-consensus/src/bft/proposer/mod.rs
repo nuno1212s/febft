@@ -12,7 +12,7 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::threadpool;
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_core::messages::{ClientRqInfo, StoredRequestMessage, SystemMessage};
-use atlas_core::reconfiguration_protocol::ReconfigurationProtocol;
+use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::request_pre_processing::{BatchOutput, PreProcessorOutputMessage};
 use atlas_core::serialize::{LogTransferMessage, ReconfigurationProtocolMessage, StateTransferMessage};
 use atlas_core::timeouts::Timeouts;
@@ -109,10 +109,8 @@ impl<D, NT, RP> Proposer<D, NT, RP>
     }
 
     ///Start this work
-    pub fn start<ST, LP>(self: Arc<Self>) -> JoinHandle<()>
-        where ST: StateTransferMessage + 'static,
-              LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> + 'static {
+    pub fn start(self: Arc<Self>) -> JoinHandle<()>
+        where NT: OrderProtocolSendNode<D, PBFT<D, RP>> + 'static {
         std::thread::Builder::new()
             .name(format!("Proposer thread"))
             .spawn(move || {
@@ -247,12 +245,10 @@ impl<D, NT, RP> Proposer<D, NT, RP>
     /// Attempt to propose an unordered request batch
     /// Fails if the batch is not large enough or the timeout
     /// Has not yet occurred
-    fn propose_unordered<ST, LP>(
+    fn propose_unordered(
         &self,
         propose: &mut ProposeBuilder<D>,
-    ) -> bool where ST: StateTransferMessage + 'static,
-                    LP: LogTransferMessage + 'static,
-                    NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> {
+    ) -> bool where NT: OrderProtocolSendNode<D, PBFT<D, RP>> {
         if !propose.currently_accumulated.is_empty() {
             let current_batch_size = propose.currently_accumulated.len();
 
@@ -318,12 +314,9 @@ impl<D, NT, RP> Proposer<D, NT, RP>
 
     /// attempt to propose the ordered requests that we have collected
     /// Returns true if a batch was proposed
-    fn propose_ordered<ST, LP>(&self,
-                               is_leader: bool,
-                               propose: &mut ProposeBuilder<D>, ) -> bool
-        where ST: StateTransferMessage + 'static,
-              LP: LogTransferMessage + 'static,
-              NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> {
+    fn propose_ordered(&self, is_leader: bool,
+                       propose: &mut ProposeBuilder<D>, ) -> bool
+        where NT: OrderProtocolSendNode<D, PBFT<D, RP>> {
 
         //Now let's deal with ordered requests
         if is_leader {
@@ -375,15 +368,13 @@ impl<D, NT, RP> Proposer<D, NT, RP>
 
     /// Proposes a new batch.
     /// (Basically broadcasts it to all of the members)
-    fn propose<ST, LP>(
+    fn propose(
         &self,
         seq: SeqNo,
         view: &ViewInfo,
         mut currently_accumulated: Vec<StoredRequestMessage<D::Request>>,
     ) where
-        ST: StateTransferMessage + 'static,
-        LP: LogTransferMessage + 'static,
-        NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> {
+        NT: OrderProtocolSendNode<D, PBFT<D, RP>> {
         let has_pending_messages = self.consensus_guard.has_pending_view_change_reqs();
 
         let is_view_change_empty = {
@@ -425,7 +416,7 @@ impl<D, NT, RP> Proposer<D, NT, RP>
 
         let targets = view.quorum_members().clone();
 
-        self.node_ref.broadcast_signed(SystemMessage::from_protocol_message(message), targets.into_iter());
+        self.node_ref.broadcast_signed(message, targets.into_iter());
 
         metric_increment(PROPOSER_BATCHES_MADE_ID, Some(1));
     }
