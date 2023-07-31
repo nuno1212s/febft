@@ -190,6 +190,9 @@ impl<D, NT, PL, RP> OrderingProtocol<D, NT, PL> for PBFTOrderProtocol<D, NT, PL,
 
     fn poll(&mut self) -> OrderProtocolPoll<PBFTMessage<D::Request, QuorumJoinCert<RP>>, D::Request>
         where PL: OrderingProtocolLog<PBFTConsensus<D, RP>> {
+
+        trace!("{:?} // Polling {:?}", self.node.id(), self.phase);
+
         match self.phase {
             ConsensusPhase::NormalPhase => {
                 self.poll_normal_phase()
@@ -820,6 +823,8 @@ impl<D, NT, PL, RP> ReconfigurableOrderProtocol<RP> for PBFTOrderProtocol<D, NT,
           NT: OrderProtocolSendNode<D, PBFT<D, RP>> + 'static,
           PL: Clone {
     fn attempt_network_view_change(&mut self, join_certificate: QuorumJoinCert<RP>) -> Result<ReconfigurationAttemptResult> {
+        self.switch_phase(ConsensusPhase::SyncPhase);
+
         Ok(self.synchronizer.attempt_join_quorum(join_certificate, &*self.node, &self.timeouts))
     }
 }

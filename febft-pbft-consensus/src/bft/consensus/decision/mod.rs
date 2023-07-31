@@ -288,24 +288,24 @@ impl<D, PL, RP> ConsensusDecision<D, PL, RP>
                     ConsensusMessageKind::PrePrepare(_)
                     if message.view() != view.sequence_number() => {
                         // drop proposed value in a different view (from different leader)
-                        debug!("{:?} // Dropped pre prepare message because of view {:?} vs {:?} (ours)",
-                            self.node_id, message.view(), synchronizer.view().sequence_number());
+                        debug!("{:?} // Dropped {:?} because of view {:?} vs {:?} (ours) header {:?}",
+                            self.node_id, message, message.view(), synchronizer.view().sequence_number(), header);
 
                         return Ok(DecisionStatus::Deciding);
                     }
                     ConsensusMessageKind::PrePrepare(_)
                     if !view.leader_set().contains(&header.from()) => {
                         // Drop proposed value since sender is not leader
-                        debug!("{:?} // Dropped pre prepare message because the sender was not the leader {:?} vs {:?} (ours)",
-                        self.node_id, header.from(), view.leader());
+                        debug!("{:?} // Dropped {:?} because the sender was not the leader {:?} vs {:?} (ours)",
+                        self.node_id,message, header.from(), view.leader());
 
                         return Ok(DecisionStatus::Deciding);
                     }
                     ConsensusMessageKind::PrePrepare(_)
                     if message.sequence_number() != self.seq => {
                         //Drop proposed value since it is not for this consensus instance
-                        warn!("{:?} // Dropped pre prepare message because the sequence number was not the same {:?} vs {:?} (ours)",
-                            self.node_id, message.sequence_number(), self.seq);
+                        warn!("{:?} // Dropped {:?} because the sequence number was not the same {:?} vs {:?} (ours)",
+                            self.node_id, message, message.sequence_number(), self.seq);
 
                         return Ok(DecisionStatus::Deciding);
                     }
