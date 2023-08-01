@@ -395,7 +395,7 @@ pub struct Synchronizer<D: ApplicationData, RP: ReconfigurationProtocolMessage> 
     //Stores currently received requests from other nodes
     stopped: RefCell<IntMap<Vec<StoredRequestMessage<D::Request>>>>,
     //Stores currently received requests from other nodes
-    currently_adding_node: Cell<Option<NodeId>>,
+    currently_adding_node: Cell<Option<(NodeId, QuorumJoinCert<RP>)>>,
     //TODO: This does not require a Mutex I believe since it's only accessed when
     // Processing messages (which is always done in the replica thread)
     collects: Mutex<CollectsType<D, QuorumJoinCert<RP>>>,
@@ -732,9 +732,7 @@ impl<D, RP> Synchronizer<D, RP>
 
                 // FIXME: Check if we have already seen the messages in the stop quorum
 
-                self.stopped
-                    .borrow_mut()
-                    .insert(header.from().into(), stopped);
+                self.stopped.borrow_mut().insert(header.from().into(), stopped);
 
                 // NOTE: we only take this branch of the code before
                 // we have sent our own STOP message
@@ -792,19 +790,11 @@ impl<D, RP> Synchronizer<D, RP>
 
                 let (received, node_id, jc) = match message.kind() {
                     ViewChangeMessageKind::NodeQuorumJoin(node_id, join_certificate) if msg_seq == next_seq => {
-                        //TODO: Verify
+                        //TODO: Verify node join certificate
 
-                        self.currently_adding_node.replace(Some(*node_id));
+                        self.currently_adding_node.replace(Some((*node_id, join_certificate.clone())));
 
-                        let message = ViewChangeMessageKind::StopQuorumJoin(*node_id, join_certificate.clone());
-
-                        let message = ViewChangeMessage::new(next_seq, message);
-
-                        let message = PBFTMessage::ViewChange(message);
-
-                        node.broadcast_signed(message, current_view.quorum_members().clone().into_iter());
-
-                        self.begin_quorum_view_change(Some(join_certificate.clone()), &**node, timeouts, log);
+                        self.begin_quorum_view_change(Some((*node_id, join_certificate.clone())), &**node, timeouts, log);
 
                         return SynchronizerStatus::Running;
                     }
@@ -879,7 +869,7 @@ impl<D, RP> Synchronizer<D, RP>
 
                 if let ProtoPhase::ViewStopping(_received) = self.phase.get() {
                     return if received > current_view.params().f() {
-                        self.currently_adding_node.replace(Some(node_id));
+                        self.currently_adding_node.replace(Some((node_id, jc.clone())));
 
                         self.begin_quorum_view_change(None, &**node, timeouts, log);
 
@@ -892,7 +882,7 @@ impl<D, RP> Synchronizer<D, RP>
                 }
 
                 if received >= current_view.params().quorum() {
-                    let next_view = current_view.next_view_with_new_node(self.currently_adding_node.get().unwrap());
+                    let next_view = current_view.next_view_with_new_node(self.currently_adding_node.get().unwrap().0);
 
                     let previous_view = current_view.clone();
 
@@ -1318,7 +1308,7 @@ impl<D, RP> Synchronizer<D, RP>
 
     pub fn begin_quorum_view_change<NT, PL>(
         &self,
-        join_cert: Option<QuorumJoinCert<RP>>,
+        join_cert: Option<(NodeId, QuorumJoinCert<RP>)>,
         node: &NT,
         timeouts: &Timeouts,
         _log: &Log<D, PL>, )
@@ -1337,12 +1327,19 @@ impl<D, RP> Synchronizer<D, RP>
                 // The amount of messages received (since we have not actually received any messages)
                 self.phase.replace(ProtoPhase::ViewStopping2(i));
             }
-            (ProtoPhase::StoppingData(_), _) | (ProtoPhase::Syncing, _) | (ProtoPhase::Stopping2(_), _) => {
+            (ProtoPhase::StoppingData(_), _) | (ProtoPhase::Syncing, _) | (ProtoPhase::ViewStopping2(_), _) => {
                 // we have already started a view change protocol
                 return;
             }
             _ => {
                 self.currently_adding_node.replace(None);
+            }
+        }
+
+        match &self.accessory {
+            SynchronizerAccessory::Follower(_) => {}
+            SynchronizerAccessory::Replica(replica) => {
+                replica.handle_begin_quorum_view_change(self, timeouts, node, join_cert)
             }
         }
     }
@@ -1429,7 +1426,7 @@ impl<D, RP> Synchronizer<D, RP>
                 self.phase.replace(ProtoPhase::Stopping2(0));
             }
             (ProtoPhase::StoppingData(_), _) | (ProtoPhase::Syncing, _) | (ProtoPhase::Stopping2(_), _) => {
-                // we have already started a view change protocol
+                // we have already started a view change protocol or we have already sent our STOP message
                 return;
             }
             // we have timed out, therefore we should send a STOP msg;

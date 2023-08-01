@@ -9,6 +9,7 @@ use std::marker::PhantomData;
 
 use std::time::{Duration, Instant};
 use log::{debug, error, info};
+use num_traits::real::Real;
 use atlas_common::collections;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable};
@@ -18,6 +19,7 @@ use atlas_execution::serialize::ApplicationData;
 use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
+use atlas_core::reconfiguration_protocol::QuorumJoinCert;
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use atlas_core::serialize::{LogTransferMessage, ReconfigurationProtocolMessage, StateTransferMessage};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, TimeoutPhase, Timeouts};
@@ -123,8 +125,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
 
         // broadcast STOP message with pending requests collected
         // from peer nodes' STOP messages
-        let requests = self.stopped_requests(base_sync,
-                                             timed_out);
+        let requests = self.stopped_requests(base_sync, timed_out);
 
         let current_view = base_sync.view();
 
@@ -141,6 +142,30 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
         let targets = current_view.quorum_members().clone();
 
         node.broadcast(message, targets.into_iter());
+    }
+
+    pub(super) fn handle_begin_quorum_view_change<NT, RP>(
+        &self,
+        base_sync: &Synchronizer<D, RP>,
+        timeouts: &Timeouts,
+        node: &NT,
+        join_cert: Option<(NodeId, QuorumJoinCert<RP>)>,
+    ) where RP: ReconfigurationProtocolMessage + 'static,
+            NT: OrderProtocolSendNode<D, PBFT<D, RP>> {
+
+        let current_view = base_sync.view();
+
+        let (node_id, join_certificate) = self.joining_node(base_sync, join_cert);
+
+        info!("{:?} // Beginning a quorum view change to next view with new node: {:?}", node.id(), node_id);
+
+        let message = ViewChangeMessageKind::StopQuorumJoin(node_id, join_certificate);
+
+        let message = ViewChangeMessage::new(current_view.sequence_number().next(), message);
+
+        let message = PBFTMessage::ViewChange(message);
+
+        node.broadcast_signed(message, current_view.quorum_members().clone().into_iter());
     }
 
     /// Watch a vector of requests received
@@ -379,6 +404,22 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
         }
 
         all_reqs.drain().map(|(_, stop)| stop).collect()
+    }
+
+    fn joining_node<RP>(
+        &self,
+        base_sync: &Synchronizer<D, RP>,
+        join_cert: Option<(NodeId, QuorumJoinCert<RP>)>,
+    ) -> (NodeId, QuorumJoinCert<RP>)
+        where RP: ReconfigurationProtocolMessage + 'static {
+        let (node, join_cert) = match join_cert {
+            Some((node, join_cert)) => (node, join_cert),
+            None => {
+                let adding_node = base_sync.currently_adding_node.get();
+
+                adding_node.expect("We should have a node we are adding")
+            }
+        };
     }
 
     fn stopped_request_digests<RP>(
