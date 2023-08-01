@@ -339,6 +339,9 @@ pub enum SynchronizerStatus<O> {
     Running,
     /// The view change protocol just finished running.
     NewView(Option<ProtocolConsensusDecision<O>>),
+    /// The view change protocol just finished running and we
+    /// have successfully joined the quorum.
+    NewViewJoinedQuorum(Option<ProtocolConsensusDecision<O>>),
     /// Before we finish the view change protocol, we need
     /// to run the CST protocol.
     RunCst,
@@ -398,6 +401,9 @@ pub struct Synchronizer<D: ApplicationData, RP: ReconfigurationProtocolMessage> 
     collects: Mutex<CollectsType<D, QuorumJoinCert<RP>>>,
     // Used to store the finalize state when we are forced to run the CST protocol
     finalize_state: RefCell<Option<FinalizeState<D::Request>>>,
+    // We need to keep track of whether we are entering the quorum
+    entering_quorum: Cell<bool>,
+    // Replica accessory
     accessory: SynchronizerAccessory<D>,
 }
 
@@ -450,6 +456,7 @@ impl<D, RP> Synchronizer<D, RP>
             collects: Mutex::new(Default::default()),
             tbo: Mutex::new(TboQueue::new(view)),
             finalize_state: RefCell::new(None),
+            entering_quorum: Cell::new(false),
             accessory: SynchronizerAccessory::Follower(FollowerSynchronizer::new()),
         })
     }
@@ -462,6 +469,7 @@ impl<D, RP> Synchronizer<D, RP>
             collects: Mutex::new(Default::default()),
             tbo: Mutex::new(TboQueue::new(view)),
             finalize_state: RefCell::new(None),
+            entering_quorum: Cell::new(false),
             accessory: SynchronizerAccessory::Replica(ReplicaSynchronizer::new(timeout_dur)),
         })
     }
@@ -481,6 +489,7 @@ impl<D, RP> Synchronizer<D, RP>
             currently_adding_node: Cell::new(None),
             collects: Mutex::new(Default::default()),
             finalize_state: RefCell::new(None),
+            entering_quorum: Cell::new(false),
             accessory: SynchronizerAccessory::Replica(ReplicaSynchronizer::new(timeout_dur)),
         }))
     }
@@ -509,10 +518,23 @@ impl<D, RP> Synchronizer<D, RP>
             ProtoPhase::Init => {
                 //If we are in the init phase and there is a pending request, move to the stopping phase
                 let result = extract_msg!(D::Request, QuorumJoinCert<RP>  =>
-                    { self.phase.replace(ProtoPhase::Stopping(0)); },
                     &mut tbo_guard.get_queue,
                     &mut tbo_guard.stop
                 );
+
+                match &result {
+                    SynchronizerPollStatus::NextMessage(h, vc) => {
+                        match vc.kind() {
+                            ViewChangeMessageKind::StopQuorumJoin(_, _) => {
+                                self.phase.replace(ProtoPhase::ViewStopping(0));
+                            }
+                            _ => {
+                                self.phase.replace(ProtoPhase::Stopping(0));
+                            }
+                        }
+                    }
+                    _ => {}
+                };
 
                 // Reset the tbo guard so we also query the join cert queue
                 tbo_guard.get_queue = true;
@@ -1357,6 +1379,8 @@ impl<D, RP> Synchronizer<D, RP>
             self.phase.replace(ProtoPhase::Syncing);
         }
 
+        self.entering_quorum.replace(true);
+
         self.install_view(view);
 
         return ReconfigurationAttemptResult::InProgress;
@@ -1418,6 +1442,7 @@ impl<D, RP> Synchronizer<D, RP>
                 self.stopped.borrow_mut().clear();
                 self.collects.lock().unwrap().clear();
                 self.currently_adding_node.replace(None);
+                self.entering_quorum.replace(false);
 
                 //Set the new state to be stopping
                 self.phase.replace(ProtoPhase::Stopping2(0));
@@ -1527,8 +1552,13 @@ impl<D, RP> Synchronizer<D, RP>
         self.tbo.lock().unwrap().next_instance_queue();
         self.phase.replace(ProtoPhase::Init);
 
-        // resume normal phase
-        SynchronizerStatus::NewView(to_execute)
+        if self.entering_quorum.get() && view.quorum_members().contains(&node.id()) {
+            self.entering_quorum.replace(false);
+            SynchronizerStatus::NewViewJoinedQuorum(to_execute)
+        } else {
+            // resume normal phase
+            SynchronizerStatus::NewView(to_execute)
+        }
     }
 
     /// Handle a batch of requests received from a Pre prepare message sent by the leader
