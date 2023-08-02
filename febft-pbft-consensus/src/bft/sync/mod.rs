@@ -467,6 +467,8 @@ impl<D> AbstractSynchronizer<D> for Synchronizer<D>
                 }
             }
 
+            // Perform various check to assert we obtain all the necessary information to
+            // Recover from a fault
 
             if view.leader() == self.node_id && self.can_process_stop_data() {
                 // If we are the leader of the new view, it means that we might still
