@@ -467,12 +467,12 @@ impl<D> AbstractSynchronizer<D> for Synchronizer<D>
                 }
             }
 
+
             if view.leader() == self.node_id && self.can_process_stop_data() {
                 // If we are the leader of the new view, it means that we might still
                 // Have time to actually process the messages that we received from the
                 // Other nodes in time to maintain regency
                 self.phase.replace(ProtoPhase::StoppingData(0));
-                return true;
             } else if self.can_process_sync() {
                 // If we are not the leader, then we need to check for the same thing
                 // But for sync messages. If we have a sync message in our queue,
@@ -481,13 +481,13 @@ impl<D> AbstractSynchronizer<D> for Synchronizer<D>
                 // Without first processing this sync message
                 self.phase.replace(ProtoPhase::Syncing);
 
-                return true;
             } else {
                 self.tbo.lock().unwrap().install_view(view);
                 return false;
             }
 
             self.install_next_view(view);
+            return true;
         } else {
             // This is the first view, so we can just install it
             if !self.tbo.lock().unwrap().install_view(view) {

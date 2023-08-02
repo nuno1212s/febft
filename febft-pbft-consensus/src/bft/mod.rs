@@ -3,6 +3,7 @@
 //! By default, it is hidden to the user, unless explicitly enabled
 //! with the feature flag `expose_impl`.
 
+use std::fmt::{Debug, Formatter};
 use std::ops::Drop;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -380,18 +381,29 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
                 if let PBFTMessage::ViewChange(view_change) = message.into_inner() {
                     let result = self.adv_sync(header, view_change);
 
-                    match result {
+                    return match result {
                         SyncPhaseRes::RunSyncProtocol => {
                             self.switch_phase(ConsensusPhase::SyncPhase);
 
-                            return OrderProtocolPoll::RePoll;
+                            OrderProtocolPoll::RePoll
                         }
                         SyncPhaseRes::RunCSTProtocol => {
                             // We don't need to switch to the sync phase
                             // As that has already been done by the adv sync method
-                            return OrderProtocolPoll::RunCst;
+                            OrderProtocolPoll::RunCst
                         }
-                        _ => { warn!("Polling the sync phase should never return anything other than a run sync protocol or run cst protocol message (Returned {:?})", result) }
+                        SyncPhaseRes::SyncProtocolNotNeeded => {
+                            warn!("Polling the sync phase should never return anything other than a run sync protocol or run cst protocol message, SyncProtocolNotNeeded");
+                            OrderProtocolPoll::RePoll
+                        }
+                        SyncPhaseRes::JoinedQuorum(_) => {
+                            warn!("Polling the sync phase should never return anything other than a run sync protocol or run cst protocol message, JoinedQuorum");
+                            OrderProtocolPoll::RePoll
+                        }
+                        SyncPhaseRes::SyncProtocolFinished(_) => {
+                            warn!("Polling the sync phase should never return anything other than a run sync protocol or run cst protocol message, Protocol Finished");
+                            OrderProtocolPoll::RePoll
+                        }
                     }
                 } else {
                     // The synchronizer should never return anything other than a view
