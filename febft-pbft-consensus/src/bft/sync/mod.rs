@@ -219,11 +219,15 @@ impl<O> TboQueue<O> {
     }
 
     /// Installs a new view into the queue.
+    /// clear_tbo indicates if we should clear the index corresponding to the installed view
+    /// or not. (In the case of state transfers, for example we don't want to clear the index)
     pub fn install_view(&mut self, view: ViewInfo) -> bool {
         let index = view.sequence_number().index(self.view.sequence_number());
 
         return match index {
             Either::Right(i) if i > 0 => {
+                info!("Installing view {:?} into tbo queue, moving right by {}, currently at sequence number {:?}", view, i, self.view.sequence_number());
+
                 let prev_view = std::mem::replace(&mut self.view, view);
 
                 self.previous_view = Some(prev_view);
@@ -270,6 +274,18 @@ impl<O> TboQueue<O> {
     /// the current view.
     pub fn can_process_stops(&self) -> bool {
         self.stop.get(0).map(|deque| deque.len() > 0).unwrap_or(false)
+    }
+
+    /// Verifies if we have new `STOP` messages to be processed for
+    /// the current view.
+    pub fn can_process_stop_data(&self) -> bool {
+        self.stop_data.get(0).map(|deque| deque.len() > 0).unwrap_or(false)
+    }
+
+    /// Verifies if we have new `STOP` messages to be processed for
+    /// the current view.
+    pub fn can_process_sync(&self) -> bool {
+        self.sync.get(0).map(|deque| deque.len() > 0).unwrap_or(false)
     }
 
     /// Queues a `STOP` message for later processing, or drops it
@@ -384,7 +400,7 @@ pub trait AbstractSynchronizer<D> where D: ApplicationData + 'static {
 
     /// Install a new view received from the CST protocol, or from
     /// running the view change protocol.
-    fn install_view(&self, view: ViewInfo);
+    fn received_view_from_state_transfer(&self, view: ViewInfo) -> bool;
 
     fn queue(&self, header: Header, message: ViewChangeMessage<D::Request>);
 }
@@ -395,6 +411,8 @@ type CollectsType<D: ApplicationData> = IntMap<StoredMessage<ViewChangeMessage<D
 /// This part of the protocol is responsible for handling the changing of views and
 /// for keeping track of any timed out client requests
 pub struct Synchronizer<D: ApplicationData> {
+    node_id: NodeId,
+
     phase: Cell<ProtoPhase>,
     //Tbo queue, keeps track of the current view and keeps messages arriving in order
     tbo: Mutex<TboQueue<D::Request>>,
@@ -429,18 +447,58 @@ impl<D> AbstractSynchronizer<D> for Synchronizer<D>
         self.tbo.lock().unwrap().view().clone()
     }
 
-    /// Install a new view received from the CST protocol, or from
-    /// running the view change protocol.
-    fn install_view(&self, view: ViewInfo) {
+    /// Install a new view received from the CST protocol
+    /// This means that we are recovering from a failure or entering the
+    /// system, so we have to catch up to any new information about the view
+    /// Returns whether we should run the view change protocol to process pending
+    /// messages
+    fn received_view_from_state_transfer(&self, view: ViewInfo) -> bool {
         // FIXME: is the following line necessary?
-        let mut guard = self.tbo.lock().unwrap();
 
-        if !guard.install_view(view) {
-            // If we don't install a new view, then we don't want to forget our current state now do we?
+        let current_view = self.view();
 
-            debug!("Replacing our phase with Init");
-            self.phase.replace(ProtoPhase::Init);
+        if let Some(previous_view) = view.previous_view() {
+            if current_view.sequence_number() != previous_view.sequence_number() {
+                if !self.tbo.lock().unwrap().install_view(previous_view) {
+                    // If we don't install a new view, then we don't want to forget our current state now do we?
+
+                    debug!("Replacing our phase with Init");
+                    self.phase.replace(ProtoPhase::Init);
+                }
+            }
+
+            if view.leader() == self.node_id && self.can_process_stop_data() {
+                // If we are the leader of the new view, it means that we might still
+                // Have time to actually process the messages that we received from the
+                // Other nodes in time to maintain regency
+                self.phase.replace(ProtoPhase::StoppingData(0));
+                return true;
+            } else if self.can_process_sync() {
+                // If we are not the leader, then we need to check for the same thing
+                // But for sync messages. If we have a sync message in our queue,
+                // It means that we probably didn't receive the first decision after
+                // The view change in the log, which means we can't keep executing
+                // Without first processing this sync message
+                self.phase.replace(ProtoPhase::Syncing);
+
+                return true;
+            } else {
+                self.tbo.lock().unwrap().install_view(view);
+                return false;
+            }
+
+            self.install_next_view(view);
+        } else {
+            // This is the first view, so we can just install it
+            if !self.tbo.lock().unwrap().install_view(view) {
+                // If we don't install a new view, then we don't want to forget our current state now do we?
+
+                debug!("Replacing our phase with Init");
+                self.phase.replace(ProtoPhase::Init);
+            }
         }
+
+        false
     }
 
     fn queue(&self, header: Header, message: ViewChangeMessage<D::Request>) {
@@ -450,8 +508,9 @@ impl<D> AbstractSynchronizer<D> for Synchronizer<D>
 
 impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 {
-    pub fn new_follower(view: ViewInfo) -> Arc<Self> {
+    pub fn new_follower(node_id: NodeId, view: ViewInfo) -> Arc<Self> {
         Arc::new(Self {
+            node_id,
             phase: Cell::new(ProtoPhase::Init),
             stopped: RefCell::new(Default::default()),
             currently_adding_node: Cell::new(None),
@@ -463,8 +522,9 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
         })
     }
 
-    pub fn new_replica(view: ViewInfo, timeout_dur: Duration) -> Arc<Self> {
+    pub fn new_replica(node_id: NodeId, view: ViewInfo, timeout_dur: Duration) -> Arc<Self> {
         Arc::new(Self {
+            node_id,
             phase: Cell::new(ProtoPhase::Init),
             stopped: RefCell::new(Default::default()),
             currently_adding_node: Cell::new(None),
@@ -477,7 +537,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
     }
 
     /// Initialize a new `Synchronizer` with the given quorum members.
-    pub fn initialize_with_quorum(seq_no: SeqNo, quorum_members: Vec<NodeId>, timeout_dur: Duration) -> Result<Arc<Self>> {
+    pub fn initialize_with_quorum(node_id: NodeId, seq_no: SeqNo, quorum_members: Vec<NodeId>, timeout_dur: Duration) -> Result<Arc<Self>> {
         let n = quorum_members.len();
 
         let f = (n - 1) / 3;
@@ -485,6 +545,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
         let view_info = ViewInfo::new(seq_no, n, f)?;
 
         Ok(Arc::new(Self {
+            node_id,
             phase: Cell::new(ProtoPhase::Init),
             tbo: Mutex::new(TboQueue::new(view_info)),
             stopped: RefCell::new(Default::default()),
@@ -519,6 +580,16 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
     pub fn can_process_stops(&self) -> bool {
         self.tbo.lock().unwrap().can_process_stops()
     }
+
+    /// Verifies if we have new `STOP_DATA` messages to be processed for
+    /// the next view.
+    pub fn can_process_stop_data(&self) -> bool {
+        self.tbo.lock().unwrap().can_process_stop_data()
+    }
+
+    /// Verifies if we have new `SYNC` messages to be processed for
+    /// the next view.
+    pub fn can_process_sync(&self) -> bool { self.tbo.lock().unwrap().can_process_sync() }
 
     /// Check if we can process new view change messages.
     /// If there are pending messages that are now processable (but weren't when we received them)
@@ -1092,7 +1163,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
             }
             ProtoPhase::Syncing => {
                 let msg_seq = message.sequence_number();
-                let next_view = self.next_view().expect("");
+                let next_view = self.next_view().expect("We should have a next view in this situation");
                 let seq = next_view.sequence_number();
 
                 // reject SYNC messages if these were not sent by the leader
@@ -1262,14 +1333,14 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
     pub fn attempt_join_quorum<NT>(&self, node: &NT,
                                    timeouts: &Timeouts) -> ReconfigurationAttemptResult
         where NT: OrderProtocolSendNode<D, PBFT<D>>, {
-
         let current_view = self.view();
 
         info!("{:?} // Attempting to join quorum, skipping stop phase as we are not yet part of the quorum", node.id());
 
         if current_view.quorum_members().contains(&node.id()) {
             //We are already a part of the quorum, so we don't need to do anything
-            info!("{:?} // Attempted to join quorum, but we are already a part of it", node.id());
+            info!("{:?} // Attempted to join quorum, but we are already a part of it, can we process sync messages {:?}", node.id(), self.can_process_sync());
+
             return ReconfigurationAttemptResult::AlreadyPartOfQuorum;
         }
 

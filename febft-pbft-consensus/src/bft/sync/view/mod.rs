@@ -161,6 +161,15 @@ impl ViewInfo {
         Self::from_quorum(self.seq.next(), quorum_members).unwrap()
     }
 
+    pub fn previous_view(&self) -> Option<ViewInfo> {
+        if self.seq == SeqNo::ZERO {
+            return None;
+        }
+
+
+        Some(Self::new(self.seq.prev(), self.params.n(), self.params.f()).unwrap())
+    }
+
     /// Returns a new view with the specified sequence number.
     pub fn peek(&self, seq: SeqNo) -> ViewInfo {
         Self::new(seq, self.params.n(), self.params.f()).unwrap()

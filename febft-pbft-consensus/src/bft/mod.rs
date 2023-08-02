@@ -288,7 +288,7 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
                                  pre_processor, batch_input,
                                  node, persistent_log, quorum) = args;
 
-        let sync = Synchronizer::initialize_with_quorum(view.sequence_number(), quorum.clone(), timeout_dur)?;
+        let sync = Synchronizer::initialize_with_quorum(node_id, view.sequence_number(), quorum.clone(), timeout_dur)?;
 
         let consensus_guard = ProposerConsensusGuard::new(view.clone(), watermark);
 
@@ -391,7 +391,7 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
                             // As that has already been done by the adv sync method
                             return OrderProtocolPoll::RunCst;
                         }
-                        _ => unreachable!("Polling the sync phase should never return anything other than a run sync protocol or run cst protocol message")
+                        _ => { warn!("Polling the sync phase should never return anything other than a run sync protocol or run cst protocol message (Returned {:?})", result) }
                     }
                 } else {
                     // The synchronizer should never return anything other than a view
@@ -648,7 +648,10 @@ impl<D, NT, PL> StatefulOrderProtocol<D, NT, PL> for PBFTOrderProtocol<D, NT, PL
 
         info!("{:?} // Installing decision log with last execution {:?}", self.node.id(),last_exec);
 
-        self.synchronizer.install_view(view_info.clone());
+        if self.synchronizer.received_view_from_state_transfer(view_info.clone()) {
+            info!("{:?} // We have pending view state messages that we need to process. Switching to sync phase", self.node.id());
+            self.switch_phase(ConsensusPhase::SyncPhase);
+        }
 
         let start = Instant::now();
 
