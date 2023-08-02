@@ -52,9 +52,8 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     /// Read the current state, if existent, from the persistent storage
     ///
     /// FIXME: The view initialization might have to be changed if we want to introduce reconfiguration
-    pub fn read_current_state<RP>(&self, n: usize, f: usize) -> Result<Option<(ViewInfo, DecisionLog<D::Request>)>>
-        where RP: ReconfigurationProtocolMessage + 'static,
-              PL: StatefulOrderingProtocolLog<PBFTConsensus<D, RP>, PBFTConsensus<D, RP>> {
+    pub fn read_current_state(&self, n: usize, f: usize) -> Result<Option<(ViewInfo, DecisionLog<D::Request>)>>
+        where PL: StatefulOrderingProtocolLog<PBFTConsensus<D>, PBFTConsensus<D>> {
         let option = self.persistent_log.read_state(OperationMode::BlockingSync)?;
 
         if let Some((view, dec_log)) = option {
@@ -77,12 +76,10 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     /// We can use this method when we want to prevent a clone, as this takes
     /// just a reference.
     /// This is mostly used for pre prepares as they contain all the requests and are therefore very expensive to send
-    pub fn insert_consensus<RP>(
+    pub fn insert_consensus(
         &mut self,
         consensus_msg: StoredConsensusMessage<D::Request>,
-    ) where
-        RP: ReconfigurationProtocolMessage + 'static,
-        PL: OrderingProtocolLog<PBFTConsensus<D, RP>>,
+    ) where PL: OrderingProtocolLog<PBFTConsensus<D>>,
     {
         if let Err(err) = self
             .persistent_log
@@ -96,10 +93,8 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     /// This is done when we receive the final SYNC message from the leader
     /// which contains all of the collects
     /// If we are missing the request determined by the
-    pub fn install_proof<RP>(&mut self, seq: SeqNo, proof: Proof<D::Request>) -> Result<ProtocolConsensusDecision<D::Request>>
-        where
-            RP: ReconfigurationProtocolMessage + 'static,
-            PL: OrderingProtocolLog<PBFTConsensus<D, RP>> {
+    pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<D::Request>) -> Result<ProtocolConsensusDecision<D::Request>>
+        where PL: OrderingProtocolLog<PBFTConsensus<D>> {
         let batch_execution_info = ProtocolConsensusDecision::from(&proof);
 
         if let Some(decision) = self.decision_log().last_decision() {
@@ -123,20 +118,16 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     }
 
     /// Clear the occurrences of a seq no from the decision log
-    pub fn clear_last_occurrence<RP>(&mut self, seq: SeqNo)
-        where
-            RP: ReconfigurationProtocolMessage + 'static,
-            PL: OrderingProtocolLog<PBFTConsensus<D, RP>> {
+    pub fn clear_last_occurrence(&mut self, seq: SeqNo)
+        where PL: OrderingProtocolLog<PBFTConsensus<D>> {
         if let Err(err) = self.persistent_log.write_invalidate(OperationMode::NonBlockingSync(None), seq) {
             error!("Failed to invalidate last occurrence {:?}", err);
         }
     }
 
     /// Update the log state, received from the CST protocol.
-    pub fn install_state<RP>(&mut self, view: ViewInfo, dec_log: DecisionLog<D::Request>)
-        where
-            RP: ReconfigurationProtocolMessage + 'static,
-            PL: StatefulOrderingProtocolLog<PBFTConsensus<D, RP>, PBFTConsensus<D, RP>> {
+    pub fn install_state(&mut self, view: ViewInfo, dec_log: DecisionLog<D::Request>)
+        where PL: StatefulOrderingProtocolLog<PBFTConsensus<D>, PBFTConsensus<D>> {
 
         //Replace the log
         self.dec_log = dec_log.clone();
@@ -171,9 +162,8 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
 
     /// Register that all the batches for a given decision have already been received
     /// Basically persists the metadata for a given consensus num
-    pub fn all_batches_received<RP>(&mut self, metadata: ProofMetadata)
-        where RP: ReconfigurationProtocolMessage + 'static,
-              PL: OrderingProtocolLog<PBFTConsensus<D, RP>> {
+    pub fn all_batches_received(&mut self, metadata: ProofMetadata)
+        where PL: OrderingProtocolLog<PBFTConsensus<D>> {
         self.persistent_log.write_proof_metadata(OperationMode::NonBlockingSync(None),
                                                  metadata).unwrap();
     }

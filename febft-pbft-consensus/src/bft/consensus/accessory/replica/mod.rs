@@ -24,25 +24,23 @@ use crate::bft::{PBFT, SysMsg};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::sync::view::ViewInfo;
 
-pub struct ReplicaAccessory<D, RP>
-    where D: ApplicationData + 'static,
-          RP: ReconfigurationProtocolMessage + 'static {
-    speculative_commits: Arc<Mutex<BTreeMap<NodeId, StoredSerializedProtocolMessage<SysMsg<D, RP>>>>>,
+pub struct ReplicaAccessory<D>
+    where D: ApplicationData + 'static {
+    speculative_commits: Arc<Mutex<BTreeMap<NodeId, StoredSerializedProtocolMessage<SysMsg<D>>>>>,
 }
 
-impl<D, RP> AccessoryConsensus<D, RP> for ReplicaAccessory<D, RP>
-    where D: ApplicationData + 'static,
-          RP: ReconfigurationProtocolMessage + 'static {
+impl<D> AccessoryConsensus<D> for ReplicaAccessory<D>
+    where D: ApplicationData + 'static,{
     fn handle_partial_pre_prepare<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                       view: &ViewInfo,
                                       msg: StoredConsensusMessage<D::Request>,
-                                      node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D, RP>> {}
+                                      node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 
     fn handle_pre_prepare_phase_completed<NT>(&mut self,
                                               deciding_log: &DecidingLog<D::Request>,
                                               view: &ViewInfo,
                                               _msg: StoredConsensusMessage<D::Request>,
-                                              node: &Arc<NT>) where NT: OrderProtocolSendNode<D, PBFT<D, RP>> + 'static {
+                                              node: &Arc<NT>) where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
         let my_id = node.id();
         let view_seq = view.sequence_number();
         let current_digest = deciding_log.current_digest().unwrap();
@@ -117,18 +115,18 @@ impl<D, RP> AccessoryConsensus<D, RP> for ReplicaAccessory<D, RP>
 
     fn handle_preparing_no_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                       view: &ViewInfo,
-                                      msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D, RP>> {}
+                                      msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 
     fn handle_preparing_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                    view: &ViewInfo,
-                                   msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D, RP>> {
+                                   msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {
         let node_id = node.id();
 
         let seq = deciding_log.sequence_number();
         let current_digest = deciding_log.current_digest().unwrap();
         let speculative_commits = self.take_speculative_commits();
 
-        if valid_spec_commits::<D, RP>(&speculative_commits, node_id, seq, view) {
+        if valid_spec_commits::<D>(&speculative_commits, node_id, seq, view) {
             for (_, msg) in speculative_commits.iter() {
                 debug!("{:?} // Broadcasting speculative commit message (total of {} messages) to {} targets",
                      node_id, speculative_commits.len(), view.params().n());
@@ -159,23 +157,22 @@ impl<D, RP> AccessoryConsensus<D, RP> for ReplicaAccessory<D, RP>
 
     fn handle_committing_no_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                        view: &ViewInfo,
-                                       msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D,  RP>> {}
+                                       msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 
     fn handle_committing_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                     view: &ViewInfo,
-                                    msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D,  RP>> {}
+                                    msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 }
 
-impl<D,  RP> ReplicaAccessory<D, RP>
-    where D: ApplicationData + 'static,
-          RP: ReconfigurationProtocolMessage + 'static {
+impl<D> ReplicaAccessory<D>
+    where D: ApplicationData + 'static, {
     pub fn new() -> Self {
         Self {
             speculative_commits: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
-    fn take_speculative_commits(&self) -> BTreeMap<NodeId, StoredSerializedProtocolMessage<SysMsg<D,  RP>>> {
+    fn take_speculative_commits(&self) -> BTreeMap<NodeId, StoredSerializedProtocolMessage<SysMsg<D>>> {
         let mut map = self.speculative_commits.lock().unwrap();
         std::mem::replace(&mut *map, BTreeMap::new())
     }
@@ -183,15 +180,14 @@ impl<D,  RP> ReplicaAccessory<D, RP>
 
 
 #[inline]
-fn valid_spec_commits<D,  RP>(
-    speculative_commits: &BTreeMap<NodeId, StoredSerializedProtocolMessage<SysMsg<D, RP>>>,
+fn valid_spec_commits<D>(
+    speculative_commits: &BTreeMap<NodeId, StoredSerializedProtocolMessage<SysMsg<D>>>,
     node_id: NodeId,
     seq_no: SeqNo,
     view: &ViewInfo,
 ) -> bool
     where
         D: ApplicationData + 'static,
-        RP: ReconfigurationProtocolMessage + 'static
 {
     let len = speculative_commits.len();
 

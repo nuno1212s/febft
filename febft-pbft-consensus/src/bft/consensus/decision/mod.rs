@@ -105,8 +105,7 @@ pub struct MessageQueue<O> {
 }
 
 /// The information needed to make a decision on a batch of requests.
-pub struct ConsensusDecision<D, PL, RP> where D: ApplicationData + 'static,
-                                              RP: ReconfigurationProtocolMessage + 'static {
+pub struct ConsensusDecision<D, PL> where D: ApplicationData + 'static, {
     node_id: NodeId,
     /// The sequence number of this consensus decision
     seq: SeqNo,
@@ -119,7 +118,7 @@ pub struct ConsensusDecision<D, PL, RP> where D: ApplicationData + 'static,
     /// Persistent log reference
     persistent_log: PL,
     /// Accessory to the base consensus state machine
-    accessory: ConsensusDecisionAccessory<D, RP>,
+    accessory: ConsensusDecisionAccessory<D>,
     // Metrics about the consensus instance
     consensus_metrics: ConsensusMetrics,
     //TODO: Store things directly into the persistent log as well as delete them when
@@ -175,9 +174,8 @@ impl<O> MessageQueue<O> {
     }
 }
 
-impl<D, PL, RP> ConsensusDecision<D, PL, RP>
-    where D: ApplicationData + 'static,
-          RP: ReconfigurationProtocolMessage + 'static {
+impl<D, PL> ConsensusDecision<D, PL>
+    where D: ApplicationData + 'static,{
     pub fn init_decision(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo, persistent_log: PL) -> Self {
         Self {
             node_id,
@@ -265,12 +263,12 @@ impl<D, PL, RP> ConsensusDecision<D, PL, RP>
     pub fn process_message<NT>(&mut self,
                                header: Header,
                                message: ConsensusMessage<D::Request>,
-                               synchronizer: &Synchronizer<D, RP>,
+                               synchronizer: &Synchronizer<D>,
                                timeouts: &Timeouts,
                                log: &mut Log<D, PL>,
                                node: &Arc<NT>) -> Result<DecisionStatus>
-        where NT: OrderProtocolSendNode<D, PBFT<D, RP>> + 'static,
-              PL: OrderingProtocolLog<PBFTConsensus<D, RP>> {
+        where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
+              PL: OrderingProtocolLog<PBFTConsensus<D>> {
         let view = synchronizer.view();
 
         return match self.phase {
@@ -594,24 +592,22 @@ impl<D, PL, RP> ConsensusDecision<D, PL, RP>
     }
 }
 
-impl<D, PL, RP> Orderable for ConsensusDecision<D, PL, RP>
-    where D: ApplicationData + 'static,
-          RP: ReconfigurationProtocolMessage + 'static {
+impl<D, PL> Orderable for ConsensusDecision<D, PL>
+    where D: ApplicationData + 'static, {
     fn sequence_number(&self) -> SeqNo {
         self.seq
     }
 }
 
 #[inline]
-fn request_batch_received<D, RP>(
+fn request_batch_received<D>(
     pre_prepare: &StoredConsensusMessage<D::Request>,
     timeouts: &Timeouts,
-    synchronizer: &Synchronizer<D, RP>,
+    synchronizer: &Synchronizer<D>,
     log: &DecidingLog<D::Request>,
 ) -> Vec<ClientRqInfo>
     where
         D: ApplicationData + 'static,
-        RP: ReconfigurationProtocolMessage + 'static
 {
     let start = Instant::now();
 

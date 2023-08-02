@@ -37,14 +37,13 @@ pub type BatchType<R> = Vec<StoredRequestMessage<R>>;
 ///Handles taking requests from the client pools and storing the requests in the log,
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
-pub struct Proposer<D, NT, RP>
-    where D: ApplicationData + 'static,
-          RP: ReconfigurationProtocolMessage + 'static {
+pub struct Proposer<D, NT>
+    where D: ApplicationData + 'static, {
     /// Channel for the reception of batches from the pre processing module
     batch_reception: BatchOutput<D::Request>,
     /// Network Node
     node_ref: Arc<NT>,
-    synchronizer: Arc<Synchronizer<D, RP>>,
+    synchronizer: Arc<Synchronizer<D>>,
     timeouts: Timeouts,
     consensus_guard: Arc<ProposerConsensusGuard>,
     // Should we shut down?
@@ -78,13 +77,12 @@ impl<D> ProposeBuilder<D> where D: ApplicationData {
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
 
-impl<D, NT, RP> Proposer<D, NT, RP>
-    where D: ApplicationData + 'static,
-          RP: ReconfigurationProtocolMessage + 'static {
+impl<D, NT> Proposer<D, NT>
+    where D: ApplicationData + 'static, {
     pub fn new(
         node: Arc<NT>,
         batch_input: BatchOutput<D::Request>,
-        sync: Arc<Synchronizer<D, RP>>,
+        sync: Arc<Synchronizer<D>>,
         timeouts: Timeouts,
         executor_handle: ExecutorHandle<D>,
         consensus_guard: Arc<ProposerConsensusGuard>,
@@ -110,7 +108,7 @@ impl<D, NT, RP> Proposer<D, NT, RP>
 
     ///Start this work
     pub fn start(self: Arc<Self>) -> JoinHandle<()>
-        where NT: OrderProtocolSendNode<D, PBFT<D, RP>> + 'static {
+        where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
         std::thread::Builder::new()
             .name(format!("Proposer thread"))
             .spawn(move || {
@@ -248,7 +246,7 @@ impl<D, NT, RP> Proposer<D, NT, RP>
     fn propose_unordered(
         &self,
         propose: &mut ProposeBuilder<D>,
-    ) -> bool where NT: OrderProtocolSendNode<D, PBFT<D, RP>> {
+    ) -> bool where NT: OrderProtocolSendNode<D, PBFT<D>> {
         if !propose.currently_accumulated.is_empty() {
             let current_batch_size = propose.currently_accumulated.len();
 
@@ -316,7 +314,7 @@ impl<D, NT, RP> Proposer<D, NT, RP>
     /// Returns true if a batch was proposed
     fn propose_ordered(&self, is_leader: bool,
                        propose: &mut ProposeBuilder<D>, ) -> bool
-        where NT: OrderProtocolSendNode<D, PBFT<D, RP>> {
+        where NT: OrderProtocolSendNode<D, PBFT<D>> {
 
         //Now let's deal with ordered requests
         if is_leader {
@@ -373,8 +371,7 @@ impl<D, NT, RP> Proposer<D, NT, RP>
         seq: SeqNo,
         view: &ViewInfo,
         mut currently_accumulated: Vec<StoredRequestMessage<D::Request>>,
-    ) where
-        NT: OrderProtocolSendNode<D, PBFT<D, RP>> {
+    ) where NT: OrderProtocolSendNode<D, PBFT<D>> {
         let has_pending_messages = self.consensus_guard.has_pending_view_change_reqs();
 
         let is_view_change_empty = {

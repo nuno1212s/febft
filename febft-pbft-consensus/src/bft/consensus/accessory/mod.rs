@@ -13,62 +13,59 @@ use crate::bft::sync::view::ViewInfo;
 
 pub mod replica;
 
-pub enum ConsensusDecisionAccessory<D, RP>
-    where D: ApplicationData + 'static,
-          RP: ReconfigurationProtocolMessage + 'static {
+pub enum ConsensusDecisionAccessory<D>
+    where D: ApplicationData + 'static, {
     Follower,
-    Replica(ReplicaAccessory<D, RP>),
+    Replica(ReplicaAccessory<D>),
 }
 
-pub trait AccessoryConsensus<D,RP> where D: ApplicationData + 'static,
-                                                  RP: ReconfigurationProtocolMessage + 'static {
+pub trait AccessoryConsensus<D> where D: ApplicationData + 'static,{
     /// Handle the reception of a pre-prepare message without having completed the pre prepare phase
     fn handle_partial_pre_prepare<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                       view: &ViewInfo,
                                       msg: StoredConsensusMessage<D::Request>,
-                                      node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D,RP>> + 'static;
+                                      node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D>> + 'static;
 
     /// Handle the prepare phase having been completed
     fn handle_pre_prepare_phase_completed<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                               view: &ViewInfo,
                                               msg: StoredConsensusMessage<D::Request>,
-                                              node: &Arc<NT>) where NT: OrderProtocolSendNode<D, PBFTConsensus<D,RP>> + 'static;
+                                              node: &Arc<NT>) where NT: OrderProtocolSendNode<D, PBFTConsensus<D>> + 'static;
 
     /// Handle a prepare message processed during the preparing phase without having
     /// reached a quorum
     fn handle_preparing_no_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                       view: &ViewInfo,
                                       msg: StoredConsensusMessage<D::Request>,
-                                      node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D, RP>> + 'static;
+                                      node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D>> + 'static;
 
     /// Handle a prepare message processed during the prepare phase when a quorum
     /// has been achieved
     fn handle_preparing_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                    view: &ViewInfo,
                                    msg: StoredConsensusMessage<D::Request>,
-                                   node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D, RP>> + 'static;
+                                   node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D>> + 'static;
 
     /// Handle a commit message processed during the preparing phase without having
     /// reached a quorum
     fn handle_committing_no_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                        view: &ViewInfo,
                                        msg: StoredConsensusMessage<D::Request>,
-                                       node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D, RP>> + 'static;
+                                       node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D>> + 'static;
 
     /// Handle a commit message processed during the prepare phase when a quorum has been reached
     fn handle_committing_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                     view: &ViewInfo,
                                     msg: StoredConsensusMessage<D::Request>,
-                                    node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D, RP>> + 'static;
+                                    node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D>> + 'static;
 }
 
-impl<D,  RP> AccessoryConsensus<D,  RP> for ConsensusDecisionAccessory<D, RP>
-    where D: ApplicationData + 'static,
-          RP: ReconfigurationProtocolMessage + 'static {
+impl<D> AccessoryConsensus<D> for ConsensusDecisionAccessory<D>
+    where D: ApplicationData + 'static{
     fn handle_partial_pre_prepare<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                       view: &ViewInfo,
                                       msg: StoredConsensusMessage<D::Request>,
-                                      node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D, RP>> + 'static {
+                                      node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D>> + 'static {
         match self {
             ConsensusDecisionAccessory::Follower => {}
             ConsensusDecisionAccessory::Replica(rep) => {
@@ -80,7 +77,7 @@ impl<D,  RP> AccessoryConsensus<D,  RP> for ConsensusDecisionAccessory<D, RP>
     fn handle_pre_prepare_phase_completed<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                               view: &ViewInfo,
                                               msg: StoredConsensusMessage<D::Request>,
-                                              node: &Arc<NT>) where NT: OrderProtocolSendNode<D, PBFTConsensus<D, RP>> + 'static{
+                                              node: &Arc<NT>) where NT: OrderProtocolSendNode<D, PBFTConsensus<D>> + 'static{
         match self {
             ConsensusDecisionAccessory::Follower => {}
             ConsensusDecisionAccessory::Replica(rep) => {
@@ -92,7 +89,7 @@ impl<D,  RP> AccessoryConsensus<D,  RP> for ConsensusDecisionAccessory<D, RP>
     fn handle_preparing_no_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                       view: &ViewInfo,
                                       msg: StoredConsensusMessage<D::Request>,
-                                      node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D, RP>> + 'static {
+                                      node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D>> + 'static {
         match self {
             ConsensusDecisionAccessory::Follower => {}
             ConsensusDecisionAccessory::Replica(rep) => {
@@ -104,7 +101,7 @@ impl<D,  RP> AccessoryConsensus<D,  RP> for ConsensusDecisionAccessory<D, RP>
     fn handle_preparing_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                    view: &ViewInfo,
                                    msg: StoredConsensusMessage<D::Request>,
-                                   node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D, RP>> + 'static {
+                                   node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D>> + 'static {
         match self {
             ConsensusDecisionAccessory::Follower => {}
             ConsensusDecisionAccessory::Replica(rep) => {
@@ -116,7 +113,7 @@ impl<D,  RP> AccessoryConsensus<D,  RP> for ConsensusDecisionAccessory<D, RP>
     fn handle_committing_no_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                        view: &ViewInfo,
                                        msg: StoredConsensusMessage<D::Request>,
-                                       node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D, RP>> + 'static {
+                                       node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D>> + 'static {
         match self {
             ConsensusDecisionAccessory::Follower => {}
             ConsensusDecisionAccessory::Replica(rep) => {
@@ -128,7 +125,7 @@ impl<D,  RP> AccessoryConsensus<D,  RP> for ConsensusDecisionAccessory<D, RP>
     fn handle_committing_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                     view: &ViewInfo,
                                     msg: StoredConsensusMessage<D::Request>,
-                                    node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D, RP>> + 'static {
+                                    node: &NT) where NT: OrderProtocolSendNode<D, PBFTConsensus<D>> + 'static {
         match self {
             ConsensusDecisionAccessory::Follower => {}
             ConsensusDecisionAccessory::Replica(rep) => {
