@@ -1323,7 +1323,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
         }
 
         if joining_node == node.id() {
-            unreachable!("We should never try to add ourselves to the quorum, there is a specific function for that")
+            unreachable!("We should never try to add ourselves to the quorum this way, there is a specific function for that")
         } else {
             self.begin_quorum_view_change(Some(joining_node), node, timeouts, log);
         }
