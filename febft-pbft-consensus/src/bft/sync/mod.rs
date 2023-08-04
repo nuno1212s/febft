@@ -363,7 +363,7 @@ pub enum SynchronizerStatus<O> {
     NewView(Option<ProtocolConsensusDecision<O>>),
     /// The view change protocol just finished running and we
     /// have successfully joined the quorum.
-    NewViewJoinedQuorum(Option<ProtocolConsensusDecision<O>>),
+    NewViewJoinedQuorum(Option<ProtocolConsensusDecision<O>>, NodeId),
     /// Before we finish the view change protocol, we need
     /// to run the CST protocol.
     RunCst,
@@ -851,8 +851,8 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
                         return SynchronizerStatus::Running;
                     }
-                    ViewChangeMessageKind::StopQuorumJoin(node) if self.currently_adding_node.get().is_some() && self.currently_adding_node.get().unwrap() != *node => {
-                        error!("{:?} // Received stop quorum join message with node that does not match the current received", node.id());
+                    ViewChangeMessageKind::StopQuorumJoin(node_id) if self.currently_adding_node.get().is_some() && self.currently_adding_node.get().unwrap() != *node_id => {
+                        error!("{:?} // Received stop quorum join message with node that does not match the current received  {:?} vs {:?}", node.id(), self.currently_adding_node.get(), node_id);
 
                         return SynchronizerStatus::Running;
                     }
@@ -1350,6 +1350,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
         let view = current_view.next_view_with_new_node(node.id());
 
         self.entering_quorum.replace(true);
+        self.currently_adding_node.replace(Some(self.node_id));
 
         self.install_next_view(view.clone());
 
@@ -1542,7 +1543,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
         let view = self.view();
 
-        warn!("{:?} // Finalizing view change to view {:?} and consensus ID {:?}", node.id(), view, curr_cid);
+        warn!("{:?} // Finalizing view change to view {:?} and consensus ID {:?}, Adding node? {:?}", node.id(), view, curr_cid, self.currently_adding_node.get());
 
         // we will get some value to be proposed because of the
         // check we did in `pre_finalize()`, guarding against no values
@@ -1579,9 +1580,10 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
         // Update proto phase
         self.phase.replace(ProtoPhase::Init);
 
-        if self.entering_quorum.get() && view.quorum_members().contains(&node.id()) {
-            self.entering_quorum.replace(false);
-            SynchronizerStatus::NewViewJoinedQuorum(to_execute)
+        if self.currently_adding_node.get().is_some() {
+            let node = self.currently_adding_node.replace(None);
+
+            SynchronizerStatus::NewViewJoinedQuorum(to_execute, node.unwrap())
         } else {
             // resume normal phase
             SynchronizerStatus::NewView(to_execute)

@@ -79,7 +79,7 @@ pub enum SyncPhaseRes<O> {
     SyncProtocolNotNeeded,
     RunSyncProtocol,
     SyncProtocolFinished(Option<ProtocolConsensusDecision<O>>),
-    JoinedQuorum(Option<ProtocolConsensusDecision<O>>),
+    JoinedQuorum(Option<ProtocolConsensusDecision<O>>, NodeId),
     RunCSTProtocol,
 }
 
@@ -396,7 +396,7 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
                             warn!("Polling the sync phase should never return anything other than a run sync protocol or run cst protocol message, SyncProtocolNotNeeded");
                             OrderProtocolPoll::RePoll
                         }
-                        SyncPhaseRes::JoinedQuorum(_) => {
+                        SyncPhaseRes::JoinedQuorum(_, _) => {
                             warn!("Polling the sync phase should never return anything other than a run sync protocol or run cst protocol message, JoinedQuorum");
                             OrderProtocolPoll::RePoll
                         }
@@ -453,8 +453,10 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
                             }
                         }
                     }
-                    SyncPhaseRes::JoinedQuorum(to_execute) => {
-                        OrderProtocolExecResult::QuorumJoinResult(true, to_execute.map(|x| vec![x]))
+                    SyncPhaseRes::JoinedQuorum(to_execute, node) => {
+                        info!("Replica {:?} joined the quorum, with a decision to execute? {}", node, to_execute.is_some());
+
+                        OrderProtocolExecResult::QuorumJoined(to_execute.map(|x| vec![x]), node)
                     }
                     SyncPhaseRes::RunCSTProtocol => {
                         OrderProtocolExecResult::RunCst
@@ -618,12 +620,12 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
 
                 SyncPhaseRes::RunCSTProtocol
             }
-            SynchronizerStatus::NewViewJoinedQuorum(decision) => {
+            SynchronizerStatus::NewViewJoinedQuorum(decision, node) => {
                 //We have joined a quorum and we have a new view to execute
                 //We need to switch to the normal phase and execute the new view
                 self.switch_phase(ConsensusPhase::NormalPhase);
 
-                SyncPhaseRes::JoinedQuorum(decision)
+                SyncPhaseRes::JoinedQuorum(decision, node)
             }
             // should not happen...
             _ => {
