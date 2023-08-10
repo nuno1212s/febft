@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 use std::cell::Cell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Formatter};
 
 use either::Either;
@@ -364,6 +365,7 @@ pub enum SynchronizerStatus<O> {
     /// The view change protocol just finished running and we
     /// have successfully joined the quorum.
     NewViewJoinedQuorum(Option<ProtocolConsensusDecision<O>>, NodeId),
+
     /// Before we finish the view change protocol, we need
     /// to run the CST protocol.
     RunCst,
@@ -390,6 +392,23 @@ pub enum SynchronizerPollStatus<O> {
     /// We need to resume the view change protocol, after
     /// running the CST protocol.
     ResumeViewChange,
+}
+
+/// The result of attempting to join a quorum
+#[derive(Clone)]
+pub enum SyncReconfigurationResult {
+    // Something failed when attempting to reconfigure the quorum
+    Failed,
+    // There is already a view change being processed
+    OnGoingViewChange,
+    // There is already a quorum change being processed
+    OnGoingQuorumChange(NodeId),
+    // This node is already a part of the quorum
+    AlreadyPartOfQuorum,
+    // The change is currently in progress
+    InProgress,
+    // We have successfully completed the reconfiguration
+    Completed,
 }
 
 ///A trait describing some of the necessary methods for the synchronizer
@@ -420,6 +439,9 @@ pub struct Synchronizer<D: ApplicationData> {
     stopped: RefCell<IntMap<Vec<StoredRequestMessage<D::Request>>>>,
     //Stores currently received requests from other nodes
     currently_adding_node: Cell<Option<NodeId>>,
+    //Stores which nodes are currently being added to the quorum, along with the number of votes
+    //For each of the nodeIDs 
+    currently_adding: RefCell<BTreeMap<NodeId, BTreeSet<NodeId>>>,
     //TODO: This does not require a Mutex I believe since it's only accessed when
     // Processing messages (which is always done in the replica thread)
     collects: Mutex<CollectsType<D>>,
@@ -482,7 +504,6 @@ impl<D> AbstractSynchronizer<D> for Synchronizer<D>
                 // The view change in the log, which means we can't keep executing
                 // Without first processing this sync message
                 self.phase.replace(ProtoPhase::Syncing);
-
             } else {
                 self.tbo.lock().unwrap().install_view(view);
                 return false;
@@ -516,6 +537,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
             phase: Cell::new(ProtoPhase::Init),
             stopped: RefCell::new(Default::default()),
             currently_adding_node: Cell::new(None),
+            currently_adding: RefCell::new(Default::default()),
             collects: Mutex::new(Default::default()),
             tbo: Mutex::new(TboQueue::new(view)),
             finalize_state: RefCell::new(None),
@@ -530,6 +552,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
             phase: Cell::new(ProtoPhase::Init),
             stopped: RefCell::new(Default::default()),
             currently_adding_node: Cell::new(None),
+            currently_adding: RefCell::new(Default::default()),
             collects: Mutex::new(Default::default()),
             tbo: Mutex::new(TboQueue::new(view)),
             finalize_state: RefCell::new(None),
@@ -552,6 +575,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
             tbo: Mutex::new(TboQueue::new(view_info)),
             stopped: RefCell::new(Default::default()),
             currently_adding_node: Cell::new(None),
+            currently_adding: RefCell::new(Default::default()),
             collects: Mutex::new(Default::default()),
             finalize_state: RefCell::new(None),
             entering_quorum: Cell::new(false),
@@ -851,11 +875,6 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
                         return SynchronizerStatus::Running;
                     }
-                    ViewChangeMessageKind::StopQuorumJoin(node_id) if self.currently_adding_node.get().is_some() && self.currently_adding_node.get().unwrap() != *node_id => {
-                        error!("{:?} // Received stop quorum join message with node that does not match the current received  {:?} vs {:?}", node.id(), self.currently_adding_node.get(), node_id);
-
-                        return SynchronizerStatus::Running;
-                    }
                     ViewChangeMessageKind::StopQuorumJoin(node) => (received + 1, *node),
                     ViewChangeMessageKind::StopData(_) => {
                         match &self.accessory {
@@ -889,51 +908,66 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                     }
                 };
 
-                //TODO: Verify that the node join certificate is valid
+                let received_votes = self.currently_adding.borrow_mut().entry(node_id).or_insert_with(BTreeSet::new);
 
-                if let ProtoPhase::ViewStopping(_received) = self.phase.get() {
-                    return if received > current_view.params().f() {
-                        self.begin_quorum_view_change(None, &**node, timeouts, log);
-
-                        SynchronizerStatus::Running
-                    } else {
-                        self.phase.replace(ProtoPhase::ViewStopping(received));
-
-                        SynchronizerStatus::Nil
-                    };
+                if received_votes.insert(header.from()) {
+                    debug!("{:?} // Received stop quorum join message from {:?} with node {:?} ", node.id(), header.from(), node_id);
+                } else {
+                    debug!("{:?} // Received duplicate stop quorum join message from {:?} with node {:?} ", node.id(), header.from(), node_id);
                 }
 
+                // We don't need to actually receive the reconfiguration confirmation to add a node to the quorum, if the quorum is already reached
+                //TODO: Is this the correct procedure?
+                self.phase.replace(ProtoPhase::ViewStopping(received));
+
                 if received >= current_view.params().quorum() {
-                    self.currently_adding_node.replace(Some(node_id));
+                    let mut votes: Vec<_> = self.currently_adding.borrow().iter().map(|(node, voters)| (*node, voters.len())).collect();
 
-                    let next_view = current_view.next_view_with_new_node(self.currently_adding_node.get().unwrap());
+                    votes.sort_by(|(node, votes), (node_2, votes_2)| votes_2.cmp(votes));
 
-                    let previous_view = current_view.clone();
+                    if let Some(vote_count) = votes.first() {
+                        if vote_count.1 >= current_view.params().quorum() {
+                            self.currently_adding_node.replace(Some(node_id));
 
-                    //We have received the necessary amount of stopping requests
-                    //To now that we should move to the next view
+                            let node_to_add = vote_count.0;
 
-                    let next_leader = next_view.leader();
+                            let next_view = current_view.next_view_with_new_node(node_to_add);
 
-                    warn!("{:?} // Stopping quorum reached, moving to next view {:?}. ", node.id(), next_view);
+                            let previous_view = current_view.clone();
 
-                    self.install_next_view(next_view);
+                            //We have received the necessary amount of stopping requests
+                            //To now that we should move to the next view
 
-                    match &self.accessory {
-                        SynchronizerAccessory::Replica(rep) => {
-                            rep.handle_stopping_quorum(self, previous_view, consensus,
-                                                       log, rq_pre_processor, timeouts, &**node)
+                            let next_leader = next_view.leader();
+
+                            warn!("{:?} // Stopping quorum reached with {} votes for node {:?} moving to next view {:?}. ", node.id(), vote_count.1, node_to_add, next_view);
+
+                            self.install_next_view(next_view);
+
+                            match &self.accessory {
+                                SynchronizerAccessory::Replica(rep) => {
+                                    rep.handle_stopping_quorum(self, previous_view, consensus,
+                                                               log, rq_pre_processor, timeouts, &**node)
+                                }
+                                SynchronizerAccessory::Follower(_) => {}
+                            }
+
+                            if next_leader == node.id() {
+                                warn!("{:?} // I am the new leader, moving to the stopping data phase.", node.id());
+
+                                //Move to the stopping data phase as we are the new leader
+                                self.phase.replace(ProtoPhase::StoppingData(0));
+                            } else {
+                                self.phase.replace(ProtoPhase::Syncing);
+                            }
+                        } else if received >= current_view.params().n() {
+                            error!("We have received view stopping messages from all nodes in the network and yet we don't have quorum {} votes for any node. {:?}",
+                                   current_view.params().quorum(), votes);
+
+                            todo!("")
+                        } else {
+                            warn!("{:?} // Stopping quorum reached, but not enough votes to add node {:?}. ", node.id(), vote_count.0);
                         }
-                        SynchronizerAccessory::Follower(_) => {}
-                    }
-
-                    if next_leader == node.id() {
-                        warn!("{:?} // I am the new leader, moving to the stopping data phase.", node.id());
-
-                        //Move to the stopping data phase as we are the new leader
-                        self.phase.replace(ProtoPhase::StoppingData(0));
-                    } else {
-                        self.phase.replace(ProtoPhase::Syncing);
                     }
                 } else {
                     self.phase.replace(ProtoPhase::ViewStopping2(received));
@@ -1308,7 +1342,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
     /// Start the quorum join procedure to integrate the given joining node into the current quorum
     /// of the system
-    pub fn start_join_quorum<NT, PL>(&self, joining_node: NodeId, node: &NT, timeouts: &Timeouts, log: &Log<D, PL>) -> ReconfigurationAttemptResult
+    pub fn start_join_quorum<NT, PL>(&self, joining_node: NodeId, node: &NT, timeouts: &Timeouts, log: &Log<D, PL>) -> SyncReconfigurationResult
         where NT: OrderProtocolSendNode<D, PBFT<D>>,
               PL: OrderingProtocolLog<PBFTConsensus<D>> {
         let current_view = self.view();
@@ -1319,7 +1353,31 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
             //We are already a part of the quorum, so we don't need to do anything
             info!("{:?} // Attempted to add node {:?} quorum but it is already a part of the quorum", node.id(), joining_node);
 
-            return ReconfigurationAttemptResult::AlreadyPartOfQuorum;
+            return SyncReconfigurationResult::AlreadyPartOfQuorum;
+        }
+
+        match self.phase.get() {
+            ProtoPhase::Init => {
+                // This means this is ready to change views
+            }
+            ProtoPhase::StoppingData(_) | ProtoPhase::SyncingState | ProtoPhase::Syncing => {
+                return if let Some(currently_adding) = self.currently_adding_node.get() {
+                    info!("{:?} // Attempted to add node {:?} quorum but we are currently already adding another node to it {:?}", node.id(), joining_node, currently_adding);
+
+                    SyncReconfigurationResult::OnGoingQuorumChange(currently_adding)
+                } else {
+                    SyncReconfigurationResult::OnGoingViewChange
+                }
+            }
+            ProtoPhase::ViewStopping2(_) | ProtoPhase::Stopping(_) | ProtoPhase::Stopping2(_) => {
+                // Here we still don't know what is the target of the view change.
+                return SyncReconfigurationResult::OnGoingViewChange
+            }
+            _ => {
+                info!("{:?} // Attempted to add node {:?} quorum but we are currently performing a view change", node.id(), joining_node);
+
+                return SyncReconfigurationResult::OnGoingViewChange;
+            }
         }
 
         if joining_node == node.id() {
@@ -1328,7 +1386,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
             self.begin_quorum_view_change(Some(joining_node), node, timeouts, log);
         }
 
-        return ReconfigurationAttemptResult::InProgress;
+        return SyncReconfigurationResult::InProgress;
     }
 
     /// Prepare ourselves for the quorum join procedure by stopping the current view and starting a new one
@@ -1344,7 +1402,18 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
             info!("{:?} // Attempted to join quorum, but we are already a part of it, can we process sync messages {:?}", node.id(), self.can_process_sync());
 
             return ReconfigurationAttemptResult::AlreadyPartOfQuorum;
+        } else if let Some(next_view) = self.next_view() {
+            if next_view.quorum_members().contains(&node.id()) {
+                //We are already a part of the quorum, so we don't need to do anything
+                info!("{:?} // Attempted to join quorum, but we are already a part of the next view, can we process sync messages {:?}", node.id(), self.can_process_sync());
+
+                return ReconfigurationAttemptResult::AlreadyPartOfQuorum;
+            }
         }
+
+        //TODO: Timeout waiting for the sync/stopping data. This is because
+        // We actually might try to enter while the protocol is running a different view change,
+        // so the view change to integrate us into the quorum might be delayed
 
         // Simulate that we were accepted into the quorum
         let view = current_view.next_view_with_new_node(node.id());
@@ -1366,12 +1435,11 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
     }
 
     /// Trigger a view change locally
-    pub fn begin_quorum_view_change<NT, PL>(
-        &self,
-        join_cert: Option<NodeId>,
-        node: &NT,
-        timeouts: &Timeouts,
-        _log: &Log<D, PL>, )
+    pub fn begin_quorum_view_change<NT, PL>(&self,
+                                            join_cert: Option<NodeId>,
+                                            node: &NT,
+                                            timeouts: &Timeouts,
+                                            _log: &Log<D, PL>, )
         where NT: OrderProtocolSendNode<D, PBFT<D>>,
               PL: OrderingProtocolLog<PBFTConsensus<D>>
     {
@@ -1379,7 +1447,8 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
         match (self.phase.get(), &join_cert) {
             (ProtoPhase::ViewStopping(i), None) => {
-                self.phase.replace(ProtoPhase::ViewStopping2(i + 1));
+                // We have not received a join certificate message from the node, so we still will
+                self.phase.replace(ProtoPhase::ViewStopping(i + 1));
             }
             (ProtoPhase::ViewStopping(i), _) => {
                 // We have ourselves received a join certificate message from the node, so we will now
@@ -1392,8 +1461,12 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                 return;
             }
             _ => {
+                // If we are called when in the init phase, we should clear the state as a new
+                // View change is going to start.
                 self.stopped.borrow_mut().clear();
                 self.collects.lock().unwrap().clear();
+                self.currently_adding_node.replace(None);
+                self.currently_adding.borrow_mut().clear();
 
                 self.phase.replace(ProtoPhase::ViewStopping2(0));
             }
@@ -1403,8 +1476,6 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
             SynchronizerAccessory::Follower(_) => {}
             SynchronizerAccessory::Replica(replica) => {
                 if let Some(join_cert) = join_cert {
-                    self.currently_adding_node.replace(Some(join_cert));
-
                     // We only want to send our STOP message when we have received the notification
                     // From the reconfiguration protocol, even if there are already f+1 STOP messages
                     replica.handle_begin_quorum_view_change(self, timeouts, node, join_cert)
@@ -1470,6 +1541,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                 self.stopped.borrow_mut().clear();
                 self.collects.lock().unwrap().clear();
                 self.currently_adding_node.replace(None);
+                self.currently_adding.borrow_mut().clear();
                 self.entering_quorum.replace(false);
 
                 //Set the new state to be stopping
@@ -1582,6 +1654,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
         if self.currently_adding_node.get().is_some() {
             let node = self.currently_adding_node.replace(None);
+            self.currently_adding.borrow_mut().clear();
 
             SynchronizerStatus::NewViewJoinedQuorum(to_execute, node.unwrap())
         } else {
