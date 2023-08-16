@@ -908,12 +908,16 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                     }
                 };
 
-                let received_votes = self.currently_adding.borrow_mut().entry(node_id).or_insert_with(BTreeSet::new);
+                {
+                    let mut write_guard = self.currently_adding.borrow_mut();
 
-                if received_votes.insert(header.from()) {
-                    debug!("{:?} // Received stop quorum join message from {:?} with node {:?} ", node.id(), header.from(), node_id);
-                } else {
-                    debug!("{:?} // Received duplicate stop quorum join message from {:?} with node {:?} ", node.id(), header.from(), node_id);
+                    let received_votes = write_guard.entry(node_id).or_insert_with(BTreeSet::new);
+
+                    if received_votes.insert(header.from()) {
+                        debug!("{:?} // Received stop quorum join message from {:?} with node {:?} ", node.id(), header.from(), node_id);
+                    } else {
+                        debug!("{:?} // Received duplicate stop quorum join message from {:?} with node {:?} ", node.id(), header.from(), node_id);
+                    }
                 }
 
                 // We don't need to actually receive the reconfiguration confirmation to add a node to the quorum, if the quorum is already reached
