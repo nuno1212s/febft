@@ -801,6 +801,9 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
                     Some(ReceivedState { count, state }) if count > f => {
                         self.phase = ProtoPhase::Init;
 
+                        info!("{:?} // Received quorum of states for CST Seq {:?} with digest {:?}, returning the state to the replica",
+                            self.node.id(), self.curr_seq, digest);
+
                         CstStatus::State(state)
                     }
                     _ => {
