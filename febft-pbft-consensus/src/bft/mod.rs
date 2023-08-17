@@ -284,7 +284,7 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
 
         let sync = Synchronizer::initialize_with_quorum(node_id, view.sequence_number(), quorum.clone(), timeout_dur)?;
 
-        let consensus_guard = ProposerConsensusGuard::new(view.clone(), watermark);
+        let consensus_guard = ProposerConsensusGuard::new(sync.view(), watermark);
 
         let consensus = Consensus::<D, PL>::new_replica(node_id, &sync.view(), executor.clone(),
                                                         SeqNo::ZERO, watermark, consensus_guard.clone(),

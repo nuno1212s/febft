@@ -567,7 +567,9 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
         let f = (n - 1) / 3;
 
-        let view_info = ViewInfo::new(seq_no, n, f)?;
+        let view_info = ViewInfo::from_quorum(seq_no, quorum_members)?;
+
+        info!("Initializing synchronizer with view {:?}", view_info);
 
         Ok(Arc::new(Self {
             node_id,

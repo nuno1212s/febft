@@ -403,15 +403,15 @@ impl<D, NT> Proposer<D, NT>
             self.consensus_guard.sync_messages_clear();
         }
 
-        info!("{:?} // Proposing new batch with {} request count {:?}", self.node_ref.id(), currently_accumulated.len(), seq);
+        let targets = view.quorum_members().clone();
+
+        info!("{:?} // Proposing new batch with {} request count {:?} to quorum: {:?}", self.node_ref.id(), currently_accumulated.len(), seq, targets);
 
         let message = PBFTMessage::Consensus(ConsensusMessage::new(
             seq,
             view.sequence_number(),
             ConsensusMessageKind::PrePrepare(currently_accumulated),
         ));
-
-        let targets = view.quorum_members().clone();
 
         self.node_ref.broadcast_signed(message, targets.into_iter());
 
