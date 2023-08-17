@@ -5,7 +5,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use atlas_common::channel::ChannelSyncTx;
@@ -94,7 +94,7 @@ impl<S> Debug for ProtoPhase<S> {
 /// and because decision log also got a lot easier to clone, but we still have
 /// to be very careful thanks to the requests vector, which can be VERY large
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RecoveryState<S> {
     pub checkpoint: Arc<ReadOnly<Checkpoint<S>>>,
 }
@@ -115,11 +115,13 @@ impl<S> RecoveryState<S> {
     }
 }
 
+#[derive(Debug)]
 struct ReceivedState<S> {
     count: usize,
     state: RecoveryState<S>,
 }
 
+#[derive(Debug)]
 struct ReceivedStateCid {
     cid: SeqNo,
     count: usize,
@@ -135,8 +137,6 @@ pub struct CollabStateTransfer<S, NT, PL>
     where S: MonolithicState + 'static {
     curr_seq: SeqNo,
     current_checkpoint_state: CheckpointState<S>,
-    largest_cid: SeqNo,
-    latest_cid_count: usize,
     base_timeout: Duration,
     curr_timeout: Duration,
     timeouts: Timeouts,
@@ -440,8 +440,6 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
             received_states: collections::hash_map(),
             received_state_ids: collections::hash_map(),
             phase: ProtoPhase::Init,
-            largest_cid: SeqNo::ZERO,
-            latest_cid_count: 0,
             curr_seq: SeqNo::ZERO,
             persistent_log,
             install_channel,
@@ -618,6 +616,9 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
                 match message.kind() {
                     CstMessageKind::ReplyStateCid(state_cid) => {
                         if let Some((cid, digest)) = state_cid {
+                            debug!("{:?} // Received state cid {:?} with digest {:?} from {:?} with seq {:?}",
+                            self.node.id(), state_cid, digest, header.from(), cid);
+
                             let received_state_cid = self.received_state_ids.entry(digest.clone()).or_insert_with(|| {
                                 ReceivedStateCid {
                                     cid: *cid,
@@ -637,6 +638,10 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
                                 received_state_cid.count += 1;
                             }
+                        } else {
+
+
+                            debug!("{:?} // Received blank state cid from node {:?}", self.node.id(), header.from());
                         }
                     }
                     CstMessageKind::RequestStateCid => {
@@ -659,29 +664,48 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
                 // TODO: check for more than one reply from the same node
                 let i = i + 1;
 
-                debug!("{:?} // Quorum count {}, i: {}, cst_seq {:?}. Current Latest Cid: {:?}. Current Latest Cid Count: {}",
+                debug!("{:?} // Quorum count {}, i: {}, cst_seq {:?}. Current Latest Cid: {:?}",
                         self.node.id(), view.quorum(), i,
-                        self.curr_seq, self.largest_cid, self.latest_cid_count);
+                        self.curr_seq, self.received_state_ids);
 
-                if i == view.quorum() {
+                if i >= view.quorum() {
                     self.phase = ProtoPhase::Init;
 
                     // reset timeout, since req was successful
                     self.curr_timeout = self.base_timeout;
 
-                    info!("{:?} // Identified the latest state seq no as {:?} with {} votes.",
-                            self.node.id(),
-                            self.largest_cid, self.latest_cid_count);
+                    let mut received_state_ids: Vec<_> = self.received_state_ids.iter().map(|(digest, cid)| {
+                        (digest, cid.cid, cid.count)
+                    }).collect();
+
+                    received_state_ids.sort_by(|(_, _, count), (_, _, count2)| {
+                        count.cmp(count2).reverse()
+                    });
+
+                    if let Some((digest, seq, count)) = received_state_ids.first() {
+                        if *count >= view.quorum() {
+                            info!("{:?} // Received quorum of states for CST Seq {:?} with digest {:?} and seq {:?}",
+                                self.node.id(), self.curr_seq, digest, seq);
+
+                            return CstStatus::SeqNo(*seq);
+                        } else {
+                            warn!("Received quorum state messages but we still don't have a quorum of states? Faulty replica? {:?}", self.received_state_ids)
+                        }
+                    } else {
+                        // If we are completely blank, then no replicas have state, so we can initialize
+
+                        warn!("We have received a quorum of blank messages, which means we are probably at the start");
+                        return CstStatus::SeqNo(SeqNo::ZERO);
+                    }
 
                     // we don't need the latest cid to be available in at least
                     // f+1 replicas since the replica has the proof that the system
                     // has decided
-                    CstStatus::SeqNo(self.largest_cid)
-                } else {
-                    self.phase = ProtoPhase::ReceivingCid(i);
-
-                    CstStatus::Running
                 }
+
+                self.phase = ProtoPhase::ReceivingCid(i);
+
+                CstStatus::Running
             }
             ProtoPhase::ReceivingState(i) => {
                 let (header, mut message) = getmessage!(progress, CstStatus::RequestState);
@@ -886,10 +910,8 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         view: V,
     ) where V: NetworkView
     {
-
-        // reset state of latest seq no. request
-        self.largest_cid = SeqNo::ZERO;
-        self.latest_cid_count = 0;
+        // Reset the map of received state ids
+        self.received_state_ids.clear();
 
         self.next_seq();
 
