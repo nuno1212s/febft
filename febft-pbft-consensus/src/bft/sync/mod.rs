@@ -1323,16 +1323,17 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
         timeouts: &Timeouts,
         consensus: &mut Consensus<D, PL>,
         node: &Arc<NT>,
-    ) -> Option<()>
+    ) -> Option<SynchronizerStatus<D::Request>>
         where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
               PL: OrderingProtocolLog<PBFTConsensus<D>>
     {
+
         let state = self.finalize_state.borrow_mut().take()?;
 
         //This is kept alive until it is out of the scope
         let _lock_guard = self.collects.lock().unwrap();
 
-        finalize_view_change!(
+        Some(finalize_view_change!(
             self,
             state,
             None,
@@ -1341,9 +1342,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
             timeouts,
             consensus,
             node,
-        );
-
-        Some(())
+        ))
     }
 
     /// Start the quorum join procedure to integrate the given joining node into the current quorum
@@ -1660,6 +1659,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
         if self.currently_adding_node.get().is_some() {
             let node = self.currently_adding_node.replace(None);
+
             self.currently_adding.borrow_mut().clear();
 
             SynchronizerStatus::NewViewJoinedQuorum(to_execute, node.unwrap())

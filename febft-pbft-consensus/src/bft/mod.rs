@@ -345,7 +345,7 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
             SynchronizerPollStatus::ResumeViewChange => {
                 debug!("{:?} // Resuming view change", self.node.id());
 
-                self.synchronizer.resume_view_change(
+                let sync_status = self.synchronizer.resume_view_change(
                     &mut self.message_log,
                     &self.timeouts,
                     &mut self.consensus,
@@ -353,6 +353,16 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
                 );
 
                 self.switch_phase(ConsensusPhase::NormalPhase);
+
+                if let Some(sync_status) = sync_status {
+                    match sync_status {
+                        SynchronizerStatus::NewViewJoinedQuorum(decisions, node) => {
+                            let quorum_members = self.synchronizer.view().quorum_members().clone();
+                            return OrderProtocolPoll::QuorumJoined(decisions.map(|dec| vec![dec]), node, quorum_members);
+                        }
+                        _ => {}
+                    }
+                }
 
                 OrderProtocolPoll::RePoll
             }
@@ -397,7 +407,7 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
                             warn!("Polling the sync phase should never return anything other than a run sync protocol or run cst protocol message, Protocol Finished");
                             OrderProtocolPoll::RePoll
                         }
-                    }
+                    };
                 } else {
                     // The synchronizer should never return anything other than a view
                     // change message
@@ -611,6 +621,8 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
 
                 //After we update the state, we go back to the sync phase (this phase) so we can check if we are missing
                 //Anything or to finalize and go back to the normal phase
+                info!("Running CST protocol as requested by the synchronizer");
+
                 self.switch_phase(ConsensusPhase::SyncPhase);
 
                 SyncPhaseRes::RunCSTProtocol
@@ -846,16 +858,14 @@ impl<D, NT, PL, RP> ReconfigurableOrderProtocol<RP> for PBFTOrderProtocol<D, NT,
                 Ok(ReconfigurationAttemptResult::Failed)
             }
             SyncReconfigurationResult::OnGoingViewChange => {
-
                 Ok(ReconfigurationAttemptResult::InProgress)
             }
-            SyncReconfigurationResult::OnGoingQuorumChange(node_id) if node_id == joining_node  => {
+            SyncReconfigurationResult::OnGoingQuorumChange(node_id) if node_id == joining_node => {
                 warn!("Received join request for node {:?} when it was already ongoing", joining_node);
 
                 Ok(ReconfigurationAttemptResult::CurrentlyReconfiguring(node_id))
             }
             SyncReconfigurationResult::OnGoingQuorumChange(node_id) => {
-
                 Ok(ReconfigurationAttemptResult::CurrentlyReconfiguring(node_id))
             }
             SyncReconfigurationResult::AlreadyPartOfQuorum => {
