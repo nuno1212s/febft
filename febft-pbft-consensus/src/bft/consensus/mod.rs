@@ -276,7 +276,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
             Either::Right(_) => {}
             Either::Left(_) => {
                 // The message pertains to older views
-                warn!("{:?} // Ignoring consensus message {:?} received from {:?} as we are already in view {:?}",
+                debug!("{:?} // Ignoring consensus message {:?} received from {:?} as we are already in view {:?}",
                     self.node_id, message, header.from(), self.curr_view.sequence_number());
 
                 return;
@@ -288,7 +288,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
             Either::Left(_) => {
                 // The message pertains to older consensus instances
 
-                warn!("{:?} // Ignoring consensus message {:?} received from {:?} as we are already in seq no {:?}",
+                debug!("{:?} // Ignoring consensus message {:?} received from {:?} as we are already in seq no {:?}",
                     self.node_id, message, header.from(), self.seq_no);
 
                 return;
@@ -382,7 +382,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
             Either::Right(_) => {}
             Either::Left(_) => {
                 // The message pertains to older views
-                warn!("{:?} // Ignoring consensus message {:?} received from {:?} as we are already in view {:?}",
+                debug!("{:?} // Ignoring consensus message {:?} received from {:?} as we are already in view {:?}",
                     self.node_id, message, header.from(), self.curr_view.sequence_number());
 
                 return Ok(ConsensusStatus::Deciding);
@@ -392,7 +392,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
         let i = match message_seq.index(self.seq_no) {
             Either::Right(i) => i,
             Either::Left(_) => {
-                warn!("Message {:?} from {:?} is behind our current sequence no {:?}. Ignoring", message, header.from(), self.seq_no, );
+                debug!("Message {:?} from {:?} is behind our current sequence no {:?}. Ignoring", message, header.from(), self.seq_no, );
 
                 return Ok(ConsensusStatus::Deciding);
             }
