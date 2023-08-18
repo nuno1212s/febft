@@ -123,6 +123,11 @@ pub struct LeaderCollects<O> {
 }
 
 impl<O> LeaderCollects<O> {
+
+    pub fn message(&self) -> &FwdConsensusMessage<O> {
+        &self.proposed
+    }
+
     /// Gives up ownership of the inner values of this `LeaderCollects`.
     pub fn into_inner(
         self,
