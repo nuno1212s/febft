@@ -8,6 +8,7 @@
 
 use std::io::{Read, Write};
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 #[cfg(feature = "serialize_serde")]
 use ::serde::{Deserialize, Serialize};
@@ -15,11 +16,13 @@ use bytes::Bytes;
 
 use atlas_common::error::*;
 use atlas_communication::message::Header;
+use atlas_communication::message_signing::NetworkMessageSignatureVerifier;
+use atlas_communication::reconfiguration_node::NetworkInformationProvider;
 use atlas_communication::serialize::Serializable;
 use atlas_core::messages::SystemMessage;
 use atlas_core::persistent_log::PersistableOrderProtocol;
 use atlas_core::reconfiguration_protocol::QuorumJoinCert;
-use atlas_core::serialize::{OrderingProtocolMessage, ReconfigurationProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage};
+use atlas_core::serialize::{InternallyVerifiable, OrderingProtocolMessage, ReconfigurationProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage};
 use atlas_execution::serialize::ApplicationData;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
@@ -67,14 +70,18 @@ pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
 pub struct PBFTConsensus<D: ApplicationData>(PhantomData<(D)>);
 
 impl<D> PBFTConsensus<D> where D: ApplicationData {
-
     /// Verify the consensus internal message structure
-    fn verify_consensus_message(header: &Header, msg: &ConsensusMessage<D::Request>) -> Result<bool> {
+    fn verify_consensus_message<S, SV, NI>(network_info: &Arc<NI>, header: &Header, msg: &ConsensusMessage<D::Request>) -> Result<bool>
+        where S: Serializable,
+              NI: NetworkInformationProvider,
+              SV: NetworkMessageSignatureVerifier<S, NI>, {
         match msg.kind() {
             ConsensusMessageKind::PrePrepare(requests) => {
                 requests.iter().map(|request| {
                     let header = request.header();
                     let client_request = request.message();
+
+                    //TODO: Verify client request signature
 
                     Ok(false)
                 }).reduce(|a, b| a.and(b))
@@ -90,7 +97,10 @@ impl<D> PBFTConsensus<D> where D: ApplicationData {
     }
 
     /// Verify view change message internal structure
-    fn verify_view_change_message(header: &Header, msg: &ViewChangeMessage<D::Request>) -> Result<bool> {
+    fn verify_view_change_message<S, SV, NI>(network_info: &Arc<NI>, header: &Header, msg: &ViewChangeMessage<D::Request>) -> Result<bool>
+        where S: Serializable,
+              NI: NetworkInformationProvider,
+              SV: NetworkMessageSignatureVerifier<S, NI>, {
         match msg.kind() {
             ViewChangeMessageKind::Stop(timed_out_rqs) => {
                 timed_out_rqs.iter().map(|request| {
@@ -109,8 +119,10 @@ impl<D> PBFTConsensus<D> where D: ApplicationData {
                         let header = pre_prepare.header();
                         let consensus_message = pre_prepare.message();
 
-                        Self::verify_consensus_message(header, consensus_message)
+                        Self::verify_consensus_message::<S, SV, NI>(network_info, header, consensus_message)
                     }).reduce(|a, b| a.and(b)).unwrap_or(Ok(true))
+                } else {
+                    Ok(true)
                 }
             }
             ViewChangeMessageKind::Sync(sync_message) => {
@@ -119,7 +131,26 @@ impl<D> PBFTConsensus<D> where D: ApplicationData {
                 let header = message.header();
                 let message = message.consensus();
 
-                Self::verify_consensus_message(header, message)
+                Self::verify_consensus_message::<S, SV, NI>(network_info, header, message)
+            }
+        }
+    }
+}
+
+impl<D> InternallyVerifiable<PBFTMessage<D::Request>> for PBFTConsensus<D> where D: ApplicationData {
+    fn verify_internal_message<S, SV, NI>(network_info: &Arc<NI>, header: &Header, msg: &PBFTMessage<D::Request>) -> Result<bool>
+        where S: Serializable,
+              SV: NetworkMessageSignatureVerifier<S, NI>,
+              NI: NetworkInformationProvider {
+        match msg {
+            PBFTMessage::Consensus(consensus_msg) => {
+                Self::verify_consensus_message::<S, SV, NI>(network_info, header, consensus_msg)
+            }
+            PBFTMessage::ViewChange(view_change) => {
+                Self::verify_view_change_message::<S, SV, NI>(network_info, header, view_change)
+            }
+            PBFTMessage::ObserverMessage(_) => {
+                Ok(true)
             }
         }
     }
@@ -132,20 +163,6 @@ impl<D> OrderingProtocolMessage for PBFTConsensus<D>
     type LoggableMessage = ConsensusMessage<D::Request>;
     type Proof = Proof<D::Request>;
     type ProofMetadata = ProofMetadata;
-
-    fn verify_protocol_message(header: &Header, msg: &Self::ProtocolMessage) -> Result<bool> {
-        match msg {
-            PBFTMessage::Consensus(consensus_msg) => {
-                Self::verify_consensus_message(header, consensus_msg)
-            }
-            PBFTMessage::ViewChange(view_change) => {
-                Self::verify_view_change_message(header, view_change)
-            }
-            PBFTMessage::ObserverMessage(_) => {
-                Ok(true)
-            }
-        }
-    }
 
     #[cfg(feature = "serialize_capnp")]
     fn serialize_capnp(builder: atlas_capnp::consensus_messages_capnp::protocol_message::Builder, msg: &Self::ProtocolMessage) -> Result<()> {
