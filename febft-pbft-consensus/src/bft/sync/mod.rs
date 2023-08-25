@@ -126,6 +126,10 @@ impl<O> LeaderCollects<O> {
         &self.proposed
     }
 
+    pub fn collects(&self) -> &Vec<StoredMessage<ViewChangeMessage<O>>> {
+        &self.collects
+    }
+
     /// Gives up ownership of the inner values of this `LeaderCollects`.
     pub fn into_inner(
         self,

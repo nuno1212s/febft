@@ -6,6 +6,7 @@
 //! as [Cap'n'Proto](https://capnproto.org/capnp-tool.html), but these are
 //! expected to be implemented by the user.
 
+use std::fmt::Debug;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -19,6 +20,7 @@ use atlas_communication::message::Header;
 use atlas_communication::message_signing::NetworkMessageSignatureVerifier;
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
 use atlas_communication::serialize::Serializable;
+use atlas_core::messages::SystemMessage;
 use atlas_core::ordering_protocol::networking::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage};
 use atlas_core::ordering_protocol::networking::signature_ver::OrderProtocolSignatureVerificationHelper;
 use atlas_core::persistent_log::PersistableOrderProtocol;
@@ -145,7 +147,96 @@ impl<D> OrderingProtocolMessage for PBFTConsensus<D>
     type ProofMetadata = ProofMetadata;
 
     fn verify_order_protocol_message<NI, OPVH, D2>(network_info: &NI, header: &Header, message: Self::ProtocolMessage) -> Result<(bool, Self::ProtocolMessage)> where NI: NetworkInformationProvider, OPVH: OrderProtocolSignatureVerificationHelper<D2, Self, NI>, D2: ApplicationData, Self: Sized {
-        todo!()
+        match &message {
+            PBFTMessage::Consensus(consensus) => {
+                match consensus.kind() {
+                    ConsensusMessageKind::PrePrepare(requests) => {
+                        for request in requests {
+                            let (result, _) = OPVH::verify_request_message(network_info, request.header(), request.message().clone())?;
+
+                            if !result {
+                                return Ok((false, message));
+                            }
+                        }
+
+                        Ok((true, message))
+                    }
+                    ConsensusMessageKind::Prepare(digest) => {
+                        Ok((true, message))
+                    }
+                    ConsensusMessageKind::Commit(digest) => {
+                        Ok((true, message))
+                    }
+                }
+            }
+            PBFTMessage::ViewChange(view_change) => {
+                match view_change.kind() {
+                    ViewChangeMessageKind::Stop(timed_out_req) => {
+                        for client_rq in timed_out_req {
+                            let (result, _) = OPVH::verify_request_message(network_info, client_rq.header(), client_rq.message().clone())?;
+
+                            if !result {
+                                return Ok((false, message));
+                            }
+                        }
+
+                        Ok((true, message))
+                    }
+                    ViewChangeMessageKind::StopQuorumJoin(_) => {
+                        Ok((true, message))
+                    }
+                    ViewChangeMessageKind::StopData(collect_data) => {
+                        if let Some(proof) = &collect_data.last_proof {
+                            for pre_prepare in proof.pre_prepares() {
+                                let (result, _) = OPVH::verify_protocol_message(network_info, pre_prepare.header(), PBFTMessage::Consensus(pre_prepare.message().clone()))?;
+
+                                if !result {
+                                    return Ok((false, message));
+                                }
+                            }
+
+                            for prepare in proof.prepares() {
+                                let (result, _) = OPVH::verify_protocol_message(network_info, prepare.header(), PBFTMessage::Consensus(prepare.message().clone()))?;
+
+                                if !result {
+                                    return Ok((false, message));
+                                }
+                            }
+
+                            for commit in proof.commits() {
+                                let (result, _) = OPVH::verify_protocol_message(network_info, commit.header(), PBFTMessage::Consensus(commit.message().clone()))?;
+
+                                if !result {
+                                    return Ok((false, message));
+                                }
+                            }
+                        }
+
+                        Ok((true, message))
+                    }
+                    ViewChangeMessageKind::Sync(leader_collects) => {
+                        let (result, _) = OPVH::verify_protocol_message(network_info, leader_collects.message().header(), PBFTMessage::Consensus(leader_collects.message().consensus().clone()))?;
+
+                        if !result {
+                            return Ok((false, message));
+                        }
+
+                        for collect in leader_collects.collects() {
+
+                            let (result, _) = OPVH::verify_protocol_message(network_info, collect.header(), PBFTMessage::ViewChange(collect.message().clone()))?;
+
+                            if !result {
+                                return Ok((false, message));
+                            }
+
+                        }
+
+                        Ok((true, message))
+                    }
+                }
+            }
+            PBFTMessage::ObserverMessage(_) => Ok((true, message))
+        }
     }
 
     #[cfg(feature = "serialize_capnp")]
