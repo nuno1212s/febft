@@ -1,20 +1,12 @@
 //! A module to manage the `febft` message log.
 
-use std::path::Path;
-use std::sync::Arc;
-
 use atlas_common::error::*;
-use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::SeqNo;
-use atlas_communication::message::{Header, StoredMessage};
-use atlas_execution::ExecutorHandle;
-use atlas_execution::serialize::ApplicationData;
+use atlas_communication::message::Header;
 use atlas_core::messages::RequestMessage;
-use atlas_core::state_transfer::Checkpoint;
+use atlas_execution::serialize::ApplicationData;
 
-use crate::bft::message::ConsensusMessage;
-use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::DecisionLog;
 

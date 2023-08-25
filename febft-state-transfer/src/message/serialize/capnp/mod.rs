@@ -1,6 +1,5 @@
 use atlas_execution::serialize::ApplicationData;
 use atlas_common::error::*;
-use atlas_core::state_transfer::StatefulOrderProtocol;
 use atlas_execution::state::divisible_state::DivisibleState;
 use crate::message::CstMessage;
 

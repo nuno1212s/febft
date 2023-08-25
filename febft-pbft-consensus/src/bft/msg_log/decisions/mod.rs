@@ -10,7 +10,7 @@ use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::StoredMessage;
-use atlas_core::serialize::{OrderProtocolLog, OrderProtocolProof};
+use atlas_core::ordering_protocol::networking::serialize::{OrderProtocolLog, OrderProtocolProof};
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::msg_log::deciding_log::CompletedBatch;

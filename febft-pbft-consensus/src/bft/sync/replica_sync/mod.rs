@@ -4,31 +4,27 @@
 //! leader is elected.
 
 use std::cell::Cell;
-
 use std::marker::PhantomData;
-
 use std::time::{Duration, Instant};
+
 use log::{debug, error, info};
-use num_traits::real::Real;
+
 use atlas_common::collections;
 use atlas_common::node_id::NodeId;
-use atlas_common::ordering::{Orderable};
-use atlas_communication::message::{NetworkMessageKind};
+use atlas_common::ordering::Orderable;
 use atlas_communication::protocol_node::ProtocolNetworkNode;
-use atlas_execution::serialize::ApplicationData;
-use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
+use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, StoredRequestMessage};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
-use atlas_core::reconfiguration_protocol::QuorumJoinCert;
+use atlas_core::persistent_log::OrderingProtocolLog;
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
-use atlas_core::serialize::{LogTransferMessage, ReconfigurationProtocolMessage, StateTransferMessage};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, TimeoutPhase, Timeouts};
+use atlas_execution::serialize::ApplicationData;
 use atlas_metrics::metrics::{metric_duration, metric_increment};
-use crate::bft::consensus::Consensus;
 
+use crate::bft::consensus::Consensus;
+use crate::bft::message::{ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
-use crate::bft::metric::{SYNC_BATCH_RECEIVED_ID, SYNC_FORWARDED_COUNT_ID, SYNC_FORWARDED_REQUESTS_ID, SYNC_STOPPED_COUNT_ID, SYNC_STOPPED_REQUESTS_ID, SYNC_WATCH_REQUESTS_ID};
+use crate::bft::metric::{SYNC_BATCH_RECEIVED_ID, SYNC_STOPPED_COUNT_ID, SYNC_STOPPED_REQUESTS_ID, SYNC_WATCH_REQUESTS_ID};
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::{CollectData, StoredConsensusMessage};
 use crate::bft::PBFT;

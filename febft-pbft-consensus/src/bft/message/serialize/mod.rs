@@ -19,10 +19,9 @@ use atlas_communication::message::Header;
 use atlas_communication::message_signing::NetworkMessageSignatureVerifier;
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
 use atlas_communication::serialize::Serializable;
-use atlas_core::messages::SystemMessage;
+use atlas_core::ordering_protocol::networking::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage};
+use atlas_core::ordering_protocol::networking::signature_ver::OrderProtocolSignatureVerificationHelper;
 use atlas_core::persistent_log::PersistableOrderProtocol;
-use atlas_core::reconfiguration_protocol::QuorumJoinCert;
-use atlas_core::serialize::{InternallyVerifiable, OrderingProtocolMessage, ReconfigurationProtocolMessage, ServiceMsg, StatefulOrderProtocolMessage};
 use atlas_execution::serialize::ApplicationData;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
@@ -137,25 +136,6 @@ impl<D> PBFTConsensus<D> where D: ApplicationData {
     }
 }
 
-impl<D> InternallyVerifiable<PBFTMessage<D::Request>> for PBFTConsensus<D> where D: ApplicationData {
-    fn verify_internal_message<S, SV, NI>(network_info: &Arc<NI>, header: &Header, msg: &PBFTMessage<D::Request>) -> Result<bool>
-        where S: Serializable,
-              SV: NetworkMessageSignatureVerifier<S, NI>,
-              NI: NetworkInformationProvider {
-        match msg {
-            PBFTMessage::Consensus(consensus_msg) => {
-                Self::verify_consensus_message::<S, SV, NI>(network_info, header, consensus_msg)
-            }
-            PBFTMessage::ViewChange(view_change) => {
-                Self::verify_view_change_message::<S, SV, NI>(network_info, header, view_change)
-            }
-            PBFTMessage::ObserverMessage(_) => {
-                Ok(true)
-            }
-        }
-    }
-}
-
 impl<D> OrderingProtocolMessage for PBFTConsensus<D>
     where D: ApplicationData, {
     type ViewInfo = ViewInfo;
@@ -163,6 +143,10 @@ impl<D> OrderingProtocolMessage for PBFTConsensus<D>
     type LoggableMessage = ConsensusMessage<D::Request>;
     type Proof = Proof<D::Request>;
     type ProofMetadata = ProofMetadata;
+
+    fn verify_order_protocol_message<NI, OPVH, D2>(network_info: &NI, header: &Header, message: Self::ProtocolMessage) -> Result<(bool, Self::ProtocolMessage)> where NI: NetworkInformationProvider, OPVH: OrderProtocolSignatureVerificationHelper<D2, Self, NI>, D2: ApplicationData, Self: Sized {
+        todo!()
+    }
 
     #[cfg(feature = "serialize_capnp")]
     fn serialize_capnp(builder: atlas_capnp::consensus_messages_capnp::protocol_message::Builder, msg: &Self::ProtocolMessage) -> Result<()> {

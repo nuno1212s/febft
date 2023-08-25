@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
@@ -8,20 +7,16 @@ use log::debug;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::threadpool;
-use atlas_communication::message::{NetworkMessageKind, SerializedMessage, StoredMessage, StoredSerializedProtocolMessage, WireMessage};
-use atlas_communication::protocol_node::ProtocolNetworkNode;
+use atlas_communication::message::{SerializedMessage, StoredMessage, StoredSerializedProtocolMessage, WireMessage};
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
-use atlas_core::messages::SystemMessage;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_core::serialize::{LogTransferMessage, ReconfigurationProtocolMessage, ServiceMsg, StateTransferMessage};
 use atlas_execution::serialize::ApplicationData;
 
+use crate::bft::{PBFT, SysMsg};
 use crate::bft::consensus::accessory::AccessoryConsensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::msg_log::deciding_log::DecidingLog;
 use crate::bft::msg_log::decisions::StoredConsensusMessage;
-use crate::bft::{PBFT, SysMsg};
-use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::sync::view::ViewInfo;
 
 pub struct ReplicaAccessory<D>

@@ -20,25 +20,23 @@ use atlas_common::crypto::hash::Digest;
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_pop_message, tbo_queue_message};
-use atlas_common::threadpool::join;
 use atlas_communication::message::{Header, StoredMessage, WireMessage};
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
-use atlas_core::messages::{ClientRqInfo, StoredRequestMessage, SystemMessage};
+use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::ProtocolConsensusDecision;
 use atlas_core::ordering_protocol::reconfigurable_order_protocol::ReconfigurationAttemptResult;
 use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
 use atlas_core::request_pre_processing::RequestPreProcessor;
-use atlas_core::serialize::{LogTransferMessage, ReconfigurationProtocolMessage, StateTransferMessage};
 use atlas_core::timeouts::{RqTimeout, Timeouts};
 use atlas_execution::serialize::ApplicationData;
 
-use crate::bft::PBFT;
 use crate::bft::consensus::Consensus;
 use crate::bft::message::{ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::{CollectData, Proof, StoredConsensusMessage, ViewDecisionPair};
+use crate::bft::PBFT;
 use crate::bft::sync::view::ViewInfo;
 
 use self::{follower_sync::FollowerSynchronizer, replica_sync::ReplicaSynchronizer};

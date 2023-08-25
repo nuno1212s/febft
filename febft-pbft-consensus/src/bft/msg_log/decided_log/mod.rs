@@ -1,23 +1,18 @@
-use std::sync::Arc;
-
 use log::error;
 
 use atlas_common::error::*;
-use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_communication::message::StoredMessage;
 use atlas_core::ordering_protocol::{DecisionInformation, ProtocolConsensusDecision};
 use atlas_core::persistent_log::{OperationMode, OrderingProtocolLog, StatefulOrderingProtocolLog};
-use atlas_core::serialize::{ReconfigurationProtocolMessage, StateTransferMessage};
 use atlas_execution::app::UpdateBatch;
 use atlas_execution::serialize::ApplicationData;
 
-use crate::bft::message::{ConsensusMessageKind, PBFTMessage};
+use crate::bft::message::ConsensusMessageKind;
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::msg_log::operation_key;
 use crate::bft::msg_log::deciding_log::CompletedBatch;
 use crate::bft::msg_log::decisions::{DecisionLog, Proof, ProofMetadata, StoredConsensusMessage};
+use crate::bft::msg_log::operation_key;
 use crate::bft::sync::view::ViewInfo;
 
 /// The log of decisions that have already been processed by the consensus
