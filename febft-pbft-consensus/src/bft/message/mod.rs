@@ -2,30 +2,25 @@
 //! between the system processes.
 
 use std::fmt::{Debug, Formatter};
-use std::io;
 use std::io::Write;
-use std::mem::MaybeUninit;
-use bytes::Bytes;
-
-#[cfg(feature = "serialize_serde")]
-use serde::{Serialize, Deserialize};
-
-use atlas_common::error::*;
 
 use futures::io::{
-    AsyncWriteExt,
     AsyncWrite,
+    AsyncWriteExt,
 };
-use atlas_common::crypto::hash::{Context, Digest};
-use atlas_common::crypto::signature::{KeyPair, PublicKey, Signature};
-use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_communication::message::{Header, NetworkMessage, NetworkMessageKind, PingMessage, StoredMessage};
-use atlas_execution::serialize::SharedData;
-use atlas_core::messages::{RequestMessage, StoredRequestMessage};
+#[cfg(feature = "serialize_serde")]
+use serde::{Deserialize, Serialize};
 
-use crate::bft::sync::LeaderCollects;
+use atlas_common::crypto::hash::Digest;
+use atlas_common::error::*;
+use atlas_common::node_id::NodeId;
+use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_communication::message::Header;
+use atlas_core::messages::{RequestMessage, StoredRequestMessage};
+use atlas_execution::serialize::ApplicationData;
+
 use crate::bft::msg_log::decisions::CollectData;
-use crate::bft::PBFT;
+use crate::bft::sync::LeaderCollects;
 use crate::bft::sync::view::ViewInfo;
 
 pub mod serialize;
@@ -134,19 +129,7 @@ impl<O> Orderable for ViewChangeMessage<O> {
 
 impl<O> Debug for ViewChangeMessage<O> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "View {:?}", self.view)?;
-
-        match self.kind {
-            ViewChangeMessageKind::Stop(_) => {
-                write!(f, "Stop Message")
-            }
-            ViewChangeMessageKind::StopData(_) => {
-                write!(f, "Stop Data Message")
-            }
-            ViewChangeMessageKind::Sync(_) => {
-                write!(f, "Sync Message")
-            }
-        }
+        write!(f, "View {:?}, {:?}", self.view, self.kind)
     }
 }
 
@@ -181,7 +164,11 @@ impl<O> ViewChangeMessage<O> {
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub enum ViewChangeMessageKind<O> {
+    /// A STOP message, broadcast when we want to call a view change due to requests getting timed out
     Stop(Vec<StoredRequestMessage<O>>),
+    /// A STOP message, broadcast when we want to call a view change due to us having received a Node Quorum Join message
+    StopQuorumJoin(NodeId),
+    // Each of the latest decisions from the sender, so the new leader can sync
     StopData(CollectData<O>),
     Sync(LeaderCollects<O>),
 }
@@ -432,6 +419,25 @@ impl Debug for ObserveEventKind {
             }
             ObserveEventKind::Executed(seq) => {
                 write!(f, "Executed the consensus instance {:?}", seq)
+            }
+        }
+    }
+}
+
+impl<O> Debug for ViewChangeMessageKind<O> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ViewChangeMessageKind::Stop(_) => {
+                write!(f, "Stop message")
+            }
+            ViewChangeMessageKind::StopData(_) => {
+                write!(f, "Stop data message")
+            }
+            ViewChangeMessageKind::Sync(_) => {
+                write!(f, "Sync message")
+            }
+            ViewChangeMessageKind::StopQuorumJoin(node ) => {
+                write!(f, "Stop quorum join message {:?}", node)
             }
         }
     }

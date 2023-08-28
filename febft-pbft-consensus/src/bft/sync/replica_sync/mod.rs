@@ -4,33 +4,27 @@
 //! leader is elected.
 
 use std::cell::Cell;
-
 use std::marker::PhantomData;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-
 use std::time::{Duration, Instant};
-use log::{debug, error, info};
-use atlas_common::collections;
-use atlas_common::collections::ConcurrentHashMap;
-use atlas_common::crypto::hash::Digest;
-use atlas_common::node_id::NodeId;
-use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_communication::message::{NetworkMessageKind, StoredMessage, System};
-use atlas_communication::{Node};
-use atlas_execution::app::{Request, Service};
-use atlas_execution::serialize::SharedData;
-use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, RequestMessage, StoredRequestMessage, SystemMessage};
-use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
-use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
-use atlas_core::serialize::StateTransferMessage;
-use atlas_core::timeouts::{RqTimeout, TimeoutKind, TimeoutPhase, Timeouts};
-use atlas_metrics::metrics::{metric_duration, metric_increment};
-use crate::bft::consensus::Consensus;
 
+use log::{debug, error, info};
+
+use atlas_common::collections;
+use atlas_common::node_id::NodeId;
+use atlas_common::ordering::Orderable;
+use atlas_communication::protocol_node::ProtocolNetworkNode;
+use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, StoredRequestMessage};
+use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
+use atlas_core::persistent_log::OrderingProtocolLog;
+use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
+use atlas_core::timeouts::{RqTimeout, TimeoutKind, TimeoutPhase, Timeouts};
+use atlas_execution::serialize::ApplicationData;
+use atlas_metrics::metrics::{metric_duration, metric_increment};
+
+use crate::bft::consensus::Consensus;
+use crate::bft::message::{ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
-use crate::bft::metric::{SYNC_BATCH_RECEIVED_ID, SYNC_FORWARDED_COUNT_ID, SYNC_FORWARDED_REQUESTS_ID, SYNC_STOPPED_COUNT_ID, SYNC_STOPPED_REQUESTS_ID, SYNC_WATCH_REQUESTS_ID};
+use crate::bft::metric::{SYNC_BATCH_RECEIVED_ID, SYNC_STOPPED_COUNT_ID, SYNC_STOPPED_REQUESTS_ID, SYNC_WATCH_REQUESTS_ID};
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::{CollectData, StoredConsensusMessage};
 use crate::bft::PBFT;
@@ -43,12 +37,12 @@ use super::{AbstractSynchronizer, Synchronizer, SynchronizerStatus};
 // - TboQueue for sync phase messages
 // This synchronizer will only move forward on replica messages
 
-pub struct ReplicaSynchronizer<D: SharedData> {
+pub struct ReplicaSynchronizer<D: ApplicationData> {
     timeout_dur: Cell<Duration>,
     _phantom: PhantomData<D>,
 }
 
-impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
+impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     pub fn new(timeout_dur: Duration) -> Self {
         Self {
             timeout_dur: Cell::new(timeout_dur),
@@ -63,18 +57,17 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     ///
     /// Therefore, we start by clearing our stopped requests and treating them as
     /// newly proposed requests (by resetting their timer)
-    pub(super) fn handle_stopping_quorum<ST, NT, PL>(
+    pub(super) fn handle_stopping_quorum<NT, PL>(
         &self,
         base_sync: &Synchronizer<D>,
         previous_view: ViewInfo,
-        consensus: &Consensus<D, ST, PL>,
+        consensus: &Consensus<D, PL>,
         log: &Log<D, PL>,
         pre_processor: &RequestPreProcessor<D::Request>,
         timeouts: &Timeouts,
         node: &NT,
-    )
-        where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>>,
-              PL: OrderingProtocolLog<PBFTConsensus<D>> {
+    ) where NT: OrderProtocolSendNode<D, PBFT<D>>,
+            PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
         // - add requests from STOP into client requests
@@ -85,7 +78,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         self.take_stopped_requests_and_register_them(base_sync, pre_processor, timeouts);
         self.watch_all_requests(timeouts);
 
-        let view_info = base_sync.view();
+        let view_info = base_sync.next_view().expect("We should have a next view if we are at this point");
 
         let current_view_seq = view_info.sequence_number();
         let current_leader = view_info.leader();
@@ -107,26 +100,25 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             ViewChangeMessageKind::StopData(collect),
         ));
 
-        node.send_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), current_leader, true);
+        node.send_signed(message, current_leader, true);
     }
 
     /// Start a new view change
     /// Receives the requests that it should send to the other
     /// nodes in its STOP message
-    pub(super) fn handle_begin_view_change<ST, NT>(
+    pub(super) fn handle_begin_view_change<NT>(
         &self,
         base_sync: &Synchronizer<D>,
         timeouts: &Timeouts,
         node: &NT,
         timed_out: Option<Vec<StoredRequestMessage<D::Request>>>,
-    ) where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
+    ) where NT: OrderProtocolSendNode<D, PBFT<D>> {
         // stop all timers
         self.unwatch_all_requests(timeouts);
 
         // broadcast STOP message with pending requests collected
         // from peer nodes' STOP messages
-        let requests = self.stopped_requests(base_sync,
-                                             timed_out);
+        let requests = self.stopped_requests(base_sync, timed_out);
 
         let current_view = base_sync.view();
 
@@ -140,9 +132,29 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
             ViewChangeMessageKind::Stop(requests),
         ));
 
-        let targets = NodeId::targets(0..current_view.params().n());
+        let targets = current_view.quorum_members().clone();
 
-        node.broadcast(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
+        node.broadcast(message, targets.into_iter());
+    }
+
+    pub(super) fn handle_begin_quorum_view_change<NT>(
+        &self,
+        base_sync: &Synchronizer<D>,
+        timeouts: &Timeouts,
+        node: &NT,
+        join_cert: NodeId,
+    ) where NT: OrderProtocolSendNode<D, PBFT<D>> {
+        let current_view = base_sync.view();
+
+        info!("{:?} // Beginning a quorum view change to next view with new node: {:?}", node.id(), join_cert);
+
+        let message = ViewChangeMessageKind::StopQuorumJoin(join_cert);
+
+        let message = ViewChangeMessage::new(current_view.sequence_number().next(), message);
+
+        let message = PBFTMessage::ViewChange(message);
+
+        node.broadcast_signed(message, current_view.quorum_members().clone().into_iter());
     }
 
     /// Watch a vector of requests received
@@ -171,7 +183,7 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     ) -> Vec<ClientRqInfo> {
         let start_time = Instant::now();
 
-        let requests = match pre_prepare.message().consensus().kind() {
+        let requests = match pre_prepare.message().kind() {
             ConsensusMessageKind::PrePrepare(req) => { req }
             _ => {
                 error!("Cannot receive a request that is not a PrePrepare");
@@ -251,12 +263,6 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
     /// Handle a timeout received from the timeouts layer.
     ///
     /// This timeout pertains to a group of client requests awaiting to be decided.
-    //
-    //
-    // TODO: fix current timeout impl, as most requests won't actually
-    // have surpassed their defined timeout period, after the timeout event
-    // is fired on the master channel of the core server task
-    //
     pub fn client_requests_timed_out(
         &self,
         base_sync: &Synchronizer<D>,
@@ -330,17 +336,21 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
         SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
     }
 
+
     /// Forward the requests that timed out, `timed_out`, to all the nodes in the
     /// current view.
-    pub fn forward_requests<ST, NT>(
+    pub fn forward_requests<NT>(
         &self,
         base_sync: &Synchronizer<D>,
         timed_out: Vec<StoredRequestMessage<D::Request>>,
         node: &NT,
-    ) where ST: StateTransferMessage + 'static, NT: Node<PBFT<D, ST>> {
-        let message = SystemMessage::ForwardedRequestMessage(ForwardedRequestsMessage::new(timed_out));
-        let targets = NodeId::targets(0..base_sync.view().params().n());
-        node.broadcast(NetworkMessageKind::from(message), targets);
+    ) where NT: OrderProtocolSendNode<D, PBFT<D>> {
+        let message = ForwardedRequestsMessage::new(timed_out);
+        let view = base_sync.view();
+
+        let targets = view.quorum_members().clone();
+
+        node.forward_requests(message, targets.into_iter());
     }
 
     /// Obtain the requests that we know have timed out so we can send out a stop message
@@ -432,4 +442,4 @@ impl<D: SharedData + 'static> ReplicaSynchronizer<D> {
 /// So we protect collects, watching and tbo as those are the fields that are going to be
 /// accessed by both those threads.
 /// Since the other fields are going to be accessed by just 1 thread, we just need them to be Send, which they are
-unsafe impl<D: SharedData> Sync for ReplicaSynchronizer<D> {}
+unsafe impl<D: ApplicationData> Sync for ReplicaSynchronizer<D> {}

@@ -12,8 +12,8 @@ use atlas_common::crypto::hash::Digest;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
+use atlas_core::ordering_protocol::networking::serialize::NetworkView;
 use atlas_execution::system_params::SystemParams;
-use atlas_core::serialize::NetworkView;
 
 /// This struct contains information related with an
 /// active `febft` view.
@@ -22,8 +22,8 @@ use atlas_core::serialize::NetworkView;
 pub struct ViewInfo {
     // The seq no of the view
     seq: SeqNo,
-    // The ids of the replicas that are currently a part of the quorum
-    quorum: Vec<NodeId>,
+    // The set of nodes in the view
+    quorum_members: Vec<NodeId>,
     // The set of leaders
     leader_set: Vec<NodeId>,
     //TODO: Do we need this? Higher cost of cloning
@@ -46,6 +46,10 @@ impl NetworkView for ViewInfo {
 
     fn quorum(&self) -> usize {
         self.params().quorum()
+    }
+
+    fn quorum_members(&self) -> &Vec<NodeId> {
+        &self.quorum_members
     }
 
     fn f(&self) -> usize {
@@ -81,7 +85,33 @@ impl ViewInfo {
 
         Ok(ViewInfo {
             seq,
-            quorum: quorum_members,
+            quorum_members,
+            leader_set,
+            leader_hash_space_division: division,
+            params,
+        })
+    }
+
+    /// Creates a new instance of `ViewInfo`, from a given list of quorum members
+    pub fn from_quorum(seq: SeqNo, quorum_members: Vec<NodeId>) -> Result<Self> {
+        let n = quorum_members.len();
+        let f = (n - 1) / 3;
+
+        let params = SystemParams::new(n, f)?;
+
+        let destined_leader = quorum_members[(usize::from(seq)) % n];
+
+        let mut leader_set = vec![destined_leader];
+
+        for i in 1..LEADER_COUNT {
+            leader_set.push(quorum_members[(usize::from(seq) + i) % n]);
+        }
+
+        let division = calculate_hash_space_division(&leader_set);
+
+        Ok(ViewInfo {
+            seq,
+            quorum_members,
             leader_set,
             leader_hash_space_division: division,
             params,
@@ -105,7 +135,7 @@ impl ViewInfo {
 
         Ok(ViewInfo {
             seq,
-            quorum: quorum_participants,
+            quorum_members: quorum_participants,
             leader_set,
             leader_hash_space_division: division,
             params,
@@ -123,6 +153,23 @@ impl ViewInfo {
         Self::new(self.seq.next(), self.params.n(), self.params.f()).unwrap()
     }
 
+    pub fn next_view_with_new_node(&self, joined_node: NodeId) -> ViewInfo {
+        let mut quorum_members = self.quorum_members().clone();
+
+        quorum_members.push(joined_node);
+
+        Self::from_quorum(self.seq.next(), quorum_members).unwrap()
+    }
+
+    pub fn previous_view(&self) -> Option<ViewInfo> {
+        if self.seq == SeqNo::ZERO {
+            return None;
+        }
+
+
+        Some(Self::new(self.seq.prev(), self.params.n(), self.params.f()).unwrap())
+    }
+
     /// Returns a new view with the specified sequence number.
     pub fn peek(&self, seq: SeqNo) -> ViewInfo {
         Self::new(seq, self.params.n(), self.params.f()).unwrap()
@@ -130,7 +177,7 @@ impl ViewInfo {
 
     /// Returns the primary of the current view.
     pub fn leader(&self) -> NodeId {
-        self.quorum[usize::from(self.seq) % self.params.n()]
+        self.quorum_members[usize::from(self.seq) % self.params.n()]
     }
 
     /// The set of leaders for this view.
@@ -140,14 +187,13 @@ impl ViewInfo {
 
     /// The quorum members for this view
     pub fn quorum_members(&self) -> &Vec<NodeId> {
-        &self.quorum
+        &self.quorum_members
     }
 
     // Get the division of hash spaces for this view
     pub fn hash_space_division(&self) -> &BTreeMap<NodeId, (Vec<u8>, Vec<u8>)> {
         &self.leader_hash_space_division
     }
-
 }
 
 /// Get the division of hash spaces for a given leader_set
@@ -159,7 +205,6 @@ fn calculate_hash_space_division(leader_set: &Vec<NodeId>) -> BTreeMap<NodeId, (
     let mut slice_for_leaders = BTreeMap::new();
 
     slices.into_iter().enumerate().for_each(|(leader_id, slice)| {
-
         let leader = leader_set[leader_id].clone();
 
         slice_for_leaders.insert(leader, slice);
@@ -170,7 +215,6 @@ fn calculate_hash_space_division(leader_set: &Vec<NodeId>) -> BTreeMap<NodeId, (
 
 /// Check if a given requests is within a given hash space
 pub fn is_request_in_hash_space(rq: &Digest, hash_space: &(Vec<u8>, Vec<u8>)) -> bool {
-
     let start = &hash_space.0;
     let end = &hash_space.1;
 
@@ -190,7 +234,7 @@ fn divide_hash_space(size_bytes: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)>
 
     let mut start = BigUint::zero();
 
-    let last_hash : Vec<u8> = iter::repeat(0xFF).take(size_bytes).collect();
+    let last_hash: Vec<u8> = iter::repeat(0xFF).take(size_bytes).collect();
 
     //Byte order does not matter, it's all 1s
     let end = BigUint::from_bytes_be(&last_hash[..]);
@@ -202,9 +246,8 @@ fn divide_hash_space(size_bytes: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)>
 
     // Get the slices
     for i in 1..=count {
-
         let slice_start = start.to_bytes_be();
-        
+
         start = start.add(increment.clone());
 
         let slice_end = if i == count {
@@ -232,18 +275,17 @@ mod view_tests {
     fn test_hash_space_partition() {
         use super::*;
 
-        const TESTS : usize = 10000;
+        const TESTS: usize = 10000;
 
         let view_info = ViewInfo::new(SeqNo::ZERO, 4, 1).unwrap();
 
         let division = calculate_hash_space_division(view_info.leader_set());
 
-        let mut digest_vec : [u8; Digest::LENGTH] = [0; Digest::LENGTH];
+        let mut digest_vec: [u8; Digest::LENGTH] = [0; Digest::LENGTH];
 
         let mut rng = rand::rngs::SmallRng::seed_from_u64(812679233723);
 
         for i in 0..TESTS {
-
             rng.fill_bytes(&mut digest_vec);
 
             let digest = Digest::from_bytes(&digest_vec).unwrap();
@@ -252,20 +294,18 @@ mod view_tests {
 
             for leader in view_info.leader_set() {
                 if is_request_in_hash_space(&digest, division.get(leader).unwrap()) {
-                    count+=1;
+                    count += 1;
                 }
             }
 
             assert_eq!(count, 1, "The digest {:?} was found in {} hash spaces", digest, count);
         }
     }
-
-
 }
 
 impl Debug for ViewInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Seq: {:?}, quorum: {:?}, primary: {:?}, leader_set: {:?}, params: {:?}",
-               self.seq, self.quorum, self.leader(), self.leader_set, self.params)
+               self.seq, self.quorum_members, self.leader(), self.leader_set, self.params)
     }
 }

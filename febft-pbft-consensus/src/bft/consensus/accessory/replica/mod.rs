@@ -1,71 +1,64 @@
 use std::collections::BTreeMap;
-use std::ops::Deref;
 use std::sync::{Arc, Mutex};
+
 use chrono::Utc;
 use log::debug;
-use atlas_common::crypto::hash::Digest;
+
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::threadpool;
-use atlas_communication::message::{NetworkMessageKind, SerializedMessage, StoredMessage, StoredSerializedNetworkMessage, WireMessage};
-use atlas_communication::{Node, NodePK, serialize};
-use atlas_communication::serialize::Buf;
-use atlas_execution::serialize::SharedData;
-use atlas_core::messages::SystemMessage;
-use atlas_core::serialize::StateTransferMessage;
+use atlas_communication::message::{SerializedMessage, StoredMessage, StoredSerializedProtocolMessage, WireMessage};
+use atlas_communication::reconfiguration_node::NetworkInformationProvider;
+use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
+use atlas_execution::serialize::ApplicationData;
+
+use crate::bft::{PBFT, SysMsg};
+use crate::bft::consensus::accessory::AccessoryConsensus;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::msg_log::deciding_log::DecidingLog;
 use crate::bft::msg_log::decisions::StoredConsensusMessage;
-use crate::bft::PBFT;
 use crate::bft::sync::view::ViewInfo;
-use crate::bft::consensus::accessory::AccessoryConsensus;
 
-pub struct ReplicaAccessory<D: SharedData + 'static, ST: StateTransferMessage + 'static> {
-    speculative_commits: Arc<Mutex<BTreeMap<NodeId, StoredSerializedNetworkMessage<PBFT<D, ST>>>>>,
+pub struct ReplicaAccessory<D>
+    where D: ApplicationData + 'static {
+    speculative_commits: Arc<Mutex<BTreeMap<NodeId, StoredSerializedProtocolMessage<SysMsg<D>>>>>,
 }
 
-impl<D, ST> AccessoryConsensus<D, ST> for ReplicaAccessory<D, ST>
-    where D: SharedData + 'static,
-          ST: StateTransferMessage + 'static {
-
+impl<D> AccessoryConsensus<D> for ReplicaAccessory<D>
+    where D: ApplicationData + 'static,{
     fn handle_partial_pre_prepare<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                       view: &ViewInfo,
                                       msg: StoredConsensusMessage<D::Request>,
-                                      node: &NT) where NT: Node<PBFT<D, ST>> {}
+                                      node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 
     fn handle_pre_prepare_phase_completed<NT>(&mut self,
                                               deciding_log: &DecidingLog<D::Request>,
                                               view: &ViewInfo,
                                               _msg: StoredConsensusMessage<D::Request>,
-                                              node: &NT) where NT: Node<PBFT<D, ST>> {
+                                              node: &Arc<NT>) where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
         let my_id = node.id();
         let view_seq = view.sequence_number();
         let current_digest = deciding_log.current_digest().unwrap();
 
-        let sign_detached = node.pk_crypto().sign_detached();
+        let key_pair = node.network_info_provider().get_key_pair().clone();
         let n = view.params().n();
 
         let seq = deciding_log.sequence_number();
 
         let speculative_commits = Arc::clone(&self.speculative_commits);
 
+        let node_clone = node.clone();
+
         threadpool::execute(move || {
-            let message = NetworkMessageKind::from(
-                SystemMessage::from_protocol_message(
-                    PBFTMessage::Consensus(ConsensusMessage::new(
-                        seq,
-                        view_seq,
-                        ConsensusMessageKind::Commit(current_digest.clone()),
-                    ))));
+            let message = PBFTMessage::Consensus(ConsensusMessage::new(
+                    seq,
+                    view_seq,
+                    ConsensusMessageKind::Commit(current_digest.clone()),
+                ));
 
+            let (message, digest) = node_clone.serialize_digest_message(message).unwrap();
 
-            // serialize raw msg
-            let mut buf = Vec::new();
-
-            let digest = serialize::serialize_digest::<Vec<u8>,
-                PBFT<D, ST>>(&message, &mut buf).unwrap();
-
-            let buf = Buf::from(buf);
+            let (message, buf) = message.into_inner();
 
             for peer_id in NodeId::targets(0..n) {
                 let buf_clone = buf.clone();
@@ -81,7 +74,7 @@ impl<D, ST> AccessoryConsensus<D, ST> for ReplicaAccessory<D, ST>
                     // PRE-PREPARE message
                     0,
                     Some(digest),
-                    Some(sign_detached.key_pair()),
+                    Some(&*key_pair),
                 ).into_inner();
 
                 // store serialized header + message
@@ -110,29 +103,28 @@ impl<D, ST> AccessoryConsensus<D, ST> for ReplicaAccessory<D, ST>
             ConsensusMessageKind::Prepare(current_digest),
         ));
 
-        let targets = NodeId::targets(0..view.params().n());
+        let targets = view.quorum_members().clone();
 
-        node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
+        node.broadcast_signed(message, targets.into_iter());
     }
 
     fn handle_preparing_no_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                       view: &ViewInfo,
-                                      msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: Node<PBFT<D, ST>> {}
+                                      msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 
     fn handle_preparing_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                    view: &ViewInfo,
-                                   msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: Node<PBFT<D, ST>> {
-
+                                   msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {
         let node_id = node.id();
 
         let seq = deciding_log.sequence_number();
         let current_digest = deciding_log.current_digest().unwrap();
         let speculative_commits = self.take_speculative_commits();
 
-        if valid_spec_commits::<D, ST>(&speculative_commits, node_id, seq, view) {
+        if valid_spec_commits::<D>(&speculative_commits, node_id, seq, view) {
             for (_, msg) in speculative_commits.iter() {
-                debug!("{:?} // Broadcasting speculative commit message {:?} (total of {} messages) to {} targets",
-                     node_id, msg.message().original(), speculative_commits.len(), view.params().n());
+                debug!("{:?} // Broadcasting speculative commit message (total of {} messages) to {} targets",
+                     node_id, speculative_commits.len(), view.params().n());
                 break;
             }
 
@@ -147,9 +139,9 @@ impl<D, ST> AccessoryConsensus<D, ST> for ReplicaAccessory<D, ST>
             debug!("{:?} // Broadcasting commit consensus message {:?}",
                         node_id, message);
 
-            let targets = NodeId::targets(0..view.params().n());
+            let targets = view.quorum_members().clone();
 
-            node.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
+            node.broadcast_signed(message, targets.into_iter());
         }
 
         debug!("{:?} // Broadcasted commit consensus message {:?}",
@@ -160,41 +152,37 @@ impl<D, ST> AccessoryConsensus<D, ST> for ReplicaAccessory<D, ST>
 
     fn handle_committing_no_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                        view: &ViewInfo,
-                                       msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: Node<PBFT<D, ST>> {}
+                                       msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 
     fn handle_committing_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
                                     view: &ViewInfo,
-                                    msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: Node<PBFT<D, ST>> {}
-
+                                    msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 }
 
-impl<D, ST> ReplicaAccessory<D, ST>
-    where D: SharedData + 'static,
-          ST: StateTransferMessage + 'static {
+impl<D> ReplicaAccessory<D>
+    where D: ApplicationData + 'static, {
     pub fn new() -> Self {
         Self {
             speculative_commits: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
-    fn take_speculative_commits(&self) -> BTreeMap<NodeId, StoredSerializedNetworkMessage<PBFT<D, ST>>> {
+    fn take_speculative_commits(&self) -> BTreeMap<NodeId, StoredSerializedProtocolMessage<SysMsg<D>>> {
         let mut map = self.speculative_commits.lock().unwrap();
         std::mem::replace(&mut *map, BTreeMap::new())
     }
-
 }
 
 
 #[inline]
-fn valid_spec_commits<D, ST>(
-    speculative_commits: &BTreeMap<NodeId, StoredSerializedNetworkMessage<PBFT<D, ST>>>,
+fn valid_spec_commits<D>(
+    speculative_commits: &BTreeMap<NodeId, StoredSerializedProtocolMessage<SysMsg<D>>>,
     node_id: NodeId,
     seq_no: SeqNo,
     view: &ViewInfo,
 ) -> bool
     where
-        D: SharedData + 'static,
-        ST: StateTransferMessage
+        D: ApplicationData + 'static,
 {
     let len = speculative_commits.len();
 
@@ -210,14 +198,6 @@ fn valid_spec_commits<D, ST>(
 
     speculative_commits
         .values()
-        .map(|stored| match stored.message().original().deref_system() {
-            SystemMessage::ProtocolMessage(protocol) => {
-                match protocol.deref() {
-                    PBFTMessage::Consensus(consensus) => consensus,
-                    _ => { unreachable!() }
-                }
-            }
-            _ => { unreachable!() }
-        })
-        .all(|commit| commit.sequence_number() == seq_no)
+        .map(|msg| msg.message())
+        .all(|commit| commit.original().sequence_number() == seq_no)
 }

@@ -1,19 +1,16 @@
-use std::{marker::PhantomData, sync::Arc};
-use atlas_common::crypto::hash::Digest;
+use std::{marker::PhantomData};
 use atlas_common::ordering::Orderable;
-use atlas_communication::message::StoredMessage;
 use atlas_core::messages::ClientRqInfo;
-use atlas_execution::app::{Request, Service};
-use atlas_execution::serialize::SharedData;
+use atlas_execution::serialize::ApplicationData;
 
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
+use crate::bft::message::{ConsensusMessageKind};
 use crate::bft::msg_log::decisions::StoredConsensusMessage;
 
-pub struct FollowerSynchronizer<D: SharedData> {
+pub struct FollowerSynchronizer<D: ApplicationData> {
     _phantom: PhantomData<D>
 }
 
-impl<D: SharedData + 'static> FollowerSynchronizer<D> {
+impl<D: ApplicationData + 'static> FollowerSynchronizer<D> {
 
     pub fn new() -> Self {
         Self { _phantom: Default::default() }
@@ -27,7 +24,7 @@ impl<D: SharedData + 'static> FollowerSynchronizer<D> {
         pre_prepare: &StoredConsensusMessage<D::Request>,
     ) -> Vec<ClientRqInfo> {
 
-        let requests = match pre_prepare.message().consensus().kind() {
+        let requests = match pre_prepare.message().kind() {
             ConsensusMessageKind::PrePrepare(req) => {req},
             _ => {panic!()}
         };

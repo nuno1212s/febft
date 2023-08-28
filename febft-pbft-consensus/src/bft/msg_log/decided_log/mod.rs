@@ -1,32 +1,23 @@
-use std::mem::size_of;
-use std::sync::Arc;
 use log::error;
-use atlas_common::crypto::hash::{Context, Digest};
 
 use atlas_common::error::*;
-use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_communication::message::StoredMessage;
-use atlas_communication::Node;
-use atlas_core::ordering_protocol::{DecisionInformation, ExecutionResult, ProtocolConsensusDecision};
-use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog, WriteMode};
-use atlas_core::serialize::StateTransferMessage;
-use atlas_execution::app::{Request, Service, State, UpdateBatch};
-use atlas_execution::serialize::SharedData;
-use atlas_core::state_transfer::Checkpoint;
+use atlas_core::ordering_protocol::{DecisionInformation, ProtocolConsensusDecision};
+use atlas_core::persistent_log::{OperationMode, OrderingProtocolLog, StatefulOrderingProtocolLog};
+use atlas_execution::app::UpdateBatch;
+use atlas_execution::serialize::ApplicationData;
 
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
+use crate::bft::message::ConsensusMessageKind;
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::msg_log::{operation_key};
-use crate::bft::msg_log::decisions::{CollectData, DecisionLog, Proof, ProofMetadata};
-use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
-use crate::bft::{PBFT, PBFTOrderProtocol};
+use crate::bft::msg_log::deciding_log::CompletedBatch;
+use crate::bft::msg_log::decisions::{DecisionLog, Proof, ProofMetadata, StoredConsensusMessage};
+use crate::bft::msg_log::operation_key;
 use crate::bft::sync::view::ViewInfo;
 
 /// The log of decisions that have already been processed by the consensus
 /// algorithm
-pub struct Log<D, PL> where D: SharedData + 'static {
+pub struct Log<D, PL> where D: ApplicationData + 'static {
     // The log for all of the already decided consensus instances
     dec_log: DecisionLog<D::Request>,
 
@@ -34,7 +25,7 @@ pub struct Log<D, PL> where D: SharedData + 'static {
     persistent_log: PL,
 }
 
-impl<D, PL> Log<D, PL> where D: SharedData + 'static {
+impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     pub(crate) fn init_decided_log(node_id: NodeId, persistent_log: PL,
                                    dec_log: Option<DecisionLog<D::Request>>) -> Self {
         Self {
@@ -57,8 +48,8 @@ impl<D, PL> Log<D, PL> where D: SharedData + 'static {
     ///
     /// FIXME: The view initialization might have to be changed if we want to introduce reconfiguration
     pub fn read_current_state(&self, n: usize, f: usize) -> Result<Option<(ViewInfo, DecisionLog<D::Request>)>>
-        where PL: StatefulOrderingProtocolLog<PBFTConsensus<D>, PBFTConsensus<D>> {
-        let option = self.persistent_log.read_state(WriteMode::BlockingSync)?;
+        where PL: StatefulOrderingProtocolLog<D, PBFTConsensus<D>, PBFTConsensus<D>> {
+        let option = self.persistent_log.read_state(OperationMode::BlockingSync)?;
 
         if let Some((view, dec_log)) = option {
             Ok(Some((view, dec_log)))
@@ -82,12 +73,12 @@ impl<D, PL> Log<D, PL> where D: SharedData + 'static {
     /// This is mostly used for pre prepares as they contain all the requests and are therefore very expensive to send
     pub fn insert_consensus(
         &mut self,
-        consensus_msg: Arc<ReadOnly<StoredMessage<PBFTMessage<D::Request>>>>,
-    ) where PL: OrderingProtocolLog<PBFTConsensus<D>>,
+        consensus_msg: StoredConsensusMessage<D::Request>,
+    ) where PL: OrderingProtocolLog<D, PBFTConsensus<D>>,
     {
         if let Err(err) = self
             .persistent_log
-            .write_message(WriteMode::NonBlockingSync(None), consensus_msg)
+            .write_message(OperationMode::NonBlockingSync(None), consensus_msg)
         {
             error!("Failed to persist message {:?}", err);
         }
@@ -98,7 +89,7 @@ impl<D, PL> Log<D, PL> where D: SharedData + 'static {
     /// which contains all of the collects
     /// If we are missing the request determined by the
     pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<D::Request>) -> Result<ProtocolConsensusDecision<D::Request>>
-        where PL: OrderingProtocolLog<PBFTConsensus<D>> {
+        where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         let batch_execution_info = ProtocolConsensusDecision::from(&proof);
 
         if let Some(decision) = self.decision_log().last_decision() {
@@ -114,7 +105,7 @@ impl<D, PL> Log<D, PL> where D: SharedData + 'static {
         }
 
         if let Err(err) = self.persistent_log
-            .write_proof(WriteMode::NonBlockingSync(None), proof) {
+            .write_proof(OperationMode::NonBlockingSync(None), proof) {
             error!("Failed to persist proof {:?}", err);
         }
 
@@ -123,16 +114,15 @@ impl<D, PL> Log<D, PL> where D: SharedData + 'static {
 
     /// Clear the occurrences of a seq no from the decision log
     pub fn clear_last_occurrence(&mut self, seq: SeqNo)
-        where
-            PL: OrderingProtocolLog<PBFTConsensus<D>> {
-        if let Err(err) = self.persistent_log.write_invalidate(WriteMode::NonBlockingSync(None), seq) {
+        where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
+        if let Err(err) = self.persistent_log.write_invalidate(OperationMode::NonBlockingSync(None), seq) {
             error!("Failed to invalidate last occurrence {:?}", err);
         }
     }
 
     /// Update the log state, received from the CST protocol.
     pub fn install_state(&mut self, view: ViewInfo, dec_log: DecisionLog<D::Request>)
-        where PL: StatefulOrderingProtocolLog<PBFTConsensus<D>, PBFTConsensus<D>> {
+        where PL: StatefulOrderingProtocolLog<D, PBFTConsensus<D>, PBFTConsensus<D>> {
 
         //Replace the log
         self.dec_log = dec_log.clone();
@@ -140,7 +130,7 @@ impl<D, PL> Log<D, PL> where D: SharedData + 'static {
         let last_seq = self.dec_log.last_execution().unwrap_or(SeqNo::ZERO);
 
         if let Err(err) = self.persistent_log
-            .write_install_state(WriteMode::NonBlockingSync(None), view, dec_log) {
+            .write_install_state(OperationMode::NonBlockingSync(None), view, dec_log) {
             error!("Failed to persist message {:?}", err);
         }
     }
@@ -167,9 +157,9 @@ impl<D, PL> Log<D, PL> where D: SharedData + 'static {
 
     /// Register that all the batches for a given decision have already been received
     /// Basically persists the metadata for a given consensus num
-    pub fn all_batches_received(&mut self, metadata: ProofMetadata) where
-        PL: OrderingProtocolLog<PBFTConsensus<D>> {
-        self.persistent_log.write_proof_metadata(WriteMode::NonBlockingSync(None),
+    pub fn all_batches_received(&mut self, metadata: ProofMetadata)
+        where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
+        self.persistent_log.write_proof_metadata(OperationMode::NonBlockingSync(None),
                                                  metadata).unwrap();
     }
 
@@ -195,7 +185,7 @@ impl<D, PL> Log<D, PL> where D: SharedData + 'static {
 
             for message in completed_batch.pre_prepare_messages() {
                 let reqs = {
-                    if let ConsensusMessageKind::PrePrepare(reqs) = (*message.message().consensus().kind()).clone() {
+                    if let ConsensusMessageKind::PrePrepare(reqs) = (*message.message().kind()).clone() {
                         reqs
                     } else { unreachable!() }
                 };
@@ -261,7 +251,7 @@ impl<O> From<&Proof<O>> for ProtocolConsensusDecision<O> where O: Clone {
         for pre_prepare in value.pre_prepares() {
             let consensus_msg = (*pre_prepare.message()).clone();
 
-            let reqs = match consensus_msg.into_consensus().into_kind() {
+            let reqs = match consensus_msg.into_kind() {
                 ConsensusMessageKind::PrePrepare(reqs) => { reqs }
                 _ => {
                     unreachable!()

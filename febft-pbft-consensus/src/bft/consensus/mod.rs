@@ -1,41 +1,39 @@
-pub mod decision;
-pub mod accessory;
-
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, BTreeMap, BTreeSet, VecDeque};
-use std::iter;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
-use chrono::Utc;
+
 use either::Either;
 use event_listener::Event;
 use log::{debug, error, info, trace, warn};
+
 use atlas_common::error::*;
-use atlas_common::crypto::hash::Digest;
-use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
-use atlas_common::ordering::{InvalidSeqNo, Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message};
+use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message};
 use atlas_communication::message::{Header, StoredMessage};
-use atlas_communication::Node;
-use atlas_execution::ExecutorHandle;
-use atlas_execution::serialize::SharedData;
-use atlas_core::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage, SystemMessage};
+use atlas_communication::protocol_node::ProtocolNetworkNode;
+use atlas_core::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage};
+use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::ProtocolConsensusDecision;
 use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
-use atlas_core::serialize::StateTransferMessage;
 use atlas_core::timeouts::Timeouts;
+use atlas_execution::ExecutorHandle;
+use atlas_execution::serialize::ApplicationData;
 use atlas_metrics::metrics::metric_increment;
-use crate::bft;
-use crate::bft::consensus::decision::{ConsensusDecision, DecisionPhase, DecisionPollStatus, DecisionStatus, MessageQueue};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
-use crate::bft::msg_log::decided_log::Log;
-use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
-use crate::bft::msg_log::decisions::{DecisionLog, IncompleteProof, Proof, StoredConsensusMessage};
+
 use crate::bft::{PBFT, SysMsg};
+use crate::bft::consensus::decision::{ConsensusDecision, DecisionPollStatus, DecisionStatus, MessageQueue};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::OPERATIONS_PROCESSED_ID;
+use crate::bft::msg_log::decided_log::Log;
+use crate::bft::msg_log::deciding_log::CompletedBatch;
+use crate::bft::msg_log::decisions::{DecisionLog, IncompleteProof, Proof};
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::sync::view::ViewInfo;
+
+pub mod decision;
+pub mod accessory;
 
 #[derive(Debug, Clone)]
 /// Status returned from processing a consensus message.
@@ -186,7 +184,9 @@ pub struct Signals {
 
 /// The consensus handler. Responsible for multiplexing consensus instances and keeping track
 /// of missing messages
-pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static, PL: Clone> {
+pub struct Consensus<D, PL>
+    where D: ApplicationData + 'static,
+          PL: Clone {
     node_id: NodeId,
     /// The handle to the executor of the function
     executor_handle: ExecutorHandle<D>,
@@ -201,7 +201,7 @@ pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static
     /// The consensus instances that are currently being processed
     /// A given consensus instance n will only be finished when all consensus instances
     /// j, where j < n have already been processed, in order to maintain total ordering
-    decisions: VecDeque<ConsensusDecision<D, ST, PL>>,
+    decisions: VecDeque<ConsensusDecision<D, PL>>,
     /// The queue for messages that sit outside the range seq_no + watermark
     /// These messages cannot currently be processed since they sit outside the allowed
     /// zone but they will be processed once the seq no moves forward enough to include them
@@ -220,9 +220,8 @@ pub struct Consensus<D: SharedData + 'static, ST: StateTransferMessage + 'static
     persistent_log: PL,
 }
 
-impl<D, ST, PL> Consensus<D, ST, PL> where D: SharedData + 'static,
-                                           ST: StateTransferMessage + 'static,
-                                           PL: Clone {
+impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
+                                   PL: Clone {
     pub fn new_replica(node_id: NodeId, view: &ViewInfo, executor_handle: ExecutorHandle<D>, seq_no: SeqNo,
                        watermark: u32, consensus_guard: Arc<ProposerConsensusGuard>, timeouts: Timeouts,
                        persistent_log: PL) -> Self {
@@ -276,7 +275,7 @@ impl<D, ST, PL> Consensus<D, ST, PL> where D: SharedData + 'static,
             Either::Right(_) => {}
             Either::Left(_) => {
                 // The message pertains to older views
-                warn!("{:?} // Ignoring consensus message {:?} received from {:?} as we are already in view {:?}",
+                debug!("{:?} // Ignoring consensus message {:?} received from {:?} as we are already in view {:?}",
                     self.node_id, message, header.from(), self.curr_view.sequence_number());
 
                 return;
@@ -288,7 +287,7 @@ impl<D, ST, PL> Consensus<D, ST, PL> where D: SharedData + 'static,
             Either::Left(_) => {
                 // The message pertains to older consensus instances
 
-                warn!("{:?} // Ignoring consensus message {:?} received from {:?} as we are already in seq no {:?}",
+                debug!("{:?} // Ignoring consensus message {:?} received from {:?} as we are already in seq no {:?}",
                     self.node_id, message, header.from(), self.seq_no);
 
                 return;
@@ -366,9 +365,9 @@ impl<D, ST, PL> Consensus<D, ST, PL> where D: SharedData + 'static,
                                synchronizer: &Synchronizer<D>,
                                timeouts: &Timeouts,
                                log: &mut Log<D, PL>,
-                               node: &NT) -> Result<ConsensusStatus>
-        where NT: Node<PBFT<D, ST>>,
-              PL: OrderingProtocolLog<PBFTConsensus<D>> {
+                               node: &Arc<NT>) -> Result<ConsensusStatus>
+        where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
+              PL: OrderingProtocolLog<D, PBFTConsensus<D>>, {
         let message_seq = message.sequence_number();
 
         let view_seq = message.view();
@@ -382,7 +381,7 @@ impl<D, ST, PL> Consensus<D, ST, PL> where D: SharedData + 'static,
             Either::Right(_) => {}
             Either::Left(_) => {
                 // The message pertains to older views
-                warn!("{:?} // Ignoring consensus message {:?} received from {:?} as we are already in view {:?}",
+                debug!("{:?} // Ignoring consensus message {:?} received from {:?} as we are already in view {:?}",
                     self.node_id, message, header.from(), self.curr_view.sequence_number());
 
                 return Ok(ConsensusStatus::Deciding);
@@ -392,7 +391,7 @@ impl<D, ST, PL> Consensus<D, ST, PL> where D: SharedData + 'static,
         let i = match message_seq.index(self.seq_no) {
             Either::Right(i) => i,
             Either::Left(_) => {
-                warn!("Message {:?} from {:?} is behind our current sequence no {:?}. Ignoring", message, header.from(), self.seq_no, );
+                debug!("Message {:?} from {:?} is behind our current sequence no {:?}. Ignoring", message, header.from(), self.seq_no, );
 
                 return Ok(ConsensusStatus::Deciding);
             }
@@ -480,7 +479,7 @@ impl<D, ST, PL> Consensus<D, ST, PL> where D: SharedData + 'static,
     /// Advance to the next instance of the consensus
     /// This will also create the necessary new decision to keep the pending decisions
     /// equal to the water mark
-    pub fn next_instance(&mut self, view: &ViewInfo) -> ConsensusDecision<D, ST, PL> {
+    pub fn next_instance(&mut self, view: &ViewInfo) -> ConsensusDecision<D, PL> {
         let decision = self.decisions.pop_front().unwrap();
 
         self.seq_no = self.seq_no.next();
@@ -547,7 +546,7 @@ impl<D, ST, PL> Consensus<D, ST, PL> where D: SharedData + 'static,
             }
 
             for pre_prepare in proof.pre_prepares() {
-                let x: &ConsensusMessage<D::Request> = pre_prepare.message().consensus();
+                let x: &ConsensusMessage<D::Request> = pre_prepare.message();
 
                 match x.kind() {
                     ConsensusMessageKind::PrePrepare(pre_prepare_reqs) => {
@@ -697,7 +696,7 @@ impl<D, ST, PL> Consensus<D, ST, PL> where D: SharedData + 'static,
                               view: &ViewInfo,
                               proof: Proof<D::Request>,
                               log: &mut Log<D, PL>) -> Result<ProtocolConsensusDecision<D::Request>>
-        where PL: OrderingProtocolLog<PBFTConsensus<D>> {
+        where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
 
         // If this is successful, it means that we are all caught up and can now start executing the
         // batch
@@ -711,19 +710,17 @@ impl<D, ST, PL> Consensus<D, ST, PL> where D: SharedData + 'static,
 
     /// Create a fake `PRE-PREPARE`. This is useful during the view
     /// change protocol.
-    pub fn forge_propose<K>(
+    pub fn forge_propose(
         &self,
         requests: Vec<StoredRequestMessage<D::Request>>,
-        synchronizer: &K,
-    ) -> SysMsg<D, ST>
-        where
-            K: AbstractSynchronizer<D>,
+        view: &ViewInfo,
+    ) -> SysMsg<D>
     {
-        SystemMessage::from_protocol_message(PBFTMessage::Consensus(ConsensusMessage::new(
+        PBFTMessage::Consensus(ConsensusMessage::new(
             self.sequence_number(),
-            synchronizer.view().sequence_number(),
+            view.sequence_number(),
             ConsensusMessageKind::PrePrepare(requests),
-        )))
+        ))
     }
 
     /// Install a given view into the current consensus decisions.
@@ -798,21 +795,17 @@ impl<D, ST, PL> Consensus<D, ST, PL> where D: SharedData + 'static,
     pub fn finalize_view_change<NT>(
         &mut self,
         (header, message): (Header, ConsensusMessage<D::Request>),
+        new_view: &ViewInfo,
         synchronizer: &Synchronizer<D>,
         timeouts: &Timeouts,
         log: &mut Log<D, PL>,
-        node: &NT,
-    ) where NT: Node<PBFT<D, ST>>,
-            PL: OrderingProtocolLog<PBFTConsensus<D>> {
-        let view = synchronizer.view();
+        node: &Arc<NT>,
+    ) where
+        NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
+        PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         //Prepare the algorithm as we are already entering this phase
 
-        //TODO: when we finalize a view change, we want to treat the pre prepare request
-        // As the only pre prepare, since it already has info provided by everyone in the network.
-        // Therefore, this should go straight to the Preparing phase instead of waiting for
-        // All the view's leaders.
-
-        self.install_view(&view);
+        self.install_view(new_view);
 
         if let ConsensusMessageKind::PrePrepare(reqs) = &message.kind() {
             let mut final_rqs = Vec::with_capacity(reqs.len());
@@ -845,7 +838,7 @@ impl<D, ST, PL> Consensus<D, ST, PL> where D: SharedData + 'static,
     }
 
     /// Enqueue a decision onto our overlapping decision log
-    fn enqueue_decision(&mut self, decision: ConsensusDecision<D, ST, PL>) {
+    fn enqueue_decision(&mut self, decision: ConsensusDecision<D, PL>) {
         self.signalled.push_signalled(decision.sequence_number());
 
         self.decisions.push_back(decision);
@@ -867,8 +860,9 @@ impl<D, ST, PL> Consensus<D, ST, PL> where D: SharedData + 'static,
     }
 }
 
-impl<D, ST, PL> Orderable for Consensus<D, ST, PL> where D: SharedData + 'static, ST: StateTransferMessage + 'static,
-                                                         PL: Clone  {
+impl<D, PL> Orderable for Consensus<D, PL>
+    where D: ApplicationData + 'static,
+          PL: Clone {
     fn sequence_number(&self) -> SeqNo {
         self.seq_no
     }
@@ -918,6 +912,8 @@ impl ProposerConsensusGuard {
     /// Lock the consensus, making it impossible for the proposer to propose any requests
     pub fn lock_consensus(&self) {
         self.can_propose.store(false, Ordering::Relaxed);
+
+        debug!("Locked consensus");
     }
 
     /// Unlock the consensus instance
@@ -925,6 +921,8 @@ impl ProposerConsensusGuard {
         self.can_propose.store(true, Ordering::Relaxed);
 
         self.event_waker.notify(usize::MAX);
+
+        debug!("Unlocking consensus")
     }
 
     /// Get the next sequence number to propose to

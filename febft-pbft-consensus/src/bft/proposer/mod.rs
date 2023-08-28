@@ -1,38 +1,34 @@
-pub mod follower_proposer;
-
-use std::cmp::max;
 use std::collections::BTreeMap;
-use std::marker::PhantomData;
-use std::ops::Div;
-use log::{error, warn, debug, info, trace};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
-use atlas_common::channel::{ChannelSyncRx, TryRecvError};
+use log::{debug, error, info, warn};
+
+use atlas_common::channel::TryRecvError;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::threadpool;
-use atlas_communication::message::{NetworkMessage, NetworkMessageKind, StoredMessage};
-use atlas_communication::Node;
-use atlas_execution::app::{Request, Service, UnorderedBatch};
-use atlas_execution::ExecutorHandle;
-use atlas_execution::serialize::SharedData;
-use atlas_core::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage, SystemMessage};
-use atlas_core::request_pre_processing::{BatchOutput, PreProcessorMessage, PreProcessorOutputMessage};
-use atlas_core::serialize::StateTransferMessage;
+use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
+use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
+use atlas_core::request_pre_processing::{BatchOutput, PreProcessorOutputMessage};
 use atlas_core::timeouts::Timeouts;
-use atlas_metrics::metrics::{metric_duration, metric_increment, metric_local_duration_end, metric_local_duration_start, metric_store_count};
+use atlas_execution::app::UnorderedBatch;
+use atlas_execution::ExecutorHandle;
+use atlas_execution::serialize::ApplicationData;
+use atlas_metrics::metrics::{metric_duration, metric_increment, metric_store_count};
+
 use crate::bft::config::ProposerConfig;
 use crate::bft::consensus::ProposerConsensusGuard;
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserverMessage, PBFTMessage};
-use crate::bft::metric::{CLIENT_POOL_BATCH_SIZE_ID, PROPOSER_BATCHES_MADE_ID, PROPOSER_FWD_REQUESTS_ID, PROPOSER_LATENCY_ID, PROPOSER_PROPOSE_TIME_ID, PROPOSER_REQUEST_FILTER_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUEST_TIME_ITERATIONS_ID, PROPOSER_REQUESTS_COLLECTED_ID};
-use crate::bft::observer::{ConnState, MessageType, ObserverHandle};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
+use crate::bft::metric::{CLIENT_POOL_BATCH_SIZE_ID, PROPOSER_BATCHES_MADE_ID, PROPOSER_LATENCY_ID, PROPOSER_PROPOSE_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUEST_TIME_ITERATIONS_ID, PROPOSER_REQUESTS_COLLECTED_ID};
 use crate::bft::PBFT;
 use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
-use super::sync::{Synchronizer, AbstractSynchronizer};
+
+use super::sync::{AbstractSynchronizer, Synchronizer};
+
+//pub mod follower_proposer;
 
 pub type BatchType<R> = Vec<StoredRequestMessage<R>>;
 
@@ -40,7 +36,7 @@ pub type BatchType<R> = Vec<StoredRequestMessage<R>>;
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
 pub struct Proposer<D, NT>
-    where D: SharedData + 'static {
+    where D: ApplicationData + 'static, {
     /// Channel for the reception of batches from the pre processing module
     batch_reception: BatchOutput<D::Request>,
     /// Network Node
@@ -65,12 +61,12 @@ pub struct Proposer<D, NT>
 const TIMEOUT: Duration = Duration::from_micros(10);
 const PRINT_INTERVAL: usize = 10000;
 
-struct ProposeBuilder<D> where D: SharedData {
+struct ProposeBuilder<D> where D: ApplicationData {
     currently_accumulated: Vec<StoredRequestMessage<D::Request>>,
     last_proposal: Instant,
 }
 
-impl<D> ProposeBuilder<D> where D: SharedData {
+impl<D> ProposeBuilder<D> where D: ApplicationData {
     pub fn new(target_size: usize) -> Self {
         Self { currently_accumulated: Vec::with_capacity(target_size), last_proposal: Instant::now() }
     }
@@ -79,7 +75,8 @@ impl<D> ProposeBuilder<D> where D: SharedData {
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
 
-impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
+impl<D, NT> Proposer<D, NT>
+    where D: ApplicationData + 'static, {
     pub fn new(
         node: Arc<NT>,
         batch_input: BatchOutput<D::Request>,
@@ -108,9 +105,8 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
     }
 
     ///Start this work
-    pub fn start<ST>(self: Arc<Self>) -> JoinHandle<()>
-        where ST: StateTransferMessage + 'static,
-              NT: Node<PBFT<D, ST>> + 'static {
+    pub fn start(self: Arc<Self>) -> JoinHandle<()>
+        where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
         std::thread::Builder::new()
             .name(format!("Proposer thread"))
             .spawn(move || {
@@ -139,6 +135,28 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                         info!("{:?} // Resuming proposer as we are now able to propose again.", self.node_ref.id());
                     }
 
+                    //We do this as we don't want to get stuck waiting for requests that might never arrive
+                    //Or even just waiting for any type of request. We want to minimize the amount of time the
+                    //Consensus is waiting for new requests
+
+                    //We don't need to do this for non leader replicas, as that would cause unnecessary strain as the
+                    //Thread is in an infinite loop
+                    // Receive the requests from the clients and process them
+                    let opt_msgs: Option<PreProcessorOutputMessage<D::Request>> = match self.batch_reception.try_recv() {
+                        Ok(res) => { Some(res) }
+                        Err(err) => {
+                            match err {
+                                TryRecvError::ChannelDc => {
+                                    error!("{:?} // Failed to receive requests from pre processing module because {:?}", self.node_ref.id(), err);
+                                    break;
+                                }
+                                _ => {
+                                    None
+                                }
+                            }
+                        }
+                    };
+
                     //TODO: Maybe not use this as it can spam the lock on synchronizer?
                     let info = self.synchronizer.view();
 
@@ -148,45 +166,6 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
 
                     let our_slice = info.hash_space_division()
                         .get(&self.node_ref.id()).cloned().clone();
-
-                    //We do this as we don't want to get stuck waiting for requests that might never arrive
-                    //Or even just waiting for any type of request. We want to minimize the amount of time the
-                    //Consensus is waiting for new requests
-
-                    //We don't need to do this for non leader replicas, as that would cause unnecessary strain as the
-                    //Thread is in an infinite loop
-                    // Receive the requests from the clients and process them
-                    let opt_msgs: Option<PreProcessorOutputMessage<D::Request>> = if is_leader {
-                        match self.batch_reception.try_recv() {
-                            Ok(res) => { Some(res) }
-                            Err(err) => {
-                                match err {
-                                    TryRecvError::ChannelDc => {
-                                        error!("{:?} // Failed to receive requests from pre processing module because {:?}", self.node_ref.id(), err);
-                                        break;
-                                    }
-                                    _ => {
-                                        None
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        match self.batch_reception.recv_timeout(Duration::from_micros(self.global_batch_time_limit as u64)) {
-                            Ok(res) => { Some(res) }
-                            Err(err) => {
-                                match err {
-                                    TryRecvError::Timeout | TryRecvError::ChannelEmpty => {
-                                        None
-                                    }
-                                    TryRecvError::ChannelDc => {
-                                        error!("{:?} // Failed to receive requests from pre processing module because {:?}", self.node_ref.id(), err);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    };
 
                     let discovered_requests;
 
@@ -220,7 +199,6 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
                                         digest_vec.push(ClientRqInfo::new(digest, message.header().from(), message.message().sequence_number(), message.message().session_id()));
                                     }
                                 }
-
                             }
                             PreProcessorOutputMessage::DeDupedUnorderedRequests(mut messages) => {
                                 unordered_propose.currently_accumulated.append(&mut messages);
@@ -263,11 +241,10 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
     /// Attempt to propose an unordered request batch
     /// Fails if the batch is not large enough or the timeout
     /// Has not yet occurred
-    fn propose_unordered<ST>(
+    fn propose_unordered(
         &self,
         propose: &mut ProposeBuilder<D>,
-    ) -> bool where ST: StateTransferMessage + 'static,
-            NT: Node<PBFT<D, ST>> {
+    ) -> bool where NT: OrderProtocolSendNode<D, PBFT<D>> {
         if !propose.currently_accumulated.is_empty() {
             let current_batch_size = propose.currently_accumulated.len();
 
@@ -333,11 +310,9 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
 
     /// attempt to propose the ordered requests that we have collected
     /// Returns true if a batch was proposed
-    fn propose_ordered<ST>(&self,
-                           is_leader: bool,
-                           propose: &mut ProposeBuilder<D>, ) -> bool
-        where ST: StateTransferMessage + 'static,
-              NT: Node<PBFT<D, ST>> {
+    fn propose_ordered(&self, is_leader: bool,
+                       propose: &mut ProposeBuilder<D>, ) -> bool
+        where NT: OrderProtocolSendNode<D, PBFT<D>> {
 
         //Now let's deal with ordered requests
         if is_leader {
@@ -389,14 +364,12 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
 
     /// Proposes a new batch.
     /// (Basically broadcasts it to all of the members)
-    fn propose<ST>(
+    fn propose(
         &self,
         seq: SeqNo,
         view: &ViewInfo,
         mut currently_accumulated: Vec<StoredRequestMessage<D::Request>>,
-    ) where ST: StateTransferMessage + 'static,
-            NT: Node<PBFT<D, ST>> {
-
+    ) where NT: OrderProtocolSendNode<D, PBFT<D>> {
         let has_pending_messages = self.consensus_guard.has_pending_view_change_reqs();
 
         let is_view_change_empty = {
@@ -411,6 +384,9 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
             currently_accumulated.retain(|msg| {
                 if self.check_if_has_been_proposed(msg, &mut view_change_msg) {
                     // if it has been proposed, then we do not want to retain it
+
+                    let info1 = ClientRqInfo::from(msg);
+                    debug!("{:?} // Request {:?} has already been proposed, not retaining it", info1, self.node_ref.id());
                     return false;
                 }
                 true
@@ -425,7 +401,9 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
             self.consensus_guard.sync_messages_clear();
         }
 
-        info!("{:?} // Proposing new batch with {} request count {:?}", self.node_ref.id(), currently_accumulated.len(), seq);
+        let targets = view.quorum_members().clone();
+
+        info!("{:?} // Proposing new batch with {} request count {:?} to quorum: {:?}", self.node_ref.id(), currently_accumulated.len(), seq, targets);
 
         let message = PBFTMessage::Consensus(ConsensusMessage::new(
             seq,
@@ -433,9 +411,7 @@ impl<D, NT> Proposer<D, NT> where D: SharedData + 'static {
             ConsensusMessageKind::PrePrepare(currently_accumulated),
         ));
 
-        let targets = view.quorum_members().iter().copied();
-
-        self.node_ref.broadcast_signed(NetworkMessageKind::from(SystemMessage::from_protocol_message(message)), targets);
+        self.node_ref.broadcast_signed(message, targets.into_iter());
 
         metric_increment(PROPOSER_BATCHES_MADE_ID, Some(1));
     }

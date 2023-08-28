@@ -1,34 +1,26 @@
-use std::marker::PhantomData;
-use std::sync::Arc;
 use std::time::Duration;
-use atlas_common::globals::ReadOnly;
+
 use atlas_common::node_id::NodeId;
-use atlas_communication::Node;
-use atlas_execution::ExecutorHandle;
-use atlas_execution::serialize::SharedData;
 use atlas_core::followers::FollowerHandle;
-use atlas_core::serialize::{OrderingProtocolMessage, StateTransferMessage, ServiceMsg};
-use atlas_core::state_transfer::Checkpoint;
-use atlas_core::timeouts::Timeouts;
+use atlas_execution::serialize::ApplicationData;
+
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::observer::ObserverHandle;
 use crate::bft::sync::view::ViewInfo;
 
-pub struct PBFTConfig<D: SharedData, ST> {
+pub struct PBFTConfig<D>
+    where D: ApplicationData {
     pub node_id: NodeId,
     // pub observer_handle: ObserverHandle,
-    pub follower_handle: Option<FollowerHandle<PBFTConsensus<D>>>,
+    pub follower_handle: Option<FollowerHandle<D, PBFTConsensus<D>>>,
     pub view: ViewInfo,
     pub timeout_dur: Duration,
     pub proposer_config: ProposerConfig,
     pub watermark: u32,
-    pub _phantom_data: PhantomData<ST>,
 }
 
-impl<D: SharedData + 'static,
-    ST: StateTransferMessage + 'static> PBFTConfig<D, ST> {
+impl<D: ApplicationData + 'static, > PBFTConfig<D> {
     pub fn new(node_id: NodeId,
-               follower_handle: Option<FollowerHandle<PBFTConsensus<D>>>,
+               follower_handle: Option<FollowerHandle<D, PBFTConsensus<D>>>,
                view: ViewInfo, timeout_dur: Duration,
                watermark: u32, proposer_config: ProposerConfig) -> Self {
         Self {
@@ -39,7 +31,6 @@ impl<D: SharedData + 'static,
             timeout_dur,
             proposer_config,
             watermark,
-            _phantom_data: Default::default(),
         }
     }
 }
