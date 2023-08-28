@@ -367,7 +367,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
                                log: &mut Log<D, PL>,
                                node: &Arc<NT>) -> Result<ConsensusStatus>
         where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
-              PL: OrderingProtocolLog<PBFTConsensus<D>>, {
+              PL: OrderingProtocolLog<D, PBFTConsensus<D>>, {
         let message_seq = message.sequence_number();
 
         let view_seq = message.view();
@@ -696,7 +696,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
                               view: &ViewInfo,
                               proof: Proof<D::Request>,
                               log: &mut Log<D, PL>) -> Result<ProtocolConsensusDecision<D::Request>>
-        where PL: OrderingProtocolLog<PBFTConsensus<D>> {
+        where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
 
         // If this is successful, it means that we are all caught up and can now start executing the
         // batch
@@ -802,7 +802,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
         node: &Arc<NT>,
     ) where
         NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
-        PL: OrderingProtocolLog<PBFTConsensus<D>> {
+        PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         //Prepare the algorithm as we are already entering this phase
 
         self.install_view(new_view);

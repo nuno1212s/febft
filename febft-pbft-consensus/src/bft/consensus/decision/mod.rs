@@ -266,7 +266,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                                log: &mut Log<D, PL>,
                                node: &Arc<NT>) -> Result<DecisionStatus>
         where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
-              PL: OrderingProtocolLog<PBFTConsensus<D>> {
+              PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         let view = synchronizer.view();
 
         return match self.phase {

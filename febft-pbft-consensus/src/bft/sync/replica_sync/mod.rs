@@ -67,7 +67,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
         timeouts: &Timeouts,
         node: &NT,
     ) where NT: OrderProtocolSendNode<D, PBFT<D>>,
-            PL: OrderingProtocolLog<PBFTConsensus<D>> {
+            PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
         // - add requests from STOP into client requests

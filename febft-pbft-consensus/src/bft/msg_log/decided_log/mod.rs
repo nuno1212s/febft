@@ -48,7 +48,7 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     ///
     /// FIXME: The view initialization might have to be changed if we want to introduce reconfiguration
     pub fn read_current_state(&self, n: usize, f: usize) -> Result<Option<(ViewInfo, DecisionLog<D::Request>)>>
-        where PL: StatefulOrderingProtocolLog<PBFTConsensus<D>, PBFTConsensus<D>> {
+        where PL: StatefulOrderingProtocolLog<D, PBFTConsensus<D>, PBFTConsensus<D>> {
         let option = self.persistent_log.read_state(OperationMode::BlockingSync)?;
 
         if let Some((view, dec_log)) = option {
@@ -74,7 +74,7 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     pub fn insert_consensus(
         &mut self,
         consensus_msg: StoredConsensusMessage<D::Request>,
-    ) where PL: OrderingProtocolLog<PBFTConsensus<D>>,
+    ) where PL: OrderingProtocolLog<D, PBFTConsensus<D>>,
     {
         if let Err(err) = self
             .persistent_log
@@ -89,7 +89,7 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     /// which contains all of the collects
     /// If we are missing the request determined by the
     pub fn install_proof(&mut self, seq: SeqNo, proof: Proof<D::Request>) -> Result<ProtocolConsensusDecision<D::Request>>
-        where PL: OrderingProtocolLog<PBFTConsensus<D>> {
+        where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         let batch_execution_info = ProtocolConsensusDecision::from(&proof);
 
         if let Some(decision) = self.decision_log().last_decision() {
@@ -114,7 +114,7 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
 
     /// Clear the occurrences of a seq no from the decision log
     pub fn clear_last_occurrence(&mut self, seq: SeqNo)
-        where PL: OrderingProtocolLog<PBFTConsensus<D>> {
+        where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         if let Err(err) = self.persistent_log.write_invalidate(OperationMode::NonBlockingSync(None), seq) {
             error!("Failed to invalidate last occurrence {:?}", err);
         }
@@ -122,7 +122,7 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
 
     /// Update the log state, received from the CST protocol.
     pub fn install_state(&mut self, view: ViewInfo, dec_log: DecisionLog<D::Request>)
-        where PL: StatefulOrderingProtocolLog<PBFTConsensus<D>, PBFTConsensus<D>> {
+        where PL: StatefulOrderingProtocolLog<D, PBFTConsensus<D>, PBFTConsensus<D>> {
 
         //Replace the log
         self.dec_log = dec_log.clone();
@@ -158,7 +158,7 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     /// Register that all the batches for a given decision have already been received
     /// Basically persists the metadata for a given consensus num
     pub fn all_batches_received(&mut self, metadata: ProofMetadata)
-        where PL: OrderingProtocolLog<PBFTConsensus<D>> {
+        where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         self.persistent_log.write_proof_metadata(OperationMode::NonBlockingSync(None),
                                                  metadata).unwrap();
     }
