@@ -8,10 +8,10 @@ use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::sync::view::ViewInfo;
 
 pub struct PBFTConfig<D>
-    where D: ApplicationData {
+    where D: ApplicationData + 'static {
     pub node_id: NodeId,
     // pub observer_handle: ObserverHandle,
-    pub follower_handle: Option<FollowerHandle<D, PBFTConsensus<D>>>,
+    pub follower_handle: Option<FollowerHandle<D, PBFTConsensus<D>, PBFTConsensus<D>>>,
     pub view: ViewInfo,
     pub timeout_dur: Duration,
     pub proposer_config: ProposerConfig,
@@ -20,7 +20,7 @@ pub struct PBFTConfig<D>
 
 impl<D: ApplicationData + 'static, > PBFTConfig<D> {
     pub fn new(node_id: NodeId,
-               follower_handle: Option<FollowerHandle<D, PBFTConsensus<D>>>,
+               follower_handle: Option<FollowerHandle<D, PBFTConsensus<D>, PBFTConsensus<D>>>,
                view: ViewInfo, timeout_dur: Duration,
                watermark: u32, proposer_config: ProposerConfig) -> Self {
         Self {

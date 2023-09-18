@@ -48,7 +48,7 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     ///
     /// FIXME: The view initialization might have to be changed if we want to introduce reconfiguration
     pub fn read_current_state(&self, n: usize, f: usize) -> Result<Option<(ViewInfo, DecisionLog<D::Request>)>>
-        where PL: StatefulOrderingProtocolLog<D, PBFTConsensus<D>, PBFTConsensus<D>> {
+        where PL: StatefulOrderingProtocolLog<D, PBFTConsensus<D>, PBFTConsensus<D>, PBFTConsensus<D>> {
         let option = self.persistent_log.read_state(OperationMode::BlockingSync)?;
 
         if let Some((view, dec_log)) = option {
@@ -122,7 +122,7 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
 
     /// Update the log state, received from the CST protocol.
     pub fn install_state(&mut self, view: ViewInfo, dec_log: DecisionLog<D::Request>)
-        where PL: StatefulOrderingProtocolLog<D, PBFTConsensus<D>, PBFTConsensus<D>> {
+        where PL: StatefulOrderingProtocolLog<D, PBFTConsensus<D>, PBFTConsensus<D>, PBFTConsensus<D>> {
 
         //Replace the log
         self.dec_log = dec_log.clone();

@@ -19,7 +19,7 @@ use atlas_communication::message::{Header, StoredMessage};
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_communication::serialize::Serializable;
 use atlas_core::messages::Protocol;
-use atlas_core::ordering_protocol::{LoggableMessage, OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, OrderProtocolTolerance, ProtocolConsensusDecision, SerProof, SerProofMetadata, View};
+use atlas_core::ordering_protocol::{LoggableMessage, OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, OrderProtocolTolerance, PermissionedOrderingProtocol, ProtocolConsensusDecision, SerProof, SerProofMetadata, View};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::networking::serialize::{NetworkView, OrderingProtocolMessage};
 use atlas_core::ordering_protocol::reconfigurable_order_protocol::{ReconfigurableOrderProtocol, ReconfigurationAttemptResult};
@@ -141,9 +141,6 @@ impl<D, NT, PL> OrderingProtocol<D, NT, PL> for PBFTOrderProtocol<D, NT, PL>
         Self::initialize_protocol(config, args, None)
     }
 
-    fn view(&self) -> View<D, Self::Serialization> {
-        self.synchronizer.view()
-    }
 
     fn handle_off_ctx_message(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>)
         where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
@@ -263,6 +260,24 @@ impl<D, NT, PL> OrderingProtocol<D, NT, PL> for PBFTOrderProtocol<D, NT, PL>
         }
 
         Ok(OrderProtocolExecResult::Success)
+    }
+}
+
+impl<D, NT, PL> PermissionedOrderingProtocol for PBFTOrderProtocol<D, NT, PL>
+    where D: ApplicationData + 'static,
+          NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
+          PL: Clone {
+
+    type PermissionedSerialization = PBFTConsensus<D>;
+
+    fn view(&self) -> View<Self::PermissionedSerialization> {
+        self.synchronizer.view()
+    }
+
+    fn install_view(&mut self, view: View<Self::PermissionedSerialization>) {
+        if self.synchronizer.received_view_from_state_transfer(view.clone()) {
+            self.consensus.install_view(&view)
+        }
     }
 }
 
@@ -656,9 +671,9 @@ impl<D, NT, PL> StatefulOrderProtocol<D, NT, PL> for PBFTOrderProtocol<D, NT, PL
     }
 
     fn install_state(&mut self,
-                     view_info: View<D, Self::Serialization>,
+                     view_info: View<Self::PermissionedSerialization>,
                      dec_log: DecLog<D, Self::Serialization, Self::StateSerialization>) -> Result<Vec<D::Request>>
-        where PL: StatefulOrderingProtocolLog<D, PBFTConsensus<D>, PBFTConsensus<D>> {
+        where PL: StatefulOrderingProtocolLog<D, PBFTConsensus<D>, PBFTConsensus<D>, PBFTConsensus<D>> {
         info!("{:?} // Installing decision log with Seq No {:?} and View {:?}", self.node.id(),
                 dec_log.sequence_number(), view_info);
 
@@ -690,12 +705,12 @@ impl<D, NT, PL> StatefulOrderProtocol<D, NT, PL> for PBFTOrderProtocol<D, NT, PL
         Ok(res)
     }
 
-    fn snapshot_log(&mut self) -> Result<(View<D, Self::Serialization>, DecLog<D, Self::Serialization, Self::StateSerialization>)> {
+    fn snapshot_log(&mut self) -> Result<(View<Self::PermissionedSerialization>, DecLog<D, Self::Serialization, Self::StateSerialization>)> {
         self.message_log.snapshot(self.synchronizer.view())
     }
 
     fn current_log(&self) -> Result<&DecLog<D, Self::Serialization, Self::StateSerialization>>
-        where PL: StatefulOrderingProtocolLog<D, Self::Serialization, Self::StateSerialization> {
+        where PL: StatefulOrderingProtocolLog<D, Self::Serialization, Self::StateSerialization, Self::PermissionedSerialization> {
         Ok(self.message_log.decision_log())
     }
 

@@ -21,7 +21,7 @@ use atlas_communication::message_signing::NetworkMessageSignatureVerifier;
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
 use atlas_communication::serialize::Serializable;
 use atlas_core::messages::SystemMessage;
-use atlas_core::ordering_protocol::networking::serialize::{OrderingProtocolMessage, StatefulOrderProtocolMessage};
+use atlas_core::ordering_protocol::networking::serialize::{OrderingProtocolMessage, PermissionedOrderingProtocolMessage, StatefulOrderProtocolMessage};
 use atlas_core::ordering_protocol::networking::signature_ver::OrderProtocolSignatureVerificationHelper;
 use atlas_core::persistent_log::PersistableOrderProtocol;
 use atlas_execution::serialize::ApplicationData;
@@ -140,7 +140,7 @@ impl<D> PBFTConsensus<D> where D: ApplicationData {
 
 impl<D> OrderingProtocolMessage<D> for PBFTConsensus<D>
     where D: ApplicationData, {
-    type ViewInfo = ViewInfo;
+
     type ProtocolMessage = PBFTMessage<D::Request>;
     type LoggableMessage = ConsensusMessage<D::Request>;
     type Proof = Proof<D::Request>;
@@ -271,6 +271,10 @@ impl<D> OrderingProtocolMessage<D> for PBFTConsensus<D>
     fn deserialize_proof_capnp(reader: atlas_capnp::cst_messages_capnp::proof::Reader) -> Result<Self::Proof> {
         todo!()
     }
+}
+
+impl<D> PermissionedOrderingProtocolMessage for PBFTConsensus<D> where D: ApplicationData + 'static {
+    type ViewInfo = ViewInfo;
 }
 
 impl<D, OP> StatefulOrderProtocolMessage<D, OP> for PBFTConsensus<D>
