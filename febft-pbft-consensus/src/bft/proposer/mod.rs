@@ -272,7 +272,7 @@ impl<D, NT> Proposer<D, NT>
                 //swap in the new vec and take the previous one to the threadpool
                 let new_accumulated_vec =
                     std::mem::replace(&mut propose.currently_accumulated,
-                                      vec![]);
+                                      Vec::new());
 
                 let executor_handle = self.executor_handle.clone();
 
@@ -348,7 +348,7 @@ impl<D, NT> Proposer<D, NT>
                     };
 
                     let current_batch = std::mem::replace(&mut propose.currently_accumulated,
-                                                          next_batch.unwrap_or_else(|| vec![]));
+                                                          next_batch.unwrap_or_else(|| Vec::new()));
 
                     self.propose(seq, &view, current_batch);
 
