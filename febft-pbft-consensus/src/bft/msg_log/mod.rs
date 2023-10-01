@@ -5,7 +5,7 @@ use atlas_common::node_id::NodeId;
 use atlas_common::ordering::SeqNo;
 use atlas_communication::message::Header;
 use atlas_core::messages::RequestMessage;
-use atlas_execution::serialize::ApplicationData;
+use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::DecisionLog;

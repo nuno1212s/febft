@@ -18,11 +18,11 @@ use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::persistent_log::OrderingProtocolLog;
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, TimeoutPhase, Timeouts};
-use atlas_execution::serialize::ApplicationData;
+use atlas_smr_application::serialize::ApplicationData;
 use atlas_metrics::metrics::{metric_duration, metric_increment};
 
 use crate::bft::consensus::Consensus;
-use crate::bft::message::{ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::{SYNC_BATCH_RECEIVED_ID, SYNC_STOPPED_COUNT_ID, SYNC_STOPPED_REQUESTS_ID, SYNC_WATCH_REQUESTS_ID};
 use crate::bft::msg_log::decided_log::Log;
@@ -178,12 +178,12 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     /// proposed, they won't timeout
     pub fn received_request_batch(
         &self,
-        pre_prepare: &StoredConsensusMessage<D::Request>,
+        pre_prepare: &ConsensusMessage<D::Request>,
         timeouts: &Timeouts,
     ) -> Vec<ClientRqInfo> {
         let start_time = Instant::now();
 
-        let requests = match pre_prepare.message().kind() {
+        let requests = match pre_prepare.kind() {
             ConsensusMessageKind::PrePrepare(req) => { req }
             _ => {
                 error!("Cannot receive a request that is not a PrePrepare");

@@ -17,8 +17,8 @@ use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::ProtocolConsensusDecision;
 use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
 use atlas_core::timeouts::Timeouts;
-use atlas_execution::ExecutorHandle;
-use atlas_execution::serialize::ApplicationData;
+use atlas_smr_application::ExecutorHandle;
+use atlas_smr_application::serialize::ApplicationData;
 use atlas_metrics::metrics::metric_increment;
 
 use crate::bft::{PBFT, SysMsg};
@@ -40,6 +40,10 @@ pub mod accessory;
 pub enum ConsensusStatus {
     /// A particular node tried voting twice.
     VotedTwice(NodeId),
+    /// The message has been ignored
+    MessageIgnored,
+    /// The message has been queued
+    MessageQueued,
     /// A `febft` quorum still hasn't made a decision
     /// on a client request to be executed.
     Deciding,
@@ -376,7 +380,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
             Either::Right(i) if i > 0 => {
                 self.enqueue_other_view_message(i, header, message);
 
-                return Ok(ConsensusStatus::Deciding);
+                return Ok(ConsensusStatus::MessageQueued);
             }
             Either::Right(_) => {}
             Either::Left(_) => {
@@ -384,7 +388,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
                 debug!("{:?} // Ignoring consensus message {:?} received from {:?} as we are already in view {:?}",
                     self.node_id, message, header.from(), self.curr_view.sequence_number());
 
-                return Ok(ConsensusStatus::Deciding);
+                return Ok(ConsensusStatus::MessageIgnored);
             }
         };
 
@@ -393,7 +397,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
             Either::Left(_) => {
                 debug!("Message {:?} from {:?} is behind our current sequence no {:?}. Ignoring", message, header.from(), self.seq_no, );
 
-                return Ok(ConsensusStatus::Deciding);
+                return Ok(ConsensusStatus::MessageIgnored);
             }
         };
 
@@ -404,7 +408,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
 
             self.tbo_queue.queue(header, message);
 
-            return Ok(ConsensusStatus::Deciding);
+            return Ok(ConsensusStatus::MessageQueued);
         }
 
         // Get the correct consensus instance for this message
@@ -416,18 +420,28 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
             DecisionStatus::VotedTwice(node) => {
                 ConsensusStatus::VotedTwice(node)
             }
-            DecisionStatus::Deciding => {
+            DecisionStatus::Deciding(message) => {
                 ConsensusStatus::Deciding
             }
-            DecisionStatus::Queued | DecisionStatus::Transitioned => {
+            DecisionStatus::MessageQueued => {
+                //When we transition phases, we may discover new messages
+                // That were in the queue, so we must be signalled again
+                self.signalled.push_signalled(message_seq);
+
+                ConsensusStatus::MessageQueued
+            }
+            DecisionStatus::Transitioned(message) => {
                 //When we transition phases, we may discover new messages
                 // That were in the queue, so we must be signalled again
                 self.signalled.push_signalled(message_seq);
 
                 ConsensusStatus::Deciding
             }
-            DecisionStatus::Decided => {
+            DecisionStatus::Decided(message) => {
                 ConsensusStatus::Decided
+            }
+            DecisionStatus::MessageIgnored => {
+                ConsensusStatus::MessageIgnored
             }
         })
     }

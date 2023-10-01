@@ -24,7 +24,7 @@ use atlas_core::messages::SystemMessage;
 use atlas_core::ordering_protocol::networking::serialize::{OrderingProtocolMessage, PermissionedOrderingProtocolMessage, StatefulOrderProtocolMessage};
 use atlas_core::ordering_protocol::networking::signature_ver::OrderProtocolSignatureVerificationHelper;
 use atlas_core::persistent_log::PersistableOrderProtocol;
-use atlas_execution::serialize::ApplicationData;
+use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::msg_log::decisions::{DecisionLog, Proof, ProofMetadata};

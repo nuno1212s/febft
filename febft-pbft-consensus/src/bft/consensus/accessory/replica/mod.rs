@@ -10,12 +10,12 @@ use atlas_common::threadpool;
 use atlas_communication::message::{SerializedMessage, StoredMessage, StoredSerializedProtocolMessage, WireMessage};
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_execution::serialize::ApplicationData;
+use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::{PBFT, SysMsg};
 use crate::bft::consensus::accessory::AccessoryConsensus;
+use crate::bft::log::deciding::WorkingDecisionLog;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
-use crate::bft::msg_log::deciding_log::DecidingLog;
 use crate::bft::msg_log::decisions::StoredConsensusMessage;
 use crate::bft::sync::view::ViewInfo;
 
@@ -25,14 +25,14 @@ pub struct ReplicaAccessory<D>
 }
 
 impl<D> AccessoryConsensus<D> for ReplicaAccessory<D>
-    where D: ApplicationData + 'static,{
-    fn handle_partial_pre_prepare<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
+    where D: ApplicationData + 'static, {
+    fn handle_partial_pre_prepare<NT>(&mut self, deciding_log: &WorkingDecisionLog<D::Request>,
                                       view: &ViewInfo,
                                       msg: StoredConsensusMessage<D::Request>,
                                       node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 
     fn handle_pre_prepare_phase_completed<NT>(&mut self,
-                                              deciding_log: &DecidingLog<D::Request>,
+                                              deciding_log: &WorkingDecisionLog<D::Request>,
                                               view: &ViewInfo,
                                               _msg: StoredConsensusMessage<D::Request>,
                                               node: &Arc<NT>) where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
@@ -51,10 +51,10 @@ impl<D> AccessoryConsensus<D> for ReplicaAccessory<D>
 
         threadpool::execute(move || {
             let message = PBFTMessage::Consensus(ConsensusMessage::new(
-                    seq,
-                    view_seq,
-                    ConsensusMessageKind::Commit(current_digest.clone()),
-                ));
+                seq,
+                view_seq,
+                ConsensusMessageKind::Commit(current_digest.clone()),
+            ));
 
             let (message, digest) = node_clone.serialize_digest_message(message).unwrap();
 
@@ -108,11 +108,11 @@ impl<D> AccessoryConsensus<D> for ReplicaAccessory<D>
         node.broadcast_signed(message, targets.into_iter());
     }
 
-    fn handle_preparing_no_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
+    fn handle_preparing_no_quorum<NT>(&mut self, deciding_log: &WorkingDecisionLog<D::Request>,
                                       view: &ViewInfo,
                                       msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 
-    fn handle_preparing_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
+    fn handle_preparing_quorum<NT>(&mut self, deciding_log: &WorkingDecisionLog<D::Request>,
                                    view: &ViewInfo,
                                    msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {
         let node_id = node.id();
@@ -150,11 +150,11 @@ impl<D> AccessoryConsensus<D> for ReplicaAccessory<D>
         deciding_log.batch_meta().lock().unwrap().commit_sent_time = Utc::now();
     }
 
-    fn handle_committing_no_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
+    fn handle_committing_no_quorum<NT>(&mut self, deciding_log: &WorkingDecisionLog<D::Request>,
                                        view: &ViewInfo,
                                        msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 
-    fn handle_committing_quorum<NT>(&mut self, deciding_log: &DecidingLog<D::Request>,
+    fn handle_committing_quorum<NT>(&mut self, deciding_log: &WorkingDecisionLog<D::Request>,
                                     view: &ViewInfo,
                                     msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 }

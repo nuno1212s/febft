@@ -380,7 +380,21 @@ impl<O> OrderProtocolLog for DecisionLog<O> {
     }
 }
 
-impl<O> OrderProtocolProof for Proof<O> {}
+impl<O> OrderProtocolProof for Proof<O> {
+    fn contained_messages(&self) -> usize {
+        let mut messages = 0;
+
+        for pre_prepare in &self.pre_prepares {
+            //Mark the requests contained in this message for removal
+            messages += match pre_prepare.message().kind() {
+                ConsensusMessageKind::PrePrepare(messages) => messages.len(),
+                _ => 0,
+            };
+        }
+
+        messages
+    }
+}
 
 impl<O> Clone for Proof<O> {
     fn clone(&self) -> Self {

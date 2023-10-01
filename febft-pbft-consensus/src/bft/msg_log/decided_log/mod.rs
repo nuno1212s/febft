@@ -5,8 +5,8 @@ use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_core::ordering_protocol::{DecisionInformation, ProtocolConsensusDecision};
 use atlas_core::persistent_log::{OperationMode, OrderingProtocolLog, StatefulOrderingProtocolLog};
-use atlas_execution::app::UpdateBatch;
-use atlas_execution::serialize::ApplicationData;
+use atlas_smr_application::app::UpdateBatch;
+use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::message::ConsensusMessageKind;
 use crate::bft::message::serialize::PBFTConsensus;

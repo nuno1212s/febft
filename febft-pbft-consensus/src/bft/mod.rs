@@ -19,18 +19,17 @@ use atlas_communication::message::{Header, StoredMessage};
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_communication::serialize::Serializable;
 use atlas_core::messages::Protocol;
-use atlas_core::ordering_protocol::{LoggableMessage, OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, OrderProtocolTolerance, PermissionedOrderingProtocol, ProtocolConsensusDecision, SerProof, SerProofMetadata, View};
+use atlas_core::ordering_protocol::{ OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, OrderProtocolTolerance, PermissionedOrderingProtocol, ProtocolConsensusDecision, SerProof, SerProofMetadata, View};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::networking::serialize::{NetworkView, OrderingProtocolMessage};
 use atlas_core::ordering_protocol::reconfigurable_order_protocol::{ReconfigurableOrderProtocol, ReconfigurationAttemptResult};
-use atlas_core::ordering_protocol::stateful_order_protocol::{DecLog, StatefulOrderProtocol};
 use atlas_core::persistent_log::{OrderingProtocolLog, PersistableOrderProtocol, StatefulOrderingProtocolLog};
 use atlas_core::reconfiguration_protocol::ReconfigurationProtocol;
 use atlas_core::request_pre_processing::RequestPreProcessor;
 use atlas_core::serialize::ReconfigurationProtocolMessage;
 use atlas_core::timeouts::{RqTimeout, Timeouts};
-use atlas_execution::ExecutorHandle;
-use atlas_execution::serialize::ApplicationData;
+use atlas_smr_application::ExecutorHandle;
+use atlas_smr_application::serialize::ApplicationData;
 use atlas_metrics::metrics::metric_duration;
 
 use crate::bft::config::PBFTConfig;
@@ -48,6 +47,10 @@ pub mod consensus;
 pub mod proposer;
 pub mod sync;
 pub mod msg_log;
+pub mod log {
+    pub mod deciding;
+    pub mod decided;
+}
 pub mod config;
 pub mod message;
 pub mod observer;
@@ -296,7 +299,7 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
 
         let OrderingProtocolArgs(executor, timeouts,
                                  pre_processor, batch_input,
-                                 node, persistent_log, quorum) = args;
+                                 node,  quorum) = args;
 
         let sync = Synchronizer::initialize_with_quorum(node_id, view.sequence_number(), quorum.clone(), timeout_dur)?;
 

@@ -29,10 +29,10 @@ use atlas_core::ordering_protocol::reconfigurable_order_protocol::Reconfiguratio
 use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
 use atlas_core::request_pre_processing::RequestPreProcessor;
 use atlas_core::timeouts::{RqTimeout, Timeouts};
-use atlas_execution::serialize::ApplicationData;
+use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::consensus::Consensus;
-use crate::bft::message::{ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::msg_log::decided_log::Log;
 use crate::bft::msg_log::decisions::{CollectData, Proof, StoredConsensusMessage, ViewDecisionPair};
@@ -1681,7 +1681,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
     /// proposed, they won't timeout
     pub fn request_batch_received(
         &self,
-        pre_prepare: &StoredConsensusMessage<D::Request>,
+        pre_prepare: &ConsensusMessage<D::Request>,
         timeouts: &Timeouts,
     ) -> Vec<ClientRqInfo> {
         match &self.accessory {
