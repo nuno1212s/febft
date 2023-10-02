@@ -7,7 +7,7 @@ use log::debug;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::threadpool;
-use atlas_communication::message::{SerializedMessage, StoredMessage, StoredSerializedProtocolMessage, WireMessage};
+use atlas_communication::message::{Header, SerializedMessage, StoredMessage, StoredSerializedProtocolMessage, WireMessage};
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_smr_application::serialize::ApplicationData;
@@ -28,13 +28,13 @@ impl<D> AccessoryConsensus<D> for ReplicaAccessory<D>
     where D: ApplicationData + 'static, {
     fn handle_partial_pre_prepare<NT>(&mut self, deciding_log: &WorkingDecisionLog<D::Request>,
                                       view: &ViewInfo,
-                                      msg: StoredConsensusMessage<D::Request>,
+                                      header: &Header, msg: &ConsensusMessage<D::Request>,
                                       node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 
     fn handle_pre_prepare_phase_completed<NT>(&mut self,
                                               deciding_log: &WorkingDecisionLog<D::Request>,
                                               view: &ViewInfo,
-                                              _msg: StoredConsensusMessage<D::Request>,
+                                              header: &Header, msg: &ConsensusMessage<D::Request>,
                                               node: &Arc<NT>) where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
         let my_id = node.id();
         let view_seq = view.sequence_number();
@@ -110,11 +110,11 @@ impl<D> AccessoryConsensus<D> for ReplicaAccessory<D>
 
     fn handle_preparing_no_quorum<NT>(&mut self, deciding_log: &WorkingDecisionLog<D::Request>,
                                       view: &ViewInfo,
-                                      msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
+                                      header: &Header, msg: &ConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 
     fn handle_preparing_quorum<NT>(&mut self, deciding_log: &WorkingDecisionLog<D::Request>,
                                    view: &ViewInfo,
-                                   msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {
+                                   header: &Header, msg: &ConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {
         let node_id = node.id();
 
         let seq = deciding_log.sequence_number();
@@ -152,11 +152,12 @@ impl<D> AccessoryConsensus<D> for ReplicaAccessory<D>
 
     fn handle_committing_no_quorum<NT>(&mut self, deciding_log: &WorkingDecisionLog<D::Request>,
                                        view: &ViewInfo,
-                                       msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
+                                       header: &Header, msg: &ConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 
     fn handle_committing_quorum<NT>(&mut self, deciding_log: &WorkingDecisionLog<D::Request>,
                                     view: &ViewInfo,
-                                    msg: StoredConsensusMessage<D::Request>, node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
+                                    header: &Header, msg: &ConsensusMessage<D::Request>,
+                                    node: &NT) where NT: OrderProtocolSendNode<D, PBFT<D>> {}
 }
 
 impl<D> ReplicaAccessory<D>

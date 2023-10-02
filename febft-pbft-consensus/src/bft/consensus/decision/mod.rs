@@ -20,12 +20,11 @@ use atlas_metrics::metrics::metric_duration;
 
 use crate::bft::consensus::accessory::{AccessoryConsensus, ConsensusDecisionAccessory};
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;
-use crate::bft::log::deciding::WorkingDecisionLog;
+use crate::bft::log::deciding::{CompletedBatch, WorkingDecisionLog};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::{ConsensusMetrics, PRE_PREPARE_ANALYSIS_ID};
 use crate::bft::msg_log::decided_log::Log;
-use crate::bft::msg_log::deciding_log::{CompletedBatch, DecidingLog};
 use crate::bft::msg_log::decisions::{IncompleteProof, StoredConsensusMessage};
 use crate::bft::PBFT;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer};
@@ -95,7 +94,7 @@ pub enum DecisionStatus<O> {
     /// THe second Vec<Digest> is a vec with digests of the requests contained in the batch
     /// The third is the messages that should be persisted for this batch to be considered persisted
     Decided(StoredMessage<ConsensusMessage<O>>),
-    DecidedIgnored
+    DecidedIgnored,
 }
 
 /// A message queue for this particular consensus instance
@@ -175,7 +174,7 @@ impl<O> MessageQueue<O> {
 }
 
 impl<D, PL> ConsensusDecision<D, PL>
-    where D: ApplicationData + 'static,{
+    where D: ApplicationData + 'static, {
     pub fn init_decision(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo, persistent_log: PL) -> Self {
         Self {
             node_id,
@@ -344,7 +343,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                 let batch_metadata = self.working_log.process_pre_prepare(header.clone(), &message,
                                                                           header.digest().clone(), digests)?;
 
-                let mut result ;
+                let mut result;
 
                 self.phase = if received == view.leader_set().len() {
                     let batch_metadata = batch_metadata.unwrap();
@@ -371,7 +370,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                     log.all_batches_received(batch_metadata);
 
                     self.accessory.handle_pre_prepare_phase_completed(&self.working_log,
-                                                                      &view, stored_msg.clone(), node);
+                                                                      &view, &header, &message, node);
 
                     self.message_queue.signal();
 
@@ -385,8 +384,8 @@ impl<D, PL> ConsensusDecision<D, PL>
                     debug!("{:?} // Received pre prepare message {:?} from {:?}. Current received {:?}",
                         self.node_id, stored_msg.message(), stored_msg.header().from(), received);
 
-                    self.accessory.handle_partial_pre_prepare(&self.working_log,
-                                                              &view, stored_msg.clone(), &**node);
+                    self.accessory.handle_partial_pre_prepare(&self.working_log, &view,
+                                                              &header, &message, &**node);
 
                     result = DecisionStatus::Deciding(StoredMessage::new(header, message));
 
@@ -457,7 +456,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                     let current_digest = self.working_log.current_digest().unwrap();
 
                     self.accessory.handle_preparing_quorum(&self.working_log, &view,
-                                                           stored_msg.clone(), &**node);
+                                                           &header, &message, &**node);
 
                     self.message_queue.signal();
 
@@ -469,7 +468,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                         self.node_id, stored_msg.message().sequence_number(), header.from(), received);
 
                     self.accessory.handle_preparing_no_quorum(&self.working_log, &view,
-                                                              stored_msg.clone(), &**node);
+                                                              &header, &message, &**node);
 
                     result = DecisionStatus::Deciding(StoredMessage::new(header, message));
 
@@ -528,7 +527,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                     self.consensus_metrics.commit_quorum_recvd();
 
                     self.accessory.handle_committing_quorum(&self.working_log, &view,
-                                                            stored_msg.clone(), &**node);
+                                                            &header, &message, &**node);
 
                     Ok(DecisionStatus::Decided(StoredMessage::new(header, message)))
                 } else {
@@ -538,7 +537,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                     self.phase = DecisionPhase::Committing(received);
 
                     self.accessory.handle_committing_no_quorum(&self.working_log, &view,
-                                                               stored_msg.clone(), &**node);
+                                                               &header, &message, &**node);
 
                     Ok(DecisionStatus::Deciding(StoredMessage::new(header, message)))
                 };

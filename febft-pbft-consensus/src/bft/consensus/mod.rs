@@ -23,11 +23,11 @@ use atlas_metrics::metrics::metric_increment;
 
 use crate::bft::{PBFT, SysMsg};
 use crate::bft::consensus::decision::{ConsensusDecision, DecisionPollStatus, DecisionStatus, MessageQueue};
+use crate::bft::log::deciding::CompletedBatch;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::OPERATIONS_PROCESSED_ID;
 use crate::bft::msg_log::decided_log::Log;
-use crate::bft::msg_log::deciding_log::CompletedBatch;
 use crate::bft::msg_log::decisions::{DecisionLog, IncompleteProof, Proof};
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::sync::view::ViewInfo;
@@ -440,6 +440,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
             DecisionStatus::Decided(message) => {
                 ConsensusStatus::Decided
             }
+            DecisionStatus::DecidedIgnored => {}
             DecisionStatus::MessageIgnored => {
                 ConsensusStatus::MessageIgnored
             }

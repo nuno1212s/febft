@@ -16,6 +16,8 @@ use crate::bft::msg_log::deciding_log::{DecidingLog, FullBatch};
 use crate::bft::msg_log::decisions::{IncompleteProof, ProofMetadata};
 use crate::bft::sync::view::ViewInfo;
 
+/// Information about the completed batch, the contained requests and
+/// other relevant information
 pub struct CompletedBatch<O> {
     seq: SeqNo,
     // The overall digest of the entire batch
@@ -26,6 +28,7 @@ pub struct CompletedBatch<O> {
     client_request_info: Vec<ClientRqInfo>,
     // The client requests contained in this batch
     client_requests: Vec<StoredRequestMessage<O>>,
+    // The metadata for the batch
     batch_meta: BatchMeta,
 }
 
@@ -243,7 +246,7 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
     }
 }
 
-impl Orderable for WorkingDecisionLog {
+impl<O> Orderable for WorkingDecisionLog<O> {
     fn sequence_number(&self) -> SeqNo {
         self.seq_no
     }
