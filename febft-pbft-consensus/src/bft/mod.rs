@@ -8,6 +8,7 @@ use std::ops::Drop;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
+use ::log::{debug, info, trace, warn};
 
 use log::{debug, info, trace, warn};
 
@@ -131,14 +132,14 @@ impl<D, NT, PL> OrderProtocolTolerance for PBFTOrderProtocol<D, NT, PL>
     }
 }
 
-impl<D, NT, PL> OrderingProtocol<D, NT, PL> for PBFTOrderProtocol<D, NT, PL>
+impl<D, NT, PL> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, NT, PL>
     where D: ApplicationData + 'static,
           NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
           PL: Clone {
     type Serialization = PBFTConsensus<D>;
     type Config = PBFTConfig<D>;
 
-    fn initialize(config: PBFTConfig<D>, args: OrderingProtocolArgs<D, NT, PL>) -> Result<Self> where
+    fn initialize(config: PBFTConfig<D>, args: OrderingProtocolArgs<D, NT>) -> Result<Self> where
         Self: Sized,
     {
         Self::initialize_protocol(config, args, None)
@@ -195,7 +196,7 @@ impl<D, NT, PL> OrderingProtocol<D, NT, PL> for PBFTOrderProtocol<D, NT, PL>
         }
     }
 
-    fn process_message(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>) -> Result<OrderProtocolExecResult<D::Request>>
+    fn process_message(&mut self, message: StoredMessage<PBFTMessage<D::Request>>) -> Result<OrderProtocolExecResult<D::Request>>
         where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         match self.phase {
             ConsensusPhase::NormalPhase => {
@@ -288,7 +289,7 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
     where D: ApplicationData + 'static,
           NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
           PL: Clone {
-    fn initialize_protocol(config: PBFTConfig<D>, args: OrderingProtocolArgs<D, NT, PL>,
+    fn initialize_protocol(config: PBFTConfig<D>, args: OrderingProtocolArgs<D, NT>,
                            initial_state: Option<DecisionLog<D::Request>>) -> Result<Self> {
         let PBFTConfig {
             node_id,
@@ -359,7 +360,7 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
         match poll_result {
             SynchronizerPollStatus::Recv => OrderProtocolPoll::ReceiveFromReplicas,
             SynchronizerPollStatus::NextMessage(h, m) => {
-                OrderProtocolPoll::Exec(StoredMessage::new(h, Protocol::new(PBFTMessage::ViewChange(m))))
+                OrderProtocolPoll::Exec(StoredMessage::new(h, PBFTMessage::ViewChange(m)))
             }
             SynchronizerPollStatus::ResumeViewChange => {
                 debug!("{:?} // Resuming view change", self.node.id());
@@ -444,7 +445,7 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
         match polled_message {
             ConsensusPollStatus::Recv => OrderProtocolPoll::ReceiveFromReplicas,
             ConsensusPollStatus::NextMessage(h, m) => {
-                OrderProtocolPoll::Exec(StoredMessage::new(h, Protocol::new(PBFTMessage::Consensus(m))))
+                OrderProtocolPoll::Exec(StoredMessage::new(h, PBFTMessage::Consensus(m)))
             }
             ConsensusPollStatus::Decided => {
                 return OrderProtocolPoll::Decided(self.finalize_all_possible().expect("Failed to finalize decisions"));
@@ -452,7 +453,7 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
         }
     }
 
-    fn update_sync_phase(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>) -> Result<OrderProtocolExecResult<D::Request>>
+    fn update_sync_phase(&mut self, message: StoredMessage<PBFTMessage<D::Request>>) -> Result<OrderProtocolExecResult<D::Request>>
         where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         let (header, protocol) = message.into_inner();
 
@@ -496,11 +497,11 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
         Ok(OrderProtocolExecResult::Success)
     }
 
-    fn update_normal_phase(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>) -> Result<OrderProtocolExecResult<D::Request>>
+    fn update_normal_phase(&mut self, message: StoredMessage<PBFTMessage<D::Request>>) -> Result<OrderProtocolExecResult<D::Request>>
         where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         let (header, protocol) = message.into_inner();
 
-        match protocol.into_inner() {
+        match protocol {
             PBFTMessage::Consensus(message) => {
                 return self.adv_consensus(header, message);
             }

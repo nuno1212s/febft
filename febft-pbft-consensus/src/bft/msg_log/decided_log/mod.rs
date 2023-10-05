@@ -159,8 +159,8 @@ impl<D, PL> Log<D, PL> where D: ApplicationData + 'static {
     /// Basically persists the metadata for a given consensus num
     pub fn all_batches_received(&mut self, metadata: ProofMetadata)
         where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
-        self.persistent_log.write_proof_metadata(OperationMode::NonBlockingSync(None),
-                                                 metadata).unwrap();
+        self.persistent_log.write_decision_metadata(OperationMode::NonBlockingSync(None),
+                                                    metadata).unwrap();
     }
 
     /// Finalize a batch of client requests decided on the consensus instance
