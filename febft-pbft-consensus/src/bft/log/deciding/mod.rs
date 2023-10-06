@@ -160,7 +160,7 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
 
             self.batch_digest = Some(digest.clone());
 
-            Some(ProofMetadata::new(self.seq_no, digest, ordering))
+            Some(ProofMetadata::new(self.seq_no, digest, ordering, self.current_batch_size))
         } else {
             None
         })

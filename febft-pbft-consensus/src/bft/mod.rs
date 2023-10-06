@@ -48,10 +48,7 @@ pub mod consensus;
 pub mod proposer;
 pub mod sync;
 pub mod msg_log;
-pub mod log {
-    pub mod deciding;
-    pub mod decided;
-}
+pub mod log;
 pub mod config;
 pub mod message;
 pub mod observer;

@@ -12,7 +12,7 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::StoredMessage;
 use atlas_core::ordering_protocol::networking::serialize::{OrderProtocolLog, OrderProtocolProof};
 
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::msg_log::deciding_log::CompletedBatch;
 
 pub type StoredConsensusMessage<O> = Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>;
@@ -47,6 +47,7 @@ pub struct ProofMetadata {
     seq_no: SeqNo,
     batch_digest: Digest,
     pre_prepare_ordering: Vec<Digest>,
+    contained_client_rqs: usize
 }
 
 impl Orderable for ProofMetadata {
@@ -100,11 +101,12 @@ impl PrepareSet {
 
 impl ProofMetadata {
     /// Create a new proof metadata
-    pub(crate) fn new(seq_no: SeqNo, digest: Digest, pre_prepare_ordering: Vec<Digest>) -> Self {
+    pub(crate) fn new(seq_no: SeqNo, digest: Digest, pre_prepare_ordering: Vec<Digest>, contained_rqs: usize) -> Self {
         Self {
             seq_no,
             batch_digest: digest,
             pre_prepare_ordering,
+            contained_client_rqs: contained_rqs
         }
     }
 
@@ -118,6 +120,10 @@ impl ProofMetadata {
 
     pub fn pre_prepare_ordering(&self) -> &Vec<Digest> {
         &self.pre_prepare_ordering
+    }
+
+    pub fn contained_client_rqs(&self) -> usize {
+        self.contained_client_rqs
     }
 }
 
