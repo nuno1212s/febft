@@ -10,8 +10,6 @@ use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 use ::log::{debug, info, trace, warn};
 
-use log::{debug, info, trace, warn};
-
 use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
@@ -20,7 +18,7 @@ use atlas_communication::message::{Header, StoredMessage};
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_communication::serialize::Serializable;
 use atlas_core::messages::Protocol;
-use atlas_core::ordering_protocol::{ OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, OrderProtocolTolerance, PermissionedOrderingProtocol, ProtocolConsensusDecision, SerProof, SerProofMetadata, View};
+use atlas_core::ordering_protocol::{OPExecResult, OPPollResult, OrderingProtocol, OrderingProtocolArgs, OrderProtocolExecResult, OrderProtocolPoll, OrderProtocolTolerance, PermissionedOrderingProtocol, ProtocolConsensusDecision, SerProof, SerProofMetadata, View};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::networking::serialize::{NetworkView, OrderingProtocolMessage};
 use atlas_core::ordering_protocol::reconfigurable_order_protocol::{ReconfigurableOrderProtocol, ReconfigurationAttemptResult};
@@ -28,6 +26,7 @@ use atlas_core::persistent_log::{OrderingProtocolLog, PersistableOrderProtocol, 
 use atlas_core::reconfiguration_protocol::ReconfigurationProtocol;
 use atlas_core::request_pre_processing::RequestPreProcessor;
 use atlas_core::serialize::ReconfigurationProtocolMessage;
+use atlas_core::smr::smr_decision_log::ShareableMessage;
 use atlas_core::timeouts::{RqTimeout, Timeouts};
 use atlas_smr_application::ExecutorHandle;
 use atlas_smr_application::serialize::ApplicationData;
@@ -35,19 +34,16 @@ use atlas_metrics::metrics::metric_duration;
 
 use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus, ProposerConsensusGuard};
+use crate::bft::log::decisions::ProofMetadata;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage, ViewChangeMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::{CONSENSUS_INSTALL_STATE_TIME_ID, MSG_LOG_INSTALL_TIME_ID};
-use crate::bft::msg_log::initialize_decided_log;
-use crate::bft::msg_log::decided_log::Log;
-use crate::bft::msg_log::decisions::{DecisionLog, Proof};
 use crate::bft::proposer::Proposer;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus, SyncReconfigurationResult};
 
 pub mod consensus;
 pub mod proposer;
 pub mod sync;
-pub mod msg_log;
 pub mod log;
 pub mod config;
 pub mod message;
@@ -143,10 +139,8 @@ impl<D, NT, PL> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, NT, PL>
     }
 
 
-    fn handle_off_ctx_message(&mut self, message: StoredMessage<Protocol<PBFTMessage<D::Request>>>)
+    fn handle_off_ctx_message(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>)
         where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
-        let (header, message) = message.into_inner();
-
         match message.into_inner() {
             PBFTMessage::Consensus(consensus) => {
                 debug!("{:?} // Received off context consensus message {:?}", self.node.id(), consensus);
@@ -179,7 +173,7 @@ impl<D, NT, PL> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, NT, PL>
         Ok(())
     }
 
-    fn poll(&mut self) -> OrderProtocolPoll<PBFTMessage<D::Request>, D::Request>
+    fn poll(&mut self) -> OPPollResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>
         where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         trace!("{:?} // Polling {:?}", self.node.id(), self.phase);
 
@@ -193,7 +187,7 @@ impl<D, NT, PL> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, NT, PL>
         }
     }
 
-    fn process_message(&mut self, message: StoredMessage<PBFTMessage<D::Request>>) -> Result<OrderProtocolExecResult<D::Request>>
+    fn process_message(&mut self, message: StoredMessage<PBFTMessage<D::Request>>) -> Result<OPExecResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>>
         where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         match self.phase {
             ConsensusPhase::NormalPhase => {
@@ -205,31 +199,18 @@ impl<D, NT, PL> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, NT, PL>
         }
     }
 
-    fn sequence_number_with_proof(&self) -> Result<Option<(SeqNo, SerProof<D, Self::Serialization>)>> {
-        Ok(self.message_log.last_proof(self.synchronizer.view().f())
-            .map(|p| (p.sequence_number(), p)))
-    }
-
-    fn verify_sequence_number(&self, seq_no: SeqNo, proof: &SerProof<D, Self::Serialization>) -> Result<bool> {
-        let proof: &Proof<D::Request> = proof;
-
-        //TODO: Verify the proof
-
-        Ok(true)
-    }
-
     fn install_seq_no(&mut self, seq_no: SeqNo) -> Result<()> {
         self.consensus.install_sequence_number(seq_no, &self.synchronizer.view());
 
         Ok(())
     }
 
-    fn handle_timeout(&mut self, timeout: Vec<RqTimeout>) -> Result<OrderProtocolExecResult<D::Request>>
+    fn handle_timeout(&mut self, timeout: Vec<RqTimeout>) -> Result<OPExecResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>>
         where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         if self.consensus.is_catching_up() {
             warn!("{:?} // Ignoring timeouts while catching up", self.node.id());
 
-            return Ok(OrderProtocolExecResult::Success);
+            return Ok(OPExecResult::MessageDropped);
         }
 
         let status = self.synchronizer.client_requests_timed_out(self.node.id(), &timeout);
@@ -260,7 +241,7 @@ impl<D, NT, PL> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, NT, PL>
             _ => (),
         }
 
-        Ok(OrderProtocolExecResult::Success)
+        Ok(OPExecResult::MessageProcessedNoUpdate)
     }
 }
 
@@ -268,7 +249,6 @@ impl<D, NT, PL> PermissionedOrderingProtocol for PBFTOrderProtocol<D, NT, PL>
     where D: ApplicationData + 'static,
           NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
           PL: Clone {
-
     type PermissionedSerialization = PBFTConsensus<D>;
 
     fn view(&self) -> View<Self::PermissionedSerialization> {
@@ -297,7 +277,7 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
 
         let OrderingProtocolArgs(executor, timeouts,
                                  pre_processor, batch_input,
-                                 node,  quorum) = args;
+                                 node, quorum) = args;
 
         let sync = Synchronizer::initialize_with_quorum(node_id, view.sequence_number(), quorum.clone(), timeout_dur)?;
 
@@ -535,9 +515,8 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
     /// Advance the consensus phase with a received message
     fn adv_consensus(
         &mut self,
-        header: Header,
-        message: ConsensusMessage<D::Request>,
-    ) -> Result<OrderProtocolExecResult<D::Request>>
+        message: ShareableMessage<PBFTMessage<D::Request>>,
+    ) -> Result<OPExecResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>>
         where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         let seq = self.consensus.sequence_number();
 
@@ -548,13 +527,28 @@ impl<D, NT, PL> PBFTOrderProtocol<D, NT, PL>
         // );
 
         let status = self.consensus.process_message(
-            header,
             message,
             &self.synchronizer,
             &self.timeouts,
-            &mut self.message_log,
             &self.node,
         )?;
+
+        match status {
+            ConsensusStatus::VotedTwice(_) | ConsensusStatus::MessageIgnored => {
+                OPExecResult::MessageDropped
+            }
+            ConsensusStatus::MessageQueued => {
+                OPExecResult::MessageQueued
+            }
+            ConsensusStatus::Deciding => {
+
+            }
+            ConsensusStatus::Decided => {
+                let finalized_decisions = self.finalize_all_possible()?;
+
+                return Ok(OPExecResult::Decided())
+            }
+        }
 
         match status {
             // if deciding, nothing to do

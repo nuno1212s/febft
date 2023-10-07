@@ -26,16 +26,16 @@ use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::ProtocolConsensusDecision;
 use atlas_core::ordering_protocol::reconfigurable_order_protocol::ReconfigurationAttemptResult;
-use atlas_core::persistent_log::{OrderingProtocolLog, StatefulOrderingProtocolLog};
+use atlas_core::persistent_log::{OrderingProtocolLog};
 use atlas_core::request_pre_processing::RequestPreProcessor;
 use atlas_core::timeouts::{RqTimeout, Timeouts};
 use atlas_smr_application::serialize::ApplicationData;
 
-use crate::bft::consensus::Consensus;
+use crate::bft::consensus::{Consensus, ConsensusStatus};
+use crate::bft::log::decisions::{CollectData, Proof, ViewDecisionPair};
+use crate::bft::log::Log;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::msg_log::decided_log::Log;
-use crate::bft::msg_log::decisions::{CollectData, Proof, StoredConsensusMessage, ViewDecisionPair};
 use crate::bft::PBFT;
 use crate::bft::sync::view::ViewInfo;
 
@@ -121,7 +121,6 @@ pub struct LeaderCollects<O> {
 }
 
 impl<O> LeaderCollects<O> {
-
     pub fn message(&self) -> &FwdConsensusMessage<O> {
         &self.proposed
     }
@@ -368,10 +367,10 @@ pub enum SynchronizerStatus<O> {
     /// The view change protocol is currently running.
     Running,
     /// The view change protocol just finished running.
-    NewView(Option<ProtocolConsensusDecision<O>>),
+    NewView(ConsensusStatus, Option<ProtocolConsensusDecision<O>>),
     /// The view change protocol just finished running and we
     /// have successfully joined the quorum.
-    NewViewJoinedQuorum(Option<ProtocolConsensusDecision<O>>, NodeId),
+    NewViewJoinedQuorum(ConsensusStatus, Option<ProtocolConsensusDecision<O>>, NodeId),
 
     /// Before we finish the view change protocol, we need
     /// to run the CST protocol.
@@ -686,7 +685,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
         header: Header,
         message: ViewChangeMessage<D::Request>,
         timeouts: &Timeouts,
-        log: &mut Log<D, PL>,
+        log: &mut Log<D>,
         rq_pre_processor: &RequestPreProcessor<D::Request>,
         consensus: &mut Consensus<D, PL>,
         node: &Arc<NT>,
@@ -1326,7 +1325,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
     /// Resume the view change protocol after running the CST protocol.
     pub fn resume_view_change<NT, PL>(
         &self,
-        log: &mut Log<D, PL>,
+        log: &mut Log<D>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<D, PL>,
         node: &Arc<NT>,
@@ -1334,7 +1333,6 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
         where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
               PL: OrderingProtocolLog<D, PBFTConsensus<D>>
     {
-
         let state = self.finalize_state.borrow_mut().take()?;
 
         //This is kept alive until it is out of the scope
@@ -1354,7 +1352,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
     /// Start the quorum join procedure to integrate the given joining node into the current quorum
     /// of the system
-    pub fn start_join_quorum<NT, PL>(&self, joining_node: NodeId, node: &NT, timeouts: &Timeouts, log: &Log<D, PL>) -> SyncReconfigurationResult
+    pub fn start_join_quorum<NT, PL>(&self, joining_node: NodeId, node: &NT, timeouts: &Timeouts, log: &Log<D>) -> SyncReconfigurationResult
         where NT: OrderProtocolSendNode<D, PBFT<D>>,
               PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         let current_view = self.view();
@@ -1379,11 +1377,11 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                     SyncReconfigurationResult::OnGoingQuorumChange(currently_adding)
                 } else {
                     SyncReconfigurationResult::OnGoingViewChange
-                }
+                };
             }
             ProtoPhase::ViewStopping2(_) | ProtoPhase::Stopping(_) | ProtoPhase::Stopping2(_) => {
                 // Here we still don't know what is the target of the view change.
-                return SyncReconfigurationResult::OnGoingViewChange
+                return SyncReconfigurationResult::OnGoingViewChange;
             }
             _ => {
                 info!("{:?} // Attempted to add node {:?} quorum but we are currently performing a view change", node.id(), joining_node);
@@ -1451,7 +1449,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                                             join_cert: Option<NodeId>,
                                             node: &NT,
                                             timeouts: &Timeouts,
-                                            _log: &Log<D, PL>, )
+                                            _log: &Log<D>, )
         where NT: OrderProtocolSendNode<D, PBFT<D>>,
               PL: OrderingProtocolLog<D, PBFTConsensus<D>>
     {
@@ -1507,7 +1505,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
         timed_out: Option<Vec<StoredRequestMessage<D::Request>>>,
         node: &NT,
         timeouts: &Timeouts,
-        _log: &Log<D, PL>,
+        _log: &Log<D>,
     ) where NT: OrderProtocolSendNode<D, PBFT<D>>,
             PL: OrderingProtocolLog<D, PBFTConsensus<D>>
     {
@@ -1576,7 +1574,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
         state: FinalizeState<D::Request>,
         proof: Option<&Proof<D::Request>>,
         _normalized_collects: Vec<Option<&CollectData<D::Request>>>,
-        log: &Log<D, PL>,
+        log: &Log<D>,
     ) -> FinalizeStatus<D::Request>
         where PL: OrderingProtocolLog<D, PBFTConsensus<D>>
     {
@@ -1607,7 +1605,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
     fn finalize<NT, PL>(
         &self,
         state: FinalizeState<D::Request>,
-        log: &mut Log<D, PL>,
+        log: &mut Log<D>,
         timeouts: &Timeouts,
         consensus: &mut Consensus<D, PL>,
         node: &Arc<NT>,
@@ -1628,10 +1626,6 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
         let view = self.view();
 
         warn!("{:?} // Finalizing view change to view {:?} and consensus ID {:?}, Adding node? {:?}", node.id(), view, curr_cid, self.currently_adding_node.get());
-
-        // we will get some value to be proposed because of the
-        // check we did in `pre_finalize()`, guarding against no values
-        log.clear_last_occurrence(curr_cid);
 
         let (header, message) = proposed.into_inner();
 
@@ -1659,7 +1653,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
         };
 
         // finalize view change by broadcasting a PREPARE msg
-        consensus.finalize_view_change((header, message), &view, self, timeouts, log, node);
+        let consensus_result = consensus.finalize_view_change((header, message), &view, self, timeouts, log, node)?;
 
         // Update proto phase
         self.phase.replace(ProtoPhase::Init);
@@ -1669,10 +1663,10 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
             self.currently_adding.borrow_mut().clear();
 
-            SynchronizerStatus::NewViewJoinedQuorum(to_execute, node.unwrap())
+            SynchronizerStatus::NewViewJoinedQuorum(consensus_result, to_execute, node.unwrap())
         } else {
             // resume normal phase
-            SynchronizerStatus::NewView(to_execute)
+            SynchronizerStatus::NewView(consensus_result, to_execute)
         }
     }
 

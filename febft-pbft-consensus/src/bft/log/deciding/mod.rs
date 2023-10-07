@@ -10,10 +10,9 @@ use atlas_communication::message::Header;
 use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
 use atlas_metrics::benchmarks::BatchMeta;
 use atlas_metrics::metrics::metric_duration;
+use crate::bft::log::decisions::{IncompleteProof, ProofMetadata};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 use crate::bft::metric::PRE_PREPARE_LOG_ANALYSIS_ID;
-use crate::bft::msg_log::deciding_log::{DecidingLog, FullBatch};
-use crate::bft::msg_log::decisions::{IncompleteProof, ProofMetadata};
 use crate::bft::sync::view::ViewInfo;
 
 /// Information about the completed batch, the contained requests and
@@ -103,7 +102,7 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
                                header: Header,
                                message: &ConsensusMessage<O>,
                                digest: Digest,
-                               mut batch_rq_digests: Vec<ClientRqInfo>) -> Result<Option<FullBatch>> {
+                               mut batch_rq_digests: Vec<ClientRqInfo>) -> Result<Option<ProofMetadata>> {
         let start = Instant::now();
 
         let sending_leader = header.from();

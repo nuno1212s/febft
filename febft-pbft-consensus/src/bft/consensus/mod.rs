@@ -8,6 +8,7 @@ use event_listener::Event;
 use log::{debug, error, info, trace, warn};
 
 use atlas_common::error::*;
+use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message};
 use atlas_communication::message::{Header, StoredMessage};
@@ -16,6 +17,7 @@ use atlas_core::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::ProtocolConsensusDecision;
 use atlas_core::persistent_log::{OrderingProtocolLog};
+use atlas_core::smr::smr_decision_log::ShareableMessage;
 use atlas_core::timeouts::Timeouts;
 use atlas_smr_application::ExecutorHandle;
 use atlas_smr_application::serialize::ApplicationData;
@@ -24,7 +26,8 @@ use atlas_metrics::metrics::metric_increment;
 use crate::bft::{PBFT, SysMsg};
 use crate::bft::consensus::decision::{ConsensusDecision, DecisionPollStatus, DecisionStatus, MessageQueue};
 use crate::bft::log::deciding::CompletedBatch;
-use crate::bft::log::decisions::IncompleteProof;
+use crate::bft::log::decisions::{DecisionLog, IncompleteProof, Proof};
+use crate::bft::log::Log;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::OPERATIONS_PROCESSED_ID;
@@ -78,9 +81,9 @@ pub struct TboQueue<O> {
     curr_seq: SeqNo,
     watermark: u32,
     get_queue: bool,
-    pre_prepares: VecDeque<VecDeque<StoredMessage<ConsensusMessage<O>>>>,
-    prepares: VecDeque<VecDeque<StoredMessage<ConsensusMessage<O>>>>,
-    commits: VecDeque<VecDeque<StoredMessage<ConsensusMessage<O>>>>,
+    pre_prepares: VecDeque<VecDeque<ShareableMessage<PBFTMessage<O>>>>,
+    prepares: VecDeque<VecDeque<ShareableMessage<PBFTMessage<O>>>>,
+    commits: VecDeque<VecDeque<ShareableMessage<PBFTMessage<O>>>>,
 }
 
 impl<O> Orderable for TboQueue<O> {
@@ -136,34 +139,34 @@ impl<O> TboQueue<O> {
 
     /// Queues a consensus message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
-    pub fn queue(&mut self, h: Header, m: ConsensusMessage<O>) {
-        match m.kind() {
-            ConsensusMessageKind::PrePrepare(_) => self.queue_pre_prepare(h, m),
-            ConsensusMessageKind::Prepare(_) => self.queue_prepare(h, m),
-            ConsensusMessageKind::Commit(_) => self.queue_commit(h, m),
+    pub fn queue(&mut self, message: ShareableMessage<PBFTMessage<O>>) {
+        match message.message().consensus().kind() {
+            ConsensusMessageKind::PrePrepare(_) => self.queue_pre_prepare(message),
+            ConsensusMessageKind::Prepare(_) => self.queue_prepare(message),
+            ConsensusMessageKind::Commit(_) => self.queue_commit(message),
         }
     }
 
     /// Queues a `PRE-PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
-    fn queue_pre_prepare(&mut self, h: Header, m: ConsensusMessage<O>) {
+    fn queue_pre_prepare(&mut self, message: ShareableMessage<PBFTMessage<O>>) {
         tbo_queue_message(
             self.base_seq(),
             &mut self.pre_prepares,
-            StoredMessage::new(h, m),
+            message,
         )
     }
 
     /// Queues a `PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
-    fn queue_prepare(&mut self, h: Header, m: ConsensusMessage<O>) {
-        tbo_queue_message(self.base_seq(), &mut self.prepares, StoredMessage::new(h, m))
+    fn queue_prepare(&mut self, message: ShareableMessage<PBFTMessage<O>>) {
+        tbo_queue_message(self.base_seq(), &mut self.prepares, message)
     }
 
     /// Queues a `COMMIT` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
-    fn queue_commit(&mut self, h: Header, m: ConsensusMessage<O>) {
-        tbo_queue_message(self.base_seq(), &mut self.commits, StoredMessage::new(h, m))
+    fn queue_commit(&mut self, message: ShareableMessage<PBFTMessage<O>>) {
+        tbo_queue_message(self.base_seq(), &mut self.commits, message)
     }
 
     /// Clear this queue
@@ -211,7 +214,7 @@ pub struct Consensus<D, PL>
     tbo_queue: TboQueue<D::Request>,
     /// This queue serves for us to keep track of messages we receive of coming up views.
     /// This is important for us to be able to continue the process of moving views after a view change
-    view_queue: VecDeque<Vec<StoredMessage<ConsensusMessage<D::Request>>>>,
+    view_queue: VecDeque<Vec<ShareableMessage<PBFTMessage<D::Request>>>>,
     /// The consensus guard that will be used to ensure that the proposer only proposes one batch
     /// for each consensus instance
     consensus_guard: Arc<ProposerConsensusGuard>,
@@ -264,14 +267,16 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
     }
 
     /// Queue a given message into our message queues.
-    pub fn queue(&mut self, header: Header, message: ConsensusMessage<D::Request>) {
-        let message_seq = message.sequence_number();
+    pub fn queue(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>) {
+        let message_seq = message.message().sequence_number();
 
-        let view_seq = message.view();
+        let view_seq = message.message().consensus().view();
+
+        let header = message.header();
 
         match view_seq.index(self.curr_view.sequence_number()) {
             Either::Right(i) if i > 0 => {
-                self.enqueue_other_view_message(i, header, message);
+                self.enqueue_other_view_message(i, message);
 
                 return;
             }
@@ -303,12 +308,13 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
 
             // We are not currently processing this consensus instance
             // so we need to queue the message
-            self.tbo_queue.queue(header, message);
+            self.tbo_queue.queue(message);
         } else {
             debug!("{:?} // Queueing message out of context msg {:?} received from {:?} into the corresponding decision {}",
                 self.node_id, message, header.from(), i);
+
             // Queue the message in the corresponding pending decision
-            self.decisions.get_mut(i).unwrap().queue(header, message);
+            self.decisions.get_mut(i).unwrap().queue(message);
 
             // Signal that we are ready to receive messages
             self.signalled.push_signalled(message_seq);
@@ -363,21 +369,21 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
     }
 
     pub fn process_message<NT>(&mut self,
-                               header: Header,
-                               message: ConsensusMessage<D::Request>,
+                               s_message: ShareableMessage<PBFTMessage<D::Request>>,
                                synchronizer: &Synchronizer<D>,
                                timeouts: &Timeouts,
-                               log: &mut Log<D, PL>,
                                node: &Arc<NT>) -> Result<ConsensusStatus>
         where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
               PL: OrderingProtocolLog<D, PBFTConsensus<D>>, {
+        let (header, message) = (s_message.header(), s_message.message().consensus());
+
         let message_seq = message.sequence_number();
 
         let view_seq = message.view();
 
         match view_seq.index(self.curr_view.sequence_number()) {
             Either::Right(i) if i > 0 => {
-                self.enqueue_other_view_message(i, header, message);
+                self.enqueue_other_view_message(i, s_message);
 
                 return Ok(ConsensusStatus::MessageQueued);
             }
@@ -405,7 +411,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
             // so we need to queue the message
             debug!("{:?} // Queueing message {:?} for seq no {:?}", self.node_id, message, message_seq);
 
-            self.tbo_queue.queue(header, message);
+            self.tbo_queue.queue(s_message);
 
             return Ok(ConsensusStatus::MessageQueued);
         }
@@ -413,7 +419,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
         // Get the correct consensus instance for this message
         let decision = self.decisions.get_mut(i).unwrap();
 
-        let status = decision.process_message(header, message, synchronizer, timeouts, log, node)?;
+        let status = decision.process_message(s_message, synchronizer, timeouts,  node)?;
 
         Ok(match status {
             DecisionStatus::VotedTwice(node) => {
@@ -709,7 +715,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
                               seq: SeqNo,
                               view: &ViewInfo,
                               proof: Proof<D::Request>,
-                              log: &mut Log<D, PL>) -> Result<ProtocolConsensusDecision<D::Request>>
+                              log: &mut Log<D>) -> Result<ProtocolConsensusDecision<D::Request>>
         where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
 
         // If this is successful, it means that we are all caught up and can now start executing the
@@ -783,15 +789,13 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
 
         if let Some(messages) = option {
             for message in messages {
-                let (header, message) = message.into_inner();
-
-                self.queue(header, message);
+                self.queue(message);
             }
         }
     }
 
     /// Enqueue a message from another view into it's correct queue
-    fn enqueue_other_view_message(&mut self, index: usize, header: Header, message: ConsensusMessage<D::Request>) {
+    fn enqueue_other_view_message(&mut self, index: usize, message: ShareableMessage<PBFTMessage<D::Request>>) {
         debug!("{:?} // Enqueuing a message from another view into the view queue. Index {}  {:?}", self.node_id, index, message);
 
         // Adjust the index to be 0 based
@@ -801,7 +805,7 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
             self.view_queue.push_back(Vec::new());
         }
 
-        self.view_queue[index].push(StoredMessage::new(header, message));
+        self.view_queue[index].push(message);
     }
 
 
@@ -812,9 +816,9 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
         new_view: &ViewInfo,
         synchronizer: &Synchronizer<D>,
         timeouts: &Timeouts,
-        log: &mut Log<D, PL>,
+        log: &mut Log<D>,
         node: &Arc<NT>,
-    ) where
+    ) -> Result<ConsensusStatus> where
         NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
         PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
         //Prepare the algorithm as we are already entering this phase
@@ -837,9 +841,13 @@ impl<D, PL> Consensus<D, PL> where D: ApplicationData + 'static,
         // So the proposer won't try to propose anything to this decision
         self.decisions[0].skip_init_phase();
 
-        self.process_message(header, message, synchronizer, timeouts, log, node).unwrap();
+        let shareable_message = Arc::new(ReadOnly::new(StoredMessage::new(header, PBFTMessage::Consensus(message))));
+
+        let result = self.process_message(shareable_message, synchronizer, timeouts, node)?;
 
         self.consensus_guard.unlock_consensus();
+
+        Ok(result)
     }
 
     /// Collect the incomplete proof that is currently being decided
