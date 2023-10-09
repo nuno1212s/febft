@@ -1,4 +1,4 @@
-use crate::bft::msg_log::decisions::Proof;
+use crate::bft::log::decisions::Proof;
 
 /// A necessary decision log for the ability to perform view changes.
 /// Only stores the latest performed decision
@@ -15,10 +15,12 @@ impl<O> OngoingDecisionLog<O> {
         }
     }
 
+    /// Install a given proof
     fn install_proof(&mut self, proof: Proof<O>) {
         self.last_decision = Some(proof)
     }
-    
+
+    /// Get the last decision
     fn last_decision(&self) -> Option<Proof<O>>  {
         self.last_decision.clone()
     }

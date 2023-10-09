@@ -1,23 +1,24 @@
-//! A module to manage the `febft` message log.
-
-use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::SeqNo;
 use atlas_communication::message::Header;
 use atlas_core::messages::RequestMessage;
 use atlas_smr_application::serialize::ApplicationData;
+use crate::bft::log::decisions::DecisionLog;
 
-use crate::bft::msg_log::decided_log::Log;
-use crate::bft::msg_log::decisions::DecisionLog;
-
+pub mod decided;
+pub mod deciding;
 pub mod decisions;
-pub mod deciding_log;
-pub mod decided_log;
 
-pub fn initialize_decided_log<D: ApplicationData + 'static, PL>(node_id: NodeId,
-                                                                persistent_log: PL,
-                                                                state: Option<DecisionLog<D::Request>>) -> Result<Log<D, PL>> {
-    Ok(Log::init_decided_log(node_id, persistent_log, state))
+pub struct Log<D> where D: ApplicationData {
+    decided: DecisionLog<D::Request>,
+}
+
+impl<D> Log<D> where D: ApplicationData {
+
+    pub fn decision_log(&self) -> &DecisionLog<D::Request> {
+        &self.decided
+    }
+
 }
 
 #[inline]

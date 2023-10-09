@@ -7,13 +7,15 @@ use chrono::Utc;
 use log::{debug, info, warn};
 
 use atlas_common::error::*;
-use atlas_common::globals::ReadOnly;
+use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::ClientRqInfo;
+use atlas_core::ordering_protocol::{Decision, DecisionInfo};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::persistent_log::{OperationMode, OrderingProtocolLog};
+use atlas_core::smr::smr_decision_log::ShareableMessage;
 use atlas_core::timeouts::Timeouts;
 use atlas_smr_application::serialize::ApplicationData;
 use atlas_metrics::metrics::metric_duration;
@@ -21,11 +23,10 @@ use atlas_metrics::metrics::metric_duration;
 use crate::bft::consensus::accessory::{AccessoryConsensus, ConsensusDecisionAccessory};
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;
 use crate::bft::log::deciding::{CompletedBatch, WorkingDecisionLog};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
+use crate::bft::log::decisions::{IncompleteProof, ProofMetadata};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::{ConsensusMetrics, PRE_PREPARE_ANALYSIS_ID};
-use crate::bft::msg_log::decided_log::Log;
-use crate::bft::msg_log::decisions::{IncompleteProof, StoredConsensusMessage};
 use crate::bft::PBFT;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::sync::view::ViewInfo;
@@ -68,7 +69,7 @@ pub enum DecisionPollStatus<O> {
     // Receive a message from the network
     Recv,
     // We currently have a message to be processed at this time
-    NextMessage(Header, ConsensusMessage<O>),
+    NextMessage(ShareableMessage<PBFTMessage<O>>),
     // This consensus decision is finished and therefore can be finalized
     Decided,
 }
@@ -84,29 +85,29 @@ pub enum DecisionStatus<O> {
     MessageQueued,
     /// A `febft` quorum still hasn't made a decision
     /// on a client request to be executed.
-    Deciding(StoredMessage<ConsensusMessage<O>>),
+    Deciding(ShareableMessage<PBFTMessage<O>>),
     /// Transitioned to another next phase of the consensus decision
-    Transitioned(StoredMessage<ConsensusMessage<O>>),
+    Transitioned(ShareableMessage<PBFTMessage<O>>),
     /// A `febft` quorum decided on the execution of
     /// the batch of requests with the given digests.
     /// The first digest is the digest of the Prepare message
     /// And therefore the entire batch digest
     /// THe second Vec<Digest> is a vec with digests of the requests contained in the batch
     /// The third is the messages that should be persisted for this batch to be considered persisted
-    Decided(StoredMessage<ConsensusMessage<O>>),
+    Decided(ShareableMessage<PBFTMessage<O>>),
     DecidedIgnored,
 }
 
 /// A message queue for this particular consensus instance
 pub struct MessageQueue<O> {
     get_queue: bool,
-    pre_prepares: VecDeque<StoredMessage<ConsensusMessage<O>>>,
-    prepares: VecDeque<StoredMessage<ConsensusMessage<O>>>,
-    commits: VecDeque<StoredMessage<ConsensusMessage<O>>>,
+    pre_prepares: VecDeque<ShareableMessage<PBFTMessage<O>>>,
+    prepares: VecDeque<ShareableMessage<PBFTMessage<O>>>,
+    commits: VecDeque<ShareableMessage<PBFTMessage<O>>>,
 }
 
 /// The information needed to make a decision on a batch of requests.
-pub struct ConsensusDecision<D, PL> where D: ApplicationData + 'static, {
+pub struct ConsensusDecision<D> where D: ApplicationData + 'static, {
     node_id: NodeId,
     /// The sequence number of this consensus decision
     seq: SeqNo,
@@ -135,9 +136,9 @@ impl<O> MessageQueue<O> {
         }
     }
 
-    pub(super) fn from_messages(pre_prepares: VecDeque<StoredMessage<ConsensusMessage<O>>>,
-                                prepares: VecDeque<StoredMessage<ConsensusMessage<O>>>,
-                                commits: VecDeque<StoredMessage<ConsensusMessage<O>>>) -> Self {
+    pub(super) fn from_messages(pre_prepares: VecDeque<ShareableMessage<PBFTMessage<O>>>,
+                                prepares: VecDeque<ShareableMessage<PBFTMessage<O>>>,
+                                commits: VecDeque<ShareableMessage<PBFTMessage<O>>>) -> Self {
         let get_queue = !pre_prepares.is_empty() || !prepares.is_empty() || !commits.is_empty();
 
         Self {
@@ -154,28 +155,28 @@ impl<O> MessageQueue<O> {
 
     pub fn is_signalled(&self) -> bool { self.get_queue }
 
-    fn queue_pre_prepare(&mut self, message: StoredMessage<ConsensusMessage<O>>) {
+    fn queue_pre_prepare(&mut self, message: ShareableMessage<PBFTMessage<O>>) {
         self.pre_prepares.push_back(message);
 
         self.signal();
     }
 
-    fn queue_prepare(&mut self, message: StoredMessage<ConsensusMessage<O>>) {
+    fn queue_prepare(&mut self, message: ShareableMessage<PBFTMessage<O>>) {
         self.prepares.push_back(message);
 
         self.signal();
     }
 
-    fn queue_commit(&mut self, message: StoredMessage<ConsensusMessage<O>>) {
+    fn queue_commit(&mut self, message: ShareableMessage<PBFTMessage<O>>) {
         self.commits.push_back(message);
 
         self.signal();
     }
 }
 
-impl<D, PL> ConsensusDecision<D, PL>
+impl<D> ConsensusDecision<D>
     where D: ApplicationData + 'static, {
-    pub fn init_decision(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo, persistent_log: PL) -> Self {
+    pub fn init_decision(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo) -> Self {
         Self {
             node_id,
             seq: seq_no,
@@ -188,7 +189,6 @@ impl<D, PL> ConsensusDecision<D, PL>
     }
 
     pub fn init_with_msg_log(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo,
-                             persistent_log: PL,
                              message_queue: MessageQueue<D::Request>) -> Self {
         Self {
             node_id,
@@ -201,16 +201,16 @@ impl<D, PL> ConsensusDecision<D, PL>
         }
     }
 
-    pub fn queue(&mut self, header: Header, message: ConsensusMessage<D::Request>) {
+    pub fn queue(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>) {
         match message.kind() {
             ConsensusMessageKind::PrePrepare(_) => {
-                self.message_queue.queue_pre_prepare(StoredMessage::new(header, message));
+                self.message_queue.queue_pre_prepare(message);
             }
             ConsensusMessageKind::Prepare(_) => {
-                self.message_queue.queue_prepare(StoredMessage::new(header, message));
+                self.message_queue.queue_prepare(message);
             }
             ConsensusMessageKind::Commit(_) => {
-                self.message_queue.queue_commit(StoredMessage::new(header, message));
+                self.message_queue.queue_commit(message);
             }
         }
     }
@@ -258,15 +258,14 @@ impl<D, PL> ConsensusDecision<D, PL>
 
     /// Process a message relating to this consensus instance
     pub fn process_message<NT>(&mut self,
-                               header: Header,
-                               message: ConsensusMessage<D::Request>,
+                               s_message: ShareableMessage<PBFTMessage<D::Request>>,
                                synchronizer: &Synchronizer<D>,
                                timeouts: &Timeouts,
-                               log: &mut Log<D, PL>,
                                node: &Arc<NT>) -> Result<DecisionStatus<D::Request>>
-        where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
-              PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
+        where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
         let view = synchronizer.view();
+        let header = s_message.header();
+        let message = s_message.message().consensus();
 
         return match self.phase {
             DecisionPhase::Initialize => {
@@ -274,7 +273,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                 // This consensus instance.
                 warn!("{:?} // Queueing message {:?} as we are in the initialize phase", self.node_id, message);
 
-                self.queue(header, message);
+                self.queue(s_message);
 
                 return Ok(DecisionStatus::MessageQueued);
             }
@@ -308,7 +307,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                         debug!("{:?} // Received {:?} from {:?} while in prepreparing ",
                             self.node_id, message, header.from());
 
-                        self.message_queue.queue_prepare(StoredMessage::new(header, message));
+                        self.message_queue.queue_prepare(s_message);
 
                         return Ok(DecisionStatus::MessageQueued);
                     }
@@ -316,7 +315,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                         debug!("{:?} // Received {:?} from {:?} while in pre preparing",
                             self.node_id, message, header.from());
 
-                        self.message_queue.queue_commit(StoredMessage::new(header, message));
+                        self.message_queue.queue_commit(s_message);
 
                         return Ok(DecisionStatus::MessageQueued);
                     }
@@ -334,13 +333,13 @@ impl<D, PL> ConsensusDecision<D, PL>
 
                 //TODO: Try out cloning each request on this method,
                 let mut digests = request_batch_received(
-                    &message,
+                    message,
                     timeouts,
                     synchronizer,
                     &mut self.working_log,
                 );
 
-                let batch_metadata = self.working_log.process_pre_prepare(header.clone(), &message,
+                let batch_metadata = self.working_log.process_pre_prepare(header.clone(), message,
                                                                           header.digest().clone(), digests)?;
 
                 let mut result;
@@ -365,17 +364,13 @@ impl<D, PL> ConsensusDecision<D, PL>
 
                     let current_digest = batch_metadata.batch_digest();
 
-                    // Register that all of the batches have been received
-                    // The digest of the batch and the order of the batches
-                    log.all_batches_received(batch_metadata);
-
                     self.accessory.handle_pre_prepare_phase_completed(&self.working_log,
                                                                       &view, &header, &message, node);
 
                     self.message_queue.signal();
 
                     // Mark that we have transitioned to the next phase
-                    result = DecisionStatus::Transitioned(StoredMessage::new(header, message));
+                    result = DecisionStatus::Transitioned(s_message);
 
                     // We no longer start the count at 1 since all leaders must also send the prepare
                     // message with the digest of the entire batch
@@ -387,7 +382,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                     self.accessory.handle_partial_pre_prepare(&self.working_log, &view,
                                                               &header, &message, &**node);
 
-                    result = DecisionStatus::Deciding(StoredMessage::new(header, message));
+                    result = DecisionStatus::Deciding(s_message);
 
                     DecisionPhase::PrePreparing(received)
                 };
@@ -407,7 +402,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                         debug!("{:?} // Received {:?} from {:?} while in preparing phase",
                             self.node_id, message, header.from());
 
-                        self.message_queue.queue_commit(StoredMessage::new(header, message));
+                        self.message_queue.queue_commit(s_message);
 
                         return Ok(DecisionStatus::MessageQueued);
                     }
@@ -460,7 +455,7 @@ impl<D, PL> ConsensusDecision<D, PL>
 
                     self.message_queue.signal();
 
-                    result = DecisionStatus::Transitioned(StoredMessage::new(header, message));
+                    result = DecisionStatus::Transitioned(s_message);
 
                     DecisionPhase::Committing(0)
                 } else {
@@ -470,7 +465,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                     self.accessory.handle_preparing_no_quorum(&self.working_log, &view,
                                                               &header, &message, &**node);
 
-                    result = DecisionStatus::Deciding(StoredMessage::new(header, message));
+                    result = DecisionStatus::Deciding(s_message);
 
                     DecisionPhase::Preparing(received)
                 };
@@ -529,7 +524,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                     self.accessory.handle_committing_quorum(&self.working_log, &view,
                                                             &header, &message, &**node);
 
-                    Ok(DecisionStatus::Decided(StoredMessage::new(header, message)))
+                    Ok(DecisionStatus::Decided(s_message))
                 } else {
                     debug!("{:?} // Received commit message {:?} from {:?}. Current count {}",
                         self.node_id, stored_msg.message().sequence_number(), header.from(), received);
@@ -539,7 +534,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                     self.accessory.handle_committing_no_quorum(&self.working_log, &view,
                                                                &header, &message, &**node);
 
-                    Ok(DecisionStatus::Deciding(StoredMessage::new(header, message)))
+                    Ok(DecisionStatus::Deciding(s_message))
                 };
             }
             DecisionPhase::Decided => {
@@ -577,7 +572,7 @@ impl<D, PL> ConsensusDecision<D, PL>
     }
 }
 
-impl<D, PL> Orderable for ConsensusDecision<D, PL>
+impl<D> Orderable for ConsensusDecision<D>
     where D: ApplicationData + 'static, {
     fn sequence_number(&self) -> SeqNo {
         self.seq
@@ -624,8 +619,8 @@ impl<O> Debug for DecisionPollStatus<O> {
             DecisionPollStatus::Recv => {
                 write!(f, "Recv")
             }
-            DecisionPollStatus::NextMessage(_, msg) => {
-                write!(f, "Next Message {:?}", msg)
+            DecisionPollStatus::NextMessage(message) => {
+                write!(f, "Next Message {:?}, Message Type {:?}", message.header(), message.message())
             }
             DecisionPollStatus::Decided => {
                 write!(f, "Decided")

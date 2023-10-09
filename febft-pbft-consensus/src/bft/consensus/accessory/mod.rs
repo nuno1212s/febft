@@ -9,8 +9,6 @@ use crate::bft::consensus::accessory::replica::ReplicaAccessory;
 use crate::bft::log::deciding::WorkingDecisionLog;
 use crate::bft::message::ConsensusMessage;
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::msg_log::deciding_log::DecidingLog;
-use crate::bft::msg_log::decisions::StoredConsensusMessage;
 use crate::bft::sync::view::ViewInfo;
 
 pub mod replica;
@@ -21,7 +19,7 @@ pub enum ConsensusDecisionAccessory<D>
     Replica(ReplicaAccessory<D>),
 }
 
-pub trait AccessoryConsensus<D> where D: ApplicationData + 'static,{
+pub trait AccessoryConsensus<D> where D: ApplicationData + 'static, {
     /// Handle the reception of a pre-prepare message without having completed the pre prepare phase
     fn handle_partial_pre_prepare<NT>(&mut self, deciding_log: &WorkingDecisionLog<D::Request>,
                                       view: &ViewInfo,
@@ -63,7 +61,7 @@ pub trait AccessoryConsensus<D> where D: ApplicationData + 'static,{
 }
 
 impl<D> AccessoryConsensus<D> for ConsensusDecisionAccessory<D>
-    where D: ApplicationData + 'static{
+    where D: ApplicationData + 'static {
     fn handle_partial_pre_prepare<NT>(&mut self, deciding_log: &WorkingDecisionLog<D::Request>,
                                       view: &ViewInfo,
                                       header: &Header, msg: &ConsensusMessage<D::Request>,
@@ -71,7 +69,7 @@ impl<D> AccessoryConsensus<D> for ConsensusDecisionAccessory<D>
         match self {
             ConsensusDecisionAccessory::Follower => {}
             ConsensusDecisionAccessory::Replica(rep) => {
-                rep.handle_partial_pre_prepare(deciding_log, view, msg, node);
+                rep.handle_partial_pre_prepare(deciding_log, view, header, msg, node);
             }
         }
     }
@@ -79,11 +77,11 @@ impl<D> AccessoryConsensus<D> for ConsensusDecisionAccessory<D>
     fn handle_pre_prepare_phase_completed<NT>(&mut self, deciding_log: &WorkingDecisionLog<D::Request>,
                                               view: &ViewInfo,
                                               header: &Header, msg: &ConsensusMessage<D::Request>,
-                                              node: &Arc<NT>) where NT: OrderProtocolSendNode<D, PBFTConsensus<D>> + 'static{
+                                              node: &Arc<NT>) where NT: OrderProtocolSendNode<D, PBFTConsensus<D>> + 'static {
         match self {
             ConsensusDecisionAccessory::Follower => {}
             ConsensusDecisionAccessory::Replica(rep) => {
-                rep.handle_pre_prepare_phase_completed(deciding_log, view, msg, node);
+                rep.handle_pre_prepare_phase_completed(deciding_log, view, header, msg, node);
             }
         }
     }
@@ -95,7 +93,7 @@ impl<D> AccessoryConsensus<D> for ConsensusDecisionAccessory<D>
         match self {
             ConsensusDecisionAccessory::Follower => {}
             ConsensusDecisionAccessory::Replica(rep) => {
-                rep.handle_preparing_no_quorum(deciding_log, view, msg, node);
+                rep.handle_preparing_no_quorum(deciding_log, view, header, msg, node);
             }
         }
     }
@@ -107,7 +105,7 @@ impl<D> AccessoryConsensus<D> for ConsensusDecisionAccessory<D>
         match self {
             ConsensusDecisionAccessory::Follower => {}
             ConsensusDecisionAccessory::Replica(rep) => {
-                rep.handle_preparing_quorum(deciding_log, view, msg, node);
+                rep.handle_preparing_quorum(deciding_log, view, header, msg, node);
             }
         }
     }
@@ -119,7 +117,7 @@ impl<D> AccessoryConsensus<D> for ConsensusDecisionAccessory<D>
         match self {
             ConsensusDecisionAccessory::Follower => {}
             ConsensusDecisionAccessory::Replica(rep) => {
-                rep.handle_committing_no_quorum(deciding_log, view, msg, node);
+                rep.handle_committing_no_quorum(deciding_log, view, header, msg, node);
             }
         }
     }
@@ -131,7 +129,7 @@ impl<D> AccessoryConsensus<D> for ConsensusDecisionAccessory<D>
         match self {
             ConsensusDecisionAccessory::Follower => {}
             ConsensusDecisionAccessory::Replica(rep) => {
-                rep.handle_committing_quorum(deciding_log, view, msg, node);
+                rep.handle_committing_quorum(deciding_log, view, header, msg, node);
             }
         }
     }

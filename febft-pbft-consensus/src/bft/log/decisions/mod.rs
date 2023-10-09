@@ -11,11 +11,11 @@ use atlas_common::globals::ReadOnly;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::StoredMessage;
 use atlas_core::ordering_protocol::networking::serialize::{OrderProtocolLog, OrderProtocolProof};
+use atlas_core::smr::smr_decision_log::ShareableMessage;
+use crate::bft::log::deciding::CompletedBatch;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
-use crate::bft::msg_log::deciding_log::CompletedBatch;
-
-pub type StoredConsensusMessage<O> = Arc<ReadOnly<StoredMessage<ConsensusMessage<O>>>>;
+pub type StoredConsensusMessage<O> = ShareableMessage<PBFTMessage<O>>;
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
@@ -47,6 +47,7 @@ pub struct ProofMetadata {
     seq_no: SeqNo,
     batch_digest: Digest,
     pre_prepare_ordering: Vec<Digest>,
+    contained_client_rqs: usize
 }
 
 impl Orderable for ProofMetadata {
@@ -100,11 +101,12 @@ impl PrepareSet {
 
 impl ProofMetadata {
     /// Create a new proof metadata
-    pub(crate) fn new(seq_no: SeqNo, digest: Digest, pre_prepare_ordering: Vec<Digest>) -> Self {
+    pub(crate) fn new(seq_no: SeqNo, digest: Digest, pre_prepare_ordering: Vec<Digest>, contained_rqs: usize) -> Self {
         Self {
             seq_no,
             batch_digest: digest,
             pre_prepare_ordering,
+            contained_client_rqs: contained_rqs
         }
     }
 
@@ -118,6 +120,10 @@ impl ProofMetadata {
 
     pub fn pre_prepare_ordering(&self) -> &Vec<Digest> {
         &self.pre_prepare_ordering
+    }
+
+    pub fn contained_client_rqs(&self) -> usize {
+        self.contained_client_rqs
     }
 }
 
@@ -161,6 +167,22 @@ impl<O> Proof<O> {
         }
 
         Ok(())
+    }
+
+    pub fn all_messages(&self) -> Vec<StoredConsensusMessage<O>> {
+        let mut messages = Vec::with_capacity(self.pre_prepares.len() + self.prepares.len() + self.commits.len());
+
+        for pre_prepare in self.pre_prepares() {
+            messages.push(pre_prepare.clone())
+        }
+        for prepare in self.prepares() {
+            messages.push(prepare.clone())
+        }
+        for commit in self.commits() {
+            messages.push(commit.clone())
+        }
+
+        messages
     }
 
     /// Check if the pre prepares stored here are ordered correctly according

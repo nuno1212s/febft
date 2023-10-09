@@ -16,7 +16,6 @@ use crate::bft::{PBFT, SysMsg};
 use crate::bft::consensus::accessory::AccessoryConsensus;
 use crate::bft::log::deciding::WorkingDecisionLog;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
-use crate::bft::msg_log::decisions::StoredConsensusMessage;
 use crate::bft::sync::view::ViewInfo;
 
 pub struct ReplicaAccessory<D>
