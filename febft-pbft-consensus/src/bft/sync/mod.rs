@@ -37,7 +37,7 @@ use crate::bft::log::decisions::{CollectData, Proof, ProofMetadata, ViewDecision
 use crate::bft::log::Log;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::{PBFT, PBFTOrderProtocol};
+use crate::bft::{OPDecision, PBFT, PBFTOrderProtocol};
 use crate::bft::sync::view::ViewInfo;
 
 use self::{follower_sync::FollowerSynchronizer, replica_sync::ReplicaSynchronizer};
@@ -368,11 +368,10 @@ pub enum SynchronizerStatus<O> {
     /// The view change protocol is currently running.
     Running,
     /// The view change protocol just finished running.
-    NewView(ConsensusStatus<O>, Option<Decision<ProofMetadata, PBFTMessage<O>, O>>),
+    NewView(ConsensusStatus<O>, Option<OPDecision<O>>),
     /// The view change protocol just finished running and we
     /// have successfully joined the quorum.
-    NewViewJoinedQuorum(ConsensusStatus<O>, Option<Decision<ProofMetadata, PBFTMessage<O>, O>>, NodeId),
-
+    NewViewJoinedQuorum(ConsensusStatus<O>, Option<OPDecision<O>>, NodeId),
     /// Before we finish the view change protocol, we need
     /// to run the CST protocol.
     RunCst,
@@ -1639,14 +1638,10 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
             // We are missing the last decision, which should be included in the collect data
             // sent by the leader in the SYNC message
             let to_execute = if let Some(last_proof) = last_proof {
-                let proof = last_proof.metadata().clone();
-                let messages = last_proof.all_messages();
-                let quorum_result = consensus.catch_up_to_quorum(last_proof.seq_no(), &view, last_proof, log)
+                let quorum_result = consensus.catch_up_to_quorum(&view, last_proof, log)
                     .expect("Failed to catch up to quorum");
 
-                let decision = Decision::full_decision_info(last_executed_cid, proof, messages, quorum_result);
-
-                Some(decision)
+                Some(quorum_result)
             } else {
                 // This maybe happens when a checkpoint is done and the first execution after it
                 // fails, leading to a view change? Don't really know how this would be possible

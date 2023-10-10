@@ -24,7 +24,7 @@ use atlas_smr_application::ExecutorHandle;
 use atlas_smr_application::serialize::ApplicationData;
 use atlas_metrics::metrics::metric_increment;
 
-use crate::bft::{PBFT, SysMsg};
+use crate::bft::{OPDecision, PBFT, SysMsg};
 use crate::bft::consensus::decision::{ConsensusDecision, DecisionPollStatus, DecisionStatus, MessageQueue};
 use crate::bft::log::deciding::CompletedBatch;
 use crate::bft::log::decisions::{DecisionLog, IncompleteProof, Proof, ProofMetadata};
@@ -48,14 +48,14 @@ pub enum ConsensusStatus<O> {
     MessageQueued,
     /// A `febft` quorum still hasn't made a decision
     /// on a client request to be executed.
-    Deciding(MaybeVec<Decision<ProofMetadata, PBFTMessage<O>, O>>),
+    Deciding(MaybeVec<OPDecision<O>>),
     /// A `febft` quorum decided on the execution of
     /// the batch of requests with the given digests.
     /// The first digest is the digest of the Prepare message
     /// And therefore the entire batch digest
     /// THe second Vec<Digest> is a vec with digests of the requests contained in the batch
     /// The third is the messages that should be persisted for this batch to be considered persisted
-    Decided(MaybeVec<Decision<ProofMetadata, PBFTMessage<O>, O>>),
+    Decided(MaybeVec<OPDecision<O>>),
 }
 
 #[derive(Debug, Clone)]
@@ -68,7 +68,7 @@ pub enum ConsensusPollStatus<O> {
     NextMessage(ShareableMessage<PBFTMessage<O>>),
     /// The first consensus instance of the consensus queue is ready to be finalized
     /// as it has already been decided
-    Decided,
+    Decided(MaybeVec<Decision<ProofMetadata, PBFTMessage<O>, O>>),
 }
 
 /// Represents a queue of messages to be ordered in a consensus instance.
@@ -190,8 +190,8 @@ pub struct Signals {
 
 /// The consensus handler. Responsible for multiplexing consensus instances and keeping track
 /// of missing messages
-pub struct Consensus<D,>
-    where D: ApplicationData + 'static,{
+pub struct Consensus<D, >
+    where D: ApplicationData + 'static, {
     node_id: NodeId,
     /// The handle to the executor of the function
     executor_handle: ExecutorHandle<D>,
@@ -355,7 +355,7 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
         // and it will be handled until completion from there, but having a backup is never
         // A bad idea
         if self.can_finalize() {
-            return ConsensusPollStatus::Decided;
+            return ConsensusPollStatus::Decided(MaybeVec::None);
         }
 
         ConsensusPollStatus::Recv
@@ -413,7 +413,7 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
 
         let decision_seq = decision.sequence_number();
 
-        let status = decision.process_message(s_message, synchronizer, timeouts,  node)?;
+        let status = decision.process_message(s_message, synchronizer, timeouts, node)?;
 
         Ok(match status {
             DecisionStatus::VotedTwice(node) => {
@@ -641,7 +641,7 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
                 while self.tbo_queue.sequence_number() < novel_seq_no && self.decisions.len() < self.watermark as usize {
                     let messages = self.tbo_queue.advance_queue();
 
-                    let decision = ConsensusDecision::init_with_msg_log(self.node_id, sequence_no, view,messages);
+                    let decision = ConsensusDecision::init_with_msg_log(self.node_id, sequence_no, view, messages);
 
                     debug!("{:?} // Initialized new decision from TBO queue messages {:?}", self.node_id, decision.sequence_number());
 
@@ -703,14 +703,13 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
 
     /// Catch up to the quorums latest decided consensus
     pub fn catch_up_to_quorum(&mut self,
-                              seq: SeqNo,
                               view: &ViewInfo,
                               proof: Proof<D::Request>,
-                              log: &mut Log<D>) -> Result<ProtocolConsensusDecision<D::Request>> {
+                              log: &mut Log<D>) -> Result<OPDecision<D::Request>> {
 
         // If this is successful, it means that we are all caught up and can now start executing the
         // batch
-        let to_execute = log.install_proof(seq, proof)?;
+        let to_execute = log.install_proof(proof)?;
 
         // Move to the next instance as this one has been finalized
         self.next_instance(view);

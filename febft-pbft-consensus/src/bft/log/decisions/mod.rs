@@ -7,14 +7,13 @@ use serde::{Deserialize, Serialize};
 
 use atlas_common::crypto::hash::Digest;
 use atlas_common::error::*;
-use atlas_common::globals::ReadOnly;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::StoredMessage;
 use atlas_core::ordering_protocol::networking::serialize::{OrderProtocolLog, OrderProtocolProof};
 use atlas_core::smr::smr_decision_log::ShareableMessage;
 use crate::bft::log::deciding::CompletedBatch;
 
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
+use crate::bft::message::{ConsensusMessageKind, PBFTMessage};
 pub type StoredConsensusMessage<O> = ShareableMessage<PBFTMessage<O>>;
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
@@ -169,22 +168,6 @@ impl<O> Proof<O> {
         Ok(())
     }
 
-    pub fn all_messages(&self) -> Vec<StoredConsensusMessage<O>> {
-        let mut messages = Vec::with_capacity(self.pre_prepares.len() + self.prepares.len() + self.commits.len());
-
-        for pre_prepare in self.pre_prepares() {
-            messages.push(pre_prepare.clone())
-        }
-        for prepare in self.prepares() {
-            messages.push(prepare.clone())
-        }
-        for commit in self.commits() {
-            messages.push(commit.clone())
-        }
-
-        messages
-    }
-
     /// Check if the pre prepares stored here are ordered correctly according
     /// to the [pre_prepare_ordering] in this same proof.
     pub fn are_pre_prepares_ordered(&self) -> Result<bool> {
@@ -228,6 +211,25 @@ impl<O> Proof<O> {
         self.pre_prepares = ordered_pre_prepares;
 
         Ok(())
+    }
+
+    pub fn into_parts(self) -> (ProofMetadata, Vec<ShareableMessage<PBFTMessage<O>>>) {
+
+        let mut vec = Vec::with_capacity(self.pre_prepares.len() + self.prepares.len() + self.commits.len());
+
+        for pre_prepares in self.pre_prepares {
+            vec.push(pre_prepares);
+        }
+
+        for prepare in self.prepares {
+            vec.push(prepare);
+        }
+
+        for commit in self.commits {
+            vec.push(commit);
+        }
+
+        (self.metadata, vec)
     }
 
 }
@@ -404,17 +406,7 @@ impl<O> OrderProtocolLog for DecisionLog<O> {
 
 impl<O> OrderProtocolProof for Proof<O> {
     fn contained_messages(&self) -> usize {
-        let mut messages = 0;
-
-        for pre_prepare in &self.pre_prepares {
-            //Mark the requests contained in this message for removal
-            messages += match pre_prepare.message().kind() {
-                ConsensusMessageKind::PrePrepare(messages) => messages.len(),
-                _ => 0,
-            };
-        }
-
-        messages
+        self.metadata().contained_client_rqs()
     }
 }
 

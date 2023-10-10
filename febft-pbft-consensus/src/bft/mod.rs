@@ -3,12 +3,13 @@
 //! By default, it is hidden to the user, unless explicitly enabled
 //! with the feature flag `expose_impl`.
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::Drop;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
-use ::log::{debug, info, trace, warn};
+use ::log::{debug, error, info, trace, warn};
 
 use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
@@ -19,7 +20,7 @@ use atlas_communication::message::{Header, StoredMessage};
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_communication::serialize::Serializable;
 use atlas_core::messages::{ClientRqInfo, Protocol};
-use atlas_core::ordering_protocol::{Decision, DecisionInfo, DecisionMetadata, JoinInfo, OPExecResult, OPPollResult, OrderingProtocol, OrderingProtocolArgs, OrderProtocolTolerance, PermissionedOrderingProtocol, ProtocolConsensusDecision, ProtocolMessage, View};
+use atlas_core::ordering_protocol::{Decision, DecisionInfo, DecisionMetadata, DecisionsAhead, JoinInfo, OPExecResult, OPPollResult, OrderingProtocol, OrderingProtocolArgs, OrderProtocolTolerance, PermissionedOrderingProtocol, ProtocolConsensusDecision, ProtocolMessage, View};
 use atlas_core::ordering_protocol::loggable::{LoggableOrderProtocol, PProof};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::networking::serialize::{NetworkView, OrderingProtocolMessage};
@@ -37,7 +38,7 @@ use atlas_smr_application::app::UpdateBatch;
 use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus, ProposerConsensusGuard};
 use crate::bft::log::decisions::{Proof, ProofMetadata};
-use crate::bft::log::Log;
+use crate::bft::log::{initialize_decided_log, Log};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage, ViewChangeMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::{CONSENSUS_INSTALL_STATE_TIME_ID, MSG_LOG_INSTALL_TIME_ID};
@@ -72,8 +73,8 @@ pub enum ConsensusPhase {
 pub enum SyncPhaseRes<O> {
     SyncProtocolNotNeeded,
     RunSyncProtocol,
-    SyncProtocolFinished(Option<ProtocolConsensusDecision<O>>),
-    JoinedQuorum(Option<ProtocolConsensusDecision<O>>, NodeId),
+    SyncProtocolFinished(ConsensusStatus<O>, Option<OPDecision<O>>),
+    JoinedQuorum(ConsensusStatus<O>, Option<OPDecision<O>>, NodeId),
     RunCSTProtocol,
 }
 
@@ -283,7 +284,7 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
                                                     SeqNo::ZERO, watermark, consensus_guard.clone(),
                                                     timeouts.clone());
 
-        let dec_log = initialize_decided_log::<D, PL>(node_id, initial_state)?;
+        let dec_log = initialize_decided_log::<D>(node_id)?;
 
         let proposer = Proposer::<D, NT>::new(node.clone(), batch_input, sync.clone(), timeouts.clone(),
                                               executor.clone(), consensus_guard.clone(),
@@ -351,22 +352,24 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
                         SynchronizerStatus::NewViewJoinedQuorum(consensus_status, decisions, node) => {
                             let quorum_members = self.synchronizer.view().quorum_members().clone();
 
-                            let decisions;
-
-                            match consensus_status {
-                                ConsensusStatus::VotedTwice(_) | ConsensusStatus::MessageQueued | ConsensusStatus::MessageIgnored => {
-                                    decisions = None;
-                                }
-                                ConsensusStatus::Deciding(decision) | ConsensusStatus::Decided(decision) => {
-                                    decisions = Some(decision)
-                                }
-                            }
+                            let decisions = self.handle_sync_result(consensus_status, decisions)?;
 
                             let joined = JoinInfo::new(node, self.synchronizer.view().quorum_members().clone());
 
-                            return OPPollResult::QuorumJoined(decisions, joined);
+                            if decisions.is_empty() {
+                                OPExecResult::QuorumJoined(DecisionsAhead::ClearAhead, None, joined)
+                            } else {
+                                OPExecResult::QuorumJoined(DecisionsAhead::ClearAhead, Some(decisions), joined)
+                            }
                         }
-                        _ => {}
+                        SynchronizerStatus::NewView(consensus_status, decisions) => {
+                            let decisions = self.handle_sync_result(consensus_status, decisions)?;
+
+                            OPExecResult::ProgressedDecision(DecisionsAhead::ClearAhead, decisions)
+                        }
+                        _ => {
+                            warn!("Received sync status that is not handled")
+                        }
                     }
                 }
 
@@ -401,15 +404,15 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
                             OPPollResult::RunCst
                         }
                         SyncPhaseRes::SyncProtocolNotNeeded => {
-                            warn!("Polling the sync phase should never return anything other than a run sync protocol or run cst protocol message, SyncProtocolNotNeeded");
+                            error!("Polling the sync phase should never return anything other than a run sync protocol or run cst protocol message, SyncProtocolNotNeeded");
                             OPPollResult::RePoll
                         }
-                        SyncPhaseRes::JoinedQuorum(_, _) => {
-                            warn!("Polling the sync phase should never return anything other than a run sync protocol or run cst protocol message, JoinedQuorum");
+                        SyncPhaseRes::JoinedQuorum(_, _, _) => {
+                            error!("Polling the sync phase should never return anything other than a run sync protocol or run cst protocol message, JoinedQuorum");
                             OPPollResult::RePoll
                         }
-                        SyncPhaseRes::SyncProtocolFinished(_) => {
-                            warn!("Polling the sync phase should never return anything other than a run sync protocol or run cst protocol message, Protocol Finished");
+                        SyncPhaseRes::SyncProtocolFinished(_, _) => {
+                            error!("Polling the sync phase should never return anything other than a run sync protocol or run cst protocol message, Protocol Finished");
                             OPPollResult::RePoll
                         }
                     };
@@ -435,13 +438,14 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
             ConsensusPollStatus::Decided(decisions) => {
                 let finalized_decisions = self.finalize_all_possible().expect("Failed to finalize decisions");
 
-                return OPPollResult::Decided(finalized_decisions);
+                let decisions = self.merge_decisions(decisions, finalized_decisions)?;
+
+                OPPollResult::ProgressedDecision(decisions)
             }
         }
     }
 
-    fn update_sync_phase(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>) -> Result<OPExecResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>>{
-
+    fn update_sync_phase(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>) -> Result<OPExecResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>> {
         match message.message() {
             PBFTMessage::ViewChange(view_change) => {
                 return Ok(match self.adv_sync(message) {
@@ -451,22 +455,23 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
                     SyncPhaseRes::RunSyncProtocol => {
                         OPExecResult::MessageProcessedNoUpdate
                     }
-                    SyncPhaseRes::SyncProtocolFinished(to_execute) => {
-                        match to_execute {
-                            None => {
-                                OPExecResult::MessageProcessedNoUpdate
-                            }
-                            Some(to_execute) => {
-                                OPExecResult::Decided(vec![to_execute])
-                            }
-                        }
+                    SyncPhaseRes::SyncProtocolFinished(status, to_execute) => {
+                        OPExecResult::ProgressedDecision(DecisionsAhead::ClearAhead, self.handle_sync_result(status, to_execute)?)
                     }
-                    SyncPhaseRes::JoinedQuorum(to_execute, node) => {
+                    SyncPhaseRes::JoinedQuorum(status, to_execute, node) => {
                         info!("Replica {:?} joined the quorum, with a decision to execute? {}", node, to_execute.is_some());
 
                         let new_quorum = self.synchronizer.view().quorum_members().clone();
 
-                        OPExecResult::QuorumJoined(to_execute.map(|x| vec![x]), node, new_quorum)
+                        let join_info = JoinInfo::new(node, new_quorum);
+
+                        let decision_adv = self.handle_sync_result(status, to_execute)?;
+
+                        if decision_adv.is_empty() {
+                            OPExecResult::QuorumJoined(DecisionsAhead::ClearAhead, None, join_info)
+                        } else {
+                            OPExecResult::QuorumJoined(DecisionsAhead::ClearAhead, Some(decision_adv), join_info)
+                        }
                     }
                     SyncPhaseRes::RunCSTProtocol => {
                         OPExecResult::RunCst
@@ -482,8 +487,83 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
         Ok(OPExecResult::MessageProcessedNoUpdate)
     }
 
-    fn update_normal_phase(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>) -> Result<OPExecResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>>
-        where PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
+    fn merge_decisions(&mut self, status: MaybeVec<OPDecision<D::Request>>, finalized_decisions: Vec<ProtocolConsensusDecision<D::Request>>) -> Result<MaybeVec<OPDecision<D::Request>>> {
+        let mut map = BTreeMap::new();
+
+        Self::merge_decision_vec(&mut map, status)?;
+
+        for decision in finalized_decisions {
+            if let Some(member) = map.get_mut(&decision.sequence_number()) {
+                member.append_decision_info(DecisionInfo::DecisionDone(decision));
+            } else {
+                map.insert(decision.sequence_number(), Decision::completed_decision(decision.sequence_number(), decision));
+            }
+        }
+
+        let mut decisions = MaybeVec::builder();
+
+        // By turning this btree map into a vec, we maintain ordering on the delivery (Shouldn't
+        // really be necessary but always nice to have)
+        map.into_iter().for_each(|(seq, decision)| {
+            decisions.push(decision);
+        });
+
+        Ok(decisions.build())
+    }
+
+    /// Handles the result of a synchronizer result
+    fn handle_sync_result(&mut self, status: ConsensusStatus<D::Request>, to_exec: Option<OPDecision<D::Request>>) -> Result<MaybeVec<OPDecision<D::Request>>> {
+        let mut map = BTreeMap::new();
+
+        match status {
+            ConsensusStatus::Deciding(decision) => {
+                Self::merge_decision_vec(&mut map, decision)?;
+            }
+            ConsensusStatus::Decided(decision) => {
+                Self::merge_decision_vec(&mut map, decision)?;
+
+                let finalized = self.finalize_all_possible()?;
+
+                for decision in finalized {
+                    if let Some(member) = map.get_mut(&decision.sequence_number()) {
+                        member.append_decision_info(DecisionInfo::DecisionDone(decision));
+                    } else {
+                        map.insert(decision.sequence_number(), Decision::completed_decision(decision.sequence_number(), decision));
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        if let Some(decision) = to_exec {
+            map.insert(decision.sequence_number(), decision);
+        }
+
+        let mut decisions = MaybeVec::builder();
+
+        // By turning this btree map into a vec, we maintain ordering on the delivery (Shouldn't
+        // really be necessary but always nice to have)
+        map.into_iter().for_each(|(seq, decision)| {
+            decisions.push(decision);
+        });
+
+        Ok(decisions.build())
+    }
+
+    /// Merge a decision vector with the already existing btreemap
+    fn merge_decision_vec(map: &mut BTreeMap<SeqNo, OPDecision<<D as ApplicationData>::Request>>, decision: MaybeVec<OPDecision<<D as ApplicationData>::Request>>) -> Result<()> {
+        for dec in decision.into_iter() {
+            if let Some(member) = map.get_mut(&dec.sequence_number()) {
+                member.merge_decisions(dec)?;
+            } else {
+                map.insert(dec.sequence_number(), dec);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn update_normal_phase(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>) -> Result<OPExecResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>> {
         match message.message() {
             PBFTMessage::Consensus(_) => {
                 return self.adv_consensus(message);
@@ -545,18 +625,14 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
                 OPExecResult::MessageQueued
             }
             ConsensusStatus::Deciding(result) => {
-                OPExecResult::ProgressedDecision(result)
+                OPExecResult::ProgressedDecision(DecisionsAhead::Ignore, result)
             }
             ConsensusStatus::Decided(result) => {
                 let finalized_decisions = self.finalize_all_possible()?;
 
-                let mut decision_builder = MaybeVec::builder();
+                let decision = self.merge_decisions(result, finalized_decisions)?;
 
-                for decision in finalized_decisions.into_iter() {
-                    decision_builder.push(Decision::completed_decision(decision.sequence_number(), decision));
-                }
-
-                OPExecResult::Decided(decision_builder.build())
+                OPExecResult::ProgressedDecision(DecisionsAhead::Ignore, decision)
             }
         });
     }
@@ -571,10 +647,8 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
             // This will automatically move the consensus machine to the next consensus instance
             let completed_batch = self.consensus.finalize(&view)?.unwrap();
 
-            let seq = completed_batch.sequence_number();
-
             //Should the execution be scheduled here or will it be scheduled by the persistent log?
-            let exec_info = self.message_log.finalize_batch(seq, completed_batch)?;
+            let exec_info = self.message_log.finalize_batch(completed_batch)?;
 
             finalized_decisions.push(exec_info);
         }
@@ -599,14 +673,21 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
         return match status {
             SynchronizerStatus::Nil => SyncPhaseRes::SyncProtocolNotNeeded,
             SynchronizerStatus::Running => SyncPhaseRes::RunSyncProtocol,
-            SynchronizerStatus::NewView(to_execute) => {
+            SynchronizerStatus::NewView(consensus_status, to_execute) => {
                 //Our current view has been updated and we have no more state operations
                 //to perform. This happens if we are a correct replica and therefore do not need
                 //To update our state or if we are a replica that was incorrect and whose state has
                 //Already been updated from the Cst protocol
                 self.switch_phase(ConsensusPhase::NormalPhase);
 
-                SyncPhaseRes::SyncProtocolFinished(to_execute)
+                SyncPhaseRes::SyncProtocolFinished(consensus_status, to_execute)
+            }
+            SynchronizerStatus::NewViewJoinedQuorum(consensus_decision, decision, node) => {
+                //We have joined a quorum and we have a new view to execute
+                //We need to switch to the normal phase and execute the new view
+                self.switch_phase(ConsensusPhase::NormalPhase);
+
+                SyncPhaseRes::JoinedQuorum(consensus_decision, decision, node)
             }
             SynchronizerStatus::RunCst => {
                 //This happens when a new view is being introduced and we are not up to date
@@ -621,82 +702,11 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
 
                 SyncPhaseRes::RunCSTProtocol
             }
-            SynchronizerStatus::NewViewJoinedQuorum(decision, node) => {
-                //We have joined a quorum and we have a new view to execute
-                //We need to switch to the normal phase and execute the new view
-                self.switch_phase(ConsensusPhase::NormalPhase);
-
-                SyncPhaseRes::JoinedQuorum(decision, node)
-            }
             // should not happen...
             _ => {
                 unreachable!()
             }
         };
-    }
-}
-
-impl<D, NT, > StatefulOrderProtocol<D, NT, PL> for PBFTOrderProtocol<D, NT>
-    where D: ApplicationData + 'static,
-          NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
-    type StateSerialization = PBFTConsensus<D>;
-
-    fn initialize_with_initial_state(config: Self::Config,
-                                     args: OrderingProtocolArgs<D, NT>,
-                                     initial_state: DecisionLog<D::Request>) -> Result<Self> where Self: Sized {
-        Self::initialize_protocol(config, args, Some(initial_state))
-    }
-
-    fn install_state(&mut self,
-                     view_info: View<Self::PermissionedSerialization>,
-                     dec_log: DecLog<D, Self::Serialization, Self::StateSerialization>) -> Result<Vec<D::Request>>
-        where PL: StatefulOrderingProtocolLog<D, PBFTConsensus<D>, PBFTConsensus<D>, PBFTConsensus<D>> {
-        info!("{:?} // Installing decision log with Seq No {:?} and View {:?}", self.node.id(),
-                dec_log.sequence_number(), view_info);
-
-        let last_exec = if let Some(last_exec) = dec_log.last_execution() {
-            last_exec
-        } else {
-            SeqNo::ZERO
-        };
-
-        info!("{:?} // Installing decision log with last execution {:?}", self.node.id(),last_exec);
-
-        if self.synchronizer.received_view_from_state_transfer(view_info.clone()) {
-            info!("{:?} // We have pending view state messages that we need to process. Switching to sync phase", self.node.id());
-            self.switch_phase(ConsensusPhase::SyncPhase);
-        }
-
-        let start = Instant::now();
-
-        let res = self.consensus.install_state(view_info.clone(), &dec_log)?;
-
-        metric_duration(CONSENSUS_INSTALL_STATE_TIME_ID, start.elapsed());
-
-        let start = Instant::now();
-
-        self.message_log.install_state(view_info, dec_log);
-
-        metric_duration(MSG_LOG_INSTALL_TIME_ID, start.elapsed());
-
-        Ok(res)
-    }
-
-    fn snapshot_log(&mut self) -> Result<(View<Self::PermissionedSerialization>, DecLog<D, Self::Serialization, Self::StateSerialization>)> {
-        self.message_log.snapshot(self.synchronizer.view())
-    }
-
-    fn current_log(&self) -> Result<&DecLog<D, Self::Serialization, Self::StateSerialization>>
-        where PL: StatefulOrderingProtocolLog<D, Self::Serialization, Self::StateSerialization, Self::PermissionedSerialization> {
-        Ok(self.message_log.decision_log())
-    }
-
-    fn checkpointed(&mut self, seq_no: SeqNo) -> Result<()> {
-        self.message_log.finalize_checkpoint(seq_no)
-    }
-
-    fn get_proof(&self, seq: SeqNo) -> Result<Option<SerProof<D, Self::Serialization>>> {
-        todo!()
     }
 }
 
@@ -859,8 +869,8 @@ impl<D, NT> LoggableOrderProtocol<D, NT> for PBFTOrderProtocol<D, NT>
         (proof.metadata(), messages)
     }
 
-    fn get_requests_in_proof(proof: &PProof<D, Self::Serialization, Self::PersistableTypes>) -> (UpdateBatch<D::Request>, Vec<ClientRqInfo>) {
-        todo!()
+    fn get_requests_in_proof(proof: &PProof<D, Self::Serialization, Self::PersistableTypes>) -> Result<ProtocolConsensusDecision<D::Request>> {
+        Ok(ProtocolConsensusDecision::from(proof))
     }
 }
 
