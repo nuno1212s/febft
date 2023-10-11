@@ -7,10 +7,12 @@ use chrono::Utc;
 use log::{debug, info, warn};
 
 use atlas_common::error::*;
+use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::ClientRqInfo;
+use atlas_core::ordering_protocol::{Decision, DecisionInfo};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::persistent_log::{OperationMode, OrderingProtocolLog};
 use atlas_core::smr::smr_decision_log::ShareableMessage;
@@ -21,7 +23,7 @@ use atlas_metrics::metrics::metric_duration;
 use crate::bft::consensus::accessory::{AccessoryConsensus, ConsensusDecisionAccessory};
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;
 use crate::bft::log::deciding::{CompletedBatch, WorkingDecisionLog};
-use crate::bft::log::decisions::IncompleteProof;
+use crate::bft::log::decisions::{IncompleteProof, ProofMetadata};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::{ConsensusMetrics, PRE_PREPARE_ANALYSIS_ID};
@@ -67,7 +69,7 @@ pub enum DecisionPollStatus<O> {
     // Receive a message from the network
     Recv,
     // We currently have a message to be processed at this time
-    NextMessage(Header, ConsensusMessage<O>),
+    NextMessage(ShareableMessage<PBFTMessage<O>>),
     // This consensus decision is finished and therefore can be finalized
     Decided,
 }
@@ -105,7 +107,7 @@ pub struct MessageQueue<O> {
 }
 
 /// The information needed to make a decision on a batch of requests.
-pub struct ConsensusDecision<D, PL> where D: ApplicationData + 'static, {
+pub struct ConsensusDecision<D> where D: ApplicationData + 'static, {
     node_id: NodeId,
     /// The sequence number of this consensus decision
     seq: SeqNo,
@@ -172,9 +174,9 @@ impl<O> MessageQueue<O> {
     }
 }
 
-impl<D, PL> ConsensusDecision<D, PL>
+impl<D> ConsensusDecision<D>
     where D: ApplicationData + 'static, {
-    pub fn init_decision(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo, persistent_log: PL) -> Self {
+    pub fn init_decision(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo) -> Self {
         Self {
             node_id,
             seq: seq_no,
@@ -187,7 +189,6 @@ impl<D, PL> ConsensusDecision<D, PL>
     }
 
     pub fn init_with_msg_log(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo,
-                             persistent_log: PL,
                              message_queue: MessageQueue<D::Request>) -> Self {
         Self {
             node_id,
@@ -261,8 +262,7 @@ impl<D, PL> ConsensusDecision<D, PL>
                                synchronizer: &Synchronizer<D>,
                                timeouts: &Timeouts,
                                node: &Arc<NT>) -> Result<DecisionStatus<D::Request>>
-        where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
-              PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
+        where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
         let view = synchronizer.view();
         let header = s_message.header();
         let message = s_message.message().consensus();
@@ -572,7 +572,7 @@ impl<D, PL> ConsensusDecision<D, PL>
     }
 }
 
-impl<D, PL> Orderable for ConsensusDecision<D, PL>
+impl<D> Orderable for ConsensusDecision<D>
     where D: ApplicationData + 'static, {
     fn sequence_number(&self) -> SeqNo {
         self.seq
@@ -619,8 +619,8 @@ impl<O> Debug for DecisionPollStatus<O> {
             DecisionPollStatus::Recv => {
                 write!(f, "Recv")
             }
-            DecisionPollStatus::NextMessage(_, msg) => {
-                write!(f, "Next Message {:?}", msg)
+            DecisionPollStatus::NextMessage(message) => {
+                write!(f, "Next Message {:?}, Message Type {:?}", message.header(), message.message())
             }
             DecisionPollStatus::Decided => {
                 write!(f, "Decided")

@@ -8,12 +8,27 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::error::*;
 use atlas_communication::message::Header;
 use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
+use atlas_core::ordering_protocol::networking::serialize::NetworkView;
+use atlas_core::smr::smr_decision_log::ShareableMessage;
 use atlas_metrics::benchmarks::BatchMeta;
 use atlas_metrics::metrics::metric_duration;
 use crate::bft::log::decisions::{IncompleteProof, ProofMetadata};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
+use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::metric::PRE_PREPARE_LOG_ANALYSIS_ID;
 use crate::bft::sync::view::ViewInfo;
+
+/// The log of messages for a given batch
+pub struct MessageLog<O> {
+    pre_prepare: Vec<Option<ShareableMessage<PBFTMessage<O>>>>,
+    prepares: Vec<ShareableMessage<PBFTMessage<O>>>,
+    commits: Vec<ShareableMessage<PBFTMessage<O>>>
+}
+
+pub struct FinishedMessageLog<O> {
+    pre_prepares: Vec<ShareableMessage<PBFTMessage<O>>>,
+    prepares: Vec<ShareableMessage<PBFTMessage<O>>>,
+    commits: Vec<ShareableMessage<PBFTMessage<O>>>
+}
 
 /// Information about the completed batch, the contained requests and
 /// other relevant information
@@ -23,10 +38,13 @@ pub struct CompletedBatch<O> {
     digest: Digest,
     // The ordering of the pre prepare requests
     pre_prepare_ordering: Vec<Digest>,
+    // The messages that are a part of this decision
+    contained_messages: FinishedMessageLog<O>,
     // The information of the client requests that are contained in this batch
     client_request_info: Vec<ClientRqInfo>,
     // The client requests contained in this batch
     client_requests: Vec<StoredRequestMessage<O>>,
+
     // The metadata for the batch
     batch_meta: BatchMeta,
 }
@@ -54,6 +72,8 @@ pub struct WorkingDecisionLog<O> {
     leader_set: Vec<NodeId>,
     // Which hash space should each leader be responsible for
     request_space_slices: BTreeMap<NodeId, (Vec<u8>, Vec<u8>)>,
+    // The log of messages of the currently working decision
+    message_log: MessageLog<O>,
     // Some logging information about metadata
     batch_meta: Arc<Mutex<BatchMeta>>,
     // The contained requests per each of the received pre prepares
@@ -74,6 +94,36 @@ pub struct DuplicateReplicaEvaluator {
     received_commit_messages: BTreeSet<NodeId>,
 }
 
+impl<O> MessageLog<O> {
+    pub fn with_leader_count(leaders: usize, quorum: usize) -> Self {
+        Self {
+            pre_prepare: iter::repeat(None).take(leaders).collect(),
+            prepares: Vec::with_capacity(quorum),
+            commits: Vec::with_capacity(quorum),
+        }
+    }
+
+    pub fn insert_pre_prepare(&mut self, index: usize, pre_prepare: ShareableMessage<PBFTMessage<O>>) {
+        let _ = self.pre_prepare.get_mut(index).unwrap().insert(pre_prepare);
+    }
+
+    pub fn insert_prepare(&mut self, prepare: ShareableMessage<PBFTMessage<O>>) {
+        self.prepares.push(prepare);
+    }
+
+    pub fn insert_commit(&mut self, commit: ShareableMessage<PBFTMessage<O>>) {
+        self.commits.push(commit);
+    }
+
+    pub fn finalize(self) -> FinishedMessageLog<O> {
+        FinishedMessageLog {
+            pre_prepares: self.pre_prepare.into_iter().map(|opt| opt.unwrap()).collect(),
+            prepares: self.prepares,
+            commits: self.commits,
+        }
+    }
+}
+
 impl<O> WorkingDecisionLog<O> where O: Clone {
     pub fn new(node: NodeId, seq: SeqNo, view: &ViewInfo) -> Self {
         let leader_count = view.leader_set().len();
@@ -88,6 +138,7 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
             client_rqs: vec![],
             leader_set: view.leader_set().clone(),
             request_space_slices: view.hash_space_division().clone(),
+            message_log: MessageLog::with_leader_count(view.leader_set().len(), view.quorum()),
             batch_meta: Arc::new(Mutex::new(BatchMeta::new())),
             contained_requests: iter::repeat(None).take(leader_count).collect(),
         }
@@ -238,10 +289,17 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
             seq: self.seq_no,
             digest: current_digest,
             pre_prepare_ordering,
+            contained_messages: self.message_log.finalize(),
             client_request_info: self.client_rqs,
             batch_meta,
             client_requests: requests
         })
+    }
+}
+
+impl<O> Orderable for CompletedBatch<O> {
+    fn sequence_number(&self) -> SeqNo {
+        self.seq
     }
 }
 

@@ -24,19 +24,20 @@ use atlas_communication::message::{Header, StoredMessage, WireMessage};
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
 use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_core::ordering_protocol::ProtocolConsensusDecision;
+use atlas_core::ordering_protocol::{Decision, ProtocolConsensusDecision};
 use atlas_core::ordering_protocol::reconfigurable_order_protocol::ReconfigurationAttemptResult;
 use atlas_core::persistent_log::{OrderingProtocolLog};
 use atlas_core::request_pre_processing::RequestPreProcessor;
+use atlas_core::smr::smr_decision_log::ShareableMessage;
 use atlas_core::timeouts::{RqTimeout, Timeouts};
 use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::consensus::{Consensus, ConsensusStatus};
-use crate::bft::log::decisions::{CollectData, Proof, ViewDecisionPair};
+use crate::bft::log::decisions::{CollectData, Proof, ProofMetadata, ViewDecisionPair};
 use crate::bft::log::Log;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::PBFT;
+use crate::bft::{OPDecision, PBFT, PBFTOrderProtocol};
 use crate::bft::sync::view::ViewInfo;
 
 use self::{follower_sync::FollowerSynchronizer, replica_sync::ReplicaSynchronizer};
@@ -188,11 +189,11 @@ pub struct TboQueue<O> {
     // fetching them from the network
     get_queue: bool,
     // stores all STOP messages for the next view
-    stop: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
+    stop: VecDeque<VecDeque<ShareableMessage<PBFTMessage<O>>>>,
     // stores all STOP-DATA messages for the next view
-    stop_data: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
+    stop_data: VecDeque<VecDeque<ShareableMessage<PBFTMessage<O>>>>,
     // stores all SYNC messages for the next view
-    sync: VecDeque<VecDeque<StoredMessage<ViewChangeMessage<O>>>>,
+    sync: VecDeque<VecDeque<ShareableMessage<PBFTMessage<O>>>>,
 }
 
 impl<O> TboQueue<O> {
@@ -269,11 +270,11 @@ impl<O> TboQueue<O> {
 
     /// Queues a view change message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
-    pub fn queue(&mut self, h: Header, m: ViewChangeMessage<O>) {
-        match m.kind() {
-            ViewChangeMessageKind::Stop(_) | ViewChangeMessageKind::StopQuorumJoin(_) => self.queue_stop(h, m),
-            ViewChangeMessageKind::StopData(_) => self.queue_stop_data(h, m),
-            ViewChangeMessageKind::Sync(_) => self.queue_sync(h, m),
+    pub fn queue(&mut self, m: ShareableMessage<PBFTMessage<O>>) {
+        match m.message().view_change().kind() {
+            ViewChangeMessageKind::Stop(_) | ViewChangeMessageKind::StopQuorumJoin(_) => self.queue_stop(m),
+            ViewChangeMessageKind::StopData(_) => self.queue_stop_data(m),
+            ViewChangeMessageKind::Sync(_) => self.queue_sync(m),
         }
     }
 
@@ -297,25 +298,25 @@ impl<O> TboQueue<O> {
 
     /// Queues a `STOP` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
-    fn queue_stop(&mut self, h: Header, m: ViewChangeMessage<O>) {
+    fn queue_stop(&mut self, m: ShareableMessage<PBFTMessage<O>>) {
         // NOTE: we use next() because we want to retrieve messages
         // for v+1, as we haven't started installing the new view yet
         let seq = self.view.sequence_number().next();
-        tbo_queue_message(seq, &mut self.stop, StoredMessage::new(h, m))
+        tbo_queue_message(seq, &mut self.stop, m)
     }
 
     /// Queues a `STOP-DATA` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
-    fn queue_stop_data(&mut self, h: Header, m: ViewChangeMessage<O>) {
+    fn queue_stop_data(&mut self, m: ShareableMessage<PBFTMessage<O>>) {
         let seq = self.view.sequence_number().next();
-        tbo_queue_message(seq, &mut self.stop_data, StoredMessage::new(h, m))
+        tbo_queue_message(seq, &mut self.stop_data, m)
     }
 
     /// Queues a `SYNC` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
-    fn queue_sync(&mut self, h: Header, m: ViewChangeMessage<O>) {
+    fn queue_sync(&mut self, m: ShareableMessage<PBFTMessage<O>>) {
         let seq = self.view.sequence_number().next();
-        tbo_queue_message(seq, &mut self.sync, StoredMessage::new(h, m))
+        tbo_queue_message(seq, &mut self.sync, m)
     }
 
     pub fn view(&self) -> &ViewInfo {
@@ -367,11 +368,10 @@ pub enum SynchronizerStatus<O> {
     /// The view change protocol is currently running.
     Running,
     /// The view change protocol just finished running.
-    NewView(ConsensusStatus, Option<ProtocolConsensusDecision<O>>),
+    NewView(ConsensusStatus<O>, Option<OPDecision<O>>),
     /// The view change protocol just finished running and we
     /// have successfully joined the quorum.
-    NewViewJoinedQuorum(ConsensusStatus, Option<ProtocolConsensusDecision<O>>, NodeId),
-
+    NewViewJoinedQuorum(ConsensusStatus<O>, Option<OPDecision<O>>, NodeId),
     /// Before we finish the view change protocol, we need
     /// to run the CST protocol.
     RunCst,
@@ -394,7 +394,7 @@ pub enum SynchronizerPollStatus<O> {
     Recv,
     /// A new view change message is available to be processed, retrieved from the
     /// Ordered queue
-    NextMessage(Header, ViewChangeMessage<O>),
+    NextMessage(ShareableMessage<PBFTMessage<O>>),
     /// We need to resume the view change protocol, after
     /// running the CST protocol.
     ResumeViewChange,
@@ -427,10 +427,10 @@ pub trait AbstractSynchronizer<D> where D: ApplicationData + 'static {
     /// running the view change protocol.
     fn received_view_from_state_transfer(&self, view: ViewInfo) -> bool;
 
-    fn queue(&self, header: Header, message: ViewChangeMessage<D::Request>);
+    fn queue(&self, message: ShareableMessage<PBFTMessage<D::Request>>);
 }
 
-type CollectsType<D: ApplicationData> = IntMap<StoredMessage<ViewChangeMessage<D::Request>>>;
+type CollectsType<D: ApplicationData> = IntMap<ShareableMessage<PBFTMessage<D::Request>>>;
 
 ///The synchronizer for the SMR protocol
 /// This part of the protocol is responsible for handling the changing of views and
@@ -530,8 +530,8 @@ impl<D> AbstractSynchronizer<D> for Synchronizer<D>
         false
     }
 
-    fn queue(&self, header: Header, message: ViewChangeMessage<D::Request>) {
-        self.tbo.lock().unwrap().queue(header, message)
+    fn queue(&self, message: ShareableMessage<PBFTMessage<D::Request>>) {
+        self.tbo.lock().unwrap().queue(message)
     }
 }
 
@@ -640,8 +640,8 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                 );
 
                 match &result {
-                    SynchronizerPollStatus::NextMessage(h, vc) => {
-                        match vc.kind() {
+                    SynchronizerPollStatus::NextMessage(message) => {
+                        match message.message().view_change().kind() {
                             ViewChangeMessageKind::StopQuorumJoin(_) => {
                                 self.phase.replace(ProtoPhase::ViewStopping(0));
                             }
@@ -682,17 +682,19 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
     // TODO: retransmit STOP msgs
     pub fn process_message<NT, PL>(
         &self,
-        header: Header,
-        message: ViewChangeMessage<D::Request>,
+        s_message: ShareableMessage<PBFTMessage<D::Request>>,
         timeouts: &Timeouts,
         log: &mut Log<D>,
         rq_pre_processor: &RequestPreProcessor<D::Request>,
-        consensus: &mut Consensus<D, PL>,
+        consensus: &mut Consensus<D>,
         node: &Arc<NT>,
     ) -> SynchronizerStatus<D::Request>
         where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
               PL: OrderingProtocolLog<D, PBFTConsensus<D>>
     {
+
+        let (header, message) = (s_message.header(), s_message.message().view_change());
+
         debug!("{:?} // Processing view change message {:?} in phase {:?} from {:?}",
                node.id(),
                message,
@@ -707,7 +709,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
                         debug!("{:?} // Received {:?} message while in init state. Queueing", node.id(), message);
 
-                        guard.queue_stop(header, message);
+                        guard.queue_stop(s_message);
 
                         SynchronizerStatus::Nil
                     }
@@ -721,7 +723,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                                 let mut guard = self.tbo.lock().unwrap();
                                 debug!("{:?} // Received stop data {:?} message while in init state. Queueing", node.id(), message);
 
-                                guard.queue_stop_data(header, message);
+                                guard.queue_stop_data(s_message);
 
                                 SynchronizerStatus::Nil
                             }
@@ -730,7 +732,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                     ViewChangeMessageKind::Sync(_) => {
                         let mut guard = self.tbo.lock().unwrap();
 
-                        guard.queue_sync(header, message);
+                        guard.queue_sync(s_message);
 
                         debug!("{:?} // Received sync message while in init state. Queueing", node.id());
 
@@ -749,7 +751,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
                         let mut guard = self.tbo.lock().unwrap();
 
-                        guard.queue_stop(header, message);
+                        guard.queue_stop(s_message);
 
                         return stop_status!(i, &current_view);
                     }
@@ -775,7 +777,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                                 {
                                     let mut guard = self.tbo.lock().unwrap();
 
-                                    guard.queue_stop_data(header, message);
+                                    guard.queue_stop_data(s_message);
 
                                     debug!("{:?} // Received stop data message while in stopping state. Queueing", node.id());
                                 }
@@ -788,7 +790,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                         {
                             let mut guard = self.tbo.lock().unwrap();
 
-                            guard.queue_sync(header, message);
+                            guard.queue_sync(s_message);
 
                             debug!("{:?} // Received sync message while in init state. Queueing", node.id());
                         }
@@ -868,7 +870,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
                         let mut guard = self.tbo.lock().unwrap();
 
-                        guard.queue_stop(header, message);
+                        guard.queue_stop(s_message);
 
                         return stop_status!(received, &current_view);
                     }
@@ -877,7 +879,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
                         warn!("{:?} // Received stop message while in View Stopping state. Since STOP takes precendence over the quorum updating, we will now change to stopping phase ", node.id());
 
-                        guard.queue_stop(header, message);
+                        guard.queue_stop(s_message);
 
                         self.phase.replace(ProtoPhase::Stopping(0));
 
@@ -894,7 +896,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                                 {
                                     let mut guard = self.tbo.lock().unwrap();
 
-                                    guard.queue_stop_data(header, message);
+                                    guard.queue_stop_data(s_message);
 
                                     debug!("{:?} // Received stop data message while in stopping state. Queueing", node.id());
                                 }
@@ -907,7 +909,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                         {
                             let mut guard = self.tbo.lock().unwrap();
 
-                            guard.queue_sync(header, message);
+                            guard.queue_sync(s_message);
 
                             debug!("{:?} // Received sync message while in init state. Queueing", node.id());
                         }
@@ -1009,7 +1011,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                                 {
                                     let mut guard = self.tbo.lock().unwrap();
 
-                                    guard.queue_stop(header, message);
+                                    guard.queue_stop(s_message);
 
                                     debug!("{:?} // Received stop message while in stopping data state. Queueing", node.id());
                                 }
@@ -1030,7 +1032,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                                     {
                                         let mut guard = self.tbo.lock().unwrap();
 
-                                        guard.queue_stop_data(header, message);
+                                        guard.queue_stop_data(s_message);
                                     }
                                 }
 
@@ -1062,7 +1064,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                                     let mut guard = self.tbo.lock().unwrap();
                                     //Since we are the current leader and are waiting for stop data,
                                     //This must be related to another view.
-                                    guard.queue_sync(header, message);
+                                    guard.queue_sync(s_message);
                                 }
 
                                 debug!("{:?} // Received sync message while in stopping data phase. Queueing", node.id());
@@ -1078,7 +1080,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                         // the new leader isn't forging messages.
 
                         // store collects from this STOP-DATA
-                        collects_guard.insert(header.from().into(), StoredMessage::new(header, message));
+                        collects_guard.insert(header.from().into(), s_message);
 
                         if i < next_view.params().quorum() {
                             self.phase.replace(ProtoPhase::StoppingData(i));
@@ -1220,7 +1222,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                         {
                             let mut guard = self.tbo.lock().unwrap();
 
-                            guard.queue_stop(header, message);
+                            guard.queue_stop(s_message);
 
                             debug!("{:?} // Received stop message while in syncing phase. Queueing", node.id());
                         }
@@ -1240,7 +1242,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                                 {
                                     let mut guard = self.tbo.lock().unwrap();
 
-                                    guard.queue_stop_data(header, message);
+                                    guard.queue_stop_data(s_message);
 
                                     debug!("{:?} // Received stop data message while in syncing phase. Queueing", node.id());
                                 }
@@ -1255,7 +1257,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
                             let mut guard = self.tbo.lock().unwrap();
 
-                            guard.queue_sync(header, message);
+                            guard.queue_sync(s_message);
                         }
 
                         return SynchronizerStatus::Running;
@@ -1323,15 +1325,14 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
     }
 
     /// Resume the view change protocol after running the CST protocol.
-    pub fn resume_view_change<NT, PL>(
+    pub fn resume_view_change<NT>(
         &self,
         log: &mut Log<D>,
         timeouts: &Timeouts,
-        consensus: &mut Consensus<D, PL>,
+        consensus: &mut Consensus<D>,
         node: &Arc<NT>,
     ) -> Option<SynchronizerStatus<D::Request>>
         where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
-              PL: OrderingProtocolLog<D, PBFTConsensus<D>>
     {
         let state = self.finalize_state.borrow_mut().take()?;
 
@@ -1569,14 +1570,13 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
     // this function mostly serves the purpose of consuming
 // values with immutable references, to allow borrowing data mutably
-    fn pre_finalize<PL>(
+    fn pre_finalize(
         &self,
         state: FinalizeState<D::Request>,
         proof: Option<&Proof<D::Request>>,
         _normalized_collects: Vec<Option<&CollectData<D::Request>>>,
         log: &Log<D>,
     ) -> FinalizeStatus<D::Request>
-        where PL: OrderingProtocolLog<D, PBFTConsensus<D>>
     {
         let last_executed_cid = proof.as_ref().map(|p| p.sequence_number()).unwrap_or(SeqNo::ZERO);
 
@@ -1602,16 +1602,15 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
     /// Finalize a view change and install the new view in the other
     /// state machines (Consensus)
-    fn finalize<NT, PL>(
+    fn finalize<NT>(
         &self,
         state: FinalizeState<D::Request>,
         log: &mut Log<D>,
         timeouts: &Timeouts,
-        consensus: &mut Consensus<D, PL>,
+        consensus: &mut Consensus<D>,
         node: &Arc<NT>,
     ) -> SynchronizerStatus<D::Request>
         where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
-              PL: OrderingProtocolLog<D, PBFTConsensus<D>>
     {
         let FinalizeState {
             curr_cid,
@@ -1639,7 +1638,10 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
             // We are missing the last decision, which should be included in the collect data
             // sent by the leader in the SYNC message
             let to_execute = if let Some(last_proof) = last_proof {
-                Some(consensus.catch_up_to_quorum(last_proof.seq_no(), &view, last_proof, log).expect("Failed to catch up to quorum"))
+                let quorum_result = consensus.catch_up_to_quorum(&view, last_proof, log)
+                    .expect("Failed to catch up to quorum");
+
+                Some(quorum_result)
             } else {
                 // This maybe happens when a checkpoint is done and the first execution after it
                 // fails, leading to a view change? Don't really know how this would be possible
@@ -2081,8 +2083,8 @@ impl<O> Debug for SynchronizerPollStatus<O> {
             SynchronizerPollStatus::Recv => {
                 write!(f, "SynchronizerPollStatus::Recv")
             }
-            SynchronizerPollStatus::NextMessage(_, _) => {
-                write!(f, "SynchronizerPollStatus::NextMessage")
+            SynchronizerPollStatus::NextMessage(message) => {
+                write!(f, "SynchronizerPollStatus::NextMessage Header {:?}, Message {:?}", message.header(), message.message().view_change())
             }
             SynchronizerPollStatus::ResumeViewChange => {
                 write!(f, "SynchronizerPollStatus::ResumeViewChange")
