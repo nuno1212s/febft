@@ -128,7 +128,7 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
     pub fn new(node: NodeId, seq: SeqNo, view: &ViewInfo) -> Self {
         let leader_count = view.leader_set().len();
         Self {
-            node_id,
+            node_id: node,
             seq_no: seq,
             duplicate_detection: Default::default(),
             batch_digest: None,
@@ -217,13 +217,13 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
     }
 
     /// Process the message received
-    pub(crate) fn process_message<O>(&mut self, header: &Header, message: &ConsensusMessage<O>) -> Result<()> {
-        match message.message().kind() {
+    pub(crate) fn process_message(&mut self, header: &Header, message: &ConsensusMessage<O>) -> Result<()> {
+        match message.kind() {
             ConsensusMessageKind::Prepare(_) => {
-                self.duplicate_detection.insert_prepare_received(message.header().from())?;
+                self.duplicate_detection.insert_prepare_received(header.from())?;
             }
             ConsensusMessageKind::Commit(_) => {
-                self.duplicate_detection.insert_commit_received(message.header().from())?;
+                self.duplicate_detection.insert_commit_received(header.from())?;
             }
             _ => unreachable!()
         }
@@ -301,6 +301,14 @@ impl<O> Orderable for CompletedBatch<O> {
     fn sequence_number(&self) -> SeqNo {
         self.seq
     }
+}
+
+impl<O> CompletedBatch<O> {
+
+    pub fn request_count(&self) -> usize {
+        self.client_requests.len()
+    }
+
 }
 
 impl<O> Orderable for WorkingDecisionLog<O> {

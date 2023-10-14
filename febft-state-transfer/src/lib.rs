@@ -27,9 +27,9 @@ use atlas_core::state_transfer::{Checkpoint, CstM, StateTransferProtocol, STResu
 use atlas_core::state_transfer::monolithic_state::MonolithicStateTransfer;
 use atlas_core::state_transfer::networking::StateTransferSendNode;
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
-use atlas_execution::app::Application;
-use atlas_execution::serialize::ApplicationData;
-use atlas_execution::state::monolithic_state::{InstallStateMessage, MonolithicState};
+use atlas_smr_application::app::Application;
+use atlas_smr_application::serialize::ApplicationData;
+use atlas_smr_application::state::monolithic_state::{InstallStateMessage, MonolithicState};
 use atlas_metrics::metrics::metric_duration;
 
 use crate::config::StateTransferConfig;

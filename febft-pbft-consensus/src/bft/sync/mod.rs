@@ -56,10 +56,9 @@ macro_rules! extract_msg {
     };
 
     ($t:ty => $opt:block, $g:expr, $q:expr) => {
-        if let Some(stored) = tbo_pop_message::<StoredMessage<ViewChangeMessage<$t>>>($q) {
+        if let Some(stored) = tbo_pop_message::<ShareableMessage<PBFTMessage<$t>>>($q) {
             $opt
-            let (header, message) = stored.into_inner();
-            SynchronizerPollStatus::NextMessage(header, message)
+            SynchronizerPollStatus::NextMessage(stored)
         } else {
             *$g = false;
             SynchronizerPollStatus::Recv
@@ -680,7 +679,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
     /// Advances the state of the view change state machine.
     //
     // TODO: retransmit STOP msgs
-    pub fn process_message<NT, PL>(
+    pub fn process_message<NT>(
         &self,
         s_message: ShareableMessage<PBFTMessage<D::Request>>,
         timeouts: &Timeouts,
@@ -690,7 +689,6 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
         node: &Arc<NT>,
     ) -> SynchronizerStatus<D::Request>
         where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
-              PL: OrderingProtocolLog<D, PBFTConsensus<D>>
     {
 
         let (header, message) = (s_message.header(), s_message.message().view_change());
@@ -1353,9 +1351,8 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
     /// Start the quorum join procedure to integrate the given joining node into the current quorum
     /// of the system
-    pub fn start_join_quorum<NT, PL>(&self, joining_node: NodeId, node: &NT, timeouts: &Timeouts, log: &Log<D>) -> SyncReconfigurationResult
-        where NT: OrderProtocolSendNode<D, PBFT<D>>,
-              PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
+    pub fn start_join_quorum<NT>(&self, joining_node: NodeId, node: &NT, timeouts: &Timeouts, log: &Log<D>) -> SyncReconfigurationResult
+        where NT: OrderProtocolSendNode<D, PBFT<D>>, {
         let current_view = self.view();
 
         info!("{:?} // Starting the quorum join procedure for node {:?}", node.id(), joining_node);
@@ -1446,13 +1443,12 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
     }
 
     /// Trigger a view change locally
-    pub fn begin_quorum_view_change<NT, PL>(&self,
+    pub fn begin_quorum_view_change<NT>(&self,
                                             join_cert: Option<NodeId>,
                                             node: &NT,
                                             timeouts: &Timeouts,
                                             _log: &Log<D>, )
         where NT: OrderProtocolSendNode<D, PBFT<D>>,
-              PL: OrderingProtocolLog<D, PBFTConsensus<D>>
     {
         debug!("Beginning quorum view change with certificate {} at phase {:?}",  join_cert.is_some(), self.phase.get());
 
@@ -1501,14 +1497,13 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
     /// that have timed out on the current replica.
     /// If the timed out requests are None, that means that the view change
     /// originated in the other replicas.
-    pub fn begin_view_change<NT, PL>(
+    pub fn begin_view_change<NT>(
         &self,
         timed_out: Option<Vec<StoredRequestMessage<D::Request>>>,
         node: &NT,
         timeouts: &Timeouts,
         _log: &Log<D>,
     ) where NT: OrderProtocolSendNode<D, PBFT<D>>,
-            PL: OrderingProtocolLog<D, PBFTConsensus<D>>
     {
         match (self.phase.get(), &timed_out) {
             // we have received STOP messages from peer nodes,
@@ -1655,7 +1650,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
         };
 
         // finalize view change by broadcasting a PREPARE msg
-        let consensus_result = consensus.finalize_view_change((header, message), &view, self, timeouts, log, node)?;
+        let consensus_result = consensus.finalize_view_change((header, message), &view, self, timeouts, log, node).expect("Failed to finalize view change in consensus");
 
         // Update proto phase
         self.phase.replace(ProtoPhase::Init);
@@ -1677,12 +1672,13 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
     /// proposed, they won't timeout
     pub fn request_batch_received(
         &self,
+        header: &Header,
         pre_prepare: &ConsensusMessage<D::Request>,
         timeouts: &Timeouts,
     ) -> Vec<ClientRqInfo> {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
-                rep.received_request_batch(pre_prepare, timeouts)
+                rep.received_request_batch(header, pre_prepare, timeouts)
             }
             SynchronizerAccessory::Follower(fol) => fol.watch_request_batch(pre_prepare),
         }
@@ -2045,7 +2041,7 @@ fn highest_proof<'a, D, I, NT>(
                 .commits()
                 .iter()
                 .filter(|stored| {
-                    stored.message()
+                    stored.message().consensus()
                         .has_proposed_digest(&digest)
                         //If he does not have the digest, then it is not valid
                         .unwrap_or(false)
@@ -2059,7 +2055,7 @@ fn highest_proof<'a, D, I, NT>(
                 .iter()
                 .filter(|stored| {
                     stored
-                        .message()
+                        .message().consensus()
                         .has_proposed_digest(&digest)
                         //If he does not have the digest, then it is not valid
                         .unwrap_or(false)

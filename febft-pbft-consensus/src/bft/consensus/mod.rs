@@ -13,25 +13,24 @@ use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message};
 use atlas_communication::message::{Header, StoredMessage};
-use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_core::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage};
+use atlas_core::ordering_protocol::Decision;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_core::ordering_protocol::{Decision, ProtocolConsensusDecision};
-use atlas_core::persistent_log::{OrderingProtocolLog};
 use atlas_core::smr::smr_decision_log::ShareableMessage;
 use atlas_core::timeouts::Timeouts;
+use atlas_metrics::metrics::metric_increment;
 use atlas_smr_application::ExecutorHandle;
 use atlas_smr_application::serialize::ApplicationData;
-use atlas_metrics::metrics::metric_increment;
 
 use crate::bft::{OPDecision, PBFT, SysMsg};
 use crate::bft::consensus::decision::{ConsensusDecision, DecisionPollStatus, DecisionStatus, MessageQueue};
+use crate::bft::log::decided::DecisionLog;
 use crate::bft::log::deciding::CompletedBatch;
-use crate::bft::log::decisions::{DecisionLog, IncompleteProof, Proof, ProofMetadata};
+use crate::bft::log::decisions::{IncompleteProof, Proof, ProofMetadata};
 use crate::bft::log::Log;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::metric::OPERATIONS_PROCESSED_ID;
-use crate::bft::sync::{AbstractSynchronizer, Synchronizer};
+use crate::bft::sync::{Synchronizer};
 use crate::bft::sync::view::ViewInfo;
 
 pub mod decision;
@@ -437,12 +436,11 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
                 ConsensusStatus::Deciding(MaybeVec::from_one(Decision::decision_info_from_message(decision_seq, message)))
             }
             DecisionStatus::Decided(message) => {
-                ConsensusStatus::Decided
+                ConsensusStatus::Decided(MaybeVec::from_one(Decision::decision_info_from_message(decision_seq, message)))
             }
-            DecisionStatus::DecidedIgnored => {}
-            DecisionStatus::MessageIgnored => {
-                ConsensusStatus::MessageIgnored
-            }
+            DecisionStatus::DecidedIgnored => ConsensusStatus::Decided(MaybeVec::None),
+            DecisionStatus::MessageIgnored => ConsensusStatus::MessageIgnored
+
         })
     }
 

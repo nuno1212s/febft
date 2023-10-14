@@ -1,14 +1,17 @@
 use either::Either;
-use atlas_common::node_id::NodeId;
-use atlas_common::ordering::{InvalidSeqNo, Orderable, SeqNo};
+
 use atlas_common::error::*;
+use atlas_common::node_id::NodeId;
+use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::Header;
 use atlas_core::messages::{ClientRqInfo, RequestMessage};
 use atlas_core::ordering_protocol::{Decision, ProtocolConsensusDecision};
 use atlas_smr_application::app::UpdateBatch;
 use atlas_smr_application::serialize::ApplicationData;
+
+use crate::bft::log::decided::DecisionLog;
 use crate::bft::log::deciding::{CompletedBatch, FinishedMessageLog};
-use crate::bft::log::decisions::{DecisionLog, Proof, ProofMetadata};
+use crate::bft::log::decisions::{Proof, ProofMetadata};
 use crate::bft::message::ConsensusMessageKind;
 use crate::bft::OPDecision;
 
@@ -23,6 +26,10 @@ pub struct Log<D> where D: ApplicationData {
 impl<D> Log<D> where D: ApplicationData {
     pub fn decision_log(&self) -> &DecisionLog<D::Request> {
         &self.decided
+    }
+
+    pub fn last_proof(&self) -> Option<Proof<D::Request>> {
+        self.decided.last_decision()
     }
 
     pub fn install_proof(&mut self, proof: Proof<D::Request>) -> Result<OPDecision<D::Request>> {
@@ -91,7 +98,7 @@ impl<D> Log<D> where D: ApplicationData {
 
 pub fn initialize_decided_log<D>(node_id: NodeId) -> Log<D> where D: ApplicationData {
     Log {
-        decided: DecisionLog::new(),
+        decided: DecisionLog::init(None),
     }
 }
 

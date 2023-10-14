@@ -7,25 +7,21 @@ use chrono::Utc;
 use log::{debug, info, warn};
 
 use atlas_common::error::*;
-use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_communication::message::{Header, StoredMessage};
+use atlas_communication::message::Header;
 use atlas_core::messages::ClientRqInfo;
-use atlas_core::ordering_protocol::{Decision, DecisionInfo};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_core::persistent_log::{OperationMode, OrderingProtocolLog};
 use atlas_core::smr::smr_decision_log::ShareableMessage;
 use atlas_core::timeouts::Timeouts;
-use atlas_smr_application::serialize::ApplicationData;
 use atlas_metrics::metrics::metric_duration;
+use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::consensus::accessory::{AccessoryConsensus, ConsensusDecisionAccessory};
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;
 use crate::bft::log::deciding::{CompletedBatch, WorkingDecisionLog};
-use crate::bft::log::decisions::{IncompleteProof, ProofMetadata};
+use crate::bft::log::decisions::IncompleteProof;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
-use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::{ConsensusMetrics, PRE_PREPARE_ANALYSIS_ID};
 use crate::bft::PBFT;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer};
@@ -37,9 +33,8 @@ macro_rules! extract_msg {
     };
     ($rsp:expr, $g:expr, $q:expr) => {
         if let Some(stored) = $q.pop_front() {
-            let (header, message) = stored.into_inner();
 
-            DecisionPollStatus::NextMessage(header, message)
+            DecisionPollStatus::NextMessage(stored)
         } else {
             *$g = false;
             $rsp
@@ -202,7 +197,7 @@ impl<D> ConsensusDecision<D>
     }
 
     pub fn queue(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>) {
-        match message.kind() {
+        match message.message().consensus().kind() {
             ConsensusMessageKind::PrePrepare(_) => {
                 self.message_queue.queue_pre_prepare(message);
             }
@@ -333,6 +328,7 @@ impl<D> ConsensusDecision<D>
 
                 //TODO: Try out cloning each request on this method,
                 let mut digests = request_batch_received(
+                    header,
                     message,
                     timeouts,
                     synchronizer,
@@ -348,7 +344,7 @@ impl<D> ConsensusDecision<D>
                     let batch_metadata = batch_metadata.unwrap();
 
                     info!("{:?} // Completed pre prepare phase with all pre prepares Seq {:?} with pre prepare from {:?}. Batch size {:?}",
-                        node.id(), self.sequence_number(), header.from(), self.message_log.current_batch_size());
+                        node.id(), self.sequence_number(), header.from(), self.working_log.current_batch_size());
 
                     //We have received all pre prepare requests for this consensus instance
                     //We are now ready to broadcast our prepare message and move to the next phase
@@ -377,7 +373,7 @@ impl<D> ConsensusDecision<D>
                     DecisionPhase::Preparing(0)
                 } else {
                     debug!("{:?} // Received pre prepare message {:?} from {:?}. Current received {:?}",
-                        self.node_id, stored_msg.message(), stored_msg.header().from(), received);
+                        self.node_id, s_message.message(), s_message.header().from(), received);
 
                     self.accessory.handle_partial_pre_prepare(&self.working_log, &view,
                                                               &header, &message, &**node);
@@ -460,7 +456,7 @@ impl<D> ConsensusDecision<D>
                     DecisionPhase::Committing(0)
                 } else {
                     debug!("{:?} // Received prepare message {:?} from {:?}. Current count {}",
-                        self.node_id, stored_msg.message().sequence_number(), header.from(), received);
+                        self.node_id, s_message.message().sequence_number(), header.from(), received);
 
                     self.accessory.handle_preparing_no_quorum(&self.working_log, &view,
                                                               &header, &message, &**node);
@@ -491,7 +487,7 @@ impl<D> ConsensusDecision<D>
                     ConsensusMessageKind::Commit(d) if *d != self.working_log.current_digest().unwrap() => {
                         // drop msg with different digest from proposed value
                         warn!("{:?} // Dropped commit message {:?} from {:?} because of digest {:?} vs {:?} (ours)",
-                            self.node_id, message.sequence_number(), header.from(), d, self.message_log.current_digest());
+                            self.node_id, message.sequence_number(), header.from(), d, self.working_log.current_digest());
 
                         return Ok(DecisionStatus::MessageIgnored);
                     }
@@ -527,7 +523,7 @@ impl<D> ConsensusDecision<D>
                     Ok(DecisionStatus::Decided(s_message))
                 } else {
                     debug!("{:?} // Received commit message {:?} from {:?}. Current count {}",
-                        self.node_id, stored_msg.message().sequence_number(), header.from(), received);
+                        self.node_id, s_message.message().sequence_number(), header.from(), received);
 
                     self.phase = DecisionPhase::Committing(received);
 
@@ -581,6 +577,7 @@ impl<D> Orderable for ConsensusDecision<D>
 
 #[inline]
 fn request_batch_received<D>(
+    header: &Header,
     pre_prepare: &ConsensusMessage<D::Request>,
     timeouts: &Timeouts,
     synchronizer: &Synchronizer<D>,
@@ -593,7 +590,7 @@ fn request_batch_received<D>(
 
     let mut batch_guard = log.batch_meta().lock().unwrap();
 
-    batch_guard.batch_size += match pre_prepare.message().kind() {
+    batch_guard.batch_size += match pre_prepare.kind() {
         ConsensusMessageKind::PrePrepare(req) => {
             req.len()
         }
@@ -603,7 +600,7 @@ fn request_batch_received<D>(
     batch_guard.reception_time = Utc::now();
 
     // Notify the synchronizer that a batch has been received
-    let digests = synchronizer.request_batch_received(pre_prepare, timeouts);
+    let digests = synchronizer.request_batch_received(header, pre_prepare, timeouts);
 
     metric_duration(PRE_PREPARE_ANALYSIS_ID, start.elapsed());
 

@@ -20,14 +20,13 @@ use atlas_communication::message::Header;
 use atlas_communication::message_signing::NetworkMessageSignatureVerifier;
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
 use atlas_communication::serialize::Serializable;
-use atlas_core::messages::SystemMessage;
-use atlas_core::ordering_protocol::networking::serialize::{OrderingProtocolMessage, PermissionedOrderingProtocolMessage, StatefulOrderProtocolMessage};
+use atlas_core::ordering_protocol::loggable::PersistentOrderProtocolTypes;
+use atlas_core::ordering_protocol::networking::serialize::{OrderingProtocolMessage, PermissionedOrderingProtocolMessage};
 use atlas_core::ordering_protocol::networking::signature_ver::OrderProtocolSignatureVerificationHelper;
-use atlas_core::persistent_log::PersistableOrderProtocol;
 use atlas_smr_application::serialize::ApplicationData;
 
+use crate::bft::log::decisions::{Proof, ProofMetadata};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
-use crate::bft::msg_log::decisions::{DecisionLog, Proof, ProofMetadata};
 use crate::bft::sync::view::ViewInfo;
 
 #[cfg(feature = "serialize_capnp")]
@@ -120,7 +119,7 @@ impl<D> PBFTConsensus<D> where D: ApplicationData {
                         let header = pre_prepare.header();
                         let consensus_message = pre_prepare.message();
 
-                        Self::verify_consensus_message::<S, SV, NI>(network_info, header, consensus_message)
+                        Self::verify_consensus_message::<S, SV, NI>(network_info, header, consensus_message.consensus())
                     }).reduce(|a, b| a.and(b)).unwrap_or(Ok(true))
                 } else {
                     Ok(true)
@@ -140,10 +139,7 @@ impl<D> PBFTConsensus<D> where D: ApplicationData {
 
 impl<D> OrderingProtocolMessage<D> for PBFTConsensus<D>
     where D: ApplicationData, {
-
     type ProtocolMessage = PBFTMessage<D::Request>;
-    type LoggableMessage = ConsensusMessage<D::Request>;
-    type Proof = Proof<D::Request>;
     type ProofMetadata = ProofMetadata;
 
     fn verify_order_protocol_message<NI, OPVH>(network_info: &Arc<NI>, header: &Header, message: Self::ProtocolMessage) -> Result<(bool, Self::ProtocolMessage)> where NI: NetworkInformationProvider, OPVH: OrderProtocolSignatureVerificationHelper<D, Self, NI>, Self: Sized {
@@ -213,35 +209,6 @@ impl<D> OrderingProtocolMessage<D> for PBFTConsensus<D>
         }
     }
 
-    fn verify_proof<NI, OPVH>(network_info: &Arc<NI>, proof: Self::Proof) -> Result<(bool, Self::Proof)>
-        where NI: NetworkInformationProvider, OPVH: OrderProtocolSignatureVerificationHelper<D, Self, NI>, Self: Sized {
-        for pre_prepare in proof.pre_prepares() {
-            let (result, _) = OPVH::verify_protocol_message(network_info, pre_prepare.header(), PBFTMessage::Consensus(pre_prepare.message().clone()))?;
-
-            if !result {
-                return Ok((false, proof));
-            }
-        }
-
-        for prepare in proof.prepares() {
-            let (result, _) = OPVH::verify_protocol_message(network_info, prepare.header(), PBFTMessage::Consensus(prepare.message().clone()))?;
-
-            if !result {
-                return Ok((false, proof));
-            }
-        }
-
-        for commit in proof.commits() {
-            let (result, _) = OPVH::verify_protocol_message(network_info, commit.header(), PBFTMessage::Consensus(commit.message().clone()))?;
-
-            if !result {
-                return Ok((false, proof));
-            }
-        }
-
-        return Ok((true, proof));
-    }
-
     #[cfg(feature = "serialize_capnp")]
     fn serialize_capnp(builder: atlas_capnp::consensus_messages_capnp::protocol_message::Builder, msg: &Self::ProtocolMessage) -> Result<()> {
         capnp::serialize_message::<D>(builder, msg)
@@ -277,25 +244,39 @@ impl<D> PermissionedOrderingProtocolMessage for PBFTConsensus<D> where D: Applic
     type ViewInfo = ViewInfo;
 }
 
-impl<D, OP> StatefulOrderProtocolMessage<D, OP> for PBFTConsensus<D>
-    where D: ApplicationData + 'static {
-    type DecLog = DecisionLog<D::Request>;
+impl<D, OP> PersistentOrderProtocolTypes<D, OP> for PBFTConsensus<D>
+    where D: ApplicationData + 'static, OP: OrderingProtocolMessage<D> + 'static {
 
-    fn verify_decision_log<NI, OPVH>(network_info: &Arc<NI>, dec_log: Self::DecLog) -> Result<(bool, Self::DecLog)>
+    type Proof = Proof<D::Request>;
+
+    fn verify_proof<NI, OPVH>(network_info: &Arc<NI>, proof: Self::Proof) -> Result<(bool, Self::Proof)>
         where NI: NetworkInformationProvider,
-              D: ApplicationData,
-              OP: OrderingProtocolMessage<D>,
-              OPVH: OrderProtocolSignatureVerificationHelper<D, OP, NI>, {
-        Ok((false, dec_log))
-    }
+              OPVH: OrderProtocolSignatureVerificationHelper<D, Self, NI>,
+              Self: Sized {
+        for pre_prepare in proof.pre_prepares() {
+            let (result, _) = OPVH::verify_protocol_message(network_info, pre_prepare.header(), pre_prepare.message().clone())?;
 
-    #[cfg(feature = "serialize_capnp")]
-    fn serialize_declog_capnp(builder: atlas_capnp::cst_messages_capnp::dec_log::Builder, msg: &Self::DecLog) -> Result<()> {
-        todo!()
-    }
+            if !result {
+                return Ok((false, proof));
+            }
+        }
 
-    #[cfg(feature = "serialize_capnp")]
-    fn deserialize_declog_capnp(reader: atlas_capnp::cst_messages_capnp::dec_log::Reader) -> Result<Self::DecLog> {
-        todo!()
+        for prepare in proof.prepares() {
+            let (result, _) = OPVH::verify_protocol_message(network_info, prepare.header(), prepare.message().clone())?;
+
+            if !result {
+                return Ok((false, proof));
+            }
+        }
+
+        for commit in proof.commits() {
+            let (result, _) = OPVH::verify_protocol_message(network_info, commit.header(), commit.message().clone())?;
+
+            if !result {
+                return Ok((false, proof));
+            }
+        }
+
+        return Ok((true, proof));
     }
 }

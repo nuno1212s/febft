@@ -1,6 +1,5 @@
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
-use std::sync::Arc;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
@@ -8,12 +7,11 @@ use serde::{Deserialize, Serialize};
 use atlas_common::crypto::hash::Digest;
 use atlas_common::error::*;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_communication::message::StoredMessage;
-use atlas_core::ordering_protocol::networking::serialize::{OrderProtocolLog, OrderProtocolProof};
+use atlas_core::ordering_protocol::networking::serialize::OrderProtocolProof;
 use atlas_core::smr::smr_decision_log::ShareableMessage;
-use crate::bft::log::deciding::CompletedBatch;
 
-use crate::bft::message::{ConsensusMessageKind, PBFTMessage};
+use crate::bft::message::PBFTMessage;
+
 pub type StoredConsensusMessage<O> = ShareableMessage<PBFTMessage<O>>;
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
