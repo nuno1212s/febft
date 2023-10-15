@@ -12,6 +12,7 @@ use log::{debug, error, info};
 use atlas_common::collections;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::Orderable;
+use atlas_communication::message::Header;
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, StoredRequestMessage};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;

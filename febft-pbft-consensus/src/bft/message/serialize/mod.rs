@@ -244,9 +244,8 @@ impl<D> PermissionedOrderingProtocolMessage for PBFTConsensus<D> where D: Applic
     type ViewInfo = ViewInfo;
 }
 
-impl<D, OP> PersistentOrderProtocolTypes<D, OP> for PBFTConsensus<D>
-    where D: ApplicationData + 'static, OP: OrderingProtocolMessage<D> + 'static {
-
+impl<D> PersistentOrderProtocolTypes<D, Self> for PBFTConsensus<D>
+    where D: ApplicationData + 'static {
     type Proof = Proof<D::Request>;
 
     fn verify_proof<NI, OPVH>(network_info: &Arc<NI>, proof: Self::Proof) -> Result<(bool, Self::Proof)>
