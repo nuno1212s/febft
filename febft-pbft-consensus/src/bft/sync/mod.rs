@@ -117,7 +117,7 @@ pub struct LeaderCollects<O> {
     // Done
     proposed: FwdConsensusMessage<O>,
     // The collect messages the leader has received.
-    collects: Vec<StoredMessage<ViewChangeMessage<O>>>,
+    collects: Vec<ShareableMessage<PBFTMessage<O>>>,
 }
 
 impl<O> LeaderCollects<O> {
@@ -125,7 +125,7 @@ impl<O> LeaderCollects<O> {
         &self.proposed
     }
 
-    pub fn collects(&self) -> &Vec<StoredMessage<ViewChangeMessage<O>>> {
+    pub fn collects(&self) -> &Vec<ShareableMessage<PBFTMessage<O>>> {
         &self.collects
     }
 
@@ -134,7 +134,7 @@ impl<O> LeaderCollects<O> {
         self,
     ) -> (
         FwdConsensusMessage<O>,
-        Vec<StoredMessage<ViewChangeMessage<O>>>,
+        Vec<ShareableMessage<PBFTMessage<O>>>,
     ) {
         (self.proposed, self.collects)
     }
@@ -1170,8 +1170,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
                             let fwd_request = FwdConsensusMessage::new(header, message);
 
-                            let collects = collects_guard.values()
-                                .cloned().collect();
+                            let collects = collects_guard.values().cloned().collect();
 
                             let message = PBFTMessage::ViewChange(ViewChangeMessage::new(
                                 next_view.sequence_number(),
@@ -1733,7 +1732,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 // may be executing the same CID when there is a leader change
     #[inline]
     fn normalized_collects<'a>(
-        collects: &'a IntMap<StoredMessage<ViewChangeMessage<D::Request>>>,
+        collects: &'a IntMap<ShareableMessage<PBFTMessage<D::Request>>>,
         in_exec: SeqNo,
     ) -> impl Iterator<Item=Option<&'a CollectData<D::Request>>> {
         let values = collects.values();
@@ -1746,7 +1745,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
     // TODO: quorum sizes may differ when we implement reconfiguration
     #[inline]
     fn highest_proof<'a, NT>(
-        guard: &'a IntMap<StoredMessage<ViewChangeMessage<D::Request>>>,
+        guard: &'a IntMap<ShareableMessage<PBFTMessage<D::Request>>>,
         view: &ViewInfo,
         node: &NT,
     ) -> Option<&'a Proof<D::Request>>
@@ -1956,9 +1955,9 @@ fn certified_value<O>(
 }
 
 fn collect_data<'a, O: 'a>(
-    collects: impl Iterator<Item=&'a StoredMessage<ViewChangeMessage<O>>>,
+    collects: impl Iterator<Item=&'a ShareableMessage<PBFTMessage<O>>>,
 ) -> impl Iterator<Item=&'a CollectData<O>> {
-    collects.filter_map(|stored| match stored.message().kind() {
+    collects.filter_map(|stored| match stored.message().view_change().kind() {
         ViewChangeMessageKind::StopData(collects) => Some(collects),
         _ => None,
     })
@@ -1979,14 +1978,14 @@ fn normalized_collects<'a, O: 'a>(
 
 fn signed_collects<D, NT>(
     node: &NT,
-    collects: Vec<StoredMessage<ViewChangeMessage<D::Request>>>,
-) -> Vec<StoredMessage<ViewChangeMessage<D::Request>>>
+    collects: Vec<ShareableMessage<PBFTMessage<D::Request>>>,
+) -> Vec<ShareableMessage<PBFTMessage<D::Request>>>
     where D: ApplicationData + 'static,
           NT: OrderProtocolSendNode<D, PBFT<D>>
 {
     collects
         .into_iter()
-        .filter(|stored| validate_signature::<D, _, _>(node, stored))
+        .filter(|stored| validate_signature::<D, _, _>(node, &**stored))
         .collect()
 }
 
@@ -2026,7 +2025,7 @@ fn highest_proof<'a, D, I, NT>(
 ) -> Option<&'a Proof<D::Request>>
     where
         D: ApplicationData + 'static,
-        I: Iterator<Item=&'a StoredMessage<ViewChangeMessage<D::Request>>>,
+        I: Iterator<Item=&'a ShareableMessage<PBFTMessage<D::Request>>>,
         NT: OrderProtocolSendNode<D, PBFT<D>>
 {
     collect_data(collects)

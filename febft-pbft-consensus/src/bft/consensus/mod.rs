@@ -36,7 +36,7 @@ use crate::bft::sync::view::ViewInfo;
 pub mod decision;
 pub mod accessory;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 /// Status returned from processing a consensus message.
 pub enum ConsensusStatus<O> {
     /// A particular node tried voting twice.
@@ -57,7 +57,7 @@ pub enum ConsensusStatus<O> {
     Decided(MaybeVec<OPDecision<O>>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 /// Represents the status of calling `poll()` on a `Consensus`.
 pub enum ConsensusPollStatus<O> {
     /// The `Replica` associated with this `Consensus` should
@@ -520,59 +520,6 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
         self.enqueue_decision(novel_decision);
 
         decision
-    }
-
-    /// Install the received state into the consensus
-    pub fn install_state(&mut self,
-                         view_info: ViewInfo,
-                         dec_log: &DecisionLog<D::Request>) -> Result<(Vec<D::Request>)> {
-
-        // get the latest seq no
-        let seq_no = {
-            let last_exec = dec_log.last_execution();
-            if last_exec.is_none() {
-                self.sequence_number()
-            } else {
-                last_exec.unwrap()
-            }
-        };
-
-        if seq_no > SeqNo::ZERO {
-            // If we have installed a new state, then we must be recovering and therefore should
-            // Stop timeouts
-            self.is_recovering = true;
-        }
-
-        // skip old messages
-        self.install_sequence_number(seq_no.next(), &view_info);
-
-        // Update the decisions with the new view information
-        self.install_view(&view_info);
-
-        let mut reqs = Vec::with_capacity(dec_log.proofs().len());
-
-        for proof in dec_log.proofs() {
-            if !proof.are_pre_prepares_ordered()? {
-                unreachable!()
-            }
-
-            for pre_prepare in proof.pre_prepares() {
-                let x: &ConsensusMessage<D::Request> = pre_prepare.message();
-
-                match x.kind() {
-                    ConsensusMessageKind::PrePrepare(pre_prepare_reqs) => {
-                        for req in pre_prepare_reqs {
-                            let rq_msg: &RequestMessage<D::Request> = req.message();
-
-                            reqs.push(rq_msg.operation().clone());
-                        }
-                    }
-                    _ => { unreachable!() }
-                }
-            }
-        }
-
-        Ok(reqs)
     }
 
     pub fn install_sequence_number(&mut self, novel_seq_no: SeqNo, view: &ViewInfo) {
