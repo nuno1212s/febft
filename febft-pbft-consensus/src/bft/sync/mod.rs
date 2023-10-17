@@ -18,8 +18,9 @@ use serde::{Deserialize, Serialize};
 use atlas_common::{collections, prng};
 use atlas_common::crypto::hash::Digest;
 use atlas_common::error::*;
+use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
-use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_pop_message, tbo_queue_message};
+use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_pop_message, tbo_queue_message, tbo_queue_message_arc};
 use atlas_communication::message::{Header, StoredMessage, WireMessage};
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
 use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
@@ -28,7 +29,7 @@ use atlas_core::ordering_protocol::{Decision, ProtocolConsensusDecision};
 use atlas_core::ordering_protocol::reconfigurable_order_protocol::ReconfigurationAttemptResult;
 use atlas_core::persistent_log::{OrderingProtocolLog};
 use atlas_core::request_pre_processing::RequestPreProcessor;
-use atlas_core::smr::smr_decision_log::ShareableMessage;
+use atlas_core::smr::smr_decision_log::{ShareableMessage, unwrap_shareable_message};
 use atlas_core::timeouts::{RqTimeout, Timeouts};
 use atlas_smr_application::serialize::ApplicationData;
 
@@ -117,15 +118,23 @@ pub struct LeaderCollects<O> {
     // Done
     proposed: FwdConsensusMessage<O>,
     // The collect messages the leader has received.
-    collects: Vec<ShareableMessage<PBFTMessage<O>>>,
+    collects: Vec<StoredMessage<PBFTMessage<O>>>,
 }
 
 impl<O> LeaderCollects<O> {
+    pub fn new(proposed: FwdConsensusMessage<O>,
+               collects: Vec<StoredMessage<PBFTMessage<O>>>) -> Self {
+        Self {
+            proposed,
+            collects,
+        }
+    }
+
     pub fn message(&self) -> &FwdConsensusMessage<O> {
         &self.proposed
     }
 
-    pub fn collects(&self) -> &Vec<ShareableMessage<PBFTMessage<O>>> {
+    pub fn collects(&self) -> &Vec<StoredMessage<PBFTMessage<O>>> {
         &self.collects
     }
 
@@ -134,7 +143,7 @@ impl<O> LeaderCollects<O> {
         self,
     ) -> (
         FwdConsensusMessage<O>,
-        Vec<ShareableMessage<PBFTMessage<O>>>,
+        Vec<StoredMessage<PBFTMessage<O>>>,
     ) {
         (self.proposed, self.collects)
     }
@@ -301,21 +310,21 @@ impl<O> TboQueue<O> {
         // NOTE: we use next() because we want to retrieve messages
         // for v+1, as we haven't started installing the new view yet
         let seq = self.view.sequence_number().next();
-        tbo_queue_message(seq, &mut self.stop, m)
+        tbo_queue_message_arc(seq, &mut self.stop, (m.sequence_number(), m))
     }
 
     /// Queues a `STOP-DATA` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
     fn queue_stop_data(&mut self, m: ShareableMessage<PBFTMessage<O>>) {
         let seq = self.view.sequence_number().next();
-        tbo_queue_message(seq, &mut self.stop_data, m)
+        tbo_queue_message_arc(seq, &mut self.stop_data, (m.sequence_number(), m))
     }
 
     /// Queues a `SYNC` message for later processing, or drops it
     /// immediately if it pertains to an older view change instance.
     fn queue_sync(&mut self, m: ShareableMessage<PBFTMessage<O>>) {
         let seq = self.view.sequence_number().next();
-        tbo_queue_message(seq, &mut self.sync, m)
+        tbo_queue_message_arc(seq, &mut self.sync, (m.sequence_number(), m))
     }
 
     pub fn view(&self) -> &ViewInfo {
@@ -429,7 +438,7 @@ pub trait AbstractSynchronizer<D> where D: ApplicationData + 'static {
     fn queue(&self, message: ShareableMessage<PBFTMessage<D::Request>>);
 }
 
-type CollectsType<D: ApplicationData> = IntMap<ShareableMessage<PBFTMessage<D::Request>>>;
+type CollectsType<D: ApplicationData> = IntMap<StoredMessage<PBFTMessage<D::Request>>>;
 
 ///The synchronizer for the SMR protocol
 /// This part of the protocol is responsible for handling the changing of views and
@@ -691,16 +700,16 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
         where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static,
     {
 
-        let (header, message) = (s_message.header(), s_message.message().view_change());
-
         debug!("{:?} // Processing view change message {:?} in phase {:?} from {:?}",
                node.id(),
-               message,
+               s_message.message().view_change(),
                self.phase.get(),
-               header.from());
+               s_message.header().from());
 
         match self.phase.get() {
             ProtoPhase::Init => {
+                let (header, message) = (s_message.header(), s_message.message().view_change());
+
                 return match message.kind() {
                     ViewChangeMessageKind::Stop(_) | ViewChangeMessageKind::StopQuorumJoin(_) => {
                         let mut guard = self.tbo.lock().unwrap();
@@ -739,6 +748,8 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                 };
             }
             ProtoPhase::Stopping(i) | ProtoPhase::Stopping2(i) => {
+                let (header, message) = (s_message.header(), s_message.message().view_change());
+
                 let msg_seq = message.sequence_number();
                 let current_view = self.view();
                 let next_seq = current_view.sequence_number().next();
@@ -798,8 +809,8 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                 };
 
                 // store pending requests from this STOP
-                let mut stopped = match message.into_kind() {
-                    ViewChangeMessageKind::Stop(stopped) => stopped,
+                let mut stopped = match message.kind() {
+                    ViewChangeMessageKind::Stop(stopped) => stopped.clone(),
                     _ => unreachable!(),
                 };
 
@@ -858,6 +869,8 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                 SynchronizerStatus::Running
             }
             ProtoPhase::ViewStopping(received) | ProtoPhase::ViewStopping2(received) => {
+                let (header, message) = (s_message.header(), s_message.message().view_change());
+
                 let msg_seq = message.sequence_number();
                 let current_view = self.view();
                 let next_seq = current_view.sequence_number().next();
@@ -988,6 +1001,8 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                 SynchronizerStatus::Running
             }
             ProtoPhase::StoppingData(i) => {
+                let (header, message) = (s_message.header(), s_message.message().view_change());
+
                 match &self.accessory {
                     SynchronizerAccessory::Follower(_) => {
                         //Since a follower can never be a leader (as he isn't a part of the
@@ -1078,7 +1093,11 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                         // the new leader isn't forging messages.
 
                         // store collects from this STOP-DATA
-                        collects_guard.insert(header.from().into(), s_message);
+                        let unwrapped_msg = unwrap_shareable_message(s_message);
+
+                        let (header, message) = (unwrapped_msg.header(), unwrapped_msg.message());
+
+                        collects_guard.insert(header.from().into(), unwrapped_msg);
 
                         if i < next_view.params().quorum() {
                             self.phase.replace(ProtoPhase::StoppingData(i));
@@ -1209,12 +1228,12 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                 }
             }
             ProtoPhase::Syncing => {
-                let msg_seq = message.sequence_number();
+                let msg_seq = s_message.sequence_number();
                 let next_view = self.next_view().expect("We should have a next view in this situation");
                 let seq = next_view.sequence_number();
 
                 // reject SYNC messages if these were not sent by the leader
-                let (proposed, collects) = match message.kind() {
+                let (proposed, collects) = match s_message.message().view_change().kind() {
                     ViewChangeMessageKind::Stop(_) | ViewChangeMessageKind::StopQuorumJoin(_) => {
                         {
                             let mut guard = self.tbo.lock().unwrap();
@@ -1250,7 +1269,8 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
                     }
                     ViewChangeMessageKind::Sync(_) if msg_seq != seq => {
                         {
-                            debug!("{:?} // Received sync message whose sequence number does not match our current one {:?} vs {:?}. Queueing", node.id(), message, next_view);
+                            debug!("{:?} // Received sync message whose sequence number does not match our current one {:?} vs {:?}. Queueing", node.id(),
+                                s_message.message().view_change(), next_view);
 
                             let mut guard = self.tbo.lock().unwrap();
 
@@ -1259,14 +1279,16 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
                         return SynchronizerStatus::Running;
                     }
-                    ViewChangeMessageKind::Sync(_) if header.from() != next_view.leader() => {
+                    ViewChangeMessageKind::Sync(_) if s_message.header().from() != next_view.leader() => {
                         //You're not the leader, what are you saying
                         return SynchronizerStatus::Running;
                     }
                     ViewChangeMessageKind::Sync(_) => {
-                        let message = message;
+                        let stored_message = unwrap_shareable_message(s_message);
 
-                        message.take_collects().unwrap().into_inner()
+                        let (header, message) = stored_message.into_inner();
+
+                        message.into_view_change().take_collects().unwrap().into_inner()
                     }
                 };
 
@@ -1443,10 +1465,10 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 
     /// Trigger a view change locally
     pub fn begin_quorum_view_change<NT>(&self,
-                                            join_cert: Option<NodeId>,
-                                            node: &NT,
-                                            timeouts: &Timeouts,
-                                            _log: &Log<D>, )
+                                        join_cert: Option<NodeId>,
+                                        node: &NT,
+                                        timeouts: &Timeouts,
+                                        _log: &Log<D>, )
         where NT: OrderProtocolSendNode<D, PBFT<D>>,
     {
         debug!("Beginning quorum view change with certificate {} at phase {:?}",  join_cert.is_some(), self.phase.get());
@@ -1732,7 +1754,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
 // may be executing the same CID when there is a leader change
     #[inline]
     fn normalized_collects<'a>(
-        collects: &'a IntMap<ShareableMessage<PBFTMessage<D::Request>>>,
+        collects: &'a IntMap<StoredMessage<PBFTMessage<D::Request>>>,
         in_exec: SeqNo,
     ) -> impl Iterator<Item=Option<&'a CollectData<D::Request>>> {
         let values = collects.values();
@@ -1745,7 +1767,7 @@ impl<D> Synchronizer<D> where D: ApplicationData + 'static,
     // TODO: quorum sizes may differ when we implement reconfiguration
     #[inline]
     fn highest_proof<'a, NT>(
-        guard: &'a IntMap<ShareableMessage<PBFTMessage<D::Request>>>,
+        guard: &'a IntMap<StoredMessage<PBFTMessage<D::Request>>>,
         view: &ViewInfo,
         node: &NT,
     ) -> Option<&'a Proof<D::Request>>
@@ -1955,7 +1977,7 @@ fn certified_value<O>(
 }
 
 fn collect_data<'a, O: 'a>(
-    collects: impl Iterator<Item=&'a ShareableMessage<PBFTMessage<O>>>,
+    collects: impl Iterator<Item=&'a StoredMessage<PBFTMessage<O>>>,
 ) -> impl Iterator<Item=&'a CollectData<O>> {
     collects.filter_map(|stored| match stored.message().view_change().kind() {
         ViewChangeMessageKind::StopData(collects) => Some(collects),
@@ -1978,14 +2000,14 @@ fn normalized_collects<'a, O: 'a>(
 
 fn signed_collects<D, NT>(
     node: &NT,
-    collects: Vec<ShareableMessage<PBFTMessage<D::Request>>>,
-) -> Vec<ShareableMessage<PBFTMessage<D::Request>>>
+    collects: Vec<StoredMessage<PBFTMessage<D::Request>>>,
+) -> Vec<StoredMessage<PBFTMessage<D::Request>>>
     where D: ApplicationData + 'static,
           NT: OrderProtocolSendNode<D, PBFT<D>>
 {
     collects
         .into_iter()
-        .filter(|stored| validate_signature::<D, _, _>(node, &**stored))
+        .filter(|stored| validate_signature::<D, _, _>(node, &stored))
         .collect()
 }
 
@@ -2025,7 +2047,7 @@ fn highest_proof<'a, D, I, NT>(
 ) -> Option<&'a Proof<D::Request>>
     where
         D: ApplicationData + 'static,
-        I: Iterator<Item=&'a ShareableMessage<PBFTMessage<D::Request>>>,
+        I: Iterator<Item=&'a StoredMessage<PBFTMessage<D::Request>>>,
         NT: OrderProtocolSendNode<D, PBFT<D>>
 {
     collect_data(collects)

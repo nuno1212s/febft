@@ -1,6 +1,5 @@
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_common::error::*;
-use crate::bft::log::deciding::CompletedBatch;
+
 use crate::bft::log::decisions::Proof;
 
 /// A necessary decision log for the ability to perform view changes.
@@ -29,7 +28,7 @@ impl<O> DecisionLog<O> {
     }
 
     pub fn last_execution(&self) -> Option<SeqNo> {
-        self.last_decision.map(|decision| decision.sequence_number())
+        self.last_decision.as_ref().map(|decision| decision.sequence_number())
     }
 
     pub fn append_proof(&mut self, proof: Proof<O>) {
@@ -41,6 +40,6 @@ impl<O> DecisionLog<O> {
 
 impl<O> Orderable for DecisionLog<O> {
     fn sequence_number(&self) -> SeqNo {
-        self.last_decision.map(|f| f.sequence_number()).unwrap_or(SeqNo::ZERO)
+        self.last_decision.as_ref().map(|f| f.sequence_number()).unwrap_or(SeqNo::ZERO)
     }
 }

@@ -17,7 +17,7 @@ pub struct CSTMsg<S: MonolithicState>(PhantomData<(S)>);
 impl<S: MonolithicState> StateTransferMessage for CSTMsg<S> {
     type StateTransferMessage = CstMessage<S>;
 
-    fn verify_state_message<NI, SVH>(network_info: &Arc<NI>, header: &Header, message: Self::StateTransferMessage) -> atlas_common::error::Result<(bool, Self::StateTransferMessage)>
+    fn verify_state_message<NI, SVH>(network_info: &Arc<NI>, header: &Header, message: Self::StateTransferMessage) -> atlas_common::error::Result<Self::StateTransferMessage>
         where NI: NetworkInformationProvider, SVH: StateTransferVerificationHelper {
         todo!()
     }

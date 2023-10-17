@@ -11,7 +11,7 @@ use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
-use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message};
+use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message, tbo_queue_message_arc};
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage};
 use atlas_core::ordering_protocol::Decision;
@@ -149,23 +149,23 @@ impl<O> TboQueue<O> {
     /// Queues a `PRE-PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
     fn queue_pre_prepare(&mut self, message: ShareableMessage<PBFTMessage<O>>) {
-        tbo_queue_message(
+        tbo_queue_message_arc(
             self.base_seq(),
             &mut self.pre_prepares,
-            message,
+            (message.sequence_number(), message),
         )
     }
 
     /// Queues a `PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
     fn queue_prepare(&mut self, message: ShareableMessage<PBFTMessage<O>>) {
-        tbo_queue_message(self.base_seq(), &mut self.prepares, message)
+        tbo_queue_message_arc(self.base_seq(), &mut self.prepares, (message.sequence_number(), message))
     }
 
     /// Queues a `COMMIT` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
     fn queue_commit(&mut self, message: ShareableMessage<PBFTMessage<O>>) {
-        tbo_queue_message(self.base_seq(), &mut self.commits, message)
+        tbo_queue_message_arc(self.base_seq(), &mut self.commits, (message.sequence_number(), message))
     }
 
     /// Clear this queue
@@ -440,7 +440,6 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
             }
             DecisionStatus::DecidedIgnored => ConsensusStatus::Decided(MaybeVec::None),
             DecisionStatus::MessageIgnored => ConsensusStatus::MessageIgnored
-
         })
     }
 

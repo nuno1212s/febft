@@ -50,10 +50,11 @@ impl<D> Log<D> where D: ApplicationData {
         }
 
         let batch_info = ProtocolConsensusDecision::from(&proof);
+        let sequence = proof.sequence_number();
 
         let (metadata, messages) = proof.into_parts();
 
-        Ok(Decision::full_decision_info(proof.sequence_number(), metadata, messages, batch_info))
+        Ok(Decision::full_decision_info(sequence, metadata, messages, batch_info))
     }
 
     pub fn finalize_batch(&mut self, completed: CompletedBatch<D::Request>) -> Result<ProtocolConsensusDecision<D::Request>> {

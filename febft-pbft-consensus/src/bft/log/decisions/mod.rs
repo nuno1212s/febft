@@ -10,7 +10,7 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_core::ordering_protocol::networking::serialize::OrderProtocolProof;
 use atlas_core::smr::smr_decision_log::ShareableMessage;
 
-use crate::bft::message::PBFTMessage;
+use crate::bft::message::{ConsensusMessageKind, PBFTMessage};
 
 pub type StoredConsensusMessage<O> = ShareableMessage<PBFTMessage<O>>;
 
@@ -31,7 +31,7 @@ pub struct ProofMetadata {
     seq_no: SeqNo,
     batch_digest: Digest,
     pre_prepare_ordering: Vec<Digest>,
-    contained_client_rqs: usize
+    contained_client_rqs: usize,
 }
 
 impl Orderable for ProofMetadata {
@@ -90,7 +90,7 @@ impl ProofMetadata {
             seq_no,
             batch_digest: digest,
             pre_prepare_ordering,
-            contained_client_rqs: contained_rqs
+            contained_client_rqs: contained_rqs,
         }
     }
 
@@ -116,6 +116,33 @@ impl<O> Proof<O> {
                pre_prepares: Vec<StoredConsensusMessage<O>>,
                prepares: Vec<StoredConsensusMessage<O>>,
                commits: Vec<StoredConsensusMessage<O>>) -> Self {
+        Self {
+            metadata,
+            pre_prepares,
+            prepares,
+            commits,
+        }
+    }
+
+    pub fn init_from_messages(metadata: ProofMetadata, messages: Vec<StoredConsensusMessage<O>>) -> Self {
+        let mut pre_prepares = Vec::new();
+        let mut prepares = Vec::new();
+        let mut commits = Vec::new();
+
+        for x in messages {
+            match x.message().consensus().kind() {
+                ConsensusMessageKind::PrePrepare(_) => {
+                    pre_prepares.push(x);
+                }
+                ConsensusMessageKind::Prepare(_) => {
+                    prepares.push(x);
+                }
+                ConsensusMessageKind::Commit(_) => {
+                    commits.push(x);
+                }
+            }
+        }
+
         Self {
             metadata,
             pre_prepares,
@@ -199,7 +226,6 @@ impl<O> Proof<O> {
     }
 
     pub fn into_parts(self) -> (ProofMetadata, Vec<ShareableMessage<PBFTMessage<O>>>) {
-
         let mut vec = Vec::with_capacity(self.pre_prepares.len() + self.prepares.len() + self.commits.len());
 
         for pre_prepares in self.pre_prepares {
@@ -216,7 +242,6 @@ impl<O> Proof<O> {
 
         (self.metadata, vec)
     }
-
 }
 
 impl<O> Orderable for Proof<O> {
@@ -273,7 +298,6 @@ pub struct CollectData<O> {
 }
 
 impl<O> CollectData<O> {
-
     pub fn new(incomplete_proof: IncompleteProof, last_proof: Option<Proof<O>>) -> Self {
         Self { incomplete_proof, last_proof }
     }
