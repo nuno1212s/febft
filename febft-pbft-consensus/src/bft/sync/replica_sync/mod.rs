@@ -12,6 +12,7 @@ use log::{debug, error, info};
 use atlas_common::collections;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::Orderable;
+use atlas_communication::message::Header;
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, StoredRequestMessage};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
@@ -22,11 +23,11 @@ use atlas_smr_application::serialize::ApplicationData;
 use atlas_metrics::metrics::{metric_duration, metric_increment};
 
 use crate::bft::consensus::Consensus;
+use crate::bft::log::decisions::CollectData;
+use crate::bft::log::Log;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::{SYNC_BATCH_RECEIVED_ID, SYNC_STOPPED_COUNT_ID, SYNC_STOPPED_REQUESTS_ID, SYNC_WATCH_REQUESTS_ID};
-use crate::bft::msg_log::decided_log::Log;
-use crate::bft::msg_log::decisions::{CollectData, StoredConsensusMessage};
 use crate::bft::PBFT;
 use crate::bft::sync::view::ViewInfo;
 
@@ -57,17 +58,16 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     ///
     /// Therefore, we start by clearing our stopped requests and treating them as
     /// newly proposed requests (by resetting their timer)
-    pub(super) fn handle_stopping_quorum<NT, PL>(
+    pub(super) fn handle_stopping_quorum<NT>(
         &self,
         base_sync: &Synchronizer<D>,
         previous_view: ViewInfo,
-        consensus: &Consensus<D, PL>,
-        log: &Log<D, PL>,
+        consensus: &Consensus<D>,
+        log: &Log<D>,
         pre_processor: &RequestPreProcessor<D::Request>,
         timeouts: &Timeouts,
         node: &NT,
-    ) where NT: OrderProtocolSendNode<D, PBFT<D>>,
-            PL: OrderingProtocolLog<D, PBFTConsensus<D>> {
+    ) where NT: OrderProtocolSendNode<D, PBFT<D>>{
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
         // - add requests from STOP into client requests
@@ -83,10 +83,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
         let current_view_seq = view_info.sequence_number();
         let current_leader = view_info.leader();
 
-        let last_proof = log
-            //we use the previous views' f because the new view could have changed
-            //The N of the network (With reconfigurable views)
-            .last_proof(previous_view.params().f());
+        let last_proof = log.last_proof();
 
         let incomplete_proof = consensus.collect_incomplete_proof(previous_view.params().f());
 
@@ -178,6 +175,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     /// proposed, they won't timeout
     pub fn received_request_batch(
         &self,
+        header: &Header,
         pre_prepare: &ConsensusMessage<D::Request>,
         timeouts: &Timeouts,
     ) -> Vec<ClientRqInfo> {
@@ -195,7 +193,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
         let mut timeout_info = Vec::with_capacity(requests.len());
         let mut digests = Vec::with_capacity(requests.len());
 
-        let sending_node = pre_prepare.header().from();
+        let sending_node = header.from();
 
         for x in requests {
             let header = x.header();

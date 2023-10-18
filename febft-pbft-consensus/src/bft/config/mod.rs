@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use atlas_common::node_id::NodeId;
 use atlas_core::followers::FollowerHandle;
-use atlas_execution::serialize::ApplicationData;
+use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::sync::view::ViewInfo;

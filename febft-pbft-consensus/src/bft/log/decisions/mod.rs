@@ -1,6 +1,5 @@
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
-use std::sync::Arc;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
@@ -8,12 +7,11 @@ use serde::{Deserialize, Serialize};
 use atlas_common::crypto::hash::Digest;
 use atlas_common::error::*;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_communication::message::StoredMessage;
-use atlas_core::ordering_protocol::networking::serialize::{OrderProtocolLog, OrderProtocolProof};
+use atlas_core::ordering_protocol::networking::serialize::OrderProtocolProof;
 use atlas_core::smr::smr_decision_log::ShareableMessage;
-use crate::bft::log::deciding::CompletedBatch;
 
 use crate::bft::message::{ConsensusMessageKind, PBFTMessage};
+
 pub type StoredConsensusMessage<O> = ShareableMessage<PBFTMessage<O>>;
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
@@ -26,19 +24,6 @@ pub struct Decision<O> {
     commits: Vec<StoredConsensusMessage<O>>,
 }
 
-/// Contains all the decisions the consensus has decided since the last checkpoint.
-/// The currently deciding variable contains the decision that is currently ongoing.
-///
-/// Cloning this decision log is actually pretty cheap (compared to the alternative of cloning
-/// all requests executed since the last checkpoint) since it only has to clone the arcs (which is one atomic operation)
-/// We can't wrap the entire vector since the decision log is actually constantly modified by the consensus
-#[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
-pub struct DecisionLog<O> {
-    last_exec: Option<SeqNo>,
-    decided: Vec<Proof<O>>,
-}
-
 /// Metadata about a proof
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug)]
@@ -46,7 +31,7 @@ pub struct ProofMetadata {
     seq_no: SeqNo,
     batch_digest: Digest,
     pre_prepare_ordering: Vec<Digest>,
-    contained_client_rqs: usize
+    contained_client_rqs: usize,
 }
 
 impl Orderable for ProofMetadata {
@@ -105,7 +90,7 @@ impl ProofMetadata {
             seq_no,
             batch_digest: digest,
             pre_prepare_ordering,
-            contained_client_rqs: contained_rqs
+            contained_client_rqs: contained_rqs,
         }
     }
 
@@ -131,6 +116,33 @@ impl<O> Proof<O> {
                pre_prepares: Vec<StoredConsensusMessage<O>>,
                prepares: Vec<StoredConsensusMessage<O>>,
                commits: Vec<StoredConsensusMessage<O>>) -> Self {
+        Self {
+            metadata,
+            pre_prepares,
+            prepares,
+            commits,
+        }
+    }
+
+    pub fn init_from_messages(metadata: ProofMetadata, messages: Vec<StoredConsensusMessage<O>>) -> Self {
+        let mut pre_prepares = Vec::new();
+        let mut prepares = Vec::new();
+        let mut commits = Vec::new();
+
+        for x in messages {
+            match x.message().consensus().kind() {
+                ConsensusMessageKind::PrePrepare(_) => {
+                    pre_prepares.push(x);
+                }
+                ConsensusMessageKind::Prepare(_) => {
+                    prepares.push(x);
+                }
+                ConsensusMessageKind::Commit(_) => {
+                    commits.push(x);
+                }
+            }
+        }
+
         Self {
             metadata,
             pre_prepares,
@@ -214,7 +226,6 @@ impl<O> Proof<O> {
     }
 
     pub fn into_parts(self) -> (ProofMetadata, Vec<ShareableMessage<PBFTMessage<O>>>) {
-
         let mut vec = Vec::with_capacity(self.pre_prepares.len() + self.prepares.len() + self.commits.len());
 
         for pre_prepares in self.pre_prepares {
@@ -231,7 +242,6 @@ impl<O> Proof<O> {
 
         (self.metadata, vec)
     }
-
 }
 
 impl<O> Orderable for Proof<O> {
@@ -288,7 +298,6 @@ pub struct CollectData<O> {
 }
 
 impl<O> CollectData<O> {
-
     pub fn new(incomplete_proof: IncompleteProof, last_proof: Option<Proof<O>>) -> Self {
         Self { incomplete_proof, last_proof }
     }
@@ -299,108 +308,6 @@ impl<O> CollectData<O> {
 
     pub fn last_proof(&self) -> Option<&Proof<O>> {
         self.last_proof.as_ref()
-    }
-}
-
-impl<O> DecisionLog<O> {
-    pub fn new() -> Self {
-        Self {
-            last_exec: None,
-            decided: vec![],
-        }
-    }
-
-    pub fn from_decided(last_exec: SeqNo, proofs: Vec<Proof<O>>) -> Self {
-        Self {
-            last_exec: Some(last_exec),
-            decided: proofs,
-        }
-    }
-    
-    pub fn from_proofs(mut proofs: Vec<Proof<O>>) -> Self { 
-        
-        proofs.sort_by(|a, b| a.sequence_number().cmp(&b.sequence_number()).reverse());
-        
-        let last_decided = proofs.first().map(|proof| proof.sequence_number());
-        
-        Self {
-            last_exec: last_decided,
-            decided: proofs,
-        }
-    }
-
-    /// Returns the sequence number of the last executed batch of client
-    /// requests, assigned by the conesensus layer.
-    pub fn last_execution(&self) -> Option<SeqNo> {
-        self.last_exec
-    }
-
-    /// Get all of the decided proofs in this decisionn log
-    pub fn proofs(&self) -> &[Proof<O>] {
-        &self.decided[..]
-    }
-
-    /// Append a proof to the end of the log. Assumes all prior checks have been done
-    pub(crate) fn append_proof(&mut self, proof: Proof<O>) {
-        self.last_exec = Some(proof.seq_no());
-
-        self.decided.push(proof);
-    }
-
-    //TODO: Maybe make these data structures a BTreeSet so that the messages are always ordered
-    //By their seq no? That way we cannot go wrong in the ordering of messages.
-    pub(crate) fn finished_quorum_execution(&mut self, completed_batch: &CompletedBatch<O>, seq_no: SeqNo, f: usize) -> Result<()> {
-        self.last_exec.replace(seq_no);
-
-        let proof = completed_batch.proof(Some(f))?;
-
-        self.decided.push(proof);
-
-        Ok(())
-    }
-    /// Returns the proof of the last executed consensus
-    /// instance registered in this `DecisionLog`.
-    pub fn last_decision(&self) -> Option<Proof<O>> {
-        self.decided.last().map(|p| (*p).clone())
-    }
-
-    /// Clear the decision log until the given sequence number
-    pub(crate) fn clear_until_seq(&mut self, seq_no: SeqNo) -> usize {
-        let mut net_decided = Vec::with_capacity(self.decided.len());
-
-        let mut decided_request_count = 0;
-
-        let prev_decided = std::mem::replace(&mut self.decided, net_decided);
-
-        for proof in prev_decided.into_iter().rev() {
-            if proof.seq_no <= seq_no {
-                for pre_prepare in &proof.pre_prepares {
-                    //Mark the requests contained in this message for removal
-                    decided_request_count += match pre_prepare.message().kind() {
-                        ConsensusMessageKind::PrePrepare(messages) => messages.len(),
-                        _ => 0,
-                    };
-                }
-            } else {
-                self.decided.push(proof);
-            }
-        }
-
-        self.decided.reverse();
-
-        decided_request_count
-    }
-}
-
-impl<O> Orderable for DecisionLog<O> {
-    fn sequence_number(&self) -> SeqNo {
-        self.last_exec.unwrap_or(SeqNo::ZERO)
-    }
-}
-
-impl<O> OrderProtocolLog for DecisionLog<O> {
-    fn first_seq(&self) -> Option<SeqNo> {
-        self.proofs().first().map(|p| p.sequence_number())
     }
 }
 

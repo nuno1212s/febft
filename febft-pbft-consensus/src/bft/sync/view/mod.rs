@@ -13,7 +13,7 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
 use atlas_core::ordering_protocol::networking::serialize::NetworkView;
-use atlas_execution::system_params::SystemParams;
+use atlas_common::system_params::SystemParams;
 
 /// This struct contains information related with an
 /// active `febft` view.

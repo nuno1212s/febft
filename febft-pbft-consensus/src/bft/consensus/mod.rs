@@ -11,33 +11,32 @@ use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
-use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message};
+use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message, tbo_queue_message_arc};
 use atlas_communication::message::{Header, StoredMessage};
-use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_core::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage};
+use atlas_core::ordering_protocol::Decision;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_core::ordering_protocol::{Decision, ProtocolConsensusDecision};
-use atlas_core::persistent_log::{OrderingProtocolLog};
 use atlas_core::smr::smr_decision_log::ShareableMessage;
 use atlas_core::timeouts::Timeouts;
+use atlas_metrics::metrics::metric_increment;
 use atlas_smr_application::ExecutorHandle;
 use atlas_smr_application::serialize::ApplicationData;
-use atlas_metrics::metrics::metric_increment;
 
 use crate::bft::{OPDecision, PBFT, SysMsg};
 use crate::bft::consensus::decision::{ConsensusDecision, DecisionPollStatus, DecisionStatus, MessageQueue};
+use crate::bft::log::decided::DecisionLog;
 use crate::bft::log::deciding::CompletedBatch;
-use crate::bft::log::decisions::{DecisionLog, IncompleteProof, Proof, ProofMetadata};
+use crate::bft::log::decisions::{IncompleteProof, Proof, ProofMetadata};
 use crate::bft::log::Log;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::metric::OPERATIONS_PROCESSED_ID;
-use crate::bft::sync::{AbstractSynchronizer, Synchronizer};
+use crate::bft::sync::{Synchronizer};
 use crate::bft::sync::view::ViewInfo;
 
 pub mod decision;
 pub mod accessory;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 /// Status returned from processing a consensus message.
 pub enum ConsensusStatus<O> {
     /// A particular node tried voting twice.
@@ -58,7 +57,7 @@ pub enum ConsensusStatus<O> {
     Decided(MaybeVec<OPDecision<O>>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 /// Represents the status of calling `poll()` on a `Consensus`.
 pub enum ConsensusPollStatus<O> {
     /// The `Replica` associated with this `Consensus` should
@@ -150,23 +149,23 @@ impl<O> TboQueue<O> {
     /// Queues a `PRE-PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
     fn queue_pre_prepare(&mut self, message: ShareableMessage<PBFTMessage<O>>) {
-        tbo_queue_message(
+        tbo_queue_message_arc(
             self.base_seq(),
             &mut self.pre_prepares,
-            message,
+            (message.sequence_number(), message),
         )
     }
 
     /// Queues a `PREPARE` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
     fn queue_prepare(&mut self, message: ShareableMessage<PBFTMessage<O>>) {
-        tbo_queue_message(self.base_seq(), &mut self.prepares, message)
+        tbo_queue_message_arc(self.base_seq(), &mut self.prepares, (message.sequence_number(), message))
     }
 
     /// Queues a `COMMIT` message for later processing, or drops it
     /// immediately if it pertains to an older consensus instance.
     fn queue_commit(&mut self, message: ShareableMessage<PBFTMessage<O>>) {
-        tbo_queue_message(self.base_seq(), &mut self.commits, message)
+        tbo_queue_message_arc(self.base_seq(), &mut self.commits, (message.sequence_number(), message))
     }
 
     /// Clear this queue
@@ -437,12 +436,10 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
                 ConsensusStatus::Deciding(MaybeVec::from_one(Decision::decision_info_from_message(decision_seq, message)))
             }
             DecisionStatus::Decided(message) => {
-                ConsensusStatus::Decided
+                ConsensusStatus::Decided(MaybeVec::from_one(Decision::decision_info_from_message(decision_seq, message)))
             }
-            DecisionStatus::DecidedIgnored => {}
-            DecisionStatus::MessageIgnored => {
-                ConsensusStatus::MessageIgnored
-            }
+            DecisionStatus::DecidedIgnored => ConsensusStatus::Decided(MaybeVec::None),
+            DecisionStatus::MessageIgnored => ConsensusStatus::MessageIgnored
         })
     }
 
@@ -522,59 +519,6 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
         self.enqueue_decision(novel_decision);
 
         decision
-    }
-
-    /// Install the received state into the consensus
-    pub fn install_state(&mut self,
-                         view_info: ViewInfo,
-                         dec_log: &DecisionLog<D::Request>) -> Result<(Vec<D::Request>)> {
-
-        // get the latest seq no
-        let seq_no = {
-            let last_exec = dec_log.last_execution();
-            if last_exec.is_none() {
-                self.sequence_number()
-            } else {
-                last_exec.unwrap()
-            }
-        };
-
-        if seq_no > SeqNo::ZERO {
-            // If we have installed a new state, then we must be recovering and therefore should
-            // Stop timeouts
-            self.is_recovering = true;
-        }
-
-        // skip old messages
-        self.install_sequence_number(seq_no.next(), &view_info);
-
-        // Update the decisions with the new view information
-        self.install_view(&view_info);
-
-        let mut reqs = Vec::with_capacity(dec_log.proofs().len());
-
-        for proof in dec_log.proofs() {
-            if !proof.are_pre_prepares_ordered()? {
-                unreachable!()
-            }
-
-            for pre_prepare in proof.pre_prepares() {
-                let x: &ConsensusMessage<D::Request> = pre_prepare.message();
-
-                match x.kind() {
-                    ConsensusMessageKind::PrePrepare(pre_prepare_reqs) => {
-                        for req in pre_prepare_reqs {
-                            let rq_msg: &RequestMessage<D::Request> = req.message();
-
-                            reqs.push(rq_msg.operation().clone());
-                        }
-                    }
-                    _ => { unreachable!() }
-                }
-            }
-        }
-
-        Ok(reqs)
     }
 
     pub fn install_sequence_number(&mut self, novel_seq_no: SeqNo, view: &ViewInfo) {

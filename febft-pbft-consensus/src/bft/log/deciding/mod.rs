@@ -21,32 +21,32 @@ use crate::bft::sync::view::ViewInfo;
 pub struct MessageLog<O> {
     pre_prepare: Vec<Option<ShareableMessage<PBFTMessage<O>>>>,
     prepares: Vec<ShareableMessage<PBFTMessage<O>>>,
-    commits: Vec<ShareableMessage<PBFTMessage<O>>>
+    commits: Vec<ShareableMessage<PBFTMessage<O>>>,
 }
 
 pub struct FinishedMessageLog<O> {
-    pre_prepares: Vec<ShareableMessage<PBFTMessage<O>>>,
-    prepares: Vec<ShareableMessage<PBFTMessage<O>>>,
-    commits: Vec<ShareableMessage<PBFTMessage<O>>>
+    pub(super) pre_prepares: Vec<ShareableMessage<PBFTMessage<O>>>,
+    pub(super) prepares: Vec<ShareableMessage<PBFTMessage<O>>>,
+    pub(super) commits: Vec<ShareableMessage<PBFTMessage<O>>>,
 }
 
 /// Information about the completed batch, the contained requests and
 /// other relevant information
 pub struct CompletedBatch<O> {
-    seq: SeqNo,
+    pub(super) seq: SeqNo,
     // The overall digest of the entire batch
-    digest: Digest,
+    pub(super) digest: Digest,
     // The ordering of the pre prepare requests
-    pre_prepare_ordering: Vec<Digest>,
+    pub(super) pre_prepare_ordering: Vec<Digest>,
     // The messages that are a part of this decision
-    contained_messages: FinishedMessageLog<O>,
+    pub(super) contained_messages: FinishedMessageLog<O>,
     // The information of the client requests that are contained in this batch
-    client_request_info: Vec<ClientRqInfo>,
+    pub(super) client_request_info: Vec<ClientRqInfo>,
     // The client requests contained in this batch
-    client_requests: Vec<StoredRequestMessage<O>>,
+    pub(super) client_requests: Vec<StoredRequestMessage<O>>,
 
     // The metadata for the batch
-    batch_meta: BatchMeta,
+    pub(super) batch_meta: BatchMeta,
 }
 
 pub struct WorkingDecisionLog<O> {
@@ -128,7 +128,7 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
     pub fn new(node: NodeId, seq: SeqNo, view: &ViewInfo) -> Self {
         let leader_count = view.leader_set().len();
         Self {
-            node_id,
+            node_id: node,
             seq_no: seq,
             duplicate_detection: Default::default(),
             batch_digest: None,
@@ -217,13 +217,13 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
     }
 
     /// Process the message received
-    pub(crate) fn process_message<O>(&mut self, header: &Header, message: &ConsensusMessage<O>) -> Result<()> {
-        match message.message().kind() {
+    pub(crate) fn process_message(&mut self, header: &Header, message: &ConsensusMessage<O>) -> Result<()> {
+        match message.kind() {
             ConsensusMessageKind::Prepare(_) => {
-                self.duplicate_detection.insert_prepare_received(message.header().from())?;
+                self.duplicate_detection.insert_prepare_received(header.from())?;
             }
             ConsensusMessageKind::Commit(_) => {
-                self.duplicate_detection.insert_commit_received(message.header().from())?;
+                self.duplicate_detection.insert_commit_received(header.from())?;
             }
             _ => unreachable!()
         }
@@ -292,7 +292,7 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
             contained_messages: self.message_log.finalize(),
             client_request_info: self.client_rqs,
             batch_meta,
-            client_requests: requests
+            client_requests: requests,
         })
     }
 }
@@ -301,6 +301,28 @@ impl<O> Orderable for CompletedBatch<O> {
     fn sequence_number(&self) -> SeqNo {
         self.seq
     }
+}
+
+impl<O> CompletedBatch<O> {
+    pub fn new(seq: SeqNo, digest: Digest, pre_prepare_ordering: Vec<Digest>,
+               contained_messages: FinishedMessageLog<O>, client_request_info: Vec<ClientRqInfo>,
+               client_requests: Vec<StoredRequestMessage<O>>, batch_meta: BatchMeta) -> Self {
+        Self {
+            seq,
+            digest,
+            pre_prepare_ordering,
+            contained_messages,
+            client_request_info,
+            client_requests,
+            batch_meta,
+        }
+    }
+
+    pub fn request_count(&self) -> usize {
+        self.client_requests.len()
+    }
+
+
 }
 
 impl<O> Orderable for WorkingDecisionLog<O> {
