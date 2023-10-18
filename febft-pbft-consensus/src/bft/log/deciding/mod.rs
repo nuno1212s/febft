@@ -321,8 +321,7 @@ impl<O> CompletedBatch<O> {
     pub fn request_count(&self) -> usize {
         self.client_requests.len()
     }
-
-
+    
 }
 
 impl<O> Orderable for WorkingDecisionLog<O> {
