@@ -225,7 +225,7 @@ impl<D> PersistentOrderProtocolTypes<D, Self> for PBFTConsensus<D>
             let _ = OPVH::verify_protocol_message(network_info, msg.header(), msg.message().clone())?;
         }
 
-        let proof = Proof::init_from_messages(metadata, messages);
+        let proof = Proof::init_from_messages(metadata, messages)?;
 
         Ok(proof)
     }

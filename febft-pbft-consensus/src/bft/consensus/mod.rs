@@ -428,12 +428,16 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
 
                 ConsensusStatus::MessageQueued
             }
-            DecisionStatus::Transitioned(message) => {
+            DecisionStatus::Transitioned(metadata, message) => {
                 //When we transition phases, we may discover new messages
                 // That were in the queue, so we must be signalled again
                 self.signalled.push_signalled(decision_seq);
 
-                ConsensusStatus::Deciding(MaybeVec::from_one(Decision::decision_info_from_message(decision_seq, message)))
+                if let Some(metadata) = metadata {
+                    ConsensusStatus::Deciding(MaybeVec::from_one(Decision::decision_info_from_metadata_and_messages(decision_seq, metadata, MaybeVec::from_one(message))))
+                } else {
+                    ConsensusStatus::Deciding(MaybeVec::from_one(Decision::decision_info_from_message(decision_seq, message)))
+                }
             }
             DecisionStatus::Decided(message) => {
                 ConsensusStatus::Decided(MaybeVec::from_one(Decision::decision_info_from_message(decision_seq, message)))

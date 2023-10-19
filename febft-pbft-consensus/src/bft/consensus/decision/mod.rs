@@ -20,7 +20,7 @@ use atlas_smr_application::serialize::ApplicationData;
 use crate::bft::consensus::accessory::{AccessoryConsensus, ConsensusDecisionAccessory};
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;
 use crate::bft::log::deciding::{CompletedBatch, WorkingDecisionLog};
-use crate::bft::log::decisions::IncompleteProof;
+use crate::bft::log::decisions::{IncompleteProof, ProofMetadata};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::metric::{ConsensusMetrics, PRE_PREPARE_ANALYSIS_ID};
 use crate::bft::PBFT;
@@ -82,7 +82,7 @@ pub enum DecisionStatus<O> {
     /// on a client request to be executed.
     Deciding(ShareableMessage<PBFTMessage<O>>),
     /// Transitioned to another next phase of the consensus decision
-    Transitioned(ShareableMessage<PBFTMessage<O>>),
+    Transitioned(Option<ProofMetadata>, ShareableMessage<PBFTMessage<O>>),
     /// A `febft` quorum decided on the execution of
     /// the batch of requests with the given digests.
     /// The first digest is the digest of the Prepare message
@@ -335,7 +335,7 @@ impl<D> ConsensusDecision<D>
                     &mut self.working_log,
                 );
 
-                let batch_metadata = self.working_log.process_pre_prepare(header.clone(), message,
+                let batch_metadata = self.working_log.process_pre_prepare(s_message.clone(),
                                                                           header.digest().clone(), digests)?;
 
                 let mut result;
@@ -366,7 +366,7 @@ impl<D> ConsensusDecision<D>
                     self.message_queue.signal();
 
                     // Mark that we have transitioned to the next phase
-                    result = DecisionStatus::Transitioned(s_message);
+                    result = DecisionStatus::Transitioned(Some(batch_metadata), s_message);
 
                     // We no longer start the count at 1 since all leaders must also send the prepare
                     // message with the digest of the entire batch
@@ -433,7 +433,7 @@ impl<D> ConsensusDecision<D>
                     self.consensus_metrics.first_prepare_recvd();
                 }
 
-                self.working_log.process_message(&header, &message)?;
+                self.working_log.process_message(s_message.clone())?;
 
                 let result;
 
@@ -451,7 +451,7 @@ impl<D> ConsensusDecision<D>
 
                     self.message_queue.signal();
 
-                    result = DecisionStatus::Transitioned(s_message);
+                    result = DecisionStatus::Transitioned(None, s_message);
 
                     DecisionPhase::Committing(0)
                 } else {
@@ -505,7 +505,7 @@ impl<D> ConsensusDecision<D>
                     self.consensus_metrics.first_commit_recvd();
                 }
 
-                self.working_log.process_message(&header, &message);
+                self.working_log.process_message(s_message.clone())?;
 
                 return if received == view.params().quorum() {
                     info!("{:?} // Completed commit phase with all commits Seq {:?} with commit from {:?}", node.id(), self.sequence_number(),

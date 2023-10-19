@@ -150,10 +150,11 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
     }
 
     pub fn process_pre_prepare(&mut self,
-                               header: Header,
-                               message: &ConsensusMessage<O>,
+                               s_message: ShareableMessage<PBFTMessage<O>>,
                                digest: Digest,
                                mut batch_rq_digests: Vec<ClientRqInfo>) -> Result<Option<ProofMetadata>> {
+        let (header, message) = (s_message.header(), s_message.message().consensus());
+
         let start = Instant::now();
 
         let sending_leader = header.from();
@@ -198,6 +199,8 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
 
         self.client_rqs.append(&mut batch_rq_digests);
 
+        self.message_log.insert_pre_prepare(leader_index, s_message);
+
         metric_duration(PRE_PREPARE_LOG_ANALYSIS_ID, start.elapsed());
 
         // if we have received all of the messages in the set, calculate the digest.
@@ -217,13 +220,17 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
     }
 
     /// Process the message received
-    pub(crate) fn process_message(&mut self, header: &Header, message: &ConsensusMessage<O>) -> Result<()> {
+    pub(crate) fn process_message(&mut self, s_message: ShareableMessage<PBFTMessage<O>>) -> Result<()> {
+        let (header, message) = (s_message.header(), s_message.message().consensus());
+
         match message.kind() {
             ConsensusMessageKind::Prepare(_) => {
                 self.duplicate_detection.insert_prepare_received(header.from())?;
+                self.message_log.insert_prepare(s_message);
             }
             ConsensusMessageKind::Commit(_) => {
                 self.duplicate_detection.insert_commit_received(header.from())?;
+                self.message_log.insert_commit(s_message);
             }
             _ => unreachable!()
         }

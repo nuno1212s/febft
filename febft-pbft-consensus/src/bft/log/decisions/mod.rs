@@ -1,4 +1,5 @@
 use std::fmt::{Debug, Formatter};
+use std::iter;
 use std::ops::Deref;
 
 #[cfg(feature = "serialize_serde")]
@@ -124,15 +125,19 @@ impl<O> Proof<O> {
         }
     }
 
-    pub fn init_from_messages(metadata: ProofMetadata, messages: Vec<StoredConsensusMessage<O>>) -> Self {
-        let mut pre_prepares = Vec::new();
+    pub fn init_from_messages(metadata: ProofMetadata, messages: Vec<StoredConsensusMessage<O>>) -> Result<Self> {
+        let mut pre_prepares: Vec<Option<StoredConsensusMessage<O>>> = iter::repeat(None).take(metadata.pre_prepare_ordering().len()).collect();
         let mut prepares = Vec::new();
         let mut commits = Vec::new();
 
         for x in messages {
             match x.message().consensus().kind() {
                 ConsensusMessageKind::PrePrepare(_) => {
-                    pre_prepares.push(x);
+                    let option = metadata.pre_prepare_ordering().iter().position(|digest| *x.header().digest() == *digest);
+
+                    let index = option.ok_or(Error::simple_with_msg(ErrorKind::OrderProtocolProof, "Failed to create proof as pre prepare is not contained in metadata ordering"))?;
+
+                    pre_prepares[index] = Some(x);
                 }
                 ConsensusMessageKind::Prepare(_) => {
                     prepares.push(x);
@@ -143,12 +148,18 @@ impl<O> Proof<O> {
             }
         }
 
-        Self {
+        let mut pre_prepares_f = Vec::with_capacity(metadata.pre_prepare_ordering().len());
+
+        for message in pre_prepares.into_iter() {
+            pre_prepares_f.push(message.ok_or(Error::simple_with_msg(ErrorKind::OrderProtocolProof, "Failed to create proof as pre prepare list is not complete"))?);
+        }
+
+        Ok(Self {
             metadata,
-            pre_prepares,
+            pre_prepares: pre_prepares_f,
             prepares,
             commits,
-        }
+        })
     }
 
     pub(crate) fn metadata(&self) -> &ProofMetadata {

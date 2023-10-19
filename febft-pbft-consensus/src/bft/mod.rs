@@ -803,49 +803,19 @@ impl<D, NT> OrderProtocolPersistenceHelper<D, PBFTConsensus<D>, PBFTConsensus<D>
         }
     }
 
-    fn init_proof_from(metadata: ProofMetadata, messages: Vec<StoredMessage<PBFTMessage<D::Request>>>) -> Proof<D::Request> {
-        let mut pre_prepares = Vec::with_capacity(messages.len() / 2);
-        let mut prepares = Vec::with_capacity(messages.len() / 2);
-        let mut commits = Vec::with_capacity(messages.len() / 2);
+    fn init_proof_from(metadata: ProofMetadata, messages: Vec<StoredMessage<PBFTMessage<D::Request>>>) -> Result<Proof<D::Request>> {
+        let mut messages_f = Vec::with_capacity(messages.len());
 
         for message in messages {
-            match message.message().consensus().kind() {
-                ConsensusMessageKind::PrePrepare(_) => {
-                    pre_prepares.push(Arc::new(ReadOnly::new(message)));
-                }
-                ConsensusMessageKind::Prepare(_) => {
-                    prepares.push(Arc::new(ReadOnly::new(message)));
-                }
-                ConsensusMessageKind::Commit(_) => {
-                    commits.push(Arc::new(ReadOnly::new(message)));
-                }
-            }
+            messages_f.push(Arc::new(ReadOnly::new(message)));
         }
 
-        Proof::new(metadata, pre_prepares, prepares, commits)
+        Proof::init_from_messages(metadata, messages_f)
     }
 
     fn init_proof_from_scm(metadata: DecisionMetadata<D, PBFTConsensus<D>>,
-                           messages: Vec<ShareableConsensusMessage<D, PBFTConsensus<D>>>) -> PProof<D, PBFTConsensus<D>, PBFTConsensus<D>> {
-        let mut pre_prepares = Vec::with_capacity(messages.len() / 2);
-        let mut prepares = Vec::with_capacity(messages.len() / 2);
-        let mut commits = Vec::with_capacity(messages.len() / 2);
-
-        for message in messages {
-            match message.message().consensus().kind() {
-                ConsensusMessageKind::PrePrepare(_) => {
-                    pre_prepares.push(message);
-                }
-                ConsensusMessageKind::Prepare(_) => {
-                    prepares.push(message);
-                }
-                ConsensusMessageKind::Commit(_) => {
-                    commits.push(message);
-                }
-            }
-        }
-
-        Proof::new(metadata, pre_prepares, prepares, commits)
+                           messages: Vec<ShareableConsensusMessage<D, PBFTConsensus<D>>>) -> Result<PProof<D, PBFTConsensus<D>, PBFTConsensus<D>>> {
+        Proof::init_from_messages(metadata, messages)
     }
 
     fn decompose_proof(proof: &Proof<D::Request>) -> (&ProofMetadata, Vec<&StoredMessage<PBFTMessage<D::Request>>>) {
