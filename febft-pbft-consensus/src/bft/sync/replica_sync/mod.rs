@@ -16,17 +16,15 @@ use atlas_communication::message::Header;
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, StoredRequestMessage};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_core::persistent_log::OrderingProtocolLog;
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, TimeoutPhase, Timeouts};
-use atlas_smr_application::serialize::ApplicationData;
 use atlas_metrics::metrics::{metric_duration, metric_increment};
+use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::consensus::Consensus;
 use crate::bft::log::decisions::CollectData;
 use crate::bft::log::Log;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
-use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::{SYNC_BATCH_RECEIVED_ID, SYNC_STOPPED_COUNT_ID, SYNC_STOPPED_REQUESTS_ID, SYNC_WATCH_REQUESTS_ID};
 use crate::bft::PBFT;
 use crate::bft::sync::view::ViewInfo;
