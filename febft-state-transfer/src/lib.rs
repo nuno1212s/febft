@@ -23,7 +23,7 @@ use atlas_core::messages::StateTransfer;
 use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol};
 use atlas_core::ordering_protocol::networking::serialize::NetworkView;
 use atlas_core::persistent_log::{MonolithicStateLog, OperationMode, PersistableStateTransferProtocol};
-use atlas_core::state_transfer::{Checkpoint, CstM, StateTransferProtocol, STResult, STTimeoutResult};
+use atlas_core::state_transfer::{Checkpoint, CstM, StateTransferProtocol, STPollResult, STResult, STTimeoutResult};
 use atlas_core::state_transfer::monolithic_state::MonolithicStateTransfer;
 use atlas_core::state_transfer::networking::StateTransferSendNode;
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
@@ -242,12 +242,14 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
         Ok(())
     }
 
-    fn handle_off_ctx_message<V>(&mut self, view: V, message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
+    fn poll(&mut self) -> Result<STPollResult<CstM<Self::Serialization>>> {
+        Ok(STPollResult::ReceiveMsg)
+    }
+
+    fn handle_off_ctx_message<V>(&mut self, view: V, message: StoredMessage<CstM<Self::Serialization>>)
                                  -> Result<()>
         where V: NetworkView {
         let (header, message) = message.into_inner();
-
-        let message = message.into_inner();
 
         debug!("{:?} // Off context Message {:?} from {:?} with seq {:?}", self.node.id(), message, header.from(), message.sequence_number());
 
@@ -282,11 +284,9 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
     }
 
     fn process_message<V>(&mut self, view: V,
-                          message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
+                          message: StoredMessage<CstM<Self::Serialization>>)
                           -> Result<STResult> where V: NetworkView {
         let (header, message) = message.into_inner();
-
-        let message = message.into_inner();
 
         debug!("{:?} // Message {:?} from {:?} while in phase {:?}", self.node.id(), message, header.from(), self.phase);
 
@@ -638,8 +638,6 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
                                 received_state_cid.count += 1;
                             }
                         } else {
-
-
                             debug!("{:?} // Received blank state cid from node {:?}", self.node.id(), header.from());
                         }
                     }
