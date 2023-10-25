@@ -128,6 +128,16 @@ impl<D, NT, > OrderProtocolTolerance for PBFTOrderProtocol<D, NT>
     fn get_n_for_f(f: usize) -> usize {
         3 * f + 1
     }
+
+    fn get_quorum_for_n(n: usize) -> usize {
+        //n = 2f+1
+
+        2 * Self::get_f_for_n(n) + 1
+    }
+
+    fn get_f_for_n(n: usize) -> usize {
+        (n - 1) / 3
+    }
 }
 
 impl<D, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, NT>
