@@ -403,16 +403,11 @@ impl<S, NT, PL> MonolithicStateTransfer<S, NT, PL> for CollabStateTransfer<S, NT
         Ok(Self::new(node, timeout_duration, timeouts, log, executor_handle))
     }
 
-    fn handle_state_received_from_app<V>(&mut self, view: V, state: Arc<ReadOnly<Checkpoint<S>>>) -> Result<()>
-        where V: NetworkView {
+    fn handle_state_received_from_app(&mut self, state: Arc<ReadOnly<Checkpoint<S>>>) -> Result<()> {
         self.finalize_checkpoint(state)?;
 
         if self.needs_checkpoint() {
-            // This will make the state transfer protocol aware of the latest state
-            if let CstStatus::Nil = self.process_message(view, CstProgress::Nil) {} else {
-                return Err("Process message while needing checkpoint returned something else than nil")
-                    .wrapped(ErrorKind::Cst);
-            }
+            self.process_pending_state_requests();
         }
 
         Ok(())
