@@ -87,8 +87,10 @@ impl<D> AccessoryConsensus<D> for ReplicaAccessory<D>
             }
         });
 
-        debug!("{:?} // Broadcasting prepare messages to quorum {:?}",
-               my_id, seq);
+        let targets = view.quorum_members().clone();
+
+        debug!("{:?} // Broadcasting prepare messages to quorum {:?}, {:?}",
+               my_id, seq, targets);
 
         // Vote for the received batch.
         // Leaders in this protocol must vote as they need to ack all
@@ -102,9 +104,7 @@ impl<D> AccessoryConsensus<D> for ReplicaAccessory<D>
             ConsensusMessageKind::Prepare(current_digest),
         ));
 
-        let targets = view.quorum_members().clone();
-
-        node.broadcast_signed(message, targets.into_iter());
+        node.broadcast_signed(message, targets.into_iter()).expect("Failed to send");
     }
 
     fn handle_preparing_no_quorum<NT>(&mut self, deciding_log: &WorkingDecisionLog<D::Request>,
