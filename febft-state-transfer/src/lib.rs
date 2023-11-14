@@ -348,8 +348,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
         Ok(STResult::StateTransferRunning)
     }
 
-    fn handle_app_state_requested<V>(&mut self, seq: SeqNo) -> Result<ExecutionResult>
-        where V: NetworkView {
+    fn handle_app_state_requested(&mut self, seq: SeqNo) -> Result<ExecutionResult> {
         let earlier = std::mem::replace(&mut self.current_checkpoint_state, CheckpointState::None);
 
         self.current_checkpoint_state = match earlier {

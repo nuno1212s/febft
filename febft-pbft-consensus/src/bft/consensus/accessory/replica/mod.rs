@@ -104,7 +104,7 @@ impl<D> AccessoryConsensus<D> for ReplicaAccessory<D>
             ConsensusMessageKind::Prepare(current_digest),
         ));
 
-        node.broadcast_signed(message, targets.into_iter()).expect("Failed to send");
+        node.broadcast_signed(message, targets.into_iter());
     }
 
     fn handle_preparing_no_quorum<NT>(&mut self, deciding_log: &WorkingDecisionLog<D::Request>,
