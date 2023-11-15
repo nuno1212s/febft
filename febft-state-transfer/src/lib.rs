@@ -327,7 +327,8 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
 
                     self.request_latest_state(view);
                 } else {
-                    debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), self.current_checkpoint_state.sequence_number(), seq);
+                    debug!("{:?} // Not installing sequence number nor requesting state {:?} {:?}", self.node.id(), self.current_checkpoint_state.sequence_number(), seq);
+
                     return Ok(STResult::StateTransferNotNeeded(seq));
                 }
             }
