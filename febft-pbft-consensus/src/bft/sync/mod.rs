@@ -524,12 +524,12 @@ impl<D> AbstractSynchronizer<D> for Synchronizer<D>
             }
 
             self.install_next_view(view);
+
             return true;
         } else {
             // This is the first view, so we can just install it
             if !self.tbo.lock().unwrap().install_view(view) {
                 // If we don't install a new view, then we don't want to forget our current state now do we?
-
                 debug!("Replacing our phase with Init");
                 self.phase.replace(ProtoPhase::Init);
             }

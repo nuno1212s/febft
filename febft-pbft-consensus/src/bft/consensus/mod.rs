@@ -608,7 +608,7 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
                 self.seq_no = novel_seq_no;
             }
             Either::Right(limit) => {
-                debug!("{:?} // Installed sequence number is right of the current one and is smaller than the decisions we have stored. Removing decided decisions.", self.node_id);
+                debug!("{:?} // Installed sequence number is right of the current one and is smaller than the decisions we have stored. Removing decided decisions until sequence {:?}", self.node_id, novel_seq_no);
 
                 for _ in 0..limit {
                     // Pop the decisions that have already been made and dispose of them
@@ -620,6 +620,8 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
                 // Get the last decision in the decision queue.
                 // The following new consensus decisions will have the sequence number of the last decision
                 let mut sequence_no: SeqNo = self.decisions.back().unwrap().sequence_number().next();
+
+                debug!("Repopulating decision vec until we reach watermark. Current seq {:?}, current decision len {}, watermark {}", sequence_no, self.decisions.len(), self.watermark);
 
                 while self.decisions.len() < self.watermark as usize {
                     // We advanced [`limit`] sequence numbers on the decisions,
@@ -905,6 +907,8 @@ impl ProposerConsensusGuard {
         while let Some(seq) = guard.0.peek() {
             if seq.0 < installed_seq {
                 guard.0.pop();
+            } else {
+                break;
             }
         }
     }
