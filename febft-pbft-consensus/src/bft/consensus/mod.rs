@@ -11,9 +11,9 @@ use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
-use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message, tbo_queue_message_arc};
+use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message_arc};
 use atlas_communication::message::{Header, StoredMessage};
-use atlas_core::messages::{ClientRqInfo, RequestMessage, StoredRequestMessage};
+use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
 use atlas_core::ordering_protocol::Decision;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::smr::smr_decision_log::ShareableMessage;
@@ -24,13 +24,12 @@ use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::{OPDecision, PBFT, SysMsg};
 use crate::bft::consensus::decision::{ConsensusDecision, DecisionPollStatus, DecisionStatus, MessageQueue};
-use crate::bft::log::decided::DecisionLog;
 use crate::bft::log::deciding::CompletedBatch;
 use crate::bft::log::decisions::{IncompleteProof, Proof, ProofMetadata};
 use crate::bft::log::Log;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::metric::OPERATIONS_PROCESSED_ID;
-use crate::bft::sync::{Synchronizer};
+use crate::bft::sync::Synchronizer;
 use crate::bft::sync::view::ViewInfo;
 
 pub mod decision;
@@ -432,6 +431,8 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
                 //When we transition phases, we may discover new messages
                 // That were in the queue, so we must be signalled again
                 self.signalled.push_signalled(decision_seq);
+
+                debug!("Received transitioned state with metadata {:?}", metadata);
 
                 if let Some(metadata) = metadata {
                     ConsensusStatus::Deciding(MaybeVec::from_one(Decision::decision_info_from_metadata_and_messages(decision_seq, metadata, MaybeVec::from_one(message))))

@@ -449,11 +449,7 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
                 OPPollResult::Exec(message)
             }
             ConsensusPollStatus::Decided(decisions) => {
-                let finalized_decisions = self.finalize_all_possible()?;
-
-                let decisions = self.merge_decisions(decisions, finalized_decisions)?;
-
-                OPPollResult::ProgressedDecision(DecisionsAhead::Ignore, decisions)
+                OPPollResult::ProgressedDecision(DecisionsAhead::Ignore, self.handle_decided(decisions)?)
             }
         })
     }
@@ -500,80 +496,14 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
         Ok(OPExecResult::MessageProcessedNoUpdate)
     }
 
-    fn merge_decisions(&mut self, status: MaybeVec<OPDecision<D::Request>>, finalized_decisions: Vec<ProtocolConsensusDecision<D::Request>>) -> Result<MaybeVec<OPDecision<D::Request>>> {
-        let mut map = BTreeMap::new();
+    fn handle_decided(&mut self, decisions: MaybeVec<Decision<ProofMetadata, PBFTMessage<D::Request>, D::Request>>) -> Result<MaybeVec<OPDecision<D::Request>>> {
+        let finalized_decisions = self.finalize_all_possible()?;
 
-        Self::merge_decision_vec(&mut map, status)?;
+        debug!("Received decided decisions {:?}, merging with finalized decisions {:?}", decisions, finalized_decisions);
 
-        for decision in finalized_decisions {
-            if let Some(member) = map.get_mut(&decision.sequence_number()) {
-                member.append_decision_info(DecisionInfo::DecisionDone(decision));
-            } else {
-                map.insert(decision.sequence_number(), Decision::completed_decision(decision.sequence_number(), decision));
-            }
-        }
+        let decisions = self.merge_decisions(decisions, finalized_decisions)?;
 
-        let mut decisions = MaybeVec::builder();
-
-        // By turning this btree map into a vec, we maintain ordering on the delivery (Shouldn't
-        // really be necessary but always nice to have)
-        map.into_iter().for_each(|(seq, decision)| {
-            decisions.push(decision);
-        });
-
-        Ok(decisions.build())
-    }
-
-    /// Handles the result of a synchronizer result
-    fn handle_sync_result(&mut self, status: ConsensusStatus<D::Request>, to_exec: Option<OPDecision<D::Request>>) -> Result<MaybeVec<OPDecision<D::Request>>> {
-        let mut map = BTreeMap::new();
-
-        match status {
-            ConsensusStatus::Deciding(decision) => {
-                Self::merge_decision_vec(&mut map, decision)?;
-            }
-            ConsensusStatus::Decided(decision) => {
-                Self::merge_decision_vec(&mut map, decision)?;
-
-                let finalized = self.finalize_all_possible()?;
-
-                for decision in finalized {
-                    if let Some(member) = map.get_mut(&decision.sequence_number()) {
-                        member.append_decision_info(DecisionInfo::DecisionDone(decision));
-                    } else {
-                        map.insert(decision.sequence_number(), Decision::completed_decision(decision.sequence_number(), decision));
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        if let Some(decision) = to_exec {
-            map.insert(decision.sequence_number(), decision);
-        }
-
-        let mut decisions = MaybeVec::builder();
-
-        // By turning this btree map into a vec, we maintain ordering on the delivery (Shouldn't
-        // really be necessary but always nice to have)
-        map.into_iter().for_each(|(seq, decision)| {
-            decisions.push(decision);
-        });
-
-        Ok(decisions.build())
-    }
-
-    /// Merge a decision vector with the already existing btreemap
-    fn merge_decision_vec(map: &mut BTreeMap<SeqNo, OPDecision<<D as ApplicationData>::Request>>, decision: MaybeVec<OPDecision<<D as ApplicationData>::Request>>) -> Result<()> {
-        for dec in decision.into_iter() {
-            if let Some(member) = map.get_mut(&dec.sequence_number()) {
-                member.merge_decisions(dec)?;
-            } else {
-                map.insert(dec.sequence_number(), dec);
-            }
-        }
-
-        Ok(())
+        Ok(decisions)
     }
 
     fn update_normal_phase(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>) -> Result<OPExecResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>> {
@@ -641,11 +571,7 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
                 OPExecResult::ProgressedDecision(DecisionsAhead::Ignore, result)
             }
             ConsensusStatus::Decided(result) => {
-                let finalized_decisions = self.finalize_all_possible()?;
-
-                let decision = self.merge_decisions(result, finalized_decisions)?;
-
-                OPExecResult::ProgressedDecision(DecisionsAhead::Ignore, decision)
+                OPExecResult::ProgressedDecision(DecisionsAhead::Ignore, self.handle_decided(result)?)
             }
         });
     }
@@ -720,6 +646,84 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
                 unreachable!()
             }
         };
+    }
+
+    fn merge_decisions(&mut self, status: MaybeVec<OPDecision<D::Request>>, finalized_decisions: Vec<ProtocolConsensusDecision<D::Request>>) -> Result<MaybeVec<OPDecision<D::Request>>> {
+        let mut map = BTreeMap::new();
+
+        debug!("Merging the decisions {:?} with finalized decisions {:?}", status, finalized_decisions);
+
+        Self::merge_decision_vec(&mut map, status)?;
+
+        for decision in finalized_decisions {
+            if let Some(member) = map.get_mut(&decision.sequence_number()) {
+                member.append_decision_info(DecisionInfo::DecisionDone(decision));
+            } else {
+                map.insert(decision.sequence_number(), Decision::completed_decision(decision.sequence_number(), decision));
+            }
+        }
+
+        let mut decisions = MaybeVec::builder();
+
+        // By turning this btree map into a vec, we maintain ordering on the delivery (Shouldn't
+        // really be necessary but always nice to have)
+        map.into_iter().for_each(|(seq, decision)| {
+            decisions.push(decision);
+        });
+
+        Ok(decisions.build())
+    }
+
+    /// Handles the result of a synchronizer result
+    fn handle_sync_result(&mut self, status: ConsensusStatus<D::Request>, to_exec: Option<OPDecision<D::Request>>) -> Result<MaybeVec<OPDecision<D::Request>>> {
+        let mut map = BTreeMap::new();
+
+        match status {
+            ConsensusStatus::Deciding(decision) => {
+                Self::merge_decision_vec(&mut map, decision)?;
+            }
+            ConsensusStatus::Decided(decision) => {
+                Self::merge_decision_vec(&mut map, decision)?;
+
+                let finalized = self.finalize_all_possible()?;
+
+                for decision in finalized {
+                    if let Some(member) = map.get_mut(&decision.sequence_number()) {
+                        member.append_decision_info(DecisionInfo::DecisionDone(decision));
+                    } else {
+                        map.insert(decision.sequence_number(), Decision::completed_decision(decision.sequence_number(), decision));
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        if let Some(decision) = to_exec {
+            map.insert(decision.sequence_number(), decision);
+        }
+
+        let mut decisions = MaybeVec::builder();
+
+        // By turning this btree map into a vec, we maintain ordering on the delivery (Shouldn't
+        // really be necessary but always nice to have)
+        map.into_iter().for_each(|(seq, decision)| {
+            decisions.push(decision);
+        });
+
+        Ok(decisions.build())
+    }
+
+    /// Merge a decision vector with the already existing btreemap
+    fn merge_decision_vec(map: &mut BTreeMap<SeqNo, OPDecision<<D as ApplicationData>::Request>>, decision: MaybeVec<OPDecision<<D as ApplicationData>::Request>>) -> Result<()> {
+        for dec in decision.into_iter() {
+            if let Some(member) = map.get_mut(&dec.sequence_number()) {
+                member.merge_decisions(dec)?;
+            } else {
+                map.insert(dec.sequence_number(), dec);
+            }
+        }
+
+        Ok(())
     }
 }
 
