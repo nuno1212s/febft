@@ -432,8 +432,6 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
                 // That were in the queue, so we must be signalled again
                 self.signalled.push_signalled(decision_seq);
 
-                debug!("Received transitioned state with metadata {:?}", metadata);
-
                 if let Some(metadata) = metadata {
                     ConsensusStatus::Deciding(MaybeVec::from_one(Decision::decision_info_from_metadata_and_messages(decision_seq, metadata, MaybeVec::from_one(message))))
                 } else {

@@ -499,8 +499,6 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
     fn handle_decided(&mut self, decisions: MaybeVec<Decision<ProofMetadata, PBFTMessage<D::Request>, D::Request>>) -> Result<MaybeVec<OPDecision<D::Request>>> {
         let finalized_decisions = self.finalize_all_possible()?;
 
-        debug!("Received decided decisions {:?}, merging with finalized decisions {:?}", decisions, finalized_decisions);
-
         let decisions = self.merge_decisions(decisions, finalized_decisions)?;
 
         Ok(decisions)
@@ -650,8 +648,6 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
 
     fn merge_decisions(&mut self, status: MaybeVec<OPDecision<D::Request>>, finalized_decisions: Vec<ProtocolConsensusDecision<D::Request>>) -> Result<MaybeVec<OPDecision<D::Request>>> {
         let mut map = BTreeMap::new();
-
-        debug!("Merging the decisions {:?} with finalized decisions {:?}", status, finalized_decisions);
 
         Self::merge_decision_vec(&mut map, status)?;
 
