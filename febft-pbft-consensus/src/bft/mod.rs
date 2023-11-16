@@ -10,12 +10,13 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 use ::log::{debug, error, info, trace, warn};
+use either::Either;
 
 use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
-use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_common::ordering::{InvalidSeqNo, Orderable, SeqNo};
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_communication::serialize::Serializable;
@@ -45,6 +46,7 @@ use crate::bft::message::serialize::PBFTConsensus;
 use crate::bft::metric::{CONSENSUS_INSTALL_STATE_TIME_ID, MSG_LOG_INSTALL_TIME_ID};
 use crate::bft::proposer::Proposer;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus, SyncReconfigurationResult};
+use crate::bft::sync::view::ViewInfo;
 
 pub mod consensus;
 pub mod proposer;
@@ -260,13 +262,25 @@ impl<D, NT> PermissionedOrderingProtocol for PBFTOrderProtocol<D, NT>
           NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
     type PermissionedSerialization = PBFTConsensus<D>;
 
-    fn view(&self) -> View<Self::PermissionedSerialization> {
+    fn view(&self) -> ViewInfo {
         self.synchronizer.view()
     }
 
-    fn install_view(&mut self, view: View<Self::PermissionedSerialization>) {
-        if self.synchronizer.received_view_from_state_transfer(view.clone()) {
-            self.consensus.install_view(&view)
+    fn install_view(&mut self, view: ViewInfo) {
+        let current_view = self.view();
+
+        match view.sequence_number().index(current_view.sequence_number()) {
+            Either::Left(_) | Either::Right(0) => {
+                warn!("Attempted to install view that is the same or older than the current view that is in place? New: {:?} vs {:?}", view, current_view);
+            }
+            Either::Right(_) => {
+                self.consensus.install_view(&view);
+                if self.synchronizer.received_view_from_state_transfer(view) {
+                    info!("Installed the view and synchronizer now requires execution in order to make sure everything is correctly setup.");
+
+                    self.switch_phase(ConsensusPhase::SyncPhase);
+                }
+            }
         }
     }
 }
