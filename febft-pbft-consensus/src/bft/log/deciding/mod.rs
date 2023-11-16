@@ -2,18 +2,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
 use atlas_common::crypto::hash::{Context, Digest};
+use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_common::error::*;
-use atlas_communication::message::Header;
 use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
 use atlas_core::ordering_protocol::networking::serialize::NetworkView;
 use atlas_core::smr::smr_decision_log::ShareableMessage;
 use atlas_metrics::benchmarks::BatchMeta;
 use atlas_metrics::metrics::metric_duration;
-use crate::bft::log::decisions::{IncompleteProof, ProofMetadata};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
+
+use crate::bft::log::decisions::{IncompleteProof, PrepareSet, ProofMetadata, ViewDecisionPair};
+use crate::bft::message::{ConsensusMessageKind, PBFTMessage};
 use crate::bft::metric::PRE_PREPARE_LOG_ANALYSIS_ID;
 use crate::bft::sync::view::ViewInfo;
 
@@ -270,10 +271,52 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
         Some((ctx.finish(), batch_ordered_digests))
     }
 
-
     /// Get the current decision
     pub fn deciding(&self, f: usize) -> IncompleteProof {
-        todo!()
+        let write_set = PrepareSet({
+            let mut set = Vec::new();
+
+            for shareable_msg in self.message_log.prepares.iter().rev() {
+                let digest = match shareable_msg.message().consensus().kind() {
+                    ConsensusMessageKind::Prepare(d) => d.clone(),
+                    _ => unreachable!(),
+                };
+
+                set.push(ViewDecisionPair(
+                    shareable_msg.message().consensus().view(),
+                    digest,
+                ));
+            }
+
+            set
+        });
+
+        let quorum_prepares = 'outer: loop {
+            let quorum = f << 1;
+            let mut last_view = None;
+            let mut count = 0;
+
+            for stored in self.message_log.prepares.iter().rev() {
+                match last_view {
+                    None => (),
+                    Some(v) if stored.message().consensus().view() == v => (),
+                    _ => count = 0,
+                }
+                last_view = Some(stored.message().consensus().view());
+                count += 1;
+                if count == quorum {
+                    let digest = match stored.message().consensus().kind() {
+                        ConsensusMessageKind::Prepare(d) => d.clone(),
+                        _ => unreachable!(),
+                    };
+                    break 'outer Some(ViewDecisionPair(stored.message().consensus().view(), digest));
+                }
+            }
+
+            break 'outer None;
+        };
+
+        IncompleteProof::new(self.seq_no, write_set, quorum_prepares)
     }
 
     /// Indicate that the batch is finished processing and
@@ -328,7 +371,6 @@ impl<O> CompletedBatch<O> {
     pub fn request_count(&self) -> usize {
         self.client_requests.len()
     }
-    
 }
 
 impl<O> Orderable for WorkingDecisionLog<O> {
