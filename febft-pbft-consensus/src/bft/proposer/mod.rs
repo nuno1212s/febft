@@ -14,9 +14,9 @@ use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::request_pre_processing::{BatchOutput, PreProcessorOutputMessage};
 use atlas_core::timeouts::Timeouts;
-use atlas_execution::app::UnorderedBatch;
-use atlas_execution::ExecutorHandle;
-use atlas_execution::serialize::ApplicationData;
+use atlas_smr_application::app::UnorderedBatch;
+use atlas_smr_application::ExecutorHandle;
+use atlas_smr_application::serialize::ApplicationData;
 use atlas_metrics::metrics::{metric_duration, metric_increment, metric_store_count};
 
 use crate::bft::config::ProposerConfig;

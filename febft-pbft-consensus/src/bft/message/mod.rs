@@ -17,9 +17,9 @@ use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::Header;
 use atlas_core::messages::{RequestMessage, StoredRequestMessage};
-use atlas_execution::serialize::ApplicationData;
+use atlas_smr_application::serialize::ApplicationData;
 
-use crate::bft::msg_log::decisions::CollectData;
+use crate::bft::log::decisions::CollectData;
 use crate::bft::sync::LeaderCollects;
 use crate::bft::sync::view::ViewInfo;
 

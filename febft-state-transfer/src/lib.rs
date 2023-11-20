@@ -23,13 +23,13 @@ use atlas_core::messages::StateTransfer;
 use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol};
 use atlas_core::ordering_protocol::networking::serialize::NetworkView;
 use atlas_core::persistent_log::{MonolithicStateLog, OperationMode, PersistableStateTransferProtocol};
-use atlas_core::state_transfer::{Checkpoint, CstM, StateTransferProtocol, STResult, STTimeoutResult};
+use atlas_core::state_transfer::{Checkpoint, CstM, StateTransferProtocol, STPollResult, STResult, STTimeoutResult};
 use atlas_core::state_transfer::monolithic_state::MonolithicStateTransfer;
 use atlas_core::state_transfer::networking::StateTransferSendNode;
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
-use atlas_execution::app::Application;
-use atlas_execution::serialize::ApplicationData;
-use atlas_execution::state::monolithic_state::{InstallStateMessage, MonolithicState};
+use atlas_smr_application::app::Application;
+use atlas_smr_application::serialize::ApplicationData;
+use atlas_smr_application::state::monolithic_state::{InstallStateMessage, MonolithicState};
 use atlas_metrics::metrics::metric_duration;
 
 use crate::config::StateTransferConfig;
@@ -242,12 +242,14 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
         Ok(())
     }
 
-    fn handle_off_ctx_message<V>(&mut self, view: V, message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
+    fn poll(&mut self) -> Result<STPollResult<CstM<Self::Serialization>>> {
+        Ok(STPollResult::ReceiveMsg)
+    }
+
+    fn handle_off_ctx_message<V>(&mut self, view: V, message: StoredMessage<CstM<Self::Serialization>>)
                                  -> Result<()>
         where V: NetworkView {
         let (header, message) = message.into_inner();
-
-        let message = message.into_inner();
 
         debug!("{:?} // Off context Message {:?} from {:?} with seq {:?}", self.node.id(), message, header.from(), message.sequence_number());
 
@@ -282,11 +284,9 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
     }
 
     fn process_message<V>(&mut self, view: V,
-                          message: StoredMessage<StateTransfer<CstM<Self::Serialization>>>)
+                          message: StoredMessage<CstM<Self::Serialization>>)
                           -> Result<STResult> where V: NetworkView {
         let (header, message) = message.into_inner();
-
-        let message = message.into_inner();
 
         debug!("{:?} // Message {:?} from {:?} while in phase {:?}", self.node.id(), message, header.from(), self.phase);
 
@@ -327,7 +327,8 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
 
                     self.request_latest_state(view);
                 } else {
-                    debug!("{:?} // Not installing sequence number nor requesting state ???? {:?} {:?}", self.node.id(), self.current_checkpoint_state.sequence_number(), seq);
+                    debug!("{:?} // Not installing sequence number nor requesting state {:?} {:?}", self.node.id(), self.current_checkpoint_state.sequence_number(), seq);
+
                     return Ok(STResult::StateTransferNotNeeded(seq));
                 }
             }
@@ -348,8 +349,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
         Ok(STResult::StateTransferRunning)
     }
 
-    fn handle_app_state_requested<V>(&mut self, view: V, seq: SeqNo) -> Result<ExecutionResult>
-        where V: NetworkView {
+    fn handle_app_state_requested(&mut self, seq: SeqNo) -> Result<ExecutionResult> {
         let earlier = std::mem::replace(&mut self.current_checkpoint_state, CheckpointState::None);
 
         self.current_checkpoint_state = match earlier {
@@ -403,16 +403,11 @@ impl<S, NT, PL> MonolithicStateTransfer<S, NT, PL> for CollabStateTransfer<S, NT
         Ok(Self::new(node, timeout_duration, timeouts, log, executor_handle))
     }
 
-    fn handle_state_received_from_app<V>(&mut self, view: V, state: Arc<ReadOnly<Checkpoint<S>>>) -> Result<()>
-        where V: NetworkView {
+    fn handle_state_received_from_app(&mut self, state: Arc<ReadOnly<Checkpoint<S>>>) -> Result<()> {
         self.finalize_checkpoint(state)?;
 
         if self.needs_checkpoint() {
-            // This will make the state transfer protocol aware of the latest state
-            if let CstStatus::Nil = self.process_message(view, CstProgress::Nil) {} else {
-                return Err("Process message while needing checkpoint returned something else than nil")
-                    .wrapped(ErrorKind::Cst);
-            }
+            self.process_pending_state_requests();
         }
 
         Ok(())
@@ -638,8 +633,6 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
                                 received_state_cid.count += 1;
                             }
                         } else {
-
-
                             debug!("{:?} // Received blank state cid from node {:?}", self.node.id(), header.from());
                         }
                     }
