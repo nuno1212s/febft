@@ -5,6 +5,8 @@ use std::time::Instant;
 
 use chrono::Utc;
 use log::{debug, info, warn};
+use thiserror::Error;
+use atlas_common::Err;
 
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
@@ -552,10 +554,12 @@ impl<D> ConsensusDecision<D>
     /// Finalize this consensus decision and return the information about the batch
     pub fn finalize(self) -> Result<CompletedBatch<D::Request>> {
         if let DecisionPhase::Decided = self.phase {
+            let seq = self.sequence_number();
+
             self.working_log.finish_processing_batch()
-                .ok_or(Error::simple_with_msg(ErrorKind::Consensus, "Failed to finalize batch"))
+                .ok_or(anyhow::Error::from(DecisionError::FailedToFinalizeBatch(seq)))
         } else {
-            Err(Error::simple_with_msg(ErrorKind::Consensus, "Cannot finalize batch that is not decided"))
+            Err!(DecisionError::CannotFinalizeUndecidedBatch(self.sequence_number()))
         }
     }
 
@@ -624,4 +628,12 @@ impl<O> Debug for DecisionPollStatus<O> {
             }
         }
     }
+}
+
+#[derive(Error, Debug)]
+pub enum DecisionError {
+    #[error("Unable to finalize an undecided batch {0:?}")]
+    CannotFinalizeUndecidedBatch(SeqNo),
+    #[error("Failed to finalize a batch {0:?}")]
+    FailedToFinalizeBatch(SeqNo),
 }

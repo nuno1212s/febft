@@ -1,4 +1,6 @@
 use either::Either;
+use thiserror::Error;
+use atlas_common::Err;
 
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
@@ -36,15 +38,19 @@ impl<D> Log<D> where D: ApplicationData {
         if let Some(decision) = self.decision_log().last_execution() {
             match proof.seq_no().index(decision) {
                 Either::Left(_) | Either::Right(0) => {
-                    return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidedLog,
-                                                      "Cannot install proof as we already have a decision that is >= to the one that was provided"));
+                    return Err!(LogError::CannotInstallDecisionAlreadyAhead {
+                        already_installed: decision,
+                        install_attempt: proof.sequence_number()
+                    });
                 }
                 Either::Right(1) => {
                     self.decided.append_proof(proof.clone());
                 }
                 Either::Right(_) => {
-                    return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidedLog,
-                                                      "Cannot install proof as it would involve skipping a decision that we are not aware of"));
+                    return Err!(LogError::CannotInstallWouldSkip {
+                        install_attempt: proof.sequence_number(),
+                        currently_installed: decision
+                    });
                 }
             }
         }
@@ -155,4 +161,18 @@ impl<O> From<&Proof<O>> for ProtocolConsensusDecision<O> where O: Clone {
                                        client_rqs,
                                        value.metadata().batch_digest())
     }
+}
+
+#[derive(Error, Debug)]
+pub enum LogError {
+    #[error("Failed to install decision {install_attempt:?} as we already have decision {already_installed:?}")]
+    CannotInstallDecisionAlreadyAhead {
+        install_attempt: SeqNo,
+        already_installed: SeqNo,
+    },
+    #[error("Failed to install decision {install_attempt:?} as we are only on decision {currently_installed:?}")]
+    CannotInstallWouldSkip {
+        install_attempt: SeqNo,
+        currently_installed: SeqNo,
+    },
 }

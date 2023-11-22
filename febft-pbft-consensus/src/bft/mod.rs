@@ -5,23 +5,20 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::ops::Drop;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
+
 use ::log::{debug, error, info, trace, warn};
+use anyhow::anyhow;
 use either::Either;
 
 use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
-use atlas_common::ordering::{InvalidSeqNo, Orderable, SeqNo};
-use atlas_communication::message::{Header, StoredMessage};
-use atlas_communication::protocol_node::ProtocolNetworkNode;
-use atlas_communication::serialize::Serializable;
-use atlas_core::messages::{ClientRqInfo, Protocol};
-use atlas_core::ordering_protocol::{Decision, DecisionInfo, DecisionMetadata, DecisionsAhead, JoinInfo, OPExecResult, OPPollResult, OrderingProtocol, OrderingProtocolArgs, OrderProtocolTolerance, PermissionedOrderingProtocol, ProtocolConsensusDecision, ProtocolMessage, View};
+use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_communication::message::StoredMessage;
+use atlas_core::ordering_protocol::{Decision, DecisionInfo, DecisionMetadata, DecisionsAhead, JoinInfo, OPExecResult, OPPollResult, OrderingProtocol, OrderingProtocolArgs, OrderProtocolTolerance, PermissionedOrderingProtocol, ProtocolConsensusDecision};
 use atlas_core::ordering_protocol::loggable::{LoggableOrderProtocol, OrderProtocolPersistenceHelper, PProof};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::networking::serialize::{NetworkView, OrderingProtocolMessage};
@@ -33,17 +30,14 @@ use atlas_core::smr::smr_decision_log::{ShareableConsensusMessage, ShareableMess
 use atlas_core::timeouts::{RqTimeout, Timeouts};
 use atlas_smr_application::ExecutorHandle;
 use atlas_smr_application::serialize::ApplicationData;
-use atlas_metrics::metrics::metric_duration;
-use atlas_smr_application::app::UpdateBatch;
 
 use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus, ProposerConsensusGuard};
-use crate::bft::log::decisions::{Proof, ProofMetadata};
 use crate::bft::log::{initialize_decided_log, Log};
 use crate::bft::log::decided::DecisionLog;
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, ObserveEventKind, PBFTMessage, ViewChangeMessage};
+use crate::bft::log::decisions::{Proof, ProofMetadata};
+use crate::bft::message::{ConsensusMessageKind, ObserveEventKind, PBFTMessage};
 use crate::bft::message::serialize::PBFTConsensus;
-use crate::bft::metric::{CONSENSUS_INSTALL_STATE_TIME_ID, MSG_LOG_INSTALL_TIME_ID};
 use crate::bft::proposer::Proposer;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer, SynchronizerPollStatus, SynchronizerStatus, SyncReconfigurationResult};
 use crate::bft::sync::view::ViewInfo;
@@ -146,9 +140,9 @@ impl<D, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, NT>
     where D: ApplicationData + 'static,
           NT: OrderProtocolSendNode<D, PBFT<D>> + 'static, {
     type Serialization = PBFTConsensus<D>;
-    type Config = PBFTConfig<D>;
+    type Config = PBFTConfig;
 
-    fn initialize(config: PBFTConfig<D>, args: OrderingProtocolArgs<D, NT>) -> Result<Self> where
+    fn initialize(config: PBFTConfig, args: OrderingProtocolArgs<D, NT>) -> Result<Self> where
         Self: Sized,
     {
         Self::initialize_protocol(config, args, None)
@@ -288,20 +282,18 @@ impl<D, NT> PermissionedOrderingProtocol for PBFTOrderProtocol<D, NT>
 impl<D, NT> PBFTOrderProtocol<D, NT>
     where D: ApplicationData + 'static,
           NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
-    fn initialize_protocol(config: PBFTConfig<D>, args: OrderingProtocolArgs<D, NT>,
+    fn initialize_protocol(config: PBFTConfig, args: OrderingProtocolArgs<D, NT>,
                            initial_state: Option<DecisionLog<D::Request>>) -> Result<Self> {
         let PBFTConfig {
-            node_id,
-            follower_handle,
-            view, timeout_dur,
+            timeout_dur,
             proposer_config, watermark
         } = config;
 
-        let OrderingProtocolArgs(executor, timeouts,
+        let OrderingProtocolArgs(node_id, executor, timeouts,
                                  pre_processor, batch_input,
                                  node, quorum) = args;
 
-        let sync = Synchronizer::initialize_with_quorum(node_id, view.sequence_number(), quorum.clone(), timeout_dur)?;
+        let sync = Synchronizer::initialize_with_quorum(node_id, SeqNo::ZERO, quorum.clone(), timeout_dur)?;
 
         let consensus_guard = ProposerConsensusGuard::new(sync.view(), watermark);
 
@@ -822,8 +814,8 @@ impl<D, NT> OrderProtocolPersistenceHelper<D, PBFTConsensus<D>, PBFTConsensus<D>
                     }
                 }
             }
-            PBFTMessage::ViewChange(view_change) => Err(Error::simple_with_msg(ErrorKind::Consensus, "Failed to get type for view change message.")),
-            PBFTMessage::ObserverMessage(_) => Err(Error::simple_with_msg(ErrorKind::Consensus, "Failed to get type for view change message."))
+            PBFTMessage::ViewChange(view_change) => Err(anyhow!("Failed to get type for view change message.")),
+            PBFTMessage::ObserverMessage(_) => Err(anyhow!("Failed to get type for view change message."))
         }
     }
 
