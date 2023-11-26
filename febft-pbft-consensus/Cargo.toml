@@ -27,7 +27,7 @@ default = [
     "serialize_serde"
 ]
 
-serialize_serde = ["atlas-capnp", "serde", "serde_bytes", "bincode", "atlas-common/serialize_serde",
+serialize_serde = ["atlas-capnp", "serde_bytes", "bincode", "atlas-common/serialize_serde",
     "atlas-smr-application/serialize_serde", "atlas-communication/serialize_serde", "atlas-core/serialize_serde"]
 serialize_capnp = ["atlas-capnp"]
 
@@ -38,6 +38,8 @@ mimalloc = { version = "*", default-features = false }
 rand = {version = "0.8.5", features = ["small_rng"] }
 
 [dependencies]
+anyhow = "1.0.75"
+thiserror = "1.0.50"
 atlas-common = { path = "../../Atlas/Atlas-Common" }
 atlas-communication = { path = "../../Atlas/Atlas-Communication" }
 atlas-smr-application = { path = "../../Atlas/Atlas-SMR-Application" }
@@ -74,7 +76,7 @@ ring = { version = "0.16", optional = true }
 threadpool-crossbeam-channel = { version = "1.8.0", optional = true }
 #async-semaphore = { version = "1", optional = true }
 
-serde = { version = "*", features = ["derive", "rc"], optional = true }
+serde = { version = "*", features = ["derive", "rc"]}
 bincode = { version = "2.0.0-rc.2", features = ["serde"], optional = true }
 
 flume = { version = "0.10", optional = true }
@@ -94,7 +96,6 @@ log4rs = { version = "1.1.1", features = ["file_appender"] }
 #tracing = "0.1.32"
 #tracing-subscriber = { version = "0.3.11", features = ["fmt"] }
 
-thiserror = "1.0.32"
 num-bigint = "0.4.3"
 num-traits = "0.2.15"
 

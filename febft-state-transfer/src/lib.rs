@@ -4,13 +4,15 @@ use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use anyhow::anyhow;
 
 use log::{debug, error, info, warn};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use atlas_common::channel::ChannelSyncTx;
-use atlas_common::collections;
+use atlas_common::{collections, Err};
 use atlas_common::collections::HashMap;
 use atlas_common::crypto::hash::Digest;
 use atlas_common::error::*;
@@ -276,7 +278,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
             CstStatus::Nil => (),
 // should not happen...
             _ => {
-                return Err(format!("Invalid state reached while state transfer processing message! {:?}", status)).wrapped(ErrorKind::CoreServer);
+                return Err(anyhow!(format!("Invalid state reached while state transfer processing message! {:?}", status)));
             }
         }
 
@@ -315,7 +317,7 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
             CstStatus::State(state) => {
                 let start = Instant::now();
 
-                self.install_channel.send(InstallStateMessage::new(state.checkpoint.state().clone())).unwrap();
+                self.install_channel.send_return(InstallStateMessage::new(state.checkpoint.state().clone())).unwrap();
 
                 metric_duration(STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID, start.elapsed());
 
@@ -818,10 +820,10 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         PL: MonolithicStateLog<S> {
         match &self.current_checkpoint_state {
             CheckpointState::None => {
-                Err("No checkpoint has been initiated yet").wrapped(ErrorKind::MsgLog)
+                Err!(StateTransferError::CheckpointNotInitiated)
             }
             CheckpointState::Complete(_) => {
-                Err("Checkpoint already finalized").wrapped(ErrorKind::MsgLog)
+                Err!(StateTransferError::CheckpointAlreadyFinalized)
             }
             CheckpointState::Partial { seq: _ } | CheckpointState::PartialWithEarlier { seq: _, .. } => {
                 let checkpoint_state = CheckpointState::Complete(checkpoint.clone());
@@ -980,4 +982,12 @@ impl<S> Orderable for CheckpointState<S> {
             }
         }
     }
+}
+
+#[derive(Error, Debug)]
+pub enum StateTransferError {
+    #[error("The checkpoint has already been finalized")]
+    CheckpointAlreadyFinalized,
+    #[error("No checkpoint has been initiated yet")]
+    CheckpointNotInitiated
 }

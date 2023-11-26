@@ -2,8 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use thiserror::Error;
 
 use atlas_common::crypto::hash::{Context, Digest};
+use atlas_common::Err;
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
@@ -161,18 +163,13 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
         let sending_leader = header.from();
 
         let slice = self.request_space_slices.get(&sending_leader)
-            .ok_or(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
-                                          format!("Failed to get request space for leader {:?}. Len: {:?}. {:?}",
-                                                  sending_leader,
-                                                  self.request_space_slices.len(),
-                                                  self.request_space_slices).as_str()))?;
+            .ok_or(DecidingLogError::FailedToGetLeadersRequestSpace(sending_leader))?;
 
         if sending_leader != self.node_id {
             // Only check batches from other leaders since we implicitly trust in ourselves
             for request in &batch_rq_digests {
                 if !crate::bft::sync::view::is_request_in_hash_space(&request.digest(), slice) {
-                    return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
-                                                      "This batch contains requests that are not in the hash space of the leader."));
+                    return Err!(DecidingLogError::BatchContainsRequestsNotInLeaderAddrSpace(sending_leader));
                 }
             }
         }
@@ -183,7 +180,7 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
         let leader_index = pre_prepare_index_of(&self.leader_set, &sending_leader)?;
 
         if leader_index >= self.pre_prepare_digests.len() {
-            unreachable!("Cannot insert a pre prepare message that was sent by a leader that is out of bounds")
+            return Err!(DecidingLogError::LeaderNotInLeaderSet(sending_leader));
         }
 
         self.pre_prepare_digests[leader_index] = Some(digest);
@@ -210,7 +207,7 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
             let result = self.calculate_instance_digest();
 
             let (digest, ordering) = result
-                .ok_or(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog, "Failed to calculate instance digest"))?;
+                .ok_or(DecidingLogError::FailedToCalculateDigest(self.seq_no))?;
 
             self.batch_digest = Some(digest.clone());
 
@@ -382,24 +379,21 @@ impl<O> Orderable for WorkingDecisionLog<O> {
 impl DuplicateReplicaEvaluator {
     fn insert_pre_prepare_received(&mut self, node_id: NodeId) -> Result<()> {
         if !self.received_pre_prepare_messages.insert(node_id) {
-            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
-                                              "We have already received a message from that leader."));
+            return Err!(DecidingLogError::DuplicateVoteFromNode(node_id));
         }
 
         Ok(())
     }
     fn insert_prepare_received(&mut self, node_id: NodeId) -> Result<()> {
         if !self.received_prepare_messages.insert(node_id) {
-            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
-                                              "We have already received a message from that leader."));
+            return Err!(DecidingLogError::DuplicateVoteFromNode(node_id));
         }
 
         Ok(())
     }
     fn insert_commit_received(&mut self, node_id: NodeId) -> Result<()> {
         if !self.received_commit_messages.insert(node_id) {
-            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecidingLog,
-                                              "We have already received a message from that leader."));
+            return Err!(DecidingLogError::DuplicateVoteFromNode(node_id));
         }
 
         Ok(())
@@ -410,7 +404,7 @@ impl DuplicateReplicaEvaluator {
 pub fn pre_prepare_index_from_digest_opt(prepare_set: &Vec<Option<Digest>>, digest: &Digest) -> Result<usize> {
     match prepare_set.iter().position(|pre_prepare| pre_prepare.map(|d| d == *digest).unwrap_or(false)) {
         None => {
-            Err(Error::simple_with_msg(ErrorKind::Consensus, "Pre prepare is not part of the pre prepare set"))
+            Err!(DecidingLogError::PrePrepareNotPartOfSet(digest.clone(), prepare_set.iter().cloned().filter(Option::is_some).map(|r| r.unwrap()).collect()))
         }
         Some(pos) => {
             Ok(pos)
@@ -421,7 +415,7 @@ pub fn pre_prepare_index_from_digest_opt(prepare_set: &Vec<Option<Digest>>, dige
 pub fn pre_prepare_index_of_from_digest(prepare_set: &Vec<Digest>, preprepare: &Digest) -> Result<usize> {
     match prepare_set.iter().position(|pre_prepare| *pre_prepare == *preprepare) {
         None => {
-            Err(Error::simple_with_msg(ErrorKind::Consensus, "Pre prepare is not part of the pre prepare set"))
+            Err!(DecidingLogError::PrePrepareNotPartOfSet(preprepare.clone(), prepare_set.clone()))
         }
         Some(pos) => {
             Ok(pos)
@@ -432,10 +426,28 @@ pub fn pre_prepare_index_of_from_digest(prepare_set: &Vec<Digest>, preprepare: &
 pub fn pre_prepare_index_of(leader_set: &Vec<NodeId>, proposer: &NodeId) -> Result<usize> {
     match leader_set.iter().position(|node| *node == *proposer) {
         None => {
-            Err(Error::simple_with_msg(ErrorKind::Consensus, "Proposer is not part of the leader set"))
+            Err!(DecidingLogError::ProposerNotInLeaderSet(proposer.clone(), leader_set.clone()))
         }
         Some(pos) => {
             Ok(pos)
         }
     }
+}
+
+#[derive(Error, Debug)]
+pub enum DecidingLogError {
+    #[error("Proposer is not part of leader set {0:?}, leader set {1:?}")]
+    ProposerNotInLeaderSet(NodeId, Vec<NodeId>),
+    #[error("Pre prepare is not part of the pre prepare set. {0:?} vs {1:?}")]
+    PrePrepareNotPartOfSet(Digest, Vec<Digest>),
+    #[error("We have received a duplicate vote from node {0:?}")]
+    DuplicateVoteFromNode(NodeId),
+    #[error("Failed to calculate instance digest {0:?}")]
+    FailedToCalculateDigest(SeqNo),
+    #[error("Failed leader not in leader set")]
+    LeaderNotInLeaderSet(NodeId),
+    #[error("Batch contains requests that are not in leader's ({0:?}) address space")]
+    BatchContainsRequestsNotInLeaderAddrSpace(NodeId),
+    #[error("Failed to get leader's request space {0:?}")]
+    FailedToGetLeadersRequestSpace(NodeId),
 }

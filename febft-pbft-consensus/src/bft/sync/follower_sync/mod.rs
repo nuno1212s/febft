@@ -2,7 +2,6 @@ use std::{marker::PhantomData};
 use atlas_common::ordering::Orderable;
 use atlas_core::messages::ClientRqInfo;
 use atlas_smr_application::serialize::ApplicationData;
-use crate::bft::log::decisions::StoredConsensusMessage;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 

@@ -4,8 +4,10 @@ use std::ops::Deref;
 
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use atlas_common::crypto::hash::Digest;
+use atlas_common::Err;
 use atlas_common::error::*;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_core::ordering_protocol::networking::serialize::OrderProtocolProof;
@@ -135,7 +137,7 @@ impl<O> Proof<O> {
                 ConsensusMessageKind::PrePrepare(_) => {
                     let option = metadata.pre_prepare_ordering().iter().position(|digest| *x.header().digest() == *digest);
 
-                    let index = option.ok_or(Error::simple_with_msg(ErrorKind::OrderProtocolProof, "Failed to create proof as pre prepare is not contained in metadata ordering"))?;
+                    let index = option.ok_or(ProofError::PrePrepareNotContainedInMetadata)?;
 
                     pre_prepares[index] = Some(x);
                 }
@@ -151,7 +153,7 @@ impl<O> Proof<O> {
         let mut pre_prepares_f = Vec::with_capacity(metadata.pre_prepare_ordering().len());
 
         for message in pre_prepares.into_iter() {
-            pre_prepares_f.push(message.ok_or(Error::simple_with_msg(ErrorKind::OrderProtocolProof, "Failed to create proof as pre prepare list is not complete"))?);
+            pre_prepares_f.push(message.ok_or(ProofError::PrePrepareListNotComplete)?);
         }
 
         Ok(Self {
@@ -184,8 +186,7 @@ impl<O> Proof<O> {
     /// Check if the amount of pre prepares line up with the expected amount
     fn check_pre_prepare_sizes(&self) -> Result<()> {
         if self.metadata.pre_prepare_ordering().len() != self.pre_prepares.len() {
-            return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
-                                              "Wrong number of pre prepares."));
+            return Err!(ProofError::WrongPrePrepareCount(self.metadata.pre_prepare_ordering().len(), self.pre_prepares.len()));
         }
 
         Ok(())
@@ -225,8 +226,7 @@ impl<O> Proof<O> {
                     ordered_pre_prepares.push(message);
                 }
                 None => {
-                    return Err(Error::simple_with_msg(ErrorKind::MsgLogDecisions,
-                                                      "Proof's batches do not match with the digests provided."));
+                    return Err!(ProofError::BatchDigestsDoNotMatch);
                 }
             }
         }
@@ -367,4 +367,16 @@ impl<O> Debug for CollectData<O> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "CollectData {{ incomplete_proof: {:?}, last_proof: {:?} }}", self.incomplete_proof, self.last_proof)
     }
+}
+
+#[derive(Error, Debug)]
+pub enum ProofError {
+    #[error("Failed to create proof as pre prepare request was not contained within the provided metadata")]
+    PrePrepareNotContainedInMetadata,
+    #[error("Failed to create proof as pre prepare list is not complete")]
+    PrePrepareListNotComplete,
+    #[error("Failed to create proof as there is a wrong pre prepare count expected {0:?} got {1:?}")]
+    WrongPrePrepareCount(usize, usize),
+    #[error("Proof's batches do not match with the digests provided.")]
+    BatchDigestsDoNotMatch,
 }

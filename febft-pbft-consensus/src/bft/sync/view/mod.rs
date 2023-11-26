@@ -8,7 +8,9 @@ use num_bigint::ToBigUint;
 use num_traits::identities::Zero;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use atlas_common::crypto::hash::Digest;
+use atlas_common::Err;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
@@ -91,7 +93,7 @@ impl ViewInfo {
             params,
         })
     }
-
+    
     /// Creates a new instance of `ViewInfo`, from a given list of quorum members
     pub fn from_quorum(seq: SeqNo, quorum_members: Vec<NodeId>) -> Result<Self> {
         let n = quorum_members.len();
@@ -126,8 +128,7 @@ impl ViewInfo {
 
         for x in &leader_set {
             if !quorum_participants.contains(x) {
-                return Err(Error::simple_with_msg(ErrorKind::CoreServer,
-                                                  "Leader is not in the quorum participants."));
+                return Err!(ViewError::LeaderNotInQuorum(x.clone(), quorum_participants));
             }
         }
 
@@ -308,4 +309,10 @@ impl Debug for ViewInfo {
         write!(f, "Seq: {:?}, quorum: {:?}, primary: {:?}, leader_set: {:?}, params: {:?}",
                self.seq, self.quorum_members, self.leader(), self.leader_set, self.params)
     }
+}
+
+#[derive(Error, Debug)]
+pub enum ViewError {
+    #[error("Leader is not contained in the quorum participants. Leader {0:?}, quorum {1:?}")]
+    LeaderNotInQuorum(NodeId, Vec<NodeId>)
 }
