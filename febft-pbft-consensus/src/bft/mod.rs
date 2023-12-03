@@ -894,7 +894,7 @@ impl<D, NT, RP> ReconfigurableOrderProtocol<RP> for PBFTOrderProtocol<D, NT>
                 Ok(ReconfigurationAttemptResult::InProgress)
             }
             SyncReconfigurationResult::Completed => {
-                Ok(ReconfigurationAttemptResult::Successful)
+                Ok(ReconfigurationAttemptResult::Successful(self.synchronizer.view().quorum_members().clone()))
             }
         };
     }
