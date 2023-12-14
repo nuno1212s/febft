@@ -13,17 +13,6 @@ readme = "README.md"
 [features]
 # Consult the crate documentation for more details on the features.
 default = [
-    "atlas-common/async_runtime_tokio",
-    "atlas-common/threadpool_rayon",
-    "atlas-common/socket_tokio_tcp",
-    "atlas-common/channel_flume_mpmc",
-    "atlas-common/channel_sync_crossbeam",
-    "atlas-common/channel_mixed_flume",
-    "atlas-common/channel_mult_custom_dump",
-    "atlas-common/crypto_signature_ring_ed25519",
-    "atlas-common/crypto_hash_blake3_blake3",
-    "atlas-common/collections_randomstate_fxhash",
-    "atlas-common/persistent_db_rocksdb",
     "serialize_serde"
 ]
 
@@ -40,7 +29,7 @@ rand = {version = "0.8.5", features = ["small_rng"] }
 [dependencies]
 anyhow = "1.0.75"
 thiserror = "1.0.50"
-atlas-common = { path = "../../Atlas/Atlas-Common" }
+atlas-common = { path = "../../Atlas/Atlas-Common", default-features = true }
 atlas-communication = { path = "../../Atlas/Atlas-Communication" }
 atlas-smr-application = { path = "../../Atlas/Atlas-SMR-Application" }
 atlas-core = { path = "../../Atlas/Atlas-Core" }
