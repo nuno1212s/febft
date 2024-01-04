@@ -10,8 +10,7 @@ edition = "2021"
 serialize_serde = ["serde"]
 serialize_capnp = ["atlas-capnp", "capnp"]
 
-default = ["serialize_serde", "atlas-communication/serialize_serde",
-    "atlas-smr-application/serialize_serde", "atlas-common/serialize_serde", "atlas-core/serialize_serde"]
+default = ["serialize_serde", "atlas-communication/serialize_serde", "atlas-common/serialize_serde", "atlas-core/serialize_serde"]
 
 [dependencies]
 

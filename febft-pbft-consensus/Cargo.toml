@@ -16,8 +16,7 @@ default = [
     "serialize_serde"
 ]
 
-serialize_serde = ["atlas-capnp", "serde_bytes", "bincode", "atlas-common/serialize_serde",
-    "atlas-smr-application/serialize_serde", "atlas-communication/serialize_serde", "atlas-core/serialize_serde"]
+serialize_serde = ["atlas-capnp", "serde_bytes", "bincode", "atlas-common/serialize_serde", "atlas-communication/serialize_serde", "atlas-core/serialize_serde"]
 serialize_capnp = ["atlas-capnp"]
 
 [dev-dependencies]

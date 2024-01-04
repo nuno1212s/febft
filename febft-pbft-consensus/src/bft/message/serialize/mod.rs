@@ -37,45 +37,43 @@ pub mod serde;
 /// The buffer type used to serialize messages into.
 pub type Buf = Bytes;
 
-pub fn serialize_consensus<W, D>(w: &mut W, message: &ConsensusMessage<D::Request>) -> Result<()>
+pub fn serialize_consensus<W, RQ>(w: &mut W, message: &ConsensusMessage<RQ>) -> Result<()>
     where
         W: Write + AsRef<[u8]> + AsMut<[u8]>,
-        D: ApplicationData,
 {
     #[cfg(feature = "serialize_capnp")]
     capnp::serialize_consensus::<W, D>(w, message)?;
 
     #[cfg(feature = "serialize_serde")]
-    serde::serialize_consensus::<W, D>(message, w)?;
+    serde::serialize_consensus::<W, RQ>(message, w)?;
 
     Ok(())
 }
 
-pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
+pub fn deserialize_consensus<R, RQ>(r: R) -> Result<ConsensusMessage<RQ>>
     where
         R: Read + AsRef<[u8]>,
-        D: ApplicationData,
 {
     #[cfg(feature = "serialize_capnp")]
         let result = capnp::deserialize_consensus::<R, D>(r)?;
 
     #[cfg(feature = "serialize_serde")]
-        let result = serde::deserialize_consensus::<R, D>(r)?;
+        let result = serde::deserialize_consensus::<R, RQ>(r)?;
 
     Ok(result)
 }
 
 /// The serializable type, to be used to appease the compiler and it's requirements
-pub struct PBFTConsensus<D: ApplicationData>(PhantomData<(D)>);
+pub struct PBFTConsensus<RQ>(PhantomData<(RQ)>);
 
-impl<D> OrderingProtocolMessage<D> for PBFTConsensus<D>
-    where D: ApplicationData, {
-    type ProtocolMessage = PBFTMessage<D::Request>;
+impl<RQ> OrderingProtocolMessage<RQ> for PBFTConsensus<RQ>
+    {
+    type ProtocolMessage = PBFTMessage<RQ>;
     type ProofMetadata = ProofMetadata;
 
     fn verify_order_protocol_message<NI, OPVH>(network_info: &Arc<NI>, header: &Header, message: Self::ProtocolMessage) -> Result<Self::ProtocolMessage>
         where NI: NetworkInformationProvider,
-              OPVH: OrderProtocolSignatureVerificationHelper<D, Self, NI>, Self: Sized {
+              OPVH: OrderProtocolSignatureVerificationHelper<RQ, Self, NI>, Self: Sized {
         match message {
             PBFTMessage::Consensus(consensus) => {
                 let (seq, view) = (consensus.sequence_number(), consensus.view());
@@ -177,12 +175,12 @@ impl<D> OrderingProtocolMessage<D> for PBFTConsensus<D>
 
     #[cfg(feature = "serialize_capnp")]
     fn serialize_capnp(builder: atlas_capnp::consensus_messages_capnp::protocol_message::Builder, msg: &Self::ProtocolMessage) -> Result<()> {
-        capnp::serialize_message::<D>(builder, msg)
+        capnp::serialize_message::<RQ>(builder, msg)
     }
 
     #[cfg(feature = "serialize_capnp")]
     fn deserialize_capnp(reader: atlas_capnp::consensus_messages_capnp::protocol_message::Reader) -> Result<Self::ProtocolMessage> {
-        capnp::deserialize_message::<D>(reader)
+        capnp::deserialize_message::<RQ>(reader)
     }
 
     #[cfg(feature = "serialize_capnp")]
