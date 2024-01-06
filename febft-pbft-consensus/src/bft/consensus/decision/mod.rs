@@ -11,6 +11,7 @@ use atlas_common::Err;
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_common::serialization_helper::SerType;
 use atlas_communication::message::Header;
 use atlas_core::messages::ClientRqInfo;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
@@ -104,18 +105,18 @@ pub struct MessageQueue<O> {
 }
 
 /// The information needed to make a decision on a batch of requests.
-pub struct ConsensusDecision<D> where D: ApplicationData + 'static, {
+pub struct ConsensusDecision<RQ> where RQ: SerType, {
     node_id: NodeId,
     /// The sequence number of this consensus decision
     seq: SeqNo,
     /// The current phase of this decision
     phase: DecisionPhase,
     /// The queue of messages for this consensus instance
-    message_queue: MessageQueue<D::Request>,
+    message_queue: MessageQueue<RQ>,
     /// The working decision log
-    working_log: WorkingDecisionLog<D::Request>,
+    working_log: WorkingDecisionLog<RQ>,
     /// Accessory to the base consensus state machine
-    accessory: ConsensusDecisionAccessory<D>,
+    accessory: ConsensusDecisionAccessory<RQ>,
     // Metrics about the consensus instance
     consensus_metrics: ConsensusMetrics,
     //TODO: Store things directly into the persistent log as well as delete them when
@@ -171,8 +172,8 @@ impl<O> MessageQueue<O> {
     }
 }
 
-impl<D> ConsensusDecision<D>
-    where D: ApplicationData + 'static, {
+impl<RQ> ConsensusDecision<RQ>
+    where RQ: SerType + 'static, {
     pub fn init_decision(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo) -> Self {
         Self {
             node_id,
@@ -186,7 +187,7 @@ impl<D> ConsensusDecision<D>
     }
 
     pub fn init_with_msg_log(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo,
-                             message_queue: MessageQueue<D::Request>) -> Self {
+                             message_queue: MessageQueue<RQ>) -> Self {
         Self {
             node_id,
             seq: seq_no,
@@ -198,7 +199,7 @@ impl<D> ConsensusDecision<D>
         }
     }
 
-    pub fn queue(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>) {
+    pub fn queue(&mut self, message: ShareableMessage<PBFTMessage<RQ>>) {
         match message.message().consensus().kind() {
             ConsensusMessageKind::PrePrepare(_) => {
                 self.message_queue.queue_pre_prepare(message);
@@ -212,7 +213,7 @@ impl<D> ConsensusDecision<D>
         }
     }
 
-    pub fn poll(&mut self) -> DecisionPollStatus<D::Request> {
+    pub fn poll(&mut self) -> DecisionPollStatus<RQ> {
         return match self.phase {
             DecisionPhase::Initialize => {
                 self.phase = DecisionPhase::PrePreparing(0);
@@ -255,11 +256,11 @@ impl<D> ConsensusDecision<D>
 
     /// Process a message relating to this consensus instance
     pub fn process_message<NT>(&mut self,
-                               s_message: ShareableMessage<PBFTMessage<D::Request>>,
-                               synchronizer: &Synchronizer<D>,
+                               s_message: ShareableMessage<PBFTMessage<RQ>>,
+                               synchronizer: &Synchronizer<RQ>,
                                timeouts: &Timeouts,
-                               node: &Arc<NT>) -> Result<DecisionStatus<D::Request>>
-        where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
+                               node: &Arc<NT>) -> Result<DecisionStatus<RQ>>
+        where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static {
         let view = synchronizer.view();
         let header = s_message.header();
         let message = s_message.message().consensus();
@@ -552,7 +553,7 @@ impl<D> ConsensusDecision<D>
     }
 
     /// Finalize this consensus decision and return the information about the batch
-    pub fn finalize(self) -> Result<CompletedBatch<D::Request>> {
+    pub fn finalize(self) -> Result<CompletedBatch<RQ>> {
         if let DecisionPhase::Decided = self.phase {
             let seq = self.sequence_number();
 
@@ -572,23 +573,22 @@ impl<D> ConsensusDecision<D>
     }
 }
 
-impl<D> Orderable for ConsensusDecision<D>
-    where D: ApplicationData + 'static, {
+impl<RQ> Orderable for ConsensusDecision<RQ>
+    where RQ: SerType,{
     fn sequence_number(&self) -> SeqNo {
         self.seq
     }
 }
 
 #[inline]
-fn request_batch_received<D>(
+fn request_batch_received<RQ>(
     header: &Header,
-    pre_prepare: &ConsensusMessage<D::Request>,
+    pre_prepare: &ConsensusMessage<RQ>,
     timeouts: &Timeouts,
-    synchronizer: &Synchronizer<D>,
-    log: &WorkingDecisionLog<D::Request>,
+    synchronizer: &Synchronizer<RQ>,
+    log: &WorkingDecisionLog<RQ>,
 ) -> Vec<ClientRqInfo>
-    where
-        D: ApplicationData + 'static,
+    where RQ: SerType + 'static,
 {
     let start = Instant::now();
 

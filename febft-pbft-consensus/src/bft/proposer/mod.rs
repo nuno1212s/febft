@@ -9,14 +9,12 @@ use log::{debug, error, info, warn};
 use atlas_common::channel::TryRecvError;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_common::serialization_helper::SerType;
 use atlas_common::threadpool;
 use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::request_pre_processing::{BatchOutput, PreProcessorOutputMessage};
 use atlas_core::timeouts::Timeouts;
-use atlas_smr_application::app::UnorderedBatch;
-use atlas_smr_application::ExecutorHandle;
-use atlas_smr_application::serialize::ApplicationData;
 use atlas_metrics::metrics::{metric_duration, metric_increment, metric_store_count};
 
 use crate::bft::config::ProposerConfig;
@@ -35,13 +33,13 @@ pub type BatchType<R> = Vec<StoredRequestMessage<R>>;
 ///Handles taking requests from the client pools and storing the requests in the log,
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
-pub struct Proposer<D, NT>
-    where D: ApplicationData + 'static, {
+pub struct Proposer<RQ, NT>
+    where RQ: SerType, {
     /// Channel for the reception of batches from the pre processing module
-    batch_reception: BatchOutput<D::Request>,
+    batch_reception: BatchOutput<RQ>,
     /// Network Node
     node_ref: Arc<NT>,
-    synchronizer: Arc<Synchronizer<D>>,
+    synchronizer: Arc<Synchronizer<RQ>>,
     timeouts: Timeouts,
     consensus_guard: Arc<ProposerConsensusGuard>,
     // Should we shut down?
@@ -53,20 +51,17 @@ pub struct Proposer<D, NT>
     global_batch_time_limit: u128,
     max_batch_size: usize,
 
-    //For unordered request execution
-    executor_handle: ExecutorHandle<D>,
-
 }
 
 const TIMEOUT: Duration = Duration::from_micros(10);
 const PRINT_INTERVAL: usize = 10000;
 
-struct ProposeBuilder<D> where D: ApplicationData {
-    currently_accumulated: Vec<StoredRequestMessage<D::Request>>,
+struct ProposeBuilder<RQ> where RQ: SerType {
+    currently_accumulated: Vec<StoredRequestMessage<RQ>>,
     last_proposal: Instant,
 }
 
-impl<D> ProposeBuilder<D> where D: ApplicationData {
+impl<RQ> ProposeBuilder<RQ> where RQ: SerType {
     pub fn new(target_size: usize) -> Self {
         Self { currently_accumulated: Vec::with_capacity(target_size), last_proposal: Instant::now() }
     }
@@ -75,14 +70,14 @@ impl<D> ProposeBuilder<D> where D: ApplicationData {
 ///The size of the batch channel
 const BATCH_CHANNEL_SIZE: usize = 128;
 
-impl<D, NT> Proposer<D, NT>
-    where D: ApplicationData + 'static, {
+impl<RQ, NT> Proposer<RQ, NT>
+    where RQ: SerType,
+{
     pub fn new(
         node: Arc<NT>,
-        batch_input: BatchOutput<D::Request>,
-        sync: Arc<Synchronizer<D>>,
+        batch_input: BatchOutput<RQ>,
+        sync: Arc<Synchronizer<RQ>>,
         timeouts: Timeouts,
-        executor_handle: ExecutorHandle<D>,
         consensus_guard: Arc<ProposerConsensusGuard>,
         proposer_config: ProposerConfig,
     ) -> Arc<Self> {
@@ -99,14 +94,14 @@ impl<D, NT> Proposer<D, NT>
             consensus_guard,
             target_global_batch_size: target_batch_size as usize,
             global_batch_time_limit: batch_timeout as u128,
-            executor_handle,
             max_batch_size: max_batch_size as usize,
         })
     }
 
     ///Start this work
     pub fn start(self: Arc<Self>) -> JoinHandle<()>
-        where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
+        where RQ: 'static,
+              NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static {
         std::thread::Builder::new()
             .name(format!("Proposer thread"))
             .spawn(move || {
@@ -142,7 +137,7 @@ impl<D, NT> Proposer<D, NT>
                     //We don't need to do this for non leader replicas, as that would cause unnecessary strain as the
                     //Thread is in an infinite loop
                     // Receive the requests from the clients and process them
-                    let opt_msgs: Option<PreProcessorOutputMessage<D::Request>> = match self.batch_reception.try_recv() {
+                    let opt_msgs: Option<PreProcessorOutputMessage<RQ>> = match self.batch_reception.try_recv() {
                         Ok(res) => { Some(res) }
                         Err(err) => {
                             match err {
@@ -243,8 +238,9 @@ impl<D, NT> Proposer<D, NT>
     /// Has not yet occurred
     fn propose_unordered(
         &self,
-        propose: &mut ProposeBuilder<D>,
-    ) -> bool where NT: OrderProtocolSendNode<D, PBFT<D>> {
+        propose: &mut ProposeBuilder<RQ>,
+    ) -> bool where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
+        /*
         if !propose.currently_accumulated.is_empty() {
             let current_batch_size = propose.currently_accumulated.len();
 
@@ -304,6 +300,7 @@ impl<D, NT> Proposer<D, NT>
                 return true;
             }
         }
+        */
 
         return false;
     }
@@ -311,8 +308,8 @@ impl<D, NT> Proposer<D, NT>
     /// attempt to propose the ordered requests that we have collected
     /// Returns true if a batch was proposed
     fn propose_ordered(&self, is_leader: bool,
-                       propose: &mut ProposeBuilder<D>, ) -> bool
-        where NT: OrderProtocolSendNode<D, PBFT<D>> {
+                       propose: &mut ProposeBuilder<RQ>, ) -> bool
+        where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
 
         //Now let's deal with ordered requests
         if is_leader {
@@ -368,8 +365,8 @@ impl<D, NT> Proposer<D, NT>
         &self,
         seq: SeqNo,
         view: &ViewInfo,
-        mut currently_accumulated: Vec<StoredRequestMessage<D::Request>>,
-    ) where NT: OrderProtocolSendNode<D, PBFT<D>> {
+        mut currently_accumulated: Vec<StoredRequestMessage<RQ>>,
+    ) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
         let has_pending_messages = self.consensus_guard.has_pending_view_change_reqs();
 
         let is_view_change_empty = {
@@ -423,7 +420,7 @@ impl<D, NT> Proposer<D, NT>
     /// Check if the given request has already appeared in a view change message
     /// Returns true if it has been seen previously (should not be proposed)
     /// Returns false if not
-    fn check_if_has_been_proposed(&self, req: &StoredRequestMessage<D::Request>, mutex_guard: &mut Option<MutexGuard<Option<BTreeMap<NodeId, BTreeMap<SeqNo, SeqNo>>>>>) -> bool {
+    fn check_if_has_been_proposed(&self, req: &StoredRequestMessage<RQ>, mutex_guard: &mut Option<MutexGuard<Option<BTreeMap<NodeId, BTreeMap<SeqNo, SeqNo>>>>>) -> bool {
         if let Some(mutex_guard) = mutex_guard {
             if let Some(seen_rqs) = (*mutex_guard).as_mut() {
                 let result = if seen_rqs.contains_key(&req.header().from()) {

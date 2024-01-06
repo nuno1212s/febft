@@ -5,11 +5,11 @@ use atlas_common::Err;
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_common::serialization_helper::SerType;
 use atlas_communication::message::Header;
 use atlas_core::messages::{ClientRqInfo, RequestMessage};
 use atlas_core::ordering_protocol::{Decision, ProtocolConsensusDecision};
 use atlas_smr_application::app::UpdateBatch;
-use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::log::decided::DecisionLog;
 use crate::bft::log::deciding::{CompletedBatch, FinishedMessageLog};
@@ -21,20 +21,20 @@ pub mod decided;
 pub mod deciding;
 pub mod decisions;
 
-pub struct Log<D> where D: ApplicationData {
-    decided: DecisionLog<D::Request>,
+pub struct Log<RQ> where RQ: SerType {
+    decided: DecisionLog<RQ>,
 }
 
-impl<D> Log<D> where D: ApplicationData {
-    pub fn decision_log(&self) -> &DecisionLog<D::Request> {
+impl<RQ> Log<RQ> where RQ: SerType {
+    pub fn decision_log(&self) -> &DecisionLog<RQ> {
         &self.decided
     }
 
-    pub fn last_proof(&self) -> Option<Proof<D::Request>> {
+    pub fn last_proof(&self) -> Option<Proof<RQ>> {
         self.decided.last_decision()
     }
 
-    pub fn install_proof(&mut self, proof: Proof<D::Request>) -> Result<OPDecision<D::Request>> {
+    pub fn install_proof(&mut self, proof: Proof<RQ>) -> Result<OPDecision<RQ>> {
         if let Some(decision) = self.decision_log().last_execution() {
             match proof.seq_no().index(decision) {
                 Either::Left(_) | Either::Right(0) => {
@@ -63,7 +63,7 @@ impl<D> Log<D> where D: ApplicationData {
         Ok(Decision::full_decision_info(sequence, metadata, messages, batch_info))
     }
 
-    pub fn finalize_batch(&mut self, completed: CompletedBatch<D::Request>) -> Result<ProtocolConsensusDecision<D::Request>> {
+    pub fn finalize_batch(&mut self, completed: CompletedBatch<RQ>) -> Result<ProtocolConsensusDecision<RQ>> {
         let CompletedBatch {
             seq, digest,
             pre_prepare_ordering,
@@ -103,7 +103,7 @@ impl<D> Log<D> where D: ApplicationData {
     }
 }
 
-pub fn initialize_decided_log<D>(node_id: NodeId) -> Log<D> where D: ApplicationData {
+pub fn initialize_decided_log<RQ>(node_id: NodeId) -> Log<RQ> where RQ: SerType {
     Log {
         decided: DecisionLog::init(None),
     }

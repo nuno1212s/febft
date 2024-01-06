@@ -12,6 +12,7 @@ use atlas_common::globals::ReadOnly;
 use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message_arc};
+use atlas_common::serialization_helper::SerType;
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
 use atlas_core::ordering_protocol::Decision;
@@ -188,11 +189,9 @@ pub struct Signals {
 
 /// The consensus handler. Responsible for multiplexing consensus instances and keeping track
 /// of missing messages
-pub struct Consensus<D, >
-    where D: ApplicationData + 'static, {
+pub struct Consensus<RQ, >
+    where RQ: SerType, {
     node_id: NodeId,
-    /// The handle to the executor of the function
-    executor_handle: ExecutorHandle<D>,
     /// How many consensus instances can we overlap at the same time.
     watermark: u32,
     /// The current seq no that we are currently in
@@ -204,14 +203,14 @@ pub struct Consensus<D, >
     /// The consensus instances that are currently being processed
     /// A given consensus instance n will only be finished when all consensus instances
     /// j, where j < n have already been processed, in order to maintain total ordering
-    decisions: VecDeque<ConsensusDecision<D>>,
+    decisions: VecDeque<ConsensusDecision<RQ>>,
     /// The queue for messages that sit outside the range seq_no + watermark
     /// These messages cannot currently be processed since they sit outside the allowed
     /// zone but they will be processed once the seq no moves forward enough to include them
-    tbo_queue: TboQueue<D::Request>,
+    tbo_queue: TboQueue<RQ>,
     /// This queue serves for us to keep track of messages we receive of coming up views.
     /// This is important for us to be able to continue the process of moving views after a view change
-    view_queue: VecDeque<Vec<ShareableMessage<PBFTMessage<D::Request>>>>,
+    view_queue: VecDeque<Vec<ShareableMessage<PBFTMessage<RQ>>>>,
     /// The consensus guard that will be used to ensure that the proposer only proposes one batch
     /// for each consensus instance
     consensus_guard: Arc<ProposerConsensusGuard>,
@@ -221,14 +220,13 @@ pub struct Consensus<D, >
     is_recovering: bool,
 }
 
-impl<D> Consensus<D> where D: ApplicationData + 'static {
-    pub fn new_replica(node_id: NodeId, view: &ViewInfo, executor_handle: ExecutorHandle<D>, seq_no: SeqNo,
+impl<RQ> Consensus<RQ> where RQ: SerType + 'static {
+    pub fn new_replica(node_id: NodeId, view: &ViewInfo, seq_no: SeqNo,
                        watermark: u32, consensus_guard: Arc<ProposerConsensusGuard>, timeouts: Timeouts) -> Self {
         let mut curr_seq = seq_no;
 
         let mut consensus = Self {
             node_id,
-            executor_handle,
             watermark,
             seq_no,
             signalled: Signals::new(watermark),
@@ -258,7 +256,7 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
     }
 
     /// Queue a given message into our message queues.
-    pub fn queue(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>) {
+    pub fn queue(&mut self, message: ShareableMessage<PBFTMessage<RQ>>) {
         let message_seq = message.message().sequence_number();
 
         let view_seq = message.message().consensus().view();
@@ -313,7 +311,7 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
     }
 
     /// Poll the given consensus
-    pub fn poll(&mut self) -> ConsensusPollStatus<D::Request> {
+    pub fn poll(&mut self) -> ConsensusPollStatus<RQ> {
         trace!("Current signal queue: {:?}", self.signalled);
 
         while let Some(seq_no) = self.signalled.pop_signalled() {
@@ -360,11 +358,11 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
     }
 
     pub fn process_message<NT>(&mut self,
-                               s_message: ShareableMessage<PBFTMessage<D::Request>>,
-                               synchronizer: &Synchronizer<D>,
+                               s_message: ShareableMessage<PBFTMessage<RQ>>,
+                               synchronizer: &Synchronizer<RQ>,
                                timeouts: &Timeouts,
-                               node: &Arc<NT>) -> Result<ConsensusStatus<D::Request>>
-        where NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
+                               node: &Arc<NT>) -> Result<ConsensusStatus<RQ>>
+        where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static {
         let (header, message) = (s_message.header(), s_message.message().consensus());
 
         let message_seq = message.sequence_number();
@@ -466,7 +464,7 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
     }
 
     /// Finalize the next consensus instance if possible
-    pub fn finalize(&mut self, view: &ViewInfo) -> Result<Option<CompletedBatch<D::Request>>> {
+    pub fn finalize(&mut self, view: &ViewInfo) -> Result<Option<CompletedBatch<RQ>>> {
 
         // If the decision can't be finalized, then we can't finalize the batch
         if let Some(decision) = self.decisions.front() {
@@ -493,7 +491,7 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
     /// Advance to the next instance of the consensus
     /// This will also create the necessary new decision to keep the pending decisions
     /// equal to the water mark
-    pub fn next_instance(&mut self, view: &ViewInfo) -> ConsensusDecision<D> {
+    pub fn next_instance(&mut self, view: &ViewInfo) -> ConsensusDecision<RQ> {
         let decision = self.decisions.pop_front().unwrap();
 
         self.seq_no = self.seq_no.next();
@@ -653,8 +651,8 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
     /// Catch up to the quorums latest decided consensus
     pub fn catch_up_to_quorum(&mut self,
                               view: &ViewInfo,
-                              proof: Proof<D::Request>,
-                              log: &mut Log<D>) -> Result<OPDecision<D::Request>> {
+                              proof: Proof<RQ>,
+                              log: &mut Log<RQ>) -> Result<OPDecision<RQ>> {
 
         // If this is successful, it means that we are all caught up and can now start executing the
         // batch
@@ -670,9 +668,9 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
     /// change protocol.
     pub fn forge_propose(
         &self,
-        requests: Vec<StoredRequestMessage<D::Request>>,
+        requests: Vec<StoredRequestMessage<RQ>>,
         view: &ViewInfo,
-    ) -> SysMsg<D>
+    ) -> SysMsg<RQ>
     {
         PBFTMessage::Consensus(ConsensusMessage::new(
             self.sequence_number(),
@@ -733,7 +731,7 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
     }
 
     /// Enqueue a message from another view into it's correct queue
-    fn enqueue_other_view_message(&mut self, index: usize, message: ShareableMessage<PBFTMessage<D::Request>>) {
+    fn enqueue_other_view_message(&mut self, index: usize, message: ShareableMessage<PBFTMessage<RQ>>) {
         debug!("{:?} // Enqueuing a message from another view into the view queue. Index {}  {:?}", self.node_id, index, message);
 
         // Adjust the index to be 0 based
@@ -750,14 +748,14 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
     /// Finalize the view change protocol
     pub fn finalize_view_change<NT>(
         &mut self,
-        (header, message): (Header, ConsensusMessage<D::Request>),
+        (header, message): (Header, ConsensusMessage<RQ>),
         new_view: &ViewInfo,
-        synchronizer: &Synchronizer<D>,
+        synchronizer: &Synchronizer<RQ>,
         timeouts: &Timeouts,
-        log: &mut Log<D>,
+        log: &mut Log<RQ>,
         node: &Arc<NT>,
-    ) -> Result<ConsensusStatus<D::Request>> where
-        NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
+    ) -> Result<ConsensusStatus<RQ>> where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static {
         //Prepare the algorithm as we are already entering this phase
 
         self.install_view(new_view);
@@ -797,7 +795,7 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
     }
 
     /// Enqueue a decision onto our overlapping decision log
-    fn enqueue_decision(&mut self, decision: ConsensusDecision<D>) {
+    fn enqueue_decision(&mut self, decision: ConsensusDecision<RQ>) {
         self.signalled.push_signalled(decision.sequence_number());
 
         self.decisions.push_back(decision);
@@ -819,8 +817,8 @@ impl<D> Consensus<D> where D: ApplicationData + 'static {
     }
 }
 
-impl<D> Orderable for Consensus<D>
-    where D: ApplicationData + 'static, {
+impl<RQ> Orderable for Consensus<RQ>
+    where RQ: SerType, {
     fn sequence_number(&self) -> SeqNo {
         self.seq_no
     }

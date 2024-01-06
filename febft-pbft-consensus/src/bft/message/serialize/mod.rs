@@ -16,6 +16,7 @@ use bytes::Bytes;
 
 use atlas_common::error::*;
 use atlas_common::ordering::Orderable;
+use atlas_common::serialization_helper::SerType;
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
 use atlas_core::ordering_protocol::loggable::PersistentOrderProtocolTypes;
@@ -38,8 +39,8 @@ pub mod serde;
 pub type Buf = Bytes;
 
 pub fn serialize_consensus<W, RQ>(w: &mut W, message: &ConsensusMessage<RQ>) -> Result<()>
-    where
-        W: Write + AsRef<[u8]> + AsMut<[u8]>,
+    where RQ: SerType,
+          W: Write + AsRef<[u8]> + AsMut<[u8]>,
 {
     #[cfg(feature = "serialize_capnp")]
     capnp::serialize_consensus::<W, D>(w, message)?;
@@ -51,8 +52,8 @@ pub fn serialize_consensus<W, RQ>(w: &mut W, message: &ConsensusMessage<RQ>) -> 
 }
 
 pub fn deserialize_consensus<R, RQ>(r: R) -> Result<ConsensusMessage<RQ>>
-    where
-        R: Read + AsRef<[u8]>,
+    where RQ: SerType,
+          R: Read + AsRef<[u8]>,
 {
     #[cfg(feature = "serialize_capnp")]
         let result = capnp::deserialize_consensus::<R, D>(r)?;
@@ -64,10 +65,11 @@ pub fn deserialize_consensus<R, RQ>(r: R) -> Result<ConsensusMessage<RQ>>
 }
 
 /// The serializable type, to be used to appease the compiler and it's requirements
-pub struct PBFTConsensus<RQ>(PhantomData<(RQ)>);
+pub struct PBFTConsensus<RQ>(PhantomData<fn() -> RQ>);
 
 impl<RQ> OrderingProtocolMessage<RQ> for PBFTConsensus<RQ>
-    {
+    where RQ: SerType
+{
     type ProtocolMessage = PBFTMessage<RQ>;
     type ProofMetadata = ProofMetadata;
 
@@ -204,19 +206,18 @@ impl<RQ> OrderingProtocolMessage<RQ> for PBFTConsensus<RQ>
     }
 }
 
-impl<D> PermissionedOrderingProtocolMessage for PBFTConsensus<D> where D: ApplicationData + 'static {
+impl<RQ> PermissionedOrderingProtocolMessage for PBFTConsensus<RQ> where RQ: SerType {
     type ViewInfo = ViewInfo;
 }
 
-impl<D> PersistentOrderProtocolTypes<D, Self> for PBFTConsensus<D>
-    where D: ApplicationData + 'static {
-    type Proof = Proof<D::Request>;
+impl<RQ> PersistentOrderProtocolTypes<RQ, Self> for PBFTConsensus<RQ>
+    where RQ: SerType {
+    type Proof = Proof<RQ>;
 
     fn verify_proof<NI, OPVH>(network_info: &Arc<NI>, proof: Self::Proof) -> Result<Self::Proof>
         where NI: NetworkInformationProvider,
-              OPVH: OrderProtocolSignatureVerificationHelper<D, Self, NI>,
+              OPVH: OrderProtocolSignatureVerificationHelper<RQ, Self, NI>,
               Self: Sized {
-
         let (metadata, messages) = proof.into_parts();
 
         for msg in &messages {
