@@ -7,9 +7,8 @@ use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerType;
 use atlas_communication::message::Header;
-use atlas_core::messages::{ClientRqInfo, RequestMessage};
-use atlas_core::ordering_protocol::{Decision, ProtocolConsensusDecision};
-use atlas_smr_application::app::UpdateBatch;
+use atlas_core::messages::{ClientRqInfo, SessionBased};
+use atlas_core::ordering_protocol::{BatchedDecision, Decision, ProtocolConsensusDecision};
 
 use crate::bft::log::decided::DecisionLog;
 use crate::bft::log::deciding::{CompletedBatch, FinishedMessageLog};
@@ -25,7 +24,7 @@ pub struct Log<RQ> where RQ: SerType {
     decided: DecisionLog<RQ>,
 }
 
-impl<RQ> Log<RQ> where RQ: SerType {
+impl<RQ> Log<RQ> where RQ: SerType + SessionBased {
     pub fn decision_log(&self) -> &DecisionLog<RQ> {
         &self.decided
     }
@@ -91,12 +90,10 @@ impl<RQ> Log<RQ> where RQ: SerType {
 
         self.decided.append_proof(proof);
 
-        let mut batch = UpdateBatch::new_with_cap(seq, client_requests.len());
+        let mut batch = BatchedDecision::new_with_cap(seq, client_requests.len());
 
         for cli_rq in client_requests {
-            let (header, rq) = cli_rq.into_inner();
-
-            batch.add(header.from(), rq.session_id(), rq.sequence_number(), rq.into_inner_operation());
+            batch.add_message(cli_rq);
         }
 
         Ok(ProtocolConsensusDecision::new(seq, batch, client_request_info, digest))
@@ -110,8 +107,8 @@ pub fn initialize_decided_log<RQ>(node_id: NodeId) -> Log<RQ> where RQ: SerType 
 }
 
 #[inline]
-pub fn operation_key<O>(header: &Header, message: &RequestMessage<O>) -> u64 {
-    operation_key_raw(header.from(), message.session_id())
+pub fn operation_key<O>(header: &Header, message: &O) -> u64 where O: SessionBased {
+    operation_key_raw(header.from(), message.session_number())
 }
 
 #[inline]
@@ -124,9 +121,9 @@ pub fn operation_key_raw(from: NodeId, session: SeqNo) -> u64 {
     client_id | (session_id << 32)
 }
 
-impl<O> From<&Proof<O>> for ProtocolConsensusDecision<O> where O: Clone {
+impl<O> From<&Proof<O>> for ProtocolConsensusDecision<O> where O: Clone + SessionBased {
     fn from(value: &Proof<O>) -> Self {
-        let mut update_batch = UpdateBatch::new_with_cap(value.seq_no(), value.metadata().contained_client_rqs());
+        let mut decided_batch = BatchedDecision::new_with_cap(value.seq_no(), value.metadata().contained_client_rqs());
         let mut client_rqs = Vec::with_capacity(value.metadata().contained_client_rqs());
 
         if !value.are_pre_prepares_ordered().unwrap() {
@@ -147,17 +144,12 @@ impl<O> From<&Proof<O>> for ProtocolConsensusDecision<O> where O: Clone {
             for request in reqs {
                 client_rqs.push(ClientRqInfo::from(&request));
 
-                let (header, message) = request.into_inner();
-
-                update_batch.add(header.from(),
-                                 message.session_id(),
-                                 message.sequence_number(),
-                                 message.into_inner_operation());
+                decided_batch.add_message(request);
             }
         }
 
         ProtocolConsensusDecision::new(value.seq_no(),
-                                       update_batch,
+                                       decided_batch,
                                        client_rqs,
                                        value.metadata().batch_digest())
     }

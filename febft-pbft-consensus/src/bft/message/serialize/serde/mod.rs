@@ -1,6 +1,5 @@
 use std::io::{Read, Write};
 use atlas_common::error::*;
-use crate::bft::message::serialize::ApplicationData;
 use crate::bft::message::{ConsensusMessage};
 use anyhow::Context;
 use atlas_common::serialization_helper::SerType;

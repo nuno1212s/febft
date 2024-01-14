@@ -14,14 +14,11 @@ use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message_arc};
 use atlas_common::serialization_helper::SerType;
 use atlas_communication::message::{Header, StoredMessage};
-use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
-use atlas_core::ordering_protocol::Decision;
+use atlas_core::messages::{ClientRqInfo, SessionBased};
+use atlas_core::ordering_protocol::{Decision, ShareableMessage};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_core::smr::smr_decision_log::ShareableMessage;
 use atlas_core::timeouts::Timeouts;
 use atlas_metrics::metrics::metric_increment;
-use atlas_smr_application::ExecutorHandle;
-use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::{OPDecision, PBFT, SysMsg};
 use crate::bft::consensus::decision::{ConsensusDecision, DecisionPollStatus, DecisionStatus, MessageQueue};
@@ -220,7 +217,7 @@ pub struct Consensus<RQ, >
     is_recovering: bool,
 }
 
-impl<RQ> Consensus<RQ> where RQ: SerType + 'static {
+impl<RQ> Consensus<RQ> where RQ: SerType + SessionBased + 'static {
     pub fn new_replica(node_id: NodeId, view: &ViewInfo, seq_no: SeqNo,
                        watermark: u32, consensus_guard: Arc<ProposerConsensusGuard>, timeouts: Timeouts) -> Self {
         let mut curr_seq = seq_no;
@@ -668,7 +665,7 @@ impl<RQ> Consensus<RQ> where RQ: SerType + 'static {
     /// change protocol.
     pub fn forge_propose(
         &self,
-        requests: Vec<StoredRequestMessage<RQ>>,
+        requests: Vec<StoredMessage<RQ>>,
         view: &ViewInfo,
     ) -> SysMsg<RQ>
     {

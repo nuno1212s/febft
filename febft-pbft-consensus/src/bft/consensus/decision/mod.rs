@@ -13,12 +13,11 @@ use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerType;
 use atlas_communication::message::Header;
-use atlas_core::messages::ClientRqInfo;
+use atlas_core::messages::{ClientRqInfo, SessionBased};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_core::smr::smr_decision_log::ShareableMessage;
+use atlas_core::ordering_protocol::ShareableMessage;
 use atlas_core::timeouts::Timeouts;
 use atlas_metrics::metrics::metric_duration;
-use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::consensus::accessory::{AccessoryConsensus, ConsensusDecisionAccessory};
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;
@@ -173,7 +172,7 @@ impl<O> MessageQueue<O> {
 }
 
 impl<RQ> ConsensusDecision<RQ>
-    where RQ: SerType + 'static, {
+    where RQ: SerType + SessionBased + 'static, {
     pub fn init_decision(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo) -> Self {
         Self {
             node_id,
@@ -574,7 +573,7 @@ impl<RQ> ConsensusDecision<RQ>
 }
 
 impl<RQ> Orderable for ConsensusDecision<RQ>
-    where RQ: SerType,{
+    where RQ: SerType, {
     fn sequence_number(&self) -> SeqNo {
         self.seq
     }
@@ -588,7 +587,7 @@ fn request_batch_received<RQ>(
     synchronizer: &Synchronizer<RQ>,
     log: &WorkingDecisionLog<RQ>,
 ) -> Vec<ClientRqInfo>
-    where RQ: SerType + 'static,
+    where RQ: SerType + SessionBased + 'static,
 {
     let start = Instant::now();
 

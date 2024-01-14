@@ -26,11 +26,10 @@ mimalloc = { version = "*", default-features = false }
 rand = {version = "0.8.5", features = ["small_rng"] }
 
 [dependencies]
-anyhow = "1.0.75"
-thiserror = "1.0.50"
+anyhow = "1.0"
+thiserror = "1.0"
 atlas-common = { path = "../../Atlas/Atlas-Common", default-features = true }
 atlas-communication = { path = "../../Atlas/Atlas-Communication" }
-atlas-smr-application = { path = "../../Atlas/Atlas-SMR-Application" }
 atlas-core = { path = "../../Atlas/Atlas-Core" }
 atlas-capnp = { path = "../../Atlas/Atlas-capnp", optional = true }
 atlas-metrics = {path = "../../Atlas/Atlas-Metrics"}

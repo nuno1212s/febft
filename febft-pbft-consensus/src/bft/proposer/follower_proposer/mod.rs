@@ -11,7 +11,7 @@ use atlas_execution::serialize::ApplicationData;
 
 use crate::bft::PBFT;
 
-pub type BatchType<D: ApplicationData> = Vec<StoredRequestMessage<D::Request>>;
+pub type BatchType<D: ApplicationData> = Vec<St<D::Request>>;
 
 ///TODO:
 pub struct FollowerProposer<RQ, ST, LP, NT, RP>

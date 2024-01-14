@@ -13,9 +13,8 @@ use atlas_common::collections;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::Orderable;
 use atlas_common::serialization_helper::SerType;
-use atlas_communication::message::Header;
-use atlas_communication::protocol_node::ProtocolNetworkNode;
-use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, StoredRequestMessage};
+use atlas_communication::message::{Header, StoredMessage};
+use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, SessionBased};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, TimeoutPhase, Timeouts};
@@ -41,7 +40,7 @@ pub struct ReplicaSynchronizer<RQ: SerType> {
     _phantom: PhantomData<fn () -> RQ>,
 }
 
-impl<RQ: SerType + 'static> ReplicaSynchronizer<RQ> {
+impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
     pub fn new(timeout_dur: Duration) -> Self {
         Self {
             timeout_dur: Cell::new(timeout_dur),
@@ -106,7 +105,7 @@ impl<RQ: SerType + 'static> ReplicaSynchronizer<RQ> {
         base_sync: &Synchronizer<RQ>,
         timeouts: &Timeouts,
         node: &NT,
-        timed_out: Option<Vec<StoredRequestMessage<RQ>>>,
+        timed_out: Option<Vec<StoredMessage<RQ>>>,
     ) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
         // stop all timers
         self.unwatch_all_requests(timeouts);
@@ -198,7 +197,7 @@ impl<RQ: SerType + 'static> ReplicaSynchronizer<RQ> {
             let digest = header.unique_digest();
 
             let seq_no = x.message().sequence_number();
-            let session = x.message().session_id();
+            let session = x.message().session_number();
 
             //let request_digest = header.digest().clone();
             let client_rq_info = ClientRqInfo::new(digest, header.from(), seq_no, session);
@@ -338,7 +337,7 @@ impl<RQ: SerType + 'static> ReplicaSynchronizer<RQ> {
     pub fn forward_requests<NT>(
         &self,
         base_sync: &Synchronizer<RQ>,
-        timed_out: Vec<StoredRequestMessage<RQ>>,
+        timed_out: Vec<StoredMessage<RQ>>,
         node: &NT,
     ) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
         let message = ForwardedRequestsMessage::new(timed_out);
@@ -356,8 +355,8 @@ impl<RQ: SerType + 'static> ReplicaSynchronizer<RQ> {
     fn stopped_requests(
         &self,
         base_sync: &Synchronizer<RQ>,
-        requests: Option<Vec<StoredRequestMessage<RQ>>>,
-    ) -> Vec<StoredRequestMessage<RQ>> {
+        requests: Option<Vec<StoredMessage<RQ>>>,
+    ) -> Vec<StoredMessage<RQ>> {
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
         let mut all_reqs = collections::hash_map();
 
@@ -385,7 +384,7 @@ impl<RQ: SerType + 'static> ReplicaSynchronizer<RQ> {
     fn stopped_request_digests(
         &self,
         base_sync: &Synchronizer<RQ>,
-        requests: Option<Vec<StoredRequestMessage<RQ>>>,
+        requests: Option<Vec<StoredMessage<RQ>>>,
     ) -> Vec<ClientRqInfo> {
 
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
@@ -411,8 +410,7 @@ impl<RQ: SerType + 'static> ReplicaSynchronizer<RQ> {
     }
 
     /// Drain our current received stopped messages
-    fn drain_stopped_request(&self, base_sync: &Synchronizer<RQ>) ->
-    Vec<StoredRequestMessage<RQ>> {
+    fn drain_stopped_request(&self, base_sync: &Synchronizer<RQ>) -> Vec<StoredMessage<RQ>> {
 
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
         let mut all_reqs = collections::hash_map();

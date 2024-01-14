@@ -23,12 +23,12 @@ use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_po
 use atlas_common::serialization_helper::SerType;
 use atlas_communication::message::{Header, StoredMessage, WireMessage};
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
-use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
+use atlas_core::messages::{ClientRqInfo, SessionBased};
+use atlas_core::ordering_protocol::{ShareableMessage, unwrap_shareable_message};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::reconfigurable_order_protocol::ReconfigurationAttemptResult;
 use atlas_core::persistent_log::OrderingProtocolLog;
 use atlas_core::request_pre_processing::RequestPreProcessor;
-use atlas_core::smr::smr_decision_log::{ShareableMessage, unwrap_shareable_message};
 use atlas_core::timeouts::{RqTimeout, Timeouts};
 
 use crate::bft::{OPDecision, PBFT};
@@ -447,7 +447,7 @@ pub struct Synchronizer<RQ: SerType> {
     //Tbo queue, keeps track of the current view and keeps messages arriving in order
     tbo: Mutex<TboQueue<RQ>>,
     //Stores currently received requests from other nodes
-    stopped: RefCell<IntMap<Vec<StoredRequestMessage<RQ>>>>,
+    stopped: RefCell<IntMap<Vec<StoredMessage<RQ>>>>,
     //Stores currently received requests from other nodes
     currently_adding_node: Cell<Option<NodeId>>,
     //Stores which nodes are currently being added to the quorum, along with the number of votes
@@ -473,7 +473,7 @@ pub struct Synchronizer<RQ: SerType> {
 unsafe impl<RQ: SerType> Sync for Synchronizer<RQ> {}
 
 impl<RQ> AbstractSynchronizer<RQ> for Synchronizer<RQ>
-    where RQ: SerType + 'static, {
+    where RQ: SerType + SessionBased + 'static, {
     /// Returns some information regarding the current view, such as
     /// the number of faulty replicas the system can tolerate.
     fn view(&self) -> ViewInfo {
@@ -540,8 +540,8 @@ impl<RQ> AbstractSynchronizer<RQ> for Synchronizer<RQ>
     }
 }
 
-impl<RQ> Synchronizer<RQ> where RQ: SerType + 'static,
-{
+impl<RQ> Synchronizer<RQ>
+    where RQ: SerType + SessionBased + 'static, {
     pub fn new_follower(node_id: NodeId, view: ViewInfo) -> Arc<Self> {
         Arc::new(Self {
             node_id,
@@ -696,7 +696,6 @@ impl<RQ> Synchronizer<RQ> where RQ: SerType + 'static,
     ) -> SynchronizerStatus<RQ>
         where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
     {
-
         debug!("{:?} // Processing view change message {:?} in phase {:?} from {:?}",
                node.id(),
                s_message.message().view_change(),
@@ -1517,7 +1516,7 @@ impl<RQ> Synchronizer<RQ> where RQ: SerType + 'static,
     /// originated in the other replicas.
     pub fn begin_view_change<NT>(
         &self,
-        timed_out: Option<Vec<StoredRequestMessage<RQ>>>,
+        timed_out: Option<Vec<StoredMessage<RQ>>>,
         node: &NT,
         timeouts: &Timeouts,
         _log: &Log<RQ>,
@@ -1717,7 +1716,7 @@ impl<RQ> Synchronizer<RQ> where RQ: SerType + 'static,
     /// So that everyone knows about (including a leader that could still be correct, but
     /// Has not received the requests from the client)
     pub fn forward_requests<NT>(&self,
-                                timed_out: Vec<StoredRequestMessage<RQ>>,
+                                timed_out: Vec<StoredMessage<RQ>>,
                                 node: &NT)
         where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
         match &self.accessory {

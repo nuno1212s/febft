@@ -10,8 +10,8 @@ use atlas_common::channel::TryRecvError;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerType;
-use atlas_common::threadpool;
-use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
+use atlas_communication::message::StoredMessage;
+use atlas_core::messages::{ClientRqInfo, SessionBased};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::request_pre_processing::{BatchOutput, PreProcessorOutputMessage};
 use atlas_core::timeouts::Timeouts;
@@ -28,7 +28,7 @@ use super::sync::{AbstractSynchronizer, Synchronizer};
 
 //pub mod follower_proposer;
 
-pub type BatchType<R> = Vec<StoredRequestMessage<R>>;
+pub type BatchType<R> = Vec<StoredMessage<R>>;
 
 ///Handles taking requests from the client pools and storing the requests in the log,
 ///as well as creating new batches and delivering them to the batch_channel
@@ -57,7 +57,7 @@ const TIMEOUT: Duration = Duration::from_micros(10);
 const PRINT_INTERVAL: usize = 10000;
 
 struct ProposeBuilder<RQ> where RQ: SerType {
-    currently_accumulated: Vec<StoredRequestMessage<RQ>>,
+    currently_accumulated: Vec<StoredMessage<RQ>>,
     last_proposal: Instant,
 }
 
@@ -71,7 +71,7 @@ impl<RQ> ProposeBuilder<RQ> where RQ: SerType {
 const BATCH_CHANNEL_SIZE: usize = 128;
 
 impl<RQ, NT> Proposer<RQ, NT>
-    where RQ: SerType,
+    where RQ: SerType + SessionBased,
 {
     pub fn new(
         node: Arc<NT>,
@@ -191,7 +191,7 @@ impl<RQ, NT> Proposer<RQ, NT>
                                             ordered_propose.currently_accumulated.push(message);
                                         }
                                     } else {
-                                        digest_vec.push(ClientRqInfo::new(digest, message.header().from(), message.message().sequence_number(), message.message().session_id()));
+                                        digest_vec.push(ClientRqInfo::new(digest, message.header().from(), message.message().sequence_number(), message.message().session_number()));
                                     }
                                 }
                             }
@@ -365,7 +365,7 @@ impl<RQ, NT> Proposer<RQ, NT>
         &self,
         seq: SeqNo,
         view: &ViewInfo,
-        mut currently_accumulated: Vec<StoredRequestMessage<RQ>>,
+        mut currently_accumulated: Vec<StoredMessage<RQ>>,
     ) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
         let has_pending_messages = self.consensus_guard.has_pending_view_change_reqs();
 
@@ -420,7 +420,7 @@ impl<RQ, NT> Proposer<RQ, NT>
     /// Check if the given request has already appeared in a view change message
     /// Returns true if it has been seen previously (should not be proposed)
     /// Returns false if not
-    fn check_if_has_been_proposed(&self, req: &StoredRequestMessage<RQ>, mutex_guard: &mut Option<MutexGuard<Option<BTreeMap<NodeId, BTreeMap<SeqNo, SeqNo>>>>>) -> bool {
+    fn check_if_has_been_proposed(&self, req: &StoredMessage<RQ>, mutex_guard: &mut Option<MutexGuard<Option<BTreeMap<NodeId, BTreeMap<SeqNo, SeqNo>>>>>) -> bool {
         if let Some(mutex_guard) = mutex_guard {
             if let Some(seen_rqs) = (*mutex_guard).as_mut() {
                 let result = if seen_rqs.contains_key(&req.header().from()) {
@@ -430,11 +430,11 @@ impl<RQ, NT> Proposer<RQ, NT>
                     let (result, should_remove) = {
                         let session_map = seen_rqs.get_mut(&req.header().from()).unwrap();
 
-                        let res = if let Some(seq_no) = session_map.get(&req.message().session_id()).cloned() {
+                        let res = if let Some(seq_no) = session_map.get(&req.message().session_number()).cloned() {
                             if req.message().sequence_number() > seq_no {
                                 // We have now seen a more recent sequence number for that session, so a previous
                                 // Operation will never be passed along again (due to the request pre processor)
-                                session_map.remove(&req.message().session_id());
+                                session_map.remove(&req.message().session_number());
 
                                 (false, session_map.is_empty())
                             } else {

@@ -4,7 +4,6 @@ use atlas_communication::message::Header;
 
 use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;
 use crate::bft::log::deciding::WorkingDecisionLog;

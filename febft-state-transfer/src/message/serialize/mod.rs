@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use atlas_communication::message::Header;
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
-use atlas_core::state_transfer::networking::serialize::StateTransferMessage;
-use atlas_core::state_transfer::networking::signature_ver::StateTransferVerificationHelper;
 use atlas_smr_application::state::monolithic_state::MonolithicState;
+use atlas_smr_core::state_transfer::networking::serialize::StateTransferMessage;
+use atlas_smr_core::state_transfer::networking::signature_ver::StateTransferVerificationHelper;
 
 use crate::message::CstMessage;
 

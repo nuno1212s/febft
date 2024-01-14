@@ -11,7 +11,6 @@ use atlas_common::threadpool;
 use atlas_communication::message::{Header, SerializedMessage, StoredMessage, StoredSerializedProtocolMessage, WireMessage};
 use atlas_communication::reconfiguration_node::NetworkInformationProvider;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::{PBFT, SysMsg};
 use crate::bft::consensus::accessory::AccessoryConsensus;
