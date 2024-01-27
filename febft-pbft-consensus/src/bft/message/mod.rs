@@ -8,6 +8,7 @@ use futures::io::{
     AsyncWrite,
     AsyncWriteExt,
 };
+use getset::Getters;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 
@@ -298,9 +299,11 @@ impl<O> ConsensusMessage<O> {
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Clone, Getters)]
 pub struct FwdConsensusMessage<O> {
+    #[get = "pub"]
     header: Header,
+    #[get = "pub"]
     consensus_msg: ConsensusMessage<O>,
 }
 
@@ -311,8 +314,6 @@ impl<O> FwdConsensusMessage<O> {
             consensus_msg: msg,
         }
     }
-
-    pub fn header(&self) -> &Header { &self.header }
 
     pub fn consensus(&self) -> &ConsensusMessage<O> {
         &self.consensus_msg

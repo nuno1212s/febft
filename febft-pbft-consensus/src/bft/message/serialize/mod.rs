@@ -18,10 +18,9 @@ use atlas_common::error::*;
 use atlas_common::ordering::Orderable;
 use atlas_common::serialization_helper::SerType;
 use atlas_communication::message::{Header, StoredMessage};
-use atlas_communication::reconfiguration_node::NetworkInformationProvider;
+use atlas_communication::reconfiguration::NetworkInformationProvider;
 use atlas_core::ordering_protocol::loggable::PersistentOrderProtocolTypes;
-use atlas_core::ordering_protocol::networking::serialize::{OrderingProtocolMessage, PermissionedOrderingProtocolMessage};
-use atlas_core::ordering_protocol::networking::signature_ver::OrderProtocolSignatureVerificationHelper;
+use atlas_core::ordering_protocol::networking::serialize::{OrderingProtocolMessage, OrderProtocolVerificationHelper, PermissionedOrderingProtocolMessage};
 
 use crate::bft::log::decisions::{Proof, ProofMetadata};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
@@ -72,105 +71,74 @@ impl<RQ> OrderingProtocolMessage<RQ> for PBFTConsensus<RQ>
     type ProtocolMessage = PBFTMessage<RQ>;
     type ProofMetadata = ProofMetadata;
 
-    fn verify_order_protocol_message<NI, OPVH>(network_info: &Arc<NI>, header: &Header, message: Self::ProtocolMessage) -> Result<Self::ProtocolMessage>
+    fn internally_verify_message<NI, OPVH>(network_info: &Arc<NI>, header: &Header, message: &Self::ProtocolMessage) -> Result<()>
         where NI: NetworkInformationProvider,
-              OPVH: OrderProtocolSignatureVerificationHelper<RQ, Self, NI>, Self: Sized {
+              OPVH: OrderProtocolVerificationHelper<RQ, Self, NI>, Self: Sized {
         match message {
             PBFTMessage::Consensus(consensus) => {
                 let (seq, view) = (consensus.sequence_number(), consensus.view());
 
-                match consensus.into_kind() {
+                match consensus.kind() {
                     ConsensusMessageKind::PrePrepare(requests) => {
-                        let mut request_copy = Vec::with_capacity(requests.len());
-
-                        let request_iter = requests.into_iter();
-
-                        let mut global_res = true;
+                        let request_iter = requests.iter();
 
                         for request in request_iter {
-                            let (header, message) = request.into_inner();
+                            let (header, message) = (request.header(), request.message());
 
-                            let message = OPVH::verify_request_message(network_info, &header, message)?;
-
-                            let stored_msg = StoredMessage::new(header, message);
-
-                            request_copy.push(stored_msg);
+                            let _ = OPVH::verify_request_message(network_info, header, message.clone())?;
                         }
 
-                        let consensus = ConsensusMessage::new(seq, view, ConsensusMessageKind::PrePrepare(request_copy));
-
-                        Ok(PBFTMessage::Consensus(consensus))
+                        Ok(())
                     }
                     ConsensusMessageKind::Prepare(digest) => {
-                        Ok(PBFTMessage::Consensus(ConsensusMessage::new(seq, view, ConsensusMessageKind::Prepare(digest))))
+                        Ok(())
                     }
                     ConsensusMessageKind::Commit(digest) => {
-                        Ok(PBFTMessage::Consensus(ConsensusMessage::new(seq, view, ConsensusMessageKind::Commit(digest))))
+                        Ok(())
                     }
                 }
             }
             PBFTMessage::ViewChange(view_change) => {
                 let (view) = view_change.sequence_number();
 
-                match view_change.into_kind() {
+                match view_change.kind() {
                     ViewChangeMessageKind::Stop(timed_out_req) => {
-                        let mut rq_copy = Vec::with_capacity(timed_out_req.len());
+                        for client_rq in timed_out_req.iter() {
+                            let (header, message) = (client_rq.header(), client_rq.message());
 
-                        let rq_iter = timed_out_req.into_iter();
-
-                        for client_rq in rq_iter {
-                            let (header, message) = client_rq.into_inner();
-
-                            let rq_message = OPVH::verify_request_message(network_info, &header, message)?;
-
-                            let stored_rq = StoredMessage::new(header, rq_message);
-
-                            rq_copy.push(stored_rq);
+                            let _ = OPVH::verify_request_message(network_info, header, message.clone())?;
                         }
 
-                        Ok(PBFTMessage::ViewChange(ViewChangeMessage::new(view, ViewChangeMessageKind::Stop(rq_copy))))
+                        Ok(())
                     }
                     ViewChangeMessageKind::StopQuorumJoin(node) => {
-                        Ok(PBFTMessage::ViewChange(ViewChangeMessage::new(view, ViewChangeMessageKind::StopQuorumJoin(node))))
+                        Ok(())
                     }
                     ViewChangeMessageKind::StopData(collect_data) => {
                         if let Some(proof) = &collect_data.last_proof {}
 
-                        let vcm = ViewChangeMessage::new(view, ViewChangeMessageKind::StopData(collect_data));
-                        Ok(PBFTMessage::ViewChange(vcm))
+                        Ok(())
                     }
                     ViewChangeMessageKind::Sync(leader_collects) => {
-                        let (fwd, collects) = leader_collects.into_inner();
+                        let (fwd, collects) = (leader_collects.proposed(), leader_collects.collects());
 
-                        let res = {
-                            let (header, message) = fwd.into_inner();
+                        {
+                            let (header, message) = (fwd.header(), fwd.consensus_msg());
 
-                            let message = OPVH::verify_protocol_message(network_info, &header, PBFTMessage::Consensus(message))?;
-
-                            let message = FwdConsensusMessage::new(header, message.into_consensus());
-
-                            message
-                        };
-
-                        let mut collected_messages = Vec::with_capacity(collects.len());
-
-                        let iter = collects.into_iter();
-
-                        for collect in iter {
-                            let (header, message) = collect.into_inner();
-
-                            let message = OPVH::verify_protocol_message(network_info, &header, message)?;
-
-                            collected_messages.push(StoredMessage::new(header, message));
+                            let _ = OPVH::verify_protocol_message(network_info, &header, PBFTMessage::Consensus(message.clone()))?;
                         }
 
-                        let vc = ViewChangeMessage::new(view, ViewChangeMessageKind::Sync(LeaderCollects::new(res, collected_messages)));
+                        for collect in collects {
+                            let (header, message) = (collect.header(), collect.message());
 
-                        Ok(PBFTMessage::ViewChange(vc))
+                            let _ = OPVH::verify_protocol_message(network_info, header, message.clone())?;
+                        }
+
+                        Ok(())
                     }
                 }
             }
-            PBFTMessage::ObserverMessage(m) => Ok(PBFTMessage::ObserverMessage(m))
+            PBFTMessage::ObserverMessage(m) => Ok(())
         }
     }
 
@@ -215,7 +183,7 @@ impl<RQ> PersistentOrderProtocolTypes<RQ, Self> for PBFTConsensus<RQ>
 
     fn verify_proof<NI, OPVH>(network_info: &Arc<NI>, proof: Self::Proof) -> Result<Self::Proof>
         where NI: NetworkInformationProvider,
-              OPVH: OrderProtocolSignatureVerificationHelper<RQ, Self, NI>,
+              OPVH: OrderProtocolVerificationHelper<RQ, Self, NI>,
               Self: Sized {
         let (metadata, messages) = proof.into_parts();
 

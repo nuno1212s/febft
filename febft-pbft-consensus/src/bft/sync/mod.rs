@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Formatter};
 
 use either::Either;
+use getset::Getters;
 use intmap::IntMap;
 use log::{debug, error, info, warn};
 #[cfg(feature = "serialize_serde")]
@@ -21,8 +22,9 @@ use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo, tbo_advance_message_queue, tbo_pop_message, tbo_queue_message_arc};
 use atlas_common::serialization_helper::SerType;
+use atlas_communication::lookup_table::MessageModule;
 use atlas_communication::message::{Header, StoredMessage, WireMessage};
-use atlas_communication::reconfiguration_node::NetworkInformationProvider;
+use atlas_communication::reconfiguration::NetworkInformationProvider;
 use atlas_core::messages::{ClientRqInfo, SessionBased};
 use atlas_core::ordering_protocol::{ShareableMessage, unwrap_shareable_message};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
@@ -109,12 +111,14 @@ macro_rules! finalize_view_change {
 /// Contains the `COLLECT` structures the leader received in the `STOP-DATA` phase
 /// of the view change protocol, as well as a value to be proposed in the `SYNC` message.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Clone, Getters)]
 pub struct LeaderCollects<O> {
     //The pre prepare message, created and signed by the leader to be executed when the view change is
     // Done
+    #[get = "pub"]
     proposed: FwdConsensusMessage<O>,
     // The collect messages the leader has received.
+    #[get =  "pub"]
     collects: Vec<StoredMessage<PBFTMessage<O>>>,
 }
 
@@ -129,10 +133,6 @@ impl<O> LeaderCollects<O> {
 
     pub fn message(&self) -> &FwdConsensusMessage<O> {
         &self.proposed
-    }
-
-    pub fn collects(&self) -> &Vec<StoredMessage<PBFTMessage<O>>> {
-        &self.collects
     }
 
     /// Gives up ownership of the inner values of this `LeaderCollects`.
@@ -1164,9 +1164,10 @@ impl<RQ> Synchronizer<RQ>
 
                                 //Create the pre-prepare message that contains the requests
                                 //Collected during the STOPPING DATA phase
-                                let (h, _) = WireMessage::new(
+                                let (h, _, _) = WireMessage::new(
                                     next_view.leader(),
                                     next_view.leader(),
+                                    MessageModule::Protocol,
                                     buf,
                                     prng_state.next_state(),
                                     Some(digest),
@@ -2013,7 +2014,7 @@ fn validate_signature<'a, RQ, M, NT>(node: &'a NT, stored: &'a StoredMessage<M>)
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>
 {
     //TODO: Fix this as I believe it will always be false
-    let wm = match WireMessage::from_header(*stored.header()) {
+    let wm = match WireMessage::from_header(*stored.header(), MessageModule::Protocol) {
         Ok(wm) => wm,
         _ => {
             error!("{:?} // Failed to parse WireMessage", node.id());

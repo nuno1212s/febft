@@ -2,7 +2,6 @@ use std::sync::Arc;
 use atlas_common::serialization_helper::SerType;
 use atlas_communication::message::Header;
 
-use atlas_communication::protocol_node::ProtocolNetworkNode;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;

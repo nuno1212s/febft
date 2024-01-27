@@ -28,6 +28,8 @@ rand = {version = "0.8.5", features = ["small_rng"] }
 [dependencies]
 anyhow = "1.0"
 thiserror = "1.0"
+getset = "0.1.2"
+
 atlas-common = { path = "../../Atlas/Atlas-Common", default-features = true }
 atlas-communication = { path = "../../Atlas/Atlas-Communication" }
 atlas-core = { path = "../../Atlas/Atlas-Core" }

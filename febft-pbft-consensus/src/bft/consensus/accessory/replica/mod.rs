@@ -8,8 +8,9 @@ use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerType;
 use atlas_common::threadpool;
-use atlas_communication::message::{Header, SerializedMessage, StoredMessage, StoredSerializedProtocolMessage, WireMessage};
-use atlas_communication::reconfiguration_node::NetworkInformationProvider;
+use atlas_communication::lookup_table::MessageModule;
+use atlas_communication::message::{Header, SerializedMessage, StoredMessage, StoredSerializedMessage, WireMessage};
+use atlas_communication::reconfiguration::NetworkInformationProvider;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 
 use crate::bft::{PBFT, SysMsg};
@@ -20,7 +21,7 @@ use crate::bft::sync::view::ViewInfo;
 
 pub struct ReplicaAccessory<RQ>
     where RQ: SerType {
-    speculative_commits: Arc<Mutex<BTreeMap<NodeId, StoredSerializedProtocolMessage<SysMsg<RQ>>>>>,
+    speculative_commits: Arc<Mutex<BTreeMap<NodeId, StoredSerializedMessage<SysMsg<RQ>>>>>,
 }
 
 impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
@@ -63,9 +64,10 @@ impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
                 let buf_clone = buf.clone();
 
                 // create header
-                let (header, _) = WireMessage::new(
+                let (header, _, _) = WireMessage::new(
                     my_id,
                     peer_id,
+                    MessageModule::Protocol,
                     buf_clone,
                     // NOTE: nonce not too important here,
                     // since we already contain enough random
@@ -167,7 +169,7 @@ impl<RQ> ReplicaAccessory<RQ>
         }
     }
 
-    fn take_speculative_commits(&self) -> BTreeMap<NodeId, StoredSerializedProtocolMessage<SysMsg<RQ>>> {
+    fn take_speculative_commits(&self) -> BTreeMap<NodeId, StoredSerializedMessage<SysMsg<RQ>>> {
         let mut map = self.speculative_commits.lock().unwrap();
         std::mem::replace(&mut *map, BTreeMap::new())
     }
@@ -176,7 +178,7 @@ impl<RQ> ReplicaAccessory<RQ>
 
 #[inline]
 fn valid_spec_commits<RQ>(
-    speculative_commits: &BTreeMap<NodeId, StoredSerializedProtocolMessage<SysMsg<RQ>>>,
+    speculative_commits: &BTreeMap<NodeId, StoredSerializedMessage<SysMsg<RQ>>>,
     node_id: NodeId,
     seq_no: SeqNo,
     view: &ViewInfo,
