@@ -22,7 +22,7 @@ use atlas_communication::message::StoredMessage;
 use atlas_core::messages::SessionBased;
 use atlas_core::ordering_protocol::{Decision, DecisionInfo, DecisionMetadata, DecisionsAhead, JoinInfo, OPExecResult, OPPollResult, OrderingProtocol, OrderingProtocolArgs, OrderProtocolTolerance, PermissionedOrderingProtocol, ProtocolConsensusDecision, ShareableConsensusMessage, ShareableMessage};
 use atlas_core::ordering_protocol::loggable::{LoggableOrderProtocol, OrderProtocolPersistenceHelper, PProof};
-use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
+use atlas_core::ordering_protocol::networking::{NetworkedOrderProtocolInitializer, OrderProtocolSendNode};
 use atlas_core::ordering_protocol::networking::serialize::{NetworkView, OrderingProtocolMessage};
 use atlas_core::ordering_protocol::reconfigurable_order_protocol::{ReconfigurableOrderProtocol, ReconfigurationAttemptResult};
 use atlas_core::reconfiguration_protocol::ReconfigurationProtocol;
@@ -132,18 +132,19 @@ impl<RQ, NT, > OrderProtocolTolerance for PBFTOrderProtocol<RQ, NT>
     }
 }
 
-impl<RQ, NT> OrderingProtocol<RQ, NT> for PBFTOrderProtocol<RQ, NT>
+impl<RQ, NT> NetworkedOrderProtocolInitializer<RQ, NT> for PBFTOrderProtocol<RQ, NT>
+    where RQ: SerType + SessionBased + 'static,
+          NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static{
+    fn initialize(config: Self::Config, ordering_protocol_args: OrderingProtocolArgs<RQ, NT>) -> Result<Self> where Self: Sized {
+        Self::initialize_protocol(config, ordering_protocol_args, None)
+    }
+}
+
+impl<RQ, NT> OrderingProtocol<RQ> for PBFTOrderProtocol<RQ, NT>
     where RQ: SerType + SessionBased + 'static,
           NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static, {
     type Serialization = PBFTConsensus<RQ>;
     type Config = PBFTConfig;
-
-    fn initialize(config: PBFTConfig, args: OrderingProtocolArgs<RQ, NT>) -> Result<Self> where
-        Self: Sized,
-    {
-        Self::initialize_protocol(config, args, None)
-    }
-
 
     fn handle_off_ctx_message(&mut self, message: ShareableMessage<PBFTMessage<RQ>>) {
         match message.message() {
@@ -854,7 +855,7 @@ impl<RQ, NT> OrderProtocolPersistenceHelper<RQ, PBFTConsensus<RQ>, PBFTConsensus
     }
 }
 
-impl<RQ, NT> LoggableOrderProtocol<RQ, NT> for PBFTOrderProtocol<RQ, NT>
+impl<RQ, NT> LoggableOrderProtocol<RQ> for PBFTOrderProtocol<RQ, NT>
     where RQ: SerType + SessionBased + 'static,
           NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
     type PersistableTypes = PBFTConsensus<RQ>;

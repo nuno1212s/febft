@@ -109,8 +109,6 @@ impl<RQ, NT> Proposer<RQ, NT>
                 //The currently accumulated requests, accumulated while we wait for the next batch to propose
                 let mut ordered_propose = ProposeBuilder::new(self.target_global_batch_size);
 
-                let mut unordered_propose = ProposeBuilder::new(self.target_global_batch_size);
-
                 loop {
                     if self.cancelled.load(Ordering::Relaxed) {
                         break;
@@ -173,30 +171,23 @@ impl<RQ, NT> Proposer<RQ, NT>
                         let mut digest_vec = Vec::with_capacity(messages.len());
                         let mut counter = messages.len();
 
-                        match messages {
-                            PreProcessorOutputMessage::DeDupedOrderedRequests(messages) => {
-                                for message in messages {
-                                    let digest = message.header().unique_digest();
+                        for message in messages {
+                            let digest = message.header().unique_digest();
 
-                                    if is_leader {
-                                        if leader_set_size > 1 {
-                                            if is_request_in_hash_space(&digest, our_slice.as_ref().unwrap()) {
-                                                // we know that these operations will always be proposed since we are a
-                                                // Correct replica. We can therefore just add them to the latest op log
-                                                ordered_propose.currently_accumulated.push(message);
-                                            }
-                                        } else {
-                                            // we know that these operations will always be proposed since we are a
-                                            // Correct replica. We can therefore just add them to the latest op log
-                                            ordered_propose.currently_accumulated.push(message);
-                                        }
-                                    } else {
-                                        digest_vec.push(ClientRqInfo::new(digest, message.header().from(), message.message().sequence_number(), message.message().session_number()));
+                            if is_leader {
+                                if leader_set_size > 1 {
+                                    if is_request_in_hash_space(&digest, our_slice.as_ref().unwrap()) {
+                                        // we know that these operations will always be proposed since we are a
+                                        // Correct replica. We can therefore just add them to the latest op log
+                                        ordered_propose.currently_accumulated.push(message);
                                     }
+                                } else {
+                                    // we know that these operations will always be proposed since we are a
+                                    // Correct replica. We can therefore just add them to the latest op log
+                                    ordered_propose.currently_accumulated.push(message);
                                 }
-                            }
-                            PreProcessorOutputMessage::DeDupedUnorderedRequests(mut messages) => {
-                                unordered_propose.currently_accumulated.append(&mut messages);
+                            } else {
+                                digest_vec.push(ClientRqInfo::new(digest, message.header().from(), message.message().sequence_number(), message.message().session_number()));
                             }
                         }
 
@@ -216,12 +207,9 @@ impl<RQ, NT> Proposer<RQ, NT>
 
                     let start = Instant::now();
 
-                    //Lets first deal with unordered requests since it should be much quicker and easier
-                    let unordered = self.propose_unordered(&mut unordered_propose);
-
                     let ordered = self.propose_ordered(is_leader, &mut ordered_propose);
 
-                    if unordered || ordered {
+                    if ordered {
                         metric_duration(PROPOSER_PROPOSE_TIME_ID, start.elapsed());
                     }
 
@@ -231,78 +219,6 @@ impl<RQ, NT> Proposer<RQ, NT>
                     }
                 }
             }).unwrap()
-    }
-
-    /// Attempt to propose an unordered request batch
-    /// Fails if the batch is not large enough or the timeout
-    /// Has not yet occurred
-    fn propose_unordered(
-        &self,
-        propose: &mut ProposeBuilder<RQ>,
-    ) -> bool where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
-        /*
-        if !propose.currently_accumulated.is_empty() {
-            let current_batch_size = propose.currently_accumulated.len();
-
-            let should_exec = if current_batch_size < self.target_global_batch_size {
-                let micros_since_last_batch = propose.last_proposal.elapsed()
-                    .as_micros();
-
-                if micros_since_last_batch <= self.global_batch_time_limit {
-                    //Don't execute yet since we don't have the size and haven't timed
-                    //out
-                    false
-                } else {
-                    //We have timed out, execute the pending requests
-                    true
-                }
-            } else {
-                true
-            };
-
-            if should_exec {
-
-                // Swap in the latest time at which a batch was executed
-                let last_unordered_batch =
-                    std::mem::replace(&mut propose.last_proposal, Instant::now());
-                //swap in the new vec and take the previous one to the threadpool
-                let new_accumulated_vec =
-                    std::mem::replace(&mut propose.currently_accumulated,
-                                      Vec::new());
-
-                let executor_handle = self.executor_handle.clone();
-
-                let node_id = self.node_ref.id();
-
-                threadpool::execute(move || {
-                    let mut unordered_batch =
-                        UnorderedBatch::new_with_cap(new_accumulated_vec.len());
-
-                    for request in new_accumulated_vec {
-                        let (header, message) = request.into_inner();
-
-                        unordered_batch.add(
-                            header.from(),
-                            message.session_id(),
-                            message.sequence_number(),
-                            message.into_inner_operation(),
-                        );
-                    }
-
-                    if let Err(err) = executor_handle.queue_update_unordered(unordered_batch) {
-                        error!(
-                            "Error while proposing unordered batch of requests: {:?}",
-                            err
-                        );
-                    }
-                });
-
-                return true;
-            }
-        }
-        */
-
-        return false;
     }
 
     /// attempt to propose the ordered requests that we have collected
