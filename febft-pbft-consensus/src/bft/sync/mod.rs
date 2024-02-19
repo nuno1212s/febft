@@ -118,7 +118,7 @@ pub struct LeaderCollects<O> {
     #[get = "pub"]
     proposed: FwdConsensusMessage<O>,
     // The collect messages the leader has received.
-    #[get =  "pub"]
+    #[get = "pub"]
     collects: Vec<StoredMessage<PBFTMessage<O>>>,
 }
 
@@ -2025,7 +2025,7 @@ fn validate_signature<'a, RQ, M, NT>(node: &'a NT, stored: &'a StoredMessage<M>)
 
     // check if we even have the public key of the node that claims
     // to have sent this particular message
-    let key = match node.network_info_provider().get_public_key(&stored.header().from()) {
+    let key = match node.network_info_provider().get_node_info(&stored.header().from()) {
         Some(k) => k,
         None => {
             error!("{:?} // Failed to get public key for node {:?}", node.id(), stored.header().from());
@@ -2034,7 +2034,7 @@ fn validate_signature<'a, RQ, M, NT>(node: &'a NT, stored: &'a StoredMessage<M>)
         }
     };
 
-    wm.is_valid(Some(&key), false)
+    wm.is_valid(Some(key.public_key()), false)
 }
 
 fn highest_proof<'a, RQ, I, NT>(
