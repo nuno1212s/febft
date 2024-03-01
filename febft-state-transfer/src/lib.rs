@@ -477,7 +477,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         debug!("{:?} // Replying to {:?} seq {:?} with seq no {:?}", self.node.id(),
             header.from(), message.sequence_number(), seq);
 
-        self.node.send(reply, header.from(), true);
+        self.node.send_signed(reply, header.from(), true);
     }
 
 
@@ -556,7 +556,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
             }),
         );
 
-        self.node.send(reply, header.from(), true).unwrap();
+        self.node.send_signed(reply, header.from(), true).unwrap();
     }
 
     /// Advances the state of the CST state machine.
@@ -932,7 +932,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
         let targets = view.quorum_members().clone().into_iter().filter(|id| *id != self.node.id());
 
-        self.node.broadcast(message, targets);
+        self.node.broadcast_signed(message, targets);
     }
 
     /// Used by a recovering node to retrieve the latest state.
@@ -960,7 +960,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         let message = CstMessage::new(cst_seq, CstMessageKind::RequestState);
         let targets = view.quorum_members().clone().into_iter().filter(|id| *id != self.node.id());
 
-        self.node.broadcast(message, targets);
+        self.node.broadcast_signed(message, targets);
     }
 }
 

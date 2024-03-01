@@ -128,7 +128,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
 
         let targets = current_view.quorum_members().clone();
 
-        node.broadcast(message, targets.into_iter());
+        node.broadcast_signed(message, targets.into_iter());
     }
 
     pub(super) fn handle_begin_quorum_view_change<NT>(

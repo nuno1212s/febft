@@ -1201,7 +1201,7 @@ impl<RQ> Synchronizer<RQ>
                             let targets = next_view.quorum_members().clone().into_iter()
                                 .filter(move |&id| id != our_id);
 
-                            node.broadcast(message, targets);
+                            node.broadcast_signed(message, targets);
 
                             let state = FinalizeState {
                                 curr_cid,
@@ -2034,7 +2034,7 @@ fn validate_signature<'a, RQ, M, NT>(node: &'a NT, stored: &'a StoredMessage<M>)
         }
     };
 
-    wm.is_valid(Some(key.public_key()), false)
+    wm.is_valid(Some(key.public_key()), false).is_ok()
 }
 
 fn highest_proof<'a, RQ, I, NT>(
