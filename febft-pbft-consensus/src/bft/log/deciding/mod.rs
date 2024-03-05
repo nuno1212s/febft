@@ -9,9 +9,10 @@ use atlas_common::Err;
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_core::messages::{ClientRqInfo, StoredRequestMessage};
+use atlas_communication::message::StoredMessage;
+use atlas_core::messages::{ClientRqInfo};
 use atlas_core::ordering_protocol::networking::serialize::NetworkView;
-use atlas_core::smr::smr_decision_log::ShareableMessage;
+use atlas_core::ordering_protocol::ShareableMessage;
 use atlas_metrics::benchmarks::BatchMeta;
 use atlas_metrics::metrics::metric_duration;
 
@@ -46,7 +47,7 @@ pub struct CompletedBatch<O> {
     // The information of the client requests that are contained in this batch
     pub(super) client_request_info: Vec<ClientRqInfo>,
     // The client requests contained in this batch
-    pub(super) client_requests: Vec<StoredRequestMessage<O>>,
+    pub(super) client_requests: Vec<StoredMessage<O>>,
 
     // The metadata for the batch
     pub(super) batch_meta: BatchMeta,
@@ -80,7 +81,7 @@ pub struct WorkingDecisionLog<O> {
     // Some logging information about metadata
     batch_meta: Arc<Mutex<BatchMeta>>,
     // The contained requests per each of the received pre prepares
-    contained_requests: Vec<Option<Vec<StoredRequestMessage<O>>>>,
+    contained_requests: Vec<Option<Vec<StoredMessage<O>>>>,
 }
 
 /// Checks to make sure replicas aren't providing more than one vote for the
@@ -353,7 +354,7 @@ impl<O> Orderable for CompletedBatch<O> {
 impl<O> CompletedBatch<O> {
     pub fn new(seq: SeqNo, digest: Digest, pre_prepare_ordering: Vec<Digest>,
                contained_messages: FinishedMessageLog<O>, client_request_info: Vec<ClientRqInfo>,
-               client_requests: Vec<StoredRequestMessage<O>>, batch_meta: BatchMeta) -> Self {
+               client_requests: Vec<StoredMessage<O>>, batch_meta: BatchMeta) -> Self {
         Self {
             seq,
             digest,

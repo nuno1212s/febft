@@ -12,14 +12,13 @@ use log::{debug, error, info};
 use atlas_common::collections;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::Orderable;
-use atlas_communication::message::Header;
-use atlas_communication::protocol_node::ProtocolNetworkNode;
-use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, StoredRequestMessage};
+use atlas_common::serialization_helper::SerType;
+use atlas_communication::message::{Header, StoredMessage};
+use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, SessionBased};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, TimeoutPhase, Timeouts};
 use atlas_metrics::metrics::{metric_duration, metric_increment};
-use atlas_smr_application::serialize::ApplicationData;
 
 use crate::bft::consensus::Consensus;
 use crate::bft::log::decisions::CollectData;
@@ -36,12 +35,12 @@ use super::{AbstractSynchronizer, Synchronizer, SynchronizerStatus};
 // - TboQueue for sync phase messages
 // This synchronizer will only move forward on replica messages
 
-pub struct ReplicaSynchronizer<D: ApplicationData> {
+pub struct ReplicaSynchronizer<RQ: SerType> {
     timeout_dur: Cell<Duration>,
-    _phantom: PhantomData<D>,
+    _phantom: PhantomData<fn () -> RQ>,
 }
 
-impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
+impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
     pub fn new(timeout_dur: Duration) -> Self {
         Self {
             timeout_dur: Cell::new(timeout_dur),
@@ -58,14 +57,14 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     /// newly proposed requests (by resetting their timer)
     pub(super) fn handle_stopping_quorum<NT>(
         &self,
-        base_sync: &Synchronizer<D>,
+        base_sync: &Synchronizer<RQ>,
         previous_view: ViewInfo,
-        consensus: &Consensus<D>,
-        log: &Log<D>,
-        pre_processor: &RequestPreProcessor<D::Request>,
+        consensus: &Consensus<RQ>,
+        log: &Log<RQ>,
+        pre_processor: &RequestPreProcessor<RQ>,
         timeouts: &Timeouts,
         node: &NT,
-    ) where NT: OrderProtocolSendNode<D, PBFT<D>>{
+    ) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>>{
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
         // - add requests from STOP into client requests
@@ -103,11 +102,11 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     /// nodes in its STOP message
     pub(super) fn handle_begin_view_change<NT>(
         &self,
-        base_sync: &Synchronizer<D>,
+        base_sync: &Synchronizer<RQ>,
         timeouts: &Timeouts,
         node: &NT,
-        timed_out: Option<Vec<StoredRequestMessage<D::Request>>>,
-    ) where NT: OrderProtocolSendNode<D, PBFT<D>> {
+        timed_out: Option<Vec<StoredMessage<RQ>>>,
+    ) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
         // stop all timers
         self.unwatch_all_requests(timeouts);
 
@@ -129,16 +128,16 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
 
         let targets = current_view.quorum_members().clone();
 
-        node.broadcast(message, targets.into_iter());
+        node.broadcast_signed(message, targets.into_iter());
     }
 
     pub(super) fn handle_begin_quorum_view_change<NT>(
         &self,
-        base_sync: &Synchronizer<D>,
+        base_sync: &Synchronizer<RQ>,
         timeouts: &Timeouts,
         node: &NT,
         join_cert: NodeId,
-    ) where NT: OrderProtocolSendNode<D, PBFT<D>> {
+    ) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
         let current_view = base_sync.view();
 
         info!("{:?} // Beginning a quorum view change to next view with new node: {:?}", node.id(), join_cert);
@@ -174,7 +173,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     pub fn received_request_batch(
         &self,
         header: &Header,
-        pre_prepare: &ConsensusMessage<D::Request>,
+        pre_prepare: &ConsensusMessage<RQ>,
         timeouts: &Timeouts,
     ) -> Vec<ClientRqInfo> {
         let start_time = Instant::now();
@@ -198,7 +197,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
             let digest = header.unique_digest();
 
             let seq_no = x.message().sequence_number();
-            let session = x.message().session_id();
+            let session = x.message().session_number();
 
             //let request_digest = header.digest().clone();
             let client_rq_info = ClientRqInfo::new(digest, header.from(), seq_no, session);
@@ -217,8 +216,8 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     }
 
     /// Register all of the requests that are missing from the view change
-    fn take_stopped_requests_and_register_them(&self, base_sync: &Synchronizer<D>,
-                                               pre_processor: &RequestPreProcessor<D::Request>,
+    fn take_stopped_requests_and_register_them(&self, base_sync: &Synchronizer<RQ>,
+                                               pre_processor: &RequestPreProcessor<RQ>,
                                                timeouts: &Timeouts) {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
@@ -261,10 +260,10 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     /// This timeout pertains to a group of client requests awaiting to be decided.
     pub fn client_requests_timed_out(
         &self,
-        base_sync: &Synchronizer<D>,
+        base_sync: &Synchronizer<RQ>,
         my_id: NodeId,
         timed_out_rqs: &Vec<RqTimeout>,
-    ) -> SynchronizerStatus<D::Request> {
+    ) -> SynchronizerStatus<RQ> {
 
         //// iterate over list of watched pending requests,
         //// and select the ones to be stopped or forwarded
@@ -337,10 +336,10 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     /// current view.
     pub fn forward_requests<NT>(
         &self,
-        base_sync: &Synchronizer<D>,
-        timed_out: Vec<StoredRequestMessage<D::Request>>,
+        base_sync: &Synchronizer<RQ>,
+        timed_out: Vec<StoredMessage<RQ>>,
         node: &NT,
-    ) where NT: OrderProtocolSendNode<D, PBFT<D>> {
+    ) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
         let message = ForwardedRequestsMessage::new(timed_out);
         let view = base_sync.view();
 
@@ -355,9 +354,9 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     /// Clones all the nodes in the `stopped` list
     fn stopped_requests(
         &self,
-        base_sync: &Synchronizer<D>,
-        requests: Option<Vec<StoredRequestMessage<D::Request>>>,
-    ) -> Vec<StoredRequestMessage<D::Request>> {
+        base_sync: &Synchronizer<RQ>,
+        requests: Option<Vec<StoredMessage<RQ>>>,
+    ) -> Vec<StoredMessage<RQ>> {
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
         let mut all_reqs = collections::hash_map();
 
@@ -384,8 +383,8 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
 
     fn stopped_request_digests(
         &self,
-        base_sync: &Synchronizer<D>,
-        requests: Option<Vec<StoredRequestMessage<D::Request>>>,
+        base_sync: &Synchronizer<RQ>,
+        requests: Option<Vec<StoredMessage<RQ>>>,
     ) -> Vec<ClientRqInfo> {
 
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
@@ -411,8 +410,7 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
     }
 
     /// Drain our current received stopped messages
-    fn drain_stopped_request(&self, base_sync: &Synchronizer<D>) ->
-    Vec<StoredRequestMessage<D::Request>> {
+    fn drain_stopped_request(&self, base_sync: &Synchronizer<RQ>) -> Vec<StoredMessage<RQ>> {
 
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
         let mut all_reqs = collections::hash_map();
@@ -438,4 +436,4 @@ impl<D: ApplicationData + 'static> ReplicaSynchronizer<D> {
 /// So we protect collects, watching and tbo as those are the fields that are going to be
 /// accessed by both those threads.
 /// Since the other fields are going to be accessed by just 1 thread, we just need them to be Send, which they are
-unsafe impl<D: ApplicationData> Sync for ReplicaSynchronizer<D> {}
+unsafe impl<RQ: SerType> Sync for ReplicaSynchronizer<RQ> {}

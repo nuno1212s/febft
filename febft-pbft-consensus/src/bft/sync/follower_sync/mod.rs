@@ -1,15 +1,15 @@
 use std::{marker::PhantomData};
 use atlas_common::ordering::Orderable;
-use atlas_core::messages::ClientRqInfo;
-use atlas_smr_application::serialize::ApplicationData;
+use atlas_common::serialization_helper::SerType;
+use atlas_core::messages::{ClientRqInfo, SessionBased};
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 
-pub struct FollowerSynchronizer<D: ApplicationData> {
-    _phantom: PhantomData<D>,
+pub struct FollowerSynchronizer<RQ: SerType> {
+    _phantom: PhantomData<fn() -> RQ>,
 }
 
-impl<D: ApplicationData + 'static> FollowerSynchronizer<D> {
+impl<RQ: SerType + SessionBased + 'static> FollowerSynchronizer<RQ> {
     pub fn new() -> Self {
         Self { _phantom: Default::default() }
     }
@@ -19,7 +19,7 @@ impl<D: ApplicationData + 'static> FollowerSynchronizer<D> {
     /// proposed, they won't timeout
     pub fn watch_request_batch(
         &self,
-        pre_prepare: &ConsensusMessage<D::Request>,
+        pre_prepare: &ConsensusMessage<RQ>,
     ) -> Vec<ClientRqInfo> {
         let requests = match pre_prepare.kind() {
             ConsensusMessageKind::PrePrepare(req) => { req }
@@ -35,7 +35,7 @@ impl<D: ApplicationData + 'static> FollowerSynchronizer<D> {
             let digest = header.unique_digest();
 
             let seq_no = x.message().sequence_number();
-            let session = x.message().session_id();
+            let session = x.message().session_number();
 
             //let request_digest = header.digest().clone();
             let client_rq_info = ClientRqInfo::new(digest, header.from(), seq_no, session);

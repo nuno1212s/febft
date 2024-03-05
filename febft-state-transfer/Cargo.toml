@@ -10,20 +10,21 @@ edition = "2021"
 serialize_serde = ["serde"]
 serialize_capnp = ["atlas-capnp", "capnp"]
 
-default = ["serialize_serde", "atlas-communication/serialize_serde",
-    "atlas-smr-application/serialize_serde", "atlas-common/serialize_serde", "atlas-core/serialize_serde"]
+default = ["serialize_serde", "atlas-communication/serialize_serde", "atlas-common/serialize_serde", "atlas-core/serialize_serde"]
 
 [dependencies]
 
-anyhow = "1.0.75"
-thiserror = "1.0.50"
+anyhow = "1.0"
+thiserror = "1.0"
 serde = { version = "*", optional = true }
 capnp = { version = "0.16.1", optional = true }
 log = "0.4.17"
 
-atlas-capnp = { path = "../../Atlas/Atlas-capnp", optional = true }
-atlas-smr-application = { path = "../../Atlas/Atlas-SMR-Application" }
 atlas-common = { path = "../../Atlas/Atlas-Common" }
 atlas-communication = { path = "../../Atlas/Atlas-Communication" }
+atlas-capnp = { path = "../../Atlas/Atlas-capnp", optional = true }
 atlas-core = { path = "../../Atlas/Atlas-Core" }
+atlas-smr-core = { path = "../../Atlas/Atlas-SMR-Core" }
+atlas-smr-application = { path = "../../Atlas/Atlas-SMR-Application" }
+
 atlas-metrics = { path = "../../Atlas/Atlas-Metrics" }

@@ -20,19 +20,18 @@ use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{Header, StoredMessage};
-use atlas_communication::protocol_node::ProtocolNetworkNode;
-use atlas_core::messages::StateTransfer;
 use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol};
 use atlas_core::ordering_protocol::networking::serialize::NetworkView;
-use atlas_core::persistent_log::{MonolithicStateLog, OperationMode, PersistableStateTransferProtocol};
-use atlas_core::state_transfer::{Checkpoint, CstM, StateTransferProtocol, STPollResult, STResult, STTimeoutResult};
-use atlas_core::state_transfer::monolithic_state::MonolithicStateTransfer;
-use atlas_core::state_transfer::networking::StateTransferSendNode;
+use atlas_core::persistent_log::{OperationMode, PersistableStateTransferProtocol};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
 use atlas_smr_application::app::Application;
 use atlas_smr_application::serialize::ApplicationData;
 use atlas_smr_application::state::monolithic_state::{InstallStateMessage, MonolithicState};
 use atlas_metrics::metrics::metric_duration;
+use atlas_smr_core::persistent_log::MonolithicStateLog;
+use atlas_smr_core::state_transfer::{Checkpoint, CstM, StateTransferProtocol, STPollResult, STResult, STTimeoutResult};
+use atlas_smr_core::state_transfer::monolithic_state::{MonolithicStateTransfer, MonolithicStateTransferInitializer};
+use atlas_smr_core::state_transfer::networking::StateTransferSendNode;
 
 use crate::config::StateTransferConfig;
 use crate::message::{CstMessage, CstMessageKind};
@@ -230,7 +229,7 @@ macro_rules! getmessage {
     }};
 }
 
-impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, PL>
+impl<S, NT, PL> StateTransferProtocol<S> for CollabStateTransfer<S, NT, PL>
     where S: MonolithicState + 'static,
           PL: MonolithicStateLog<S> + 'static,
           NT: StateTransferSendNode<CSTMsg<S>> + 'static
@@ -388,22 +387,11 @@ impl<S, NT, PL> StateTransferProtocol<S, NT, PL> for CollabStateTransfer<S, NT, 
     }
 }
 
-impl<S, NT, PL> MonolithicStateTransfer<S, NT, PL> for CollabStateTransfer<S, NT, PL>
+impl<S, NT, PL> MonolithicStateTransfer<S> for CollabStateTransfer<S, NT, PL>
     where S: MonolithicState + 'static,
           PL: MonolithicStateLog<S> + 'static,
           NT: StateTransferSendNode<CSTMsg<S>> + 'static {
     type Config = StateTransferConfig;
-
-    fn initialize(config: Self::Config, timeouts: Timeouts, node: Arc<NT>,
-                  log: PL, executor_handle: ChannelSyncTx<InstallStateMessage<S>>) -> Result<Self>
-        where Self: Sized {
-        let StateTransferConfig {
-            timeout_duration
-        } = config;
-
-
-        Ok(Self::new(node, timeout_duration, timeouts, log, executor_handle))
-    }
 
     fn handle_state_received_from_app(&mut self, state: Arc<ReadOnly<Checkpoint<S>>>) -> Result<()> {
         self.finalize_checkpoint(state)?;
@@ -416,7 +404,22 @@ impl<S, NT, PL> MonolithicStateTransfer<S, NT, PL> for CollabStateTransfer<S, NT
     }
 }
 
-type Ser<ST: StateTransferProtocol<S, NT, PL>, S, NT, PL> = <ST as StateTransferProtocol<S, NT, PL>>::Serialization;
+impl<S, NT, PL> MonolithicStateTransferInitializer<S, NT, PL> for CollabStateTransfer<S, NT, PL>
+    where S: MonolithicState + 'static,
+          PL: MonolithicStateLog<S> + 'static,
+          NT: StateTransferSendNode<CSTMsg<S>> + 'static {
+    fn initialize(config: Self::Config, timeouts: Timeouts, node: Arc<NT>, log: PL, executor_handle: ChannelSyncTx<InstallStateMessage<S>>) -> Result<Self>
+        where Self: Sized, NT: StateTransferSendNode<Self::Serialization>, PL: MonolithicStateLog<S> {
+        let StateTransferConfig {
+            timeout_duration
+        } = config;
+
+
+        Ok(Self::new(node, timeout_duration, timeouts, log, executor_handle))
+    }
+}
+
+type Ser<ST: StateTransferProtocol<S>, S> = <ST as StateTransferProtocol<S>>::Serialization;
 
 // TODO: request timeouts
 impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
@@ -474,7 +477,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         debug!("{:?} // Replying to {:?} seq {:?} with seq no {:?}", self.node.id(),
             header.from(), message.sequence_number(), seq);
 
-        self.node.send(reply, header.from(), true);
+        self.node.send_signed(reply, header.from(), true);
     }
 
 
@@ -553,7 +556,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
             }),
         );
 
-        self.node.send(reply, header.from(), true).unwrap();
+        self.node.send_signed(reply, header.from(), true).unwrap();
     }
 
     /// Advances the state of the CST state machine.
@@ -929,7 +932,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
 
         let targets = view.quorum_members().clone().into_iter().filter(|id| *id != self.node.id());
 
-        self.node.broadcast(message, targets);
+        self.node.broadcast_signed(message, targets);
     }
 
     /// Used by a recovering node to retrieve the latest state.
@@ -957,7 +960,7 @@ impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
         let message = CstMessage::new(cst_seq, CstMessageKind::RequestState);
         let targets = view.quorum_members().clone().into_iter().filter(|id| *id != self.node.id());
 
-        self.node.broadcast(message, targets);
+        self.node.broadcast_signed(message, targets);
     }
 }
 
@@ -989,5 +992,5 @@ pub enum StateTransferError {
     #[error("The checkpoint has already been finalized")]
     CheckpointAlreadyFinalized,
     #[error("No checkpoint has been initiated yet")]
-    CheckpointNotInitiated
+    CheckpointNotInitiated,
 }

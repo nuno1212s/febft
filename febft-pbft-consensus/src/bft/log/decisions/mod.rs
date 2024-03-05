@@ -11,7 +11,7 @@ use atlas_common::Err;
 use atlas_common::error::*;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_core::ordering_protocol::networking::serialize::OrderProtocolProof;
-use atlas_core::smr::smr_decision_log::ShareableMessage;
+use atlas_core::ordering_protocol::ShareableMessage;
 
 use crate::bft::message::{ConsensusMessageKind, PBFTMessage};
 

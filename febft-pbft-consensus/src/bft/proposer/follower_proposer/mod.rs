@@ -11,18 +11,18 @@ use atlas_execution::serialize::ApplicationData;
 
 use crate::bft::PBFT;
 
-pub type BatchType<D: ApplicationData> = Vec<StoredRequestMessage<D::Request>>;
+pub type BatchType<D: ApplicationData> = Vec<St<D::Request>>;
 
 ///TODO:
-pub struct FollowerProposer<D, ST, LP, NT, RP>
-    where D: ApplicationData + 'static,
+pub struct FollowerProposer<RQ, ST, LP, NT, RP>
+    where RQ: SerType,
           ST: StateTransferMessage + 'static,
           LP: LogTransferMessage + 'static,
           RP: ReconfigurationProtocolMessage + 'static,
-          NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> {
-    batch_channel: (ChannelSyncTx<BatchType<D>>, ChannelSyncRx<BatchType<D>>),
+          NT: ProtocolNetworkNode<PBFT<RQ, ST, LP, RP>> {
+    batch_channel: (ChannelSyncTx<BatchType<RQ>>, ChannelSyncRx<BatchType<RQ>>),
     //For request execution
-    executor_handle: ExecutorHandle<D>,
+    executor_handle: ExecutorHandle<RQ>,
     cancelled: AtomicBool,
 
     //Reference to the network node
@@ -40,15 +40,15 @@ pub struct FollowerProposer<D, ST, LP, NT, RP>
 const BATCH_CHANNEL_SIZE: usize = 1024;
 
 
-impl<D, ST, LP, NT, RP> FollowerProposer<D, ST, LP, NT, RP>
-    where D: ApplicationData + 'static,
+impl<RQ, ST, LP, NT, RP> FollowerProposer<RQ, ST, LP, NT, RP>
+    where RQ: SerType,
           ST: StateTransferMessage + 'static,
           LP: LogTransferMessage + 'static,
           RP: ReconfigurationProtocolMessage + 'static,
-          NT: ProtocolNetworkNode<PBFT<D, ST, LP, RP>> {
+          NT: ProtocolNetworkNode<PBFT<RQ, ST, LP, RP>> {
     pub fn new(
         node: Arc<NT>,
-        executor: ExecutorHandle<D>,
+        executor: ExecutorHandle<RQ>,
         target_global_batch_size: usize,
         global_batch_time_limit: u128,
     ) -> Arc<Self> {

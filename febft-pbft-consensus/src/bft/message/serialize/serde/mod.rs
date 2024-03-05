@@ -1,15 +1,15 @@
 use std::io::{Read, Write};
 use atlas_common::error::*;
-use crate::bft::message::serialize::ApplicationData;
 use crate::bft::message::{ConsensusMessage};
 use anyhow::Context;
+use atlas_common::serialization_helper::SerType;
 
-pub fn serialize_consensus<W, D>(
-    m: &ConsensusMessage<D::Request>,
+pub fn serialize_consensus<W, RQ>(
+    m: &ConsensusMessage<RQ>,
     w: &mut W,
 ) -> Result<()> where
     W: Write + AsMut<[u8]>,
-    D: ApplicationData {
+    RQ: SerType {
 
     bincode::serde::encode_into_std_write(m,  w, bincode::config::standard())
         .context(format!("Failed to serialize message {} bytes len", w.as_mut().len()))?;
@@ -17,9 +17,9 @@ pub fn serialize_consensus<W, D>(
     Ok(())
 }
 
-pub fn deserialize_consensus<R, D>(
+pub fn deserialize_consensus<R, RQ>(
     r: R
-) -> Result<ConsensusMessage<D::Request>> where D: ApplicationData, R: Read + AsRef<[u8]> {
+) -> Result<ConsensusMessage<RQ>> where RQ: SerType, R: Read + AsRef<[u8]> {
     let msg =  bincode::serde::decode_borrowed_from_slice(r.as_ref(), bincode::config::standard())
         .context("Failed to deserialize message")?;
 

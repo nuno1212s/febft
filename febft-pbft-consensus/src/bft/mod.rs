@@ -17,20 +17,18 @@ use atlas_common::globals::ReadOnly;
 use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_common::serialization_helper::SerType;
 use atlas_communication::message::StoredMessage;
-use atlas_core::ordering_protocol::{Decision, DecisionInfo, DecisionMetadata, DecisionsAhead, JoinInfo, OPExecResult, OPPollResult, OrderingProtocol, OrderingProtocolArgs, OrderProtocolTolerance, PermissionedOrderingProtocol, ProtocolConsensusDecision};
+use atlas_core::messages::SessionBased;
+use atlas_core::ordering_protocol::{Decision, DecisionInfo, DecisionMetadata, DecisionsAhead, JoinInfo, OPExecResult, OPPollResult, OrderingProtocol, OrderingProtocolArgs, OrderProtocolTolerance, PermissionedOrderingProtocol, ProtocolConsensusDecision, ShareableConsensusMessage, ShareableMessage};
 use atlas_core::ordering_protocol::loggable::{LoggableOrderProtocol, OrderProtocolPersistenceHelper, PProof};
-use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
+use atlas_core::ordering_protocol::networking::{NetworkedOrderProtocolInitializer, OrderProtocolSendNode};
 use atlas_core::ordering_protocol::networking::serialize::{NetworkView, OrderingProtocolMessage};
 use atlas_core::ordering_protocol::reconfigurable_order_protocol::{ReconfigurableOrderProtocol, ReconfigurationAttemptResult};
 use atlas_core::reconfiguration_protocol::ReconfigurationProtocol;
 use atlas_core::request_pre_processing::RequestPreProcessor;
 use atlas_core::serialize::ReconfigurationProtocolMessage;
-use atlas_core::smr::smr_decision_log::{ShareableConsensusMessage, ShareableMessage};
 use atlas_core::timeouts::{RqTimeout, Timeouts};
-use atlas_smr_application::ExecutorHandle;
-use atlas_smr_application::serialize::ApplicationData;
-
 use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{Consensus, ConsensusPollStatus, ConsensusStatus, ProposerConsensusGuard};
 use crate::bft::log::{initialize_decided_log, Log};
@@ -52,9 +50,9 @@ pub mod observer;
 pub mod metric;
 
 // The types responsible for this protocol
-pub type PBFT<D> = PBFTConsensus<D>;
+pub type PBFT<RQ> = PBFTConsensus<RQ>;
 // The message type for this consensus protocol
-pub type SysMsg<D> = <PBFTConsensus<D> as OrderingProtocolMessage<D>>::ProtocolMessage;
+pub type SysMsg<RQ> = <PBFTConsensus<RQ> as OrderingProtocolMessage<RQ>>::ProtocolMessage;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 /// Which phase of the consensus algorithm are we currently executing
@@ -79,18 +77,18 @@ pub type OPDecision<O> = Decision<ProofMetadata, PBFTMessage<O>, O>;
 pub type OPDecisionInfo<O> = DecisionInfo<ProofMetadata, PBFTMessage<O>, O>;
 
 /// a PBFT based ordering protocol
-pub struct PBFTOrderProtocol<D, NT, >
+pub struct PBFTOrderProtocol<RQ, NT, >
     where
-        D: ApplicationData + 'static,
-        NT: OrderProtocolSendNode<D, PBFT<D>> + 'static, {
+        RQ: SerType,
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static, {
     // What phase of the consensus algorithm are we currently executing
     phase: ConsensusPhase,
     /// The consensus state machine
-    consensus: Consensus<D>,
+    consensus: Consensus<RQ>,
     /// The synchronizer state machine
-    synchronizer: Arc<Synchronizer<D>>,
+    synchronizer: Arc<Synchronizer<RQ>>,
     /// The request pre processor
-    pre_processor: RequestPreProcessor<D::Request>,
+    pre_processor: RequestPreProcessor<RQ>,
     // A reference to the timeouts layer
     timeouts: Timeouts,
     //The proposer guard
@@ -101,26 +99,24 @@ pub struct PBFTOrderProtocol<D, NT, >
     // The log of the decided consensus messages
     // This is completely owned by the server thread and therefore does not
     // Require any synchronization
-    message_log: Log<D>,
+    message_log: Log<RQ>,
     // The proposer of this replica
-    proposer: Arc<Proposer<D, NT>>,
+    proposer: Arc<Proposer<RQ, NT>>,
     // The networking layer for a Node in the network (either Client or Replica)
     node: Arc<NT>,
-    // The handle to the executor, currently not utilized
-    executor: ExecutorHandle<D>,
 }
 
-impl<D, NT, > Orderable for PBFTOrderProtocol<D, NT>
-    where D: 'static + ApplicationData,
-          NT: 'static + OrderProtocolSendNode<D, PBFT<D>>, {
+impl<RQ, NT, > Orderable for PBFTOrderProtocol<RQ, NT>
+    where RQ: SerType,
+          NT: 'static + OrderProtocolSendNode<RQ, PBFT<RQ>>, {
     fn sequence_number(&self) -> SeqNo {
         self.consensus.sequence_number()
     }
 }
 
-impl<D, NT, > OrderProtocolTolerance for PBFTOrderProtocol<D, NT>
-    where D: 'static + ApplicationData,
-          NT: 'static + OrderProtocolSendNode<D, PBFT<D>>, {
+impl<RQ, NT, > OrderProtocolTolerance for PBFTOrderProtocol<RQ, NT>
+    where RQ: SerType,
+          NT: 'static + OrderProtocolSendNode<RQ, PBFT<RQ>>, {
     fn get_n_for_f(f: usize) -> usize {
         3 * f + 1
     }
@@ -136,20 +132,21 @@ impl<D, NT, > OrderProtocolTolerance for PBFTOrderProtocol<D, NT>
     }
 }
 
-impl<D, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, NT>
-    where D: ApplicationData + 'static,
-          NT: OrderProtocolSendNode<D, PBFT<D>> + 'static, {
-    type Serialization = PBFTConsensus<D>;
+impl<RQ, NT> NetworkedOrderProtocolInitializer<RQ, NT> for PBFTOrderProtocol<RQ, NT>
+    where RQ: SerType + SessionBased + 'static,
+          NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static{
+    fn initialize(config: Self::Config, ordering_protocol_args: OrderingProtocolArgs<RQ, NT>) -> Result<Self> where Self: Sized {
+        Self::initialize_protocol(config, ordering_protocol_args, None)
+    }
+}
+
+impl<RQ, NT> OrderingProtocol<RQ> for PBFTOrderProtocol<RQ, NT>
+    where RQ: SerType + SessionBased + 'static,
+          NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static, {
+    type Serialization = PBFTConsensus<RQ>;
     type Config = PBFTConfig;
 
-    fn initialize(config: PBFTConfig, args: OrderingProtocolArgs<D, NT>) -> Result<Self> where
-        Self: Sized,
-    {
-        Self::initialize_protocol(config, args, None)
-    }
-
-
-    fn handle_off_ctx_message(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>) {
+    fn handle_off_ctx_message(&mut self, message: ShareableMessage<PBFTMessage<RQ>>) {
         match message.message() {
             PBFTMessage::Consensus(consensus) => {
                 debug!("{:?} // Received off context consensus message {:?}", self.node.id(), consensus);
@@ -182,7 +179,7 @@ impl<D, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, NT>
         Ok(())
     }
 
-    fn poll(&mut self) -> Result<OPPollResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>> {
+    fn poll(&mut self) -> Result<OPPollResult<ProofMetadata, PBFTMessage<RQ>, RQ>> {
         trace!("{:?} // Polling {:?}", self.node.id(), self.phase);
 
         match self.phase {
@@ -195,7 +192,7 @@ impl<D, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, NT>
         }
     }
 
-    fn process_message(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>) -> Result<OPExecResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>> {
+    fn process_message(&mut self, message: ShareableMessage<PBFTMessage<RQ>>) -> Result<OPExecResult<ProofMetadata, PBFTMessage<RQ>, RQ>> {
         match self.phase {
             ConsensusPhase::NormalPhase => {
                 self.update_normal_phase(message)
@@ -212,7 +209,7 @@ impl<D, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, NT>
         Ok(())
     }
 
-    fn handle_timeout(&mut self, timeout: Vec<RqTimeout>) -> Result<OPExecResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>> {
+    fn handle_timeout(&mut self, timeout: Vec<RqTimeout>) -> Result<OPExecResult<ProofMetadata, PBFTMessage<RQ>, RQ>> {
         if self.consensus.is_catching_up() {
             warn!("{:?} // Ignoring timeouts while catching up", self.node.id());
 
@@ -251,10 +248,10 @@ impl<D, NT> OrderingProtocol<D, NT> for PBFTOrderProtocol<D, NT>
     }
 }
 
-impl<D, NT> PermissionedOrderingProtocol for PBFTOrderProtocol<D, NT>
-    where D: ApplicationData + 'static,
-          NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
-    type PermissionedSerialization = PBFTConsensus<D>;
+impl<RQ, NT> PermissionedOrderingProtocol for PBFTOrderProtocol<RQ, NT>
+    where RQ: SerType + SessionBased + 'static,
+          NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static {
+    type PermissionedSerialization = PBFTConsensus<RQ>;
 
     fn view(&self) -> ViewInfo {
         self.synchronizer.view()
@@ -279,17 +276,17 @@ impl<D, NT> PermissionedOrderingProtocol for PBFTOrderProtocol<D, NT>
     }
 }
 
-impl<D, NT> PBFTOrderProtocol<D, NT>
-    where D: ApplicationData + 'static,
-          NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
-    fn initialize_protocol(config: PBFTConfig, args: OrderingProtocolArgs<D, NT>,
-                           initial_state: Option<DecisionLog<D::Request>>) -> Result<Self> {
+impl<RQ, NT> PBFTOrderProtocol<RQ, NT>
+    where RQ: SerType + SessionBased + 'static,
+          NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static {
+    fn initialize_protocol(config: PBFTConfig, args: OrderingProtocolArgs<RQ, NT>,
+                           initial_state: Option<DecisionLog<RQ>>) -> Result<Self> {
         let PBFTConfig {
             timeout_dur,
             proposer_config, watermark
         } = config;
 
-        let OrderingProtocolArgs(node_id, executor, timeouts,
+        let OrderingProtocolArgs(node_id, timeouts,
                                  pre_processor, batch_input,
                                  node, quorum) = args;
 
@@ -297,15 +294,15 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
 
         let consensus_guard = ProposerConsensusGuard::new(sync.view(), watermark);
 
-        let consensus = Consensus::<D>::new_replica(node_id, &sync.view(), executor.clone(),
-                                                    SeqNo::ZERO, watermark, consensus_guard.clone(),
-                                                    timeouts.clone());
+        let consensus = Consensus::<RQ>::new_replica(node_id, &sync.view(),
+                                                     SeqNo::ZERO, watermark, consensus_guard.clone(),
+                                                     timeouts.clone());
 
-        let dec_log = initialize_decided_log::<D>(node_id);
+        let dec_log = initialize_decided_log::<RQ>(node_id);
 
-        let proposer = Proposer::<D, NT>::new(node.clone(), batch_input, sync.clone(), timeouts.clone(),
-                                              executor.clone(), consensus_guard.clone(),
-                                              proposer_config);
+        let proposer = Proposer::<RQ, NT>::new(node.clone(), batch_input, sync.clone(), timeouts.clone(),
+                                               consensus_guard.clone(),
+                                               proposer_config);
 
         let replica = Self {
             phase: ConsensusPhase::NormalPhase,
@@ -315,7 +312,6 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
             timeouts,
             consensus_guard,
             unordered_rq_guard: Arc::new(Default::default()),
-            executor,
             message_log: dec_log,
             proposer,
             node,
@@ -340,7 +336,7 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
         Ok(replica)
     }
 
-    fn poll_sync_phase(&mut self) -> Result<OPPollResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>> {
+    fn poll_sync_phase(&mut self) -> Result<OPPollResult<ProofMetadata, PBFTMessage<RQ>, RQ>> {
 
         // retrieve a view change message to be processed
         let poll_result = self.synchronizer.poll();
@@ -397,7 +393,7 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
         }
     }
 
-    fn poll_normal_phase(&mut self) -> Result<OPPollResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>> {
+    fn poll_normal_phase(&mut self) -> Result<OPPollResult<ProofMetadata, PBFTMessage<RQ>, RQ>> {
         // check if we have STOP messages to be processed,
         // and update our phase when we start installing
         // the new view
@@ -460,7 +456,7 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
         })
     }
 
-    fn update_sync_phase(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>) -> Result<OPExecResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>> {
+    fn update_sync_phase(&mut self, message: ShareableMessage<PBFTMessage<RQ>>) -> Result<OPExecResult<ProofMetadata, PBFTMessage<RQ>, RQ>> {
         match message.message() {
             PBFTMessage::ViewChange(view_change) => {
                 return Ok(match self.adv_sync(message) {
@@ -502,7 +498,7 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
         Ok(OPExecResult::MessageProcessedNoUpdate)
     }
 
-    fn handle_decided(&mut self, decisions: MaybeVec<Decision<ProofMetadata, PBFTMessage<D::Request>, D::Request>>) -> Result<MaybeVec<OPDecision<D::Request>>> {
+    fn handle_decided(&mut self, decisions: MaybeVec<Decision<ProofMetadata, PBFTMessage<RQ>, RQ>>) -> Result<MaybeVec<OPDecision<RQ>>> {
         let finalized_decisions = self.finalize_all_possible()?;
 
         let decisions = self.merge_decisions(decisions, finalized_decisions)?;
@@ -510,7 +506,7 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
         Ok(decisions)
     }
 
-    fn update_normal_phase(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>) -> Result<OPExecResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>> {
+    fn update_normal_phase(&mut self, message: ShareableMessage<PBFTMessage<RQ>>) -> Result<OPExecResult<ProofMetadata, PBFTMessage<RQ>, RQ>> {
         match message.message() {
             PBFTMessage::Consensus(_) => {
                 return self.adv_consensus(message);
@@ -547,8 +543,8 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
     /// Advance the consensus phase with a received message
     fn adv_consensus(
         &mut self,
-        message: ShareableMessage<PBFTMessage<D::Request>>,
-    ) -> Result<OPExecResult<ProofMetadata, PBFTMessage<D::Request>, D::Request>> {
+        message: ShareableMessage<PBFTMessage<RQ>>,
+    ) -> Result<OPExecResult<ProofMetadata, PBFTMessage<RQ>, RQ>> {
         let seq = self.consensus.sequence_number();
 
         // debug!(
@@ -581,7 +577,7 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
     }
 
     /// Finalize all possible consensus instances
-    fn finalize_all_possible(&mut self) -> Result<Vec<ProtocolConsensusDecision<D::Request>>> {
+    fn finalize_all_possible(&mut self) -> Result<Vec<ProtocolConsensusDecision<RQ>>> {
         let view = self.synchronizer.view();
 
         let mut finalized_decisions = Vec::with_capacity(self.consensus.finalizeable_count());
@@ -601,7 +597,7 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
 
 
     /// Advance the sync phase of the algorithm
-    fn adv_sync(&mut self, message: ShareableMessage<PBFTMessage<D::Request>>) -> SyncPhaseRes<D::Request> {
+    fn adv_sync(&mut self, message: ShareableMessage<PBFTMessage<RQ>>) -> SyncPhaseRes<RQ> {
         let status = self.synchronizer.process_message(
             message,
             &self.timeouts,
@@ -652,7 +648,7 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
         };
     }
 
-    fn merge_decisions(&mut self, status: MaybeVec<OPDecision<D::Request>>, finalized_decisions: Vec<ProtocolConsensusDecision<D::Request>>) -> Result<MaybeVec<OPDecision<D::Request>>> {
+    fn merge_decisions(&mut self, status: MaybeVec<OPDecision<RQ>>, finalized_decisions: Vec<ProtocolConsensusDecision<RQ>>) -> Result<MaybeVec<OPDecision<RQ>>> {
         let mut map = BTreeMap::new();
 
         Self::merge_decision_vec(&mut map, status)?;
@@ -677,7 +673,7 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
     }
 
     /// Handles the result of a synchronizer result
-    fn handle_sync_result(&mut self, status: ConsensusStatus<D::Request>, to_exec: Option<OPDecision<D::Request>>) -> Result<MaybeVec<OPDecision<D::Request>>> {
+    fn handle_sync_result(&mut self, status: ConsensusStatus<RQ>, to_exec: Option<OPDecision<RQ>>) -> Result<MaybeVec<OPDecision<RQ>>> {
         let mut map = BTreeMap::new();
 
         match status {
@@ -716,7 +712,7 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
     }
 
     /// Merge a decision vector with the already existing btreemap
-    fn merge_decision_vec(map: &mut BTreeMap<SeqNo, OPDecision<<D as ApplicationData>::Request>>, decision: MaybeVec<OPDecision<<D as ApplicationData>::Request>>) -> Result<()> {
+    fn merge_decision_vec(map: &mut BTreeMap<SeqNo, OPDecision<RQ>>, decision: MaybeVec<OPDecision<RQ>>) -> Result<()> {
         for dec in decision.into_iter() {
             if let Some(member) = map.get_mut(&dec.sequence_number()) {
                 member.merge_decisions(dec)?;
@@ -729,9 +725,9 @@ impl<D, NT> PBFTOrderProtocol<D, NT>
     }
 }
 
-impl<D, NT> PBFTOrderProtocol<D, NT>
-    where D: ApplicationData + 'static,
-          NT: OrderProtocolSendNode<D, PBFT<D>> + 'static, {
+impl<RQ, NT> PBFTOrderProtocol<RQ, NT>
+    where RQ: SerType + SessionBased + 'static,
+          NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static, {
     pub(crate) fn switch_phase(&mut self, new_phase: ConsensusPhase) {
         info!("{:?} // Switching from phase {:?} to phase {:?}", self.node.id(), self.phase, new_phase);
 
@@ -790,7 +786,9 @@ const CF_PRE_PREPARES: &str = "PRE_PREPARES";
 const CF_PREPARES: &str = "PREPARES";
 const CF_COMMIT: &str = "COMMITS";
 
-impl<D, NT> OrderProtocolPersistenceHelper<D, PBFTConsensus<D>, PBFTConsensus<D>> for PBFTOrderProtocol<D, NT> where D: 'static + ApplicationData, NT: OrderProtocolSendNode<D, PBFT<D>> {
+impl<RQ, NT> OrderProtocolPersistenceHelper<RQ, PBFTConsensus<RQ>, PBFTConsensus<RQ>> for PBFTOrderProtocol<RQ, NT>
+    where RQ: SerType + SessionBased,
+          NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
     fn message_types() -> Vec<&'static str> {
         vec![
             CF_PRE_PREPARES,
@@ -799,7 +797,7 @@ impl<D, NT> OrderProtocolPersistenceHelper<D, PBFTConsensus<D>, PBFTConsensus<D>
         ]
     }
 
-    fn get_type_for_message(msg: &PBFTMessage<D::Request>) -> Result<&'static str> {
+    fn get_type_for_message(msg: &PBFTMessage<RQ>) -> Result<&'static str> {
         match msg {
             PBFTMessage::Consensus(consensus) => {
                 match consensus.kind() {
@@ -819,7 +817,7 @@ impl<D, NT> OrderProtocolPersistenceHelper<D, PBFTConsensus<D>, PBFTConsensus<D>
         }
     }
 
-    fn init_proof_from(metadata: ProofMetadata, messages: Vec<StoredMessage<PBFTMessage<D::Request>>>) -> Result<Proof<D::Request>> {
+    fn init_proof_from(metadata: ProofMetadata, messages: Vec<StoredMessage<PBFTMessage<RQ>>>) -> Result<Proof<RQ>> {
         let mut messages_f = Vec::with_capacity(messages.len());
 
         for message in messages {
@@ -829,12 +827,12 @@ impl<D, NT> OrderProtocolPersistenceHelper<D, PBFTConsensus<D>, PBFTConsensus<D>
         Proof::init_from_messages(metadata, messages_f)
     }
 
-    fn init_proof_from_scm(metadata: DecisionMetadata<D, PBFTConsensus<D>>,
-                           messages: Vec<ShareableConsensusMessage<D, PBFTConsensus<D>>>) -> Result<PProof<D, PBFTConsensus<D>, PBFTConsensus<D>>> {
+    fn init_proof_from_scm(metadata: DecisionMetadata<RQ, PBFTConsensus<RQ>>,
+                           messages: Vec<ShareableConsensusMessage<RQ, PBFTConsensus<RQ>>>) -> Result<PProof<RQ, PBFTConsensus<RQ>, PBFTConsensus<RQ>>> {
         Proof::init_from_messages(metadata, messages)
     }
 
-    fn decompose_proof(proof: &Proof<D::Request>) -> (&ProofMetadata, Vec<&StoredMessage<PBFTMessage<D::Request>>>) {
+    fn decompose_proof(proof: &Proof<RQ>) -> (&ProofMetadata, Vec<&StoredMessage<PBFTMessage<RQ>>>) {
         let mut messages = Vec::new();
 
         for message in proof.pre_prepares() {
@@ -852,21 +850,21 @@ impl<D, NT> OrderProtocolPersistenceHelper<D, PBFTConsensus<D>, PBFTConsensus<D>
         (proof.metadata(), messages)
     }
 
-    fn get_requests_in_proof(proof: &PProof<D, PBFTConsensus<D>, PBFTConsensus<D>>) -> Result<ProtocolConsensusDecision<D::Request>> {
+    fn get_requests_in_proof(proof: &PProof<RQ, PBFTConsensus<RQ>, PBFTConsensus<RQ>>) -> Result<ProtocolConsensusDecision<RQ>> {
         Ok(ProtocolConsensusDecision::from(proof))
     }
 }
 
-impl<D, NT> LoggableOrderProtocol<D, NT> for PBFTOrderProtocol<D, NT>
-    where D: ApplicationData + 'static,
-          NT: OrderProtocolSendNode<D, PBFT<D>> {
-    type PersistableTypes = PBFTConsensus<D>;
+impl<RQ, NT> LoggableOrderProtocol<RQ> for PBFTOrderProtocol<RQ, NT>
+    where RQ: SerType + SessionBased + 'static,
+          NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
+    type PersistableTypes = PBFTConsensus<RQ>;
 }
 
-impl<D, NT, RP> ReconfigurableOrderProtocol<RP> for PBFTOrderProtocol<D, NT>
-    where D: ApplicationData + 'static,
+impl<RQ, NT, RP> ReconfigurableOrderProtocol<RP> for PBFTOrderProtocol<RQ, NT>
+    where RQ: SerType + SessionBased + 'static,
           RP: ReconfigurationProtocolMessage + 'static,
-          NT: OrderProtocolSendNode<D, PBFT<D>> + 'static {
+          NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static {
     fn attempt_quorum_node_join(&mut self, joining_node: NodeId) -> Result<ReconfigurationAttemptResult> {
         let result = self.synchronizer.start_join_quorum(joining_node, &*self.node, &self.timeouts, &self.message_log);
 

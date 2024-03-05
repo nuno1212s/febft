@@ -16,8 +16,7 @@ default = [
     "serialize_serde"
 ]
 
-serialize_serde = ["atlas-capnp", "serde_bytes", "bincode", "atlas-common/serialize_serde",
-    "atlas-smr-application/serialize_serde", "atlas-communication/serialize_serde", "atlas-core/serialize_serde"]
+serialize_serde = ["atlas-capnp", "serde_bytes", "bincode", "atlas-common/serialize_serde", "atlas-communication/serialize_serde", "atlas-core/serialize_serde"]
 serialize_capnp = ["atlas-capnp"]
 
 [dev-dependencies]
@@ -27,11 +26,12 @@ mimalloc = { version = "*", default-features = false }
 rand = {version = "0.8.5", features = ["small_rng"] }
 
 [dependencies]
-anyhow = "1.0.75"
-thiserror = "1.0.50"
+anyhow = "1.0"
+thiserror = "1.0"
+getset = "0.1.2"
+
 atlas-common = { path = "../../Atlas/Atlas-Common", default-features = true }
 atlas-communication = { path = "../../Atlas/Atlas-Communication" }
-atlas-smr-application = { path = "../../Atlas/Atlas-SMR-Application" }
 atlas-core = { path = "../../Atlas/Atlas-Core" }
 atlas-capnp = { path = "../../Atlas/Atlas-capnp", optional = true }
 atlas-metrics = {path = "../../Atlas/Atlas-Metrics"}

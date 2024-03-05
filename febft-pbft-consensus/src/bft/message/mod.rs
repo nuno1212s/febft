@@ -8,6 +8,7 @@ use futures::io::{
     AsyncWrite,
     AsyncWriteExt,
 };
+use getset::Getters;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 
@@ -15,9 +16,7 @@ use atlas_common::crypto::hash::Digest;
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_communication::message::Header;
-use atlas_core::messages::{RequestMessage, StoredRequestMessage};
-use atlas_smr_application::serialize::ApplicationData;
+use atlas_communication::message::{Header, StoredMessage};
 
 use crate::bft::log::decisions::CollectData;
 use crate::bft::sync::LeaderCollects;
@@ -165,7 +164,7 @@ impl<O> ViewChangeMessage<O> {
 #[derive(Clone)]
 pub enum ViewChangeMessageKind<O> {
     /// A STOP message, broadcast when we want to call a view change due to requests getting timed out
-    Stop(Vec<StoredRequestMessage<O>>),
+    Stop(Vec<StoredMessage<O>>),
     /// A STOP message, broadcast when we want to call a view change due to us having received a Node Quorum Join message
     StopQuorumJoin(NodeId),
     // Each of the latest decisions from the sender, so the new leader can sync
@@ -211,7 +210,7 @@ pub enum ConsensusMessageKind<O> {
     ///
     /// The value `Vec<Digest>` contains a batch of hash digests of the
     /// serialized client requests to be proposed.
-    PrePrepare(Vec<StoredRequestMessage<O>>),
+    PrePrepare(Vec<StoredMessage<O>>),
     /// Prepare a batch of requests.
     ///
     /// The `Digest` represents the hash of the serialized `PRE-PREPARE`,
@@ -284,7 +283,7 @@ impl<O> ConsensusMessage<O> {
 
     /// Takes the proposed client requests embedded in this consensus message,
     /// if they are available.
-    pub fn take_proposed_requests(&mut self) -> Option<Vec<StoredRequestMessage<O>>> {
+    pub fn take_proposed_requests(&mut self) -> Option<Vec<StoredMessage<O>>> {
         let kind = std::mem::replace(
             &mut self.kind,
             ConsensusMessageKind::PrePrepare(Vec::new()),
@@ -300,9 +299,11 @@ impl<O> ConsensusMessage<O> {
 }
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Clone, Getters)]
 pub struct FwdConsensusMessage<O> {
+    #[get = "pub"]
     header: Header,
+    #[get = "pub"]
     consensus_msg: ConsensusMessage<O>,
 }
 
@@ -313,8 +314,6 @@ impl<O> FwdConsensusMessage<O> {
             consensus_msg: msg,
         }
     }
-
-    pub fn header(&self) -> &Header { &self.header }
 
     pub fn consensus(&self) -> &ConsensusMessage<O> {
         &self.consensus_msg
