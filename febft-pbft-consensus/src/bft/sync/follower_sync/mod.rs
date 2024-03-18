@@ -9,6 +9,12 @@ pub struct FollowerSynchronizer<RQ: SerType> {
     _phantom: PhantomData<fn() -> RQ>,
 }
 
+impl<RQ: SerType + SessionBased + 'static> Default for FollowerSynchronizer<RQ> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<RQ: SerType + SessionBased + 'static> FollowerSynchronizer<RQ> {
     pub fn new() -> Self {
         Self {

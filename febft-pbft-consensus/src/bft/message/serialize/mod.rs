@@ -10,14 +10,13 @@ use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-#[cfg(feature = "serialize_serde")]
-use ::serde::{Deserialize, Serialize};
+
 use bytes::Bytes;
 
 use atlas_common::error::*;
 use atlas_common::ordering::Orderable;
 use atlas_common::serialization_helper::SerType;
-use atlas_communication::message::{Header, StoredMessage};
+use atlas_communication::message::{Header};
 use atlas_communication::reconfiguration::NetworkInformationProvider;
 use atlas_core::ordering_protocol::loggable::PersistentOrderProtocolTypes;
 use atlas_core::ordering_protocol::networking::serialize::{
@@ -26,11 +25,11 @@ use atlas_core::ordering_protocol::networking::serialize::{
 
 use crate::bft::log::decisions::{Proof, ProofMetadata};
 use crate::bft::message::{
-    ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage,
+    ConsensusMessage, ConsensusMessageKind, PBFTMessage,
     ViewChangeMessageKind,
 };
 use crate::bft::sync::view::ViewInfo;
-use crate::bft::sync::LeaderCollects;
+
 
 #[cfg(feature = "serialize_capnp")]
 pub mod capnp;
@@ -81,7 +80,7 @@ where
 
     fn internally_verify_message<NI, OPVH>(
         network_info: &Arc<NI>,
-        header: &Header,
+        _header: &Header,
         message: &Self::ProtocolMessage,
     ) -> Result<()>
     where
@@ -91,7 +90,7 @@ where
     {
         match message {
             PBFTMessage::Consensus(consensus) => {
-                let (seq, view) = (consensus.sequence_number(), consensus.view());
+                let (_seq, _view) = (consensus.sequence_number(), consensus.view());
 
                 match consensus.kind() {
                     ConsensusMessageKind::PrePrepare(requests) => {
@@ -109,12 +108,12 @@ where
 
                         Ok(())
                     }
-                    ConsensusMessageKind::Prepare(digest) => Ok(()),
-                    ConsensusMessageKind::Commit(digest) => Ok(()),
+                    ConsensusMessageKind::Prepare(_digest) => Ok(()),
+                    ConsensusMessageKind::Commit(_digest) => Ok(()),
                 }
             }
             PBFTMessage::ViewChange(view_change) => {
-                let (view) = view_change.sequence_number();
+                let _view = view_change.sequence_number();
 
                 match view_change.kind() {
                     ViewChangeMessageKind::Stop(timed_out_req) => {
@@ -130,9 +129,9 @@ where
 
                         Ok(())
                     }
-                    ViewChangeMessageKind::StopQuorumJoin(node) => Ok(()),
+                    ViewChangeMessageKind::StopQuorumJoin(_node) => Ok(()),
                     ViewChangeMessageKind::StopData(collect_data) => {
-                        if let Some(proof) = &collect_data.last_proof {}
+                        if let Some(_proof) = &collect_data.last_proof {}
 
                         Ok(())
                     }
@@ -145,7 +144,7 @@ where
 
                             let _ = OPVH::verify_protocol_message(
                                 network_info,
-                                &header,
+                                header,
                                 PBFTMessage::Consensus(message.clone()),
                             )?;
                         }
@@ -164,7 +163,7 @@ where
                     }
                 }
             }
-            PBFTMessage::ObserverMessage(m) => Ok(()),
+            PBFTMessage::ObserverMessage(_m) => Ok(()),
         }
     }
 

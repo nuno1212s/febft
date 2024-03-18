@@ -25,8 +25,8 @@ use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol};
 use atlas_core::persistent_log::{OperationMode, PersistableStateTransferProtocol};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
 use atlas_metrics::metrics::metric_duration;
-use atlas_smr_application::app::Application;
-use atlas_smr_application::serialize::ApplicationData;
+
+
 use atlas_smr_application::state::monolithic_state::{InstallStateMessage, MonolithicState};
 use atlas_smr_core::persistent_log::MonolithicStateLog;
 use atlas_smr_core::state_transfer::monolithic_state::{
@@ -415,7 +415,7 @@ where
     {
         for cst_seq in timeout {
             if let TimeoutKind::Cst(cst_seq) = cst_seq.timeout_kind() {
-                if self.cst_request_timed_out(cst_seq.clone(), view.clone()) {
+                if self.cst_request_timed_out(*cst_seq, view.clone()) {
                     return Ok(STTimeoutResult::RunCst);
                 }
             }
@@ -477,7 +477,7 @@ where
     }
 }
 
-type Ser<ST: StateTransferProtocol<S>, S> = <ST as StateTransferProtocol<S>>::Serialization;
+type Ser<ST, S> = <ST as StateTransferProtocol<S>>::Serialization;
 
 // TODO: request timeouts
 impl<S, NT, PL> CollabStateTransfer<S, NT, PL>
@@ -519,14 +519,14 @@ where
 
     fn process_request_seq(&mut self, header: Header, message: CstMessage<S>) {
         let seq = match &self.current_checkpoint_state {
-            CheckpointState::PartialWithEarlier { seq, earlier } => {
-                Some((earlier.sequence_number(), earlier.digest().clone()))
+            CheckpointState::PartialWithEarlier { seq: _, earlier } => {
+                Some((earlier.sequence_number(), *earlier.digest()))
             }
-            CheckpointState::Complete(seq) => Some((seq.sequence_number(), seq.digest().clone())),
+            CheckpointState::Complete(seq) => Some((seq.sequence_number(), *seq.digest())),
             _ => None,
         };
 
-        let kind = CstMessageKind::ReplyStateCid(seq.clone());
+        let kind = CstMessageKind::ReplyStateCid(seq);
 
         let reply = CstMessage::new(message.sequence_number(), kind);
 
@@ -551,7 +551,9 @@ where
 
             for request in reqs {
                 // We only want to reply to the most recent requests from each of the nodes
-                if map.contains_key(&request.header().from()) {
+                if let std::collections::hash_map::Entry::Vacant(e) = map.entry(request.header().from()) {
+                    e.insert(request);
+                } else {
                     map.entry(request.header().from()).and_modify(|x| {
                         if x.message().sequence_number() < request.message().sequence_number() {
                             //Dispose of the previous request
@@ -560,8 +562,6 @@ where
                     });
 
                     continue;
-                } else {
-                    map.insert(request.header().from(), request);
                 }
             }
 
@@ -588,7 +588,7 @@ where
         }
 
         let state = match &self.current_checkpoint_state {
-            CheckpointState::PartialWithEarlier { earlier, seq } => earlier.clone(),
+            CheckpointState::PartialWithEarlier { earlier, seq: _ } => earlier.clone(),
             CheckpointState::Complete(checkpoint) => checkpoint.clone(),
             _ => {
                 if let ProtoPhase::WaitingCheckpoint(waiting) = &mut self.phase {
@@ -673,7 +673,7 @@ where
 
                             let received_state_cid = self
                                 .received_state_ids
-                                .entry(digest.clone())
+                                .entry(*digest)
                                 .or_insert_with(|| ReceivedStateCid {
                                     cid: *cid,
                                     count: 0,
@@ -769,7 +769,7 @@ where
                 CstStatus::Running
             }
             ProtoPhase::ReceivingState(i) => {
-                let (header, mut message) = getmessage!(progress, CstStatus::RequestState);
+                let (_header, mut message) = getmessage!(progress, CstStatus::RequestState);
 
                 if message.sequence_number() != self.curr_seq {
                     // NOTE: check comment above, on ProtoPhase::ReceivingCid
@@ -782,7 +782,7 @@ where
                     None => return CstStatus::Running,
                 };
 
-                let state_digest = state.checkpoint.digest().clone();
+                let state_digest = *state.checkpoint.digest();
 
                 debug!(
                     "{:?} // Received state with digest {:?}, is contained in map? {}",
@@ -791,7 +791,9 @@ where
                     self.received_states.contains_key(&state_digest)
                 );
 
-                if self.received_states.contains_key(&state_digest) {
+                if let std::collections::hash_map::Entry::Vacant(e) = self.received_states.entry(state_digest) {
+                    e.insert(ReceivedState { count: 1, state });
+                } else {
                     let current_state = self.received_states.get_mut(&state_digest).unwrap();
 
                     let current_state_seq: SeqNo =
@@ -813,9 +815,6 @@ where
                             current_state.count += 1;
                         }
                     }
-                } else {
-                    self.received_states
-                        .insert(state_digest, ReceivedState { count: 1, state });
                 }
 
                 // check if we have gathered enough state
@@ -838,7 +837,7 @@ where
                     let received_state = self.received_states.iter().max_by_key(|(_, st)| st.count);
 
                     match received_state {
-                        Some((digest, _)) => digest.clone(),
+                        Some((digest, _)) => *digest,
                         None => {
                             return if i >= view.quorum() {
                                 self.received_states.clear();
@@ -1065,7 +1064,7 @@ impl<S> Orderable for CheckpointState<S> {
     fn sequence_number(&self) -> SeqNo {
         match self {
             CheckpointState::None => SeqNo::ZERO,
-            CheckpointState::Partial { seq } => SeqNo::ZERO,
+            CheckpointState::Partial { seq: _ } => SeqNo::ZERO,
             CheckpointState::PartialWithEarlier { earlier, .. } => earlier.sequence_number(),
             CheckpointState::Complete(arc) => arc.sequence_number(),
         }

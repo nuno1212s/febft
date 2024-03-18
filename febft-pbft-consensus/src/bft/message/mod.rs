@@ -4,13 +4,13 @@
 use std::fmt::{Debug, Formatter};
 use std::io::Write;
 
-use futures::io::{AsyncWrite, AsyncWriteExt};
+
 use getset::Getters;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 
 use atlas_common::crypto::hash::Digest;
-use atlas_common::error::*;
+
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{Header, StoredMessage};
@@ -54,7 +54,7 @@ impl<R> Orderable for PBFTMessage<R> {
         match self {
             PBFTMessage::Consensus(consensus) => consensus.sequence_number(),
             PBFTMessage::ViewChange(view) => view.sequence_number(),
-            PBFTMessage::ObserverMessage(obs) => SeqNo::ZERO,
+            PBFTMessage::ObserverMessage(_obs) => SeqNo::ZERO,
         }
     }
 }

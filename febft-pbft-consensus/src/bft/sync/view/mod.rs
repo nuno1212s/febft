@@ -132,7 +132,7 @@ impl ViewInfo {
 
         for x in &leader_set {
             if !quorum_participants.contains(x) {
-                return Err!(ViewError::LeaderNotInQuorum(x.clone(), quorum_participants));
+                return Err!(ViewError::LeaderNotInQuorum(*x, quorum_participants));
             }
         }
 
@@ -212,7 +212,7 @@ fn calculate_hash_space_division(leader_set: &Vec<NodeId>) -> BTreeMap<NodeId, (
         .into_iter()
         .enumerate()
         .for_each(|(leader_id, slice)| {
-            let leader = leader_set[leader_id].clone();
+            let leader = leader_set[leader_id];
 
             slice_for_leaders.insert(leader, slice);
         });

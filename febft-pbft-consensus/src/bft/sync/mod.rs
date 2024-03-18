@@ -31,7 +31,7 @@ use atlas_core::messages::{ClientRqInfo, SessionBased};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::reconfigurable_order_protocol::ReconfigurationAttemptResult;
 use atlas_core::ordering_protocol::{unwrap_shareable_message, ShareableMessage};
-use atlas_core::persistent_log::OrderingProtocolLog;
+
 use atlas_core::request_pre_processing::RequestPreProcessor;
 use atlas_core::timeouts::{RqTimeout, Timeouts};
 
@@ -160,7 +160,7 @@ pub(super) enum FinalizeStatus<O> {
 
 ///
 #[derive(Clone, Debug)]
-pub(self) enum Sound {
+ enum Sound {
     Unbound(bool),
     Bound(Digest),
 }
@@ -236,7 +236,7 @@ impl<O> TboQueue<O> {
     pub fn install_view(&mut self, view: ViewInfo) -> bool {
         let index = view.sequence_number().index(self.view.sequence_number());
 
-        return match index {
+        match index {
             Either::Right(i) if i > 0 => {
                 info!("Installing view {:?} into tbo queue, moving right by {}, currently at sequence number {:?}", view, i, self.view.sequence_number());
 
@@ -260,7 +260,7 @@ impl<O> TboQueue<O> {
                     view, self.view
                 );
             }
-        };
+        }
     }
 
     /// Signal this `TboQueue` that it may be able to extract new
@@ -290,27 +290,24 @@ impl<O> TboQueue<O> {
     /// Verifies if we have new `STOP` messages to be processed for
     /// the current view.
     pub fn can_process_stops(&self) -> bool {
-        self.stop
-            .get(0)
-            .map(|deque| deque.len() > 0)
+        self.stop.front()
+            .map(|deque| !deque.is_empty())
             .unwrap_or(false)
     }
 
     /// Verifies if we have new `STOP` messages to be processed for
     /// the current view.
     pub fn can_process_stop_data(&self) -> bool {
-        self.stop_data
-            .get(0)
-            .map(|deque| deque.len() > 0)
+        self.stop_data.front()
+            .map(|deque| !deque.is_empty())
             .unwrap_or(false)
     }
 
     /// Verifies if we have new `STOP` messages to be processed for
     /// the current view.
     pub fn can_process_sync(&self) -> bool {
-        self.sync
-            .get(0)
-            .map(|deque| deque.len() > 0)
+        self.sync.front()
+            .map(|deque| !deque.is_empty())
             .unwrap_or(false)
     }
 
@@ -451,7 +448,7 @@ where
     fn queue(&self, message: ShareableMessage<PBFTMessage<RQ>>);
 }
 
-type CollectsType<RQ: SerType> = IntMap<StoredMessage<PBFTMessage<RQ>>>;
+type CollectsType<RQ> = IntMap<StoredMessage<PBFTMessage<RQ>>>;
 
 ///The synchronizer for the SMR protocol
 /// This part of the protocol is responsible for handling the changing of views and
@@ -509,13 +506,11 @@ where
         let current_view = self.view();
 
         if let Some(previous_view) = view.previous_view() {
-            if current_view.sequence_number() != previous_view.sequence_number() {
-                if !self.tbo.lock().unwrap().install_view(previous_view) {
-                    // If we don't install a new view, then we don't want to forget our current state now do we?
+            if current_view.sequence_number() != previous_view.sequence_number() && !self.tbo.lock().unwrap().install_view(previous_view) {
+                // If we don't install a new view, then we don't want to forget our current state now do we?
 
-                    debug!("Replacing our phase with Init");
-                    self.phase.replace(ProtoPhase::Init);
-                }
+                debug!("Replacing our phase with Init");
+                self.phase.replace(ProtoPhase::Init);
             }
 
             // Perform various check to assert we obtain all the necessary information to
@@ -601,7 +596,7 @@ where
     ) -> Result<Arc<Self>> {
         let n = quorum_members.len();
 
-        let f = (n - 1) / 3;
+        let _f = (n - 1) / 3;
 
         let view_info = ViewInfo::from_quorum(seq_no, quorum_members)?;
 
@@ -745,7 +740,7 @@ where
 
         match self.phase.get() {
             ProtoPhase::Init => {
-                let (header, message) = (s_message.header(), s_message.message().view_change());
+                let (_header, message) = (s_message.header(), s_message.message().view_change());
 
                 return match message.kind() {
                     ViewChangeMessageKind::Stop(_) | ViewChangeMessageKind::StopQuorumJoin(_) => {
@@ -864,7 +859,7 @@ where
                 };
 
                 // store pending requests from this STOP
-                let mut stopped = match message.kind() {
+                let stopped = match message.kind() {
                     ViewChangeMessageKind::Stop(stopped) => stopped.clone(),
                     _ => unreachable!(),
                 };
@@ -956,7 +951,7 @@ where
 
                         return stop_status!(received, &current_view);
                     }
-                    ViewChangeMessageKind::Stop(requests) => {
+                    ViewChangeMessageKind::Stop(_requests) => {
                         let mut guard = self.tbo.lock().unwrap();
 
                         warn!("{:?} // Received stop message while in View Stopping state. Since STOP takes precendence over the quorum updating, we will now change to stopping phase ", node.id());
@@ -1006,7 +1001,7 @@ where
                 {
                     let mut write_guard = self.currently_adding.borrow_mut();
 
-                    let received_votes = write_guard.entry(node_id).or_insert_with(BTreeSet::new);
+                    let received_votes = write_guard.entry(node_id).or_default();
 
                     if received_votes.insert(header.from()) {
                         debug!(
@@ -1032,7 +1027,7 @@ where
                         .map(|(node, voters)| (*node, voters.len()))
                         .collect();
 
-                    votes.sort_by(|(node, votes), (node_2, votes_2)| votes_2.cmp(votes));
+                    votes.sort_by(|(_node, votes), (_node_2, votes_2)| votes_2.cmp(votes));
 
                     if let Some(vote_count) = votes.first() {
                         if vote_count.1 >= current_view.params().quorum() {
@@ -1188,14 +1183,14 @@ where
                         // store collects from this STOP-DATA
                         let unwrapped_msg = unwrap_shareable_message(s_message);
 
-                        let (header, message) = (unwrapped_msg.header(), unwrapped_msg.message());
+                        let (header, _message) = (unwrapped_msg.header(), unwrapped_msg.message());
 
                         collects_guard.insert(header.from().into(), unwrapped_msg);
 
                         if i < next_view.params().quorum() {
                             self.phase.replace(ProtoPhase::StoppingData(i));
 
-                            return SynchronizerStatus::Running;
+                            SynchronizerStatus::Running
                         } else {
                             // NOTE:
                             // - fetch highest CID from consensus proofs
@@ -1392,7 +1387,7 @@ where
                     ViewChangeMessageKind::Sync(_) => {
                         let stored_message = unwrap_shareable_message(s_message);
 
-                        let (header, message) = stored_message.into_inner();
+                        let (_header, message) = stored_message.into_inner();
 
                         message
                             .into_view_change()
@@ -1545,14 +1540,14 @@ where
             self.begin_quorum_view_change(Some(joining_node), node, timeouts, log);
         }
 
-        return SyncReconfigurationResult::InProgress;
+        SyncReconfigurationResult::InProgress
     }
 
     /// Prepare ourselves for the quorum join procedure by stopping the current view and starting a new one
     pub fn attempt_join_quorum<NT>(
         &self,
         node: &NT,
-        timeouts: &Timeouts,
+        _timeouts: &Timeouts,
     ) -> ReconfigurationAttemptResult
     where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
@@ -1595,7 +1590,7 @@ where
             self.phase.replace(ProtoPhase::Syncing);
         }
 
-        return ReconfigurationAttemptResult::InProgress;
+        ReconfigurationAttemptResult::InProgress
     }
 
     /// Trigger a view change locally
@@ -1782,7 +1777,7 @@ where
         let FinalizeState {
             curr_cid,
             proposed,
-            sound,
+            sound: _,
             last_proof,
         } = state;
 
@@ -1816,7 +1811,9 @@ where
 
             // We are missing the last decision, which should be included in the collect data
             // sent by the leader in the SYNC message
-            let to_execute = if let Some(last_proof) = last_proof {
+            
+
+            if let Some(last_proof) = last_proof {
                 let quorum_result = consensus
                     .catch_up_to_quorum(&view, last_proof, log)
                     .expect("Failed to catch up to quorum");
@@ -1827,9 +1824,7 @@ where
                 // fails, leading to a view change? Don't really know how this would be possible
                 // FIXME:
                 None
-            };
-
-            to_execute
+            }
         } else {
             None
         };
@@ -1915,10 +1910,10 @@ where
     // all collects are related to the same CID. This is important because not all replicas
     // may be executing the same CID when there is a leader change
     #[inline]
-    fn normalized_collects<'a>(
-        collects: &'a IntMap<StoredMessage<PBFTMessage<RQ>>>,
+    fn normalized_collects(
+        collects: &IntMap<StoredMessage<PBFTMessage<RQ>>>,
         in_exec: SeqNo,
-    ) -> impl Iterator<Item = Option<&'a CollectData<RQ>>> {
+    ) -> impl Iterator<Item = Option<&'_ CollectData<RQ>>> {
         let values = collects.values();
 
         let collects = normalized_collects(in_exec, collect_data(values));
@@ -1936,7 +1931,7 @@ where
     where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
     {
-        highest_proof::<RQ, _, _>(&view, node, guard.values())
+        highest_proof::<RQ, _, _>(view, node, guard.values())
     }
 }
 
@@ -1960,7 +1955,7 @@ pub enum SynchronizerAccessory<RQ: SerType> {
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-fn sound<'a, O>(curr_view: &ViewInfo, normalized_collects: &[Option<&'a CollectData<O>>]) -> Sound {
+fn sound<O>(curr_view: &ViewInfo, normalized_collects: &[Option<&CollectData<O>>]) -> Sound {
     // collect timestamps and values
     let mut seq_numbers = collections::hash_set();
     let mut values = collections::hash_set();
@@ -1995,7 +1990,7 @@ fn sound<'a, O>(curr_view: &ViewInfo, normalized_collects: &[Option<&'a CollectD
         // add writeset timestamps and values
         for ViewDecisionPair(seq_no, value) in c.incomplete_proof().write_set().iter() {
             seq_numbers.insert(*seq_no);
-            values.insert(value.clone());
+            values.insert(*value);
         }
     }
 
@@ -2007,7 +2002,7 @@ fn sound<'a, O>(curr_view: &ViewInfo, normalized_collects: &[Option<&'a CollectD
 
     for seq_no in seq_numbers {
         for value in values.iter() {
-            if binds(&curr_view, seq_no, value, normalized_collects) {
+            if binds(curr_view, seq_no, value, normalized_collects) {
                 return Sound::Bound(*value);
             } else {
                 debug!("Failed to bind seq no {:?} and value {:?}.", seq_no, value);
@@ -2015,7 +2010,7 @@ fn sound<'a, O>(curr_view: &ViewInfo, normalized_collects: &[Option<&'a CollectD
         }
     }
 
-    Sound::Unbound(unbound(&curr_view, normalized_collects))
+    Sound::Unbound(unbound(curr_view, normalized_collects))
 }
 
 fn binds<O>(
@@ -2192,7 +2187,7 @@ where
 {
     collects
         .into_iter()
-        .filter(|stored| validate_signature::<RQ, _, _>(node, &stored))
+        .filter(|stored| validate_signature::<RQ, _, _>(node, stored))
         .collect()
 }
 

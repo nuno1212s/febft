@@ -81,12 +81,12 @@ where
             contained_messages,
             client_request_info,
             client_requests,
-            batch_meta,
+            batch_meta: _,
         } = completed;
 
         let metadata = ProofMetadata::new(
             seq,
-            digest.clone(),
+            digest,
             pre_prepare_ordering,
             client_requests.len(),
         );
@@ -116,7 +116,7 @@ where
     }
 }
 
-pub fn initialize_decided_log<RQ>(node_id: NodeId) -> Log<RQ>
+pub fn initialize_decided_log<RQ>(_node_id: NodeId) -> Log<RQ>
 where
     RQ: SerType,
 {

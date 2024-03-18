@@ -224,7 +224,7 @@ where
     }
 
     pub fn poll(&mut self) -> DecisionPollStatus<RQ> {
-        return match self.phase {
+        match self.phase {
             DecisionPhase::Initialize => {
                 self.phase = DecisionPhase::PrePreparing(0);
 
@@ -255,7 +255,7 @@ where
             }
             DecisionPhase::Decided => DecisionPollStatus::Decided,
             _ => DecisionPollStatus::Recv,
-        };
+        }
     }
 
     /// Allows us to skip the initialization phase of this consensus instance
@@ -333,7 +333,7 @@ where
 
                         return Ok(DecisionStatus::MessageIgnored);
                     }
-                    ConsensusMessageKind::Prepare(d) => {
+                    ConsensusMessageKind::Prepare(_d) => {
                         debug!(
                             "{:?} // Received {:?} from {:?} while in prepreparing ",
                             self.node_id,
@@ -345,7 +345,7 @@ where
 
                         return Ok(DecisionStatus::MessageQueued);
                     }
-                    ConsensusMessageKind::Commit(d) => {
+                    ConsensusMessageKind::Commit(_d) => {
                         debug!(
                             "{:?} // Received {:?} from {:?} while in pre preparing",
                             self.node_id,
@@ -370,7 +370,7 @@ where
                 let pre_prepare_received_time = Utc::now();
 
                 //TODO: Try out cloning each request on this method,
-                let mut digests = request_batch_received(
+                let digests = request_batch_received(
                     header,
                     message,
                     timeouts,
@@ -380,11 +380,11 @@ where
 
                 let batch_metadata = self.working_log.process_pre_prepare(
                     s_message.clone(),
-                    header.digest().clone(),
+                    *header.digest(),
                     digests,
                 )?;
 
-                let mut result;
+                let result;
 
                 self.phase = if received == view.leader_set().len() {
                     let batch_metadata = batch_metadata.unwrap();
@@ -405,13 +405,13 @@ where
                     self.consensus_metrics
                         .all_pre_prepares_recvd(self.working_log.current_batch_size());
 
-                    let current_digest = batch_metadata.batch_digest();
+                    let _current_digest = batch_metadata.batch_digest();
 
                     self.accessory.handle_pre_prepare_phase_completed(
                         &self.working_log,
                         &view,
-                        &header,
-                        &message,
+                        header,
+                        message,
                         node,
                     );
 
@@ -430,8 +430,8 @@ where
                     self.accessory.handle_partial_pre_prepare(
                         &self.working_log,
                         &view,
-                        &header,
-                        &message,
+                        header,
+                        message,
                         &**node,
                     );
 
@@ -451,7 +451,7 @@ where
 
                         return Ok(DecisionStatus::MessageIgnored);
                     }
-                    ConsensusMessageKind::Commit(d) => {
+                    ConsensusMessageKind::Commit(_d) => {
                         debug!(
                             "{:?} // Received {:?} from {:?} while in preparing phase",
                             self.node_id,
@@ -520,14 +520,14 @@ where
                         .commit_sent_time = Utc::now();
                     self.consensus_metrics.prepare_quorum_recvd();
 
-                    let seq_no = self.sequence_number();
-                    let current_digest = self.working_log.current_digest().unwrap();
+                    let _seq_no = self.sequence_number();
+                    let _current_digest = self.working_log.current_digest().unwrap();
 
                     self.accessory.handle_preparing_quorum(
                         &self.working_log,
                         &view,
-                        &header,
-                        &message,
+                        header,
+                        message,
                         &**node,
                     );
 
@@ -548,8 +548,8 @@ where
                     self.accessory.handle_preparing_no_quorum(
                         &self.working_log,
                         &view,
-                        &header,
-                        &message,
+                        header,
+                        message,
                         &**node,
                     );
 
@@ -624,8 +624,8 @@ where
                     self.accessory.handle_committing_quorum(
                         &self.working_log,
                         &view,
-                        &header,
-                        &message,
+                        header,
+                        message,
                         &**node,
                     );
 
@@ -644,8 +644,8 @@ where
                     self.accessory.handle_committing_no_quorum(
                         &self.working_log,
                         &view,
-                        &header,
-                        &message,
+                        header,
+                        message,
                         &**node,
                     );
 

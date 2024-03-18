@@ -151,7 +151,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
     pub(super) fn handle_begin_quorum_view_change<NT>(
         &self,
         base_sync: &Synchronizer<RQ>,
-        timeouts: &Timeouts,
+        _timeouts: &Timeouts,
         node: &NT,
         join_cert: NodeId,
     ) where
@@ -245,7 +245,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
 
         let requests = self.drain_stopped_request(base_sync);
 
-        let rq_info = requests.iter().map(|rq| ClientRqInfo::from(rq)).collect();
+        let rq_info = requests.iter().map(ClientRqInfo::from).collect();
 
         let count = requests.len();
 
@@ -288,7 +288,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         //// to peer nodes
         let mut forwarded = Vec::new();
         let mut stopped = Vec::new();
-        let now = Instant::now();
+        let _now = Instant::now();
 
         // NOTE:
         // =====================================================
@@ -305,7 +305,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
 
         for timed_out_rq in timed_out_rqs {
             match timed_out_rq.timeout_phase() {
-                TimeoutPhase::TimedOut(id, time) => {
+                TimeoutPhase::TimedOut(id, _time) => {
                     let timeout = timed_out_rq.timeout_kind();
 
                     let rq_info = match timeout {

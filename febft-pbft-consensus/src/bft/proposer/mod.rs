@@ -122,7 +122,7 @@ where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
     {
         std::thread::Builder::new()
-            .name(format!("Proposer thread"))
+            .name("Proposer thread".to_string())
             .spawn(move || {
 
                 //The currently accumulated requests, accumulated while we wait for the next batch to propose
@@ -188,7 +188,7 @@ where
                         let start_time = Instant::now();
 
                         let mut digest_vec = Vec::with_capacity(messages.len());
-                        let mut counter = messages.len();
+                        let counter = messages.len();
 
                         for message in messages {
                             let digest = message.header().unique_digest();
@@ -259,7 +259,7 @@ where
                 }
             }
 
-            let last_proposed_batch = propose.last_proposal.clone();
+            let last_proposed_batch = propose.last_proposal;
 
             if self.consensus_guard.can_propose() {
                 if let Some((seq, view)) = self.consensus_guard.next_seq_no() {
@@ -282,7 +282,7 @@ where
 
                     let current_batch = std::mem::replace(
                         &mut propose.currently_accumulated,
-                        next_batch.unwrap_or_else(|| Vec::new()),
+                        next_batch.unwrap_or_else(Vec::new),
                     );
 
                     self.propose(seq, &view, current_batch);
@@ -294,7 +294,7 @@ where
             }
         }
 
-        return false;
+        false
     }
 
     /// Proposes a new batch.

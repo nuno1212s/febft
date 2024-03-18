@@ -12,15 +12,15 @@ use crate::message::CstMessage;
 #[cfg(feature = "serialize_capnp")]
 mod capnp;
 
-pub struct CSTMsg<S: MonolithicState>(PhantomData<(S)>);
+pub struct CSTMsg<S: MonolithicState>(PhantomData<S>);
 
 impl<S: MonolithicState> StateTransferMessage for CSTMsg<S> {
     type StateTransferMessage = CstMessage<S>;
 
     fn verify_state_message<NI, SVH>(
-        network_info: &Arc<NI>,
-        header: &Header,
-        message: Self::StateTransferMessage,
+        _network_info: &Arc<NI>,
+        _header: &Header,
+        _message: Self::StateTransferMessage,
     ) -> atlas_common::error::Result<Self::StateTransferMessage>
     where
         NI: NetworkInformationProvider,

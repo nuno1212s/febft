@@ -267,13 +267,13 @@ where
 
         match status {
             SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
-                if forwarded.len() > 0 {
+                if !forwarded.is_empty() {
                     let requests = self.pre_processor.clone_pending_rqs(forwarded);
 
                     self.synchronizer.forward_requests(requests, &*self.node);
                 }
 
-                if stopped.len() > 0 {
+                if !stopped.is_empty() {
                     let stopped = self.pre_processor.clone_pending_rqs(stopped);
 
                     self.switch_phase(ConsensusPhase::SyncPhase);
@@ -332,7 +332,7 @@ where
     fn initialize_protocol(
         config: PBFTConfig,
         args: OrderingProtocolArgs<RQ, NT>,
-        initial_state: Option<DecisionLog<RQ>>,
+        _initial_state: Option<DecisionLog<RQ>>,
     ) -> Result<Self> {
         let PBFTConfig {
             timeout_dur,
@@ -449,7 +449,7 @@ where
                             decisions,
                             node,
                         ) => {
-                            let quorum_members = self.synchronizer.view().quorum_members().clone();
+                            let _quorum_members = self.synchronizer.view().quorum_members().clone();
 
                             let decisions = self.handle_sync_result(consensus_status, decisions)?;
 
@@ -502,9 +502,9 @@ where
             let sync_protocol = self.poll_sync_phase()?;
 
             if let OPPollResult::Exec(s_message) = sync_protocol {
-                let (header, message) = (s_message.header(), s_message.message());
+                let (_header, message) = (s_message.header(), s_message.message());
 
-                if let PBFTMessage::ViewChange(view_change) = message {
+                if let PBFTMessage::ViewChange(_view_change) = message {
                     let result = self.adv_sync(s_message);
 
                     return Ok(match result {
@@ -562,7 +562,7 @@ where
         message: ShareableMessage<PBFTMessage<RQ>>,
     ) -> Result<OPExecResult<ProofMetadata, PBFTMessage<RQ>, RQ>> {
         match message.message() {
-            PBFTMessage::ViewChange(view_change) => {
+            PBFTMessage::ViewChange(_view_change) => {
                 return Ok(match self.adv_sync(message) {
                     SyncPhaseRes::SyncProtocolNotNeeded => OPExecResult::MessageProcessedNoUpdate,
                     SyncPhaseRes::RunSyncProtocol => OPExecResult::MessageProcessedNoUpdate,
@@ -658,7 +658,7 @@ where
         &mut self,
         message: ShareableMessage<PBFTMessage<RQ>>,
     ) -> Result<OPExecResult<ProofMetadata, PBFTMessage<RQ>, RQ>> {
-        let seq = self.consensus.sequence_number();
+        let _seq = self.consensus.sequence_number();
 
         // debug!(
         //     "{:?} // Processing consensus message {:?} ",
@@ -673,7 +673,7 @@ where
             &self.node,
         )?;
 
-        return Ok(match status {
+        Ok(match status {
             ConsensusStatus::VotedTwice(_) | ConsensusStatus::MessageIgnored => {
                 OPExecResult::MessageDropped
             }
@@ -685,7 +685,7 @@ where
                 DecisionsAhead::Ignore,
                 self.handle_decided(result)?,
             ),
-        });
+        })
     }
 
     /// Finalize all possible consensus instances
@@ -720,7 +720,7 @@ where
 
         self.synchronizer.signal();
 
-        return match status {
+        match status {
             SynchronizerStatus::Nil => SyncPhaseRes::SyncProtocolNotNeeded,
             SynchronizerStatus::Running => SyncPhaseRes::RunSyncProtocol,
             SynchronizerStatus::NewView(consensus_status, to_execute) => {
@@ -756,7 +756,7 @@ where
             _ => {
                 unreachable!()
             }
-        };
+        }
     }
 
     fn merge_decisions(
@@ -783,7 +783,7 @@ where
 
         // By turning this btree map into a vec, we maintain ordering on the delivery (Shouldn't
         // really be necessary but always nice to have)
-        map.into_iter().for_each(|(seq, decision)| {
+        map.into_iter().for_each(|(_seq, decision)| {
             decisions.push(decision);
         });
 
@@ -829,7 +829,7 @@ where
 
         // By turning this btree map into a vec, we maintain ordering on the delivery (Shouldn't
         // really be necessary but always nice to have)
-        map.into_iter().for_each(|(seq, decision)| {
+        map.into_iter().for_each(|(_seq, decision)| {
             decisions.push(decision);
         });
 
@@ -894,7 +894,7 @@ where
             Observe event stuff
             @{
              */
-            let to_send = match (&old_phase, &self.phase) {
+            let _to_send = match (&old_phase, &self.phase) {
                 (_, ConsensusPhase::SyncPhase) => ObserveEventKind::ViewChangePhase,
                 (_, ConsensusPhase::NormalPhase) => {
                     let current_view = self.synchronizer.view();
@@ -938,7 +938,7 @@ where
                 ConsensusMessageKind::Prepare(_) => Ok(CF_PREPARES),
                 ConsensusMessageKind::Commit(_) => Ok(CF_COMMIT),
             },
-            PBFTMessage::ViewChange(view_change) => {
+            PBFTMessage::ViewChange(_view_change) => {
                 Err(anyhow!("Failed to get type for view change message."))
             }
             PBFTMessage::ObserverMessage(_) => {

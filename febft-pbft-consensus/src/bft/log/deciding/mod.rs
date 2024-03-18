@@ -226,7 +226,7 @@ where
                 let (digest, ordering) =
                     result.ok_or(DecidingLogError::FailedToCalculateDigest(self.seq_no))?;
 
-                self.batch_digest = Some(digest.clone());
+                self.batch_digest = Some(digest);
 
                 Some(ProofMetadata::new(
                     self.seq_no,
@@ -271,7 +271,7 @@ where
 
     /// Getter for the current digest
     pub fn current_digest(&self) -> Option<Digest> {
-        self.batch_digest.clone()
+        self.batch_digest
     }
 
     /// Get the current batch size in this consensus decision
@@ -287,7 +287,7 @@ where
         let mut batch_ordered_digests = Vec::with_capacity(self.pre_prepare_digests.len());
 
         for order_digest in &self.pre_prepare_digests {
-            if let Some(digest) = order_digest.clone() {
+            if let Some(digest) = *order_digest {
                 ctx.update(digest.as_ref());
                 batch_ordered_digests.push(digest);
             } else {
@@ -305,7 +305,7 @@ where
 
             for shareable_msg in self.message_log.prepares.iter().rev() {
                 let digest = match shareable_msg.message().consensus().kind() {
-                    ConsensusMessageKind::Prepare(d) => d.clone(),
+                    ConsensusMessageKind::Prepare(d) => *d,
                     _ => unreachable!(),
                 };
 
@@ -333,7 +333,7 @@ where
                 count += 1;
                 if count == quorum {
                     let digest = match stored.message().consensus().kind() {
-                        ConsensusMessageKind::Prepare(d) => d.clone(),
+                        ConsensusMessageKind::Prepare(d) => *d,
                         _ => unreachable!(),
                     };
                     break 'outer Some(ViewDecisionPair(
@@ -453,12 +453,11 @@ pub fn pre_prepare_index_from_digest_opt(
     {
         None => {
             Err!(DecidingLogError::PrePrepareNotPartOfSet(
-                digest.clone(),
+                *digest,
                 prepare_set
                     .iter()
                     .cloned()
-                    .filter(Option::is_some)
-                    .map(|r| r.unwrap())
+                    .flatten()
                     .collect()
             ))
         }
@@ -476,7 +475,7 @@ pub fn pre_prepare_index_of_from_digest(
     {
         None => {
             Err!(DecidingLogError::PrePrepareNotPartOfSet(
-                preprepare.clone(),
+                *preprepare,
                 prepare_set.clone()
             ))
         }
@@ -488,7 +487,7 @@ pub fn pre_prepare_index_of(leader_set: &Vec<NodeId>, proposer: &NodeId) -> Resu
     match leader_set.iter().position(|node| *node == *proposer) {
         None => {
             Err!(DecidingLogError::ProposerNotInLeaderSet(
-                proposer.clone(),
+                *proposer,
                 leader_set.clone()
             ))
         }

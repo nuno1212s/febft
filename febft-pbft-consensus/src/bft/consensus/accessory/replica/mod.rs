@@ -34,11 +34,11 @@ where
 {
     fn handle_partial_pre_prepare<NT>(
         &mut self,
-        deciding_log: &WorkingDecisionLog<RQ>,
-        view: &ViewInfo,
-        header: &Header,
-        msg: &ConsensusMessage<RQ>,
-        node: &NT,
+        _deciding_log: &WorkingDecisionLog<RQ>,
+        _view: &ViewInfo,
+        _header: &Header,
+        _msg: &ConsensusMessage<RQ>,
+        _node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
     {
@@ -48,8 +48,8 @@ where
         &mut self,
         deciding_log: &WorkingDecisionLog<RQ>,
         view: &ViewInfo,
-        header: &Header,
-        msg: &ConsensusMessage<RQ>,
+        _header: &Header,
+        _msg: &ConsensusMessage<RQ>,
         node: &Arc<NT>,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
@@ -71,7 +71,7 @@ where
             let message = PBFTMessage::Consensus(ConsensusMessage::new(
                 seq,
                 view_seq,
-                ConsensusMessageKind::Commit(current_digest.clone()),
+                ConsensusMessageKind::Commit(current_digest),
             ));
 
             let (message, digest) = node_clone.serialize_digest_message(message).unwrap();
@@ -104,7 +104,7 @@ where
 
                 let mut map = speculative_commits.lock().unwrap();
 
-                map.insert(peer_id.into(), stored);
+                map.insert(peer_id, stored);
             }
         });
 
@@ -132,11 +132,11 @@ where
 
     fn handle_preparing_no_quorum<NT>(
         &mut self,
-        deciding_log: &WorkingDecisionLog<RQ>,
-        view: &ViewInfo,
-        header: &Header,
-        msg: &ConsensusMessage<RQ>,
-        node: &NT,
+        _deciding_log: &WorkingDecisionLog<RQ>,
+        _view: &ViewInfo,
+        _header: &Header,
+        _msg: &ConsensusMessage<RQ>,
+        _node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
     {
@@ -146,8 +146,8 @@ where
         &mut self,
         deciding_log: &WorkingDecisionLog<RQ>,
         view: &ViewInfo,
-        header: &Header,
-        msg: &ConsensusMessage<RQ>,
+        _header: &Header,
+        _msg: &ConsensusMessage<RQ>,
         node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
@@ -159,7 +159,7 @@ where
         let speculative_commits = self.take_speculative_commits();
 
         if valid_spec_commits::<RQ>(&speculative_commits, node_id, seq, view) {
-            for (_, msg) in speculative_commits.iter() {
+            for (_, _msg) in speculative_commits.iter() {
                 debug!("{:?} // Broadcasting speculative commit message (total of {} messages) to {} targets",
                      node_id, speculative_commits.len(), view.params().n());
                 break;
@@ -170,7 +170,7 @@ where
             let message = PBFTMessage::Consensus(ConsensusMessage::new(
                 seq,
                 view.sequence_number(),
-                ConsensusMessageKind::Commit(current_digest.clone()),
+                ConsensusMessageKind::Commit(current_digest),
             ));
 
             debug!(
@@ -194,11 +194,11 @@ where
 
     fn handle_committing_no_quorum<NT>(
         &mut self,
-        deciding_log: &WorkingDecisionLog<RQ>,
-        view: &ViewInfo,
-        header: &Header,
-        msg: &ConsensusMessage<RQ>,
-        node: &NT,
+        _deciding_log: &WorkingDecisionLog<RQ>,
+        _view: &ViewInfo,
+        _header: &Header,
+        _msg: &ConsensusMessage<RQ>,
+        _node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
     {
@@ -206,14 +206,23 @@ where
 
     fn handle_committing_quorum<NT>(
         &mut self,
-        deciding_log: &WorkingDecisionLog<RQ>,
-        view: &ViewInfo,
-        header: &Header,
-        msg: &ConsensusMessage<RQ>,
-        node: &NT,
+        _deciding_log: &WorkingDecisionLog<RQ>,
+        _view: &ViewInfo,
+        _header: &Header,
+        _msg: &ConsensusMessage<RQ>,
+        _node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
     {
+    }
+}
+
+impl<RQ> Default for ReplicaAccessory<RQ>
+where
+    RQ: SerType,
+ {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -229,7 +238,7 @@ where
 
     fn take_speculative_commits(&self) -> BTreeMap<NodeId, StoredSerializedMessage<SysMsg<RQ>>> {
         let mut map = self.speculative_commits.lock().unwrap();
-        std::mem::replace(&mut *map, BTreeMap::new())
+        std::mem::take(&mut *map)
     }
 }
 

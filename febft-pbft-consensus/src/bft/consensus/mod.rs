@@ -120,11 +120,11 @@ impl<O> TboQueue<O> {
         self.curr_seq = self.curr_seq.next();
 
         let pre_prepares = tbo_advance_message_queue_return(&mut self.pre_prepares)
-            .unwrap_or_else(|| VecDeque::new());
+            .unwrap_or_else(VecDeque::new);
         let prepares =
-            tbo_advance_message_queue_return(&mut self.prepares).unwrap_or_else(|| VecDeque::new());
+            tbo_advance_message_queue_return(&mut self.prepares).unwrap_or_else(VecDeque::new);
         let commits =
-            tbo_advance_message_queue_return(&mut self.commits).unwrap_or_else(|| VecDeque::new());
+            tbo_advance_message_queue_return(&mut self.commits).unwrap_or_else(VecDeque::new);
 
         MessageQueue::from_messages(pre_prepares, prepares, commits)
     }
@@ -589,7 +589,7 @@ where
 
                     self.enqueue_decision(novel_decision);
 
-                    sequence_no = sequence_no + SeqNo::ONE;
+                    sequence_no += SeqNo::ONE;
                 }
 
                 self.tbo_queue.curr_seq = novel_seq_no;
@@ -611,7 +611,7 @@ where
 
                 let mut sequence_no = novel_seq_no;
 
-                let mut overflow = limit - self.watermark as usize;
+                let overflow = limit - self.watermark as usize;
 
                 if overflow >= self.tbo_queue.pre_prepares.len() {
                     debug!("{:?} // Decision log overflow is larger than the tbo queue. Clearing tbo queue {} vs {}", self.node_id, overflow, self.tbo_queue.pre_prepares.len());
@@ -784,7 +784,7 @@ where
 
             self.enqueue_decision(novel_decision);
 
-            sequence_no = sequence_no + SeqNo::ONE;
+            sequence_no += SeqNo::ONE;
         }
 
         if view_index > 1 {
@@ -838,7 +838,7 @@ where
         new_view: &ViewInfo,
         synchronizer: &Synchronizer<RQ>,
         timeouts: &Timeouts,
-        log: &mut Log<RQ>,
+        _log: &mut Log<RQ>,
         node: &Arc<NT>,
     ) -> Result<ConsensusStatus<RQ>>
     where

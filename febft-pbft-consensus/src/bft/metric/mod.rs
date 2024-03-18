@@ -1,5 +1,5 @@
 use atlas_metrics::metrics::{
-    metric_duration, metric_duration_end, metric_store_count, MetricKind,
+    metric_duration, metric_store_count, MetricKind,
 };
 use atlas_metrics::{MetricLevel, MetricRegistry};
 use std::time::Instant;
@@ -261,6 +261,12 @@ pub struct ConsensusMetrics {
     pub first_commit_rcvd_time: Instant,
     // At which time did we receive the quorum of commit messages
     pub commit_quorum_time: Instant,
+}
+
+impl Default for ConsensusMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ConsensusMetrics {
