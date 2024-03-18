@@ -471,7 +471,7 @@ pub fn pre_prepare_index_of_from_digest(
 ) -> Result<usize> {
     match prepare_set
         .iter()
-        .position(|pre_prepare| *pre_prepare == *pre_prepare)
+        .position(|pre_prepare_2| *pre_prepare == *pre_prepare_2)
     {
         None => {
             Err!(DecidingLogError::PrePrepareNotPartOfSet(
