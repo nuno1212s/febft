@@ -1,15 +1,14 @@
 use std::fmt::{Debug, Formatter};
 
+use atlas_common::crypto::hash::Digest;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
-use atlas_common::crypto::hash::Digest;
 
 use atlas_common::ordering::{Orderable, SeqNo};
 
 use crate::RecoveryState;
 
 pub mod serialize;
-
 
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]

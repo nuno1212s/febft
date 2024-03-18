@@ -1,21 +1,24 @@
-use std::io::Read;
-use std::io::Write;
-use bytes::BytesMut;
-use capnp::message::ReaderOptions;
 use atlas_capnp::{consensus_messages_capnp, messages_capnp};
 use atlas_common::crypto::hash::Digest;
+use bytes::BytesMut;
+use capnp::message::ReaderOptions;
+use std::io::Read;
+use std::io::Write;
 
 use atlas_common::error::*;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{Header, PingMessage, StoredMessage};
 use atlas_core::serialize::capnp::deserialize_request;
 
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind,  ObserveEventKind, ObserverMessage, PBFTMessage, RequestMessage, ViewChangeMessage};
+use crate::bft::message::{
+    ConsensusMessage, ConsensusMessageKind, ObserveEventKind, ObserverMessage, PBFTMessage,
+    RequestMessage, ViewChangeMessage,
+};
 
 use crate::bft::msg_log::persistent::ProofInfo;
 use crate::bft::sync::view::ViewInfo;
 
-use super::{Buf, ApplicationData};
+use super::{ApplicationData, Buf};
 
 /// This module is meant to handle the serialization of the SMR messages, to allow for the users of this library to only
 /// Have to serialize (and declare) their request, reply and state, instead of also having to do so for all message
@@ -23,8 +26,13 @@ use super::{Buf, ApplicationData};
 
 const DEFAULT_SERIALIZE_BUFFER_SIZE: usize = 1024;
 
-pub fn serialize_message<D>(mut pbft_message: consensus_messages_capnp::protocol_message::Builder,
-                            m: &PBFTMessage<D::Request>) -> Result<()> where D: ApplicationData {
+pub fn serialize_message<D>(
+    mut pbft_message: consensus_messages_capnp::protocol_message::Builder,
+    m: &PBFTMessage<D::Request>,
+) -> Result<()>
+where
+    D: ApplicationData,
+{
     match m {
         PBFTMessage::Consensus(consensus_msg) => {
             let mut consensus_builder = pbft_message.init_consensus_message();
@@ -47,19 +55,31 @@ pub fn serialize_message<D>(mut pbft_message: consensus_messages_capnp::protocol
     Ok(())
 }
 
-pub fn deserialize_message<D>(pbft_reader: consensus_messages_capnp::protocol_message::Reader) -> Result<PBFTMessage<D::Request>> where
-    D: ApplicationData {
-    let which = pbft_reader.which().wrapped(ErrorKind::CommunicationSerialize)?;
+pub fn deserialize_message<D>(
+    pbft_reader: consensus_messages_capnp::protocol_message::Reader,
+) -> Result<PBFTMessage<D::Request>>
+where
+    D: ApplicationData,
+{
+    let which = pbft_reader
+        .which()
+        .wrapped(ErrorKind::CommunicationSerialize)?;
 
     match which {
         consensus_messages_capnp::protocol_message::WhichReader::ConsensusMessage(Ok(cons_msg)) => {
-            Ok(PBFTMessage::Consensus(deserialize_consensus_message::<D>(cons_msg)?))
+            Ok(PBFTMessage::Consensus(deserialize_consensus_message::<D>(
+                cons_msg,
+            )?))
         }
-        consensus_messages_capnp::protocol_message::WhichReader::ViewChangeMessage(Ok(view_change)) => {
-            Ok(PBFTMessage::ViewChange(deserialize_view_change::<D>(view_change)?))
-        }
+        consensus_messages_capnp::protocol_message::WhichReader::ViewChangeMessage(Ok(
+            view_change,
+        )) => Ok(PBFTMessage::ViewChange(deserialize_view_change::<D>(
+            view_change,
+        )?)),
         consensus_messages_capnp::protocol_message::WhichReader::ObserverMessage(Ok(obs_msg)) => {
-            Ok(PBFTMessage::ObserverMessage(deserialize_observer_message(obs_msg)?))
+            Ok(PBFTMessage::ObserverMessage(deserialize_observer_message(
+                obs_msg,
+            )?))
         }
         consensus_messages_capnp::protocol_message::WhichReader::ViewChangeMessage(Err(err)) => {
             Err(Error::wrapped(ErrorKind::CommunicationSerialize, err))
@@ -76,8 +96,8 @@ pub fn deserialize_message<D>(pbft_reader: consensus_messages_capnp::protocol_me
 fn deserialize_consensus_message<D>(
     consensus_msg: consensus_messages_capnp::consensus::Reader,
 ) -> Result<ConsensusMessage<D::Request>>
-    where
-        D: ApplicationData,
+where
+    D: ApplicationData,
 {
     let seq_no: SeqNo = consensus_msg.get_seq_no().into();
     let view: SeqNo = consensus_msg.get_view().into();
@@ -136,19 +156,20 @@ fn deserialize_consensus_message<D>(
 
 /// Deserialize a persistent consensus message from the log
 pub fn deserialize_consensus<R, D>(r: R) -> Result<ConsensusMessage<D::Request>>
-    where
-        R: Read,
-        D: ApplicationData,
+where
+    R: Read,
+    D: ApplicationData,
 {
     let reader = capnp::serialize::read_message(r, Default::default()).wrapped_msg(
         ErrorKind::CommunicationSerialize,
         "Failed to get capnp reader",
     )?;
 
-    let consensus_msg: consensus_messages_capnp::consensus::Reader = reader.get_root().wrapped_msg(
-        ErrorKind::CommunicationSerialize,
-        "Failed to get system msg root",
-    )?;
+    let consensus_msg: consensus_messages_capnp::consensus::Reader =
+        reader.get_root().wrapped_msg(
+            ErrorKind::CommunicationSerialize,
+            "Failed to get system msg root",
+        )?;
 
     deserialize_consensus_message::<D>(consensus_msg)
 }
@@ -157,8 +178,8 @@ fn serialize_consensus_message<S>(
     mut consensus: atlas_capnp::consensus_messages_capnp::consensus::Builder,
     m: &ConsensusMessage<S::Request>,
 ) -> Result<()>
-    where
-        S: ApplicationData,
+where
+    S: ApplicationData,
 {
     consensus.set_seq_no(m.sequence_number().into());
     consensus.set_view(m.view().into());
@@ -166,7 +187,8 @@ fn serialize_consensus_message<S>(
     match m.kind() {
         ConsensusMessageKind::PrePrepare(requests) => {
             let mut header = [0; Header::LENGTH];
-            let mut pre_prepare_requests = consensus.reborrow().init_pre_prepare(requests.len() as u32);
+            let mut pre_prepare_requests =
+                consensus.reborrow().init_pre_prepare(requests.len() as u32);
 
             for (i, stored) in requests.iter().enumerate() {
                 let mut forwarded = pre_prepare_requests.reborrow().get(i as u32);
@@ -204,9 +226,9 @@ fn serialize_consensus_message<S>(
 }
 
 pub fn serialize_consensus<W, S>(w: &mut W, message: &ConsensusMessage<S::Request>) -> Result<()>
-    where
-        W: Write,
-        S: ApplicationData,
+where
+    W: Write,
+    S: ApplicationData,
 {
     let mut root = capnp::message::Builder::new(capnp::message::HeapAllocator::new());
 
@@ -220,19 +242,29 @@ pub fn serialize_consensus<W, S>(w: &mut W, message: &ConsensusMessage<S::Reques
     )
 }
 
-fn serialize_view_change<D>(mut view_change: consensus_messages_capnp::view_change::Builder,
-                            msg: &ViewChangeMessage<D::Request>) -> Result<()> where D: ApplicationData {
+fn serialize_view_change<D>(
+    mut view_change: consensus_messages_capnp::view_change::Builder,
+    msg: &ViewChangeMessage<D::Request>,
+) -> Result<()>
+where
+    D: ApplicationData,
+{
     Ok(())
 }
 
-fn deserialize_view_change<D>(view_change: consensus_messages_capnp::view_change::Reader)
-                              -> Result<ViewChangeMessage<D::Request>>
-    where D: ApplicationData {
+fn deserialize_view_change<D>(
+    view_change: consensus_messages_capnp::view_change::Reader,
+) -> Result<ViewChangeMessage<D::Request>>
+where
+    D: ApplicationData,
+{
     Err(Error::simple(ErrorKind::CommunicationSerialize))
 }
 
-fn serialize_observer_message(mut obs_message: consensus_messages_capnp::observer_message::Builder,
-                              msg: &ObserverMessage) -> Result<()> {
+fn serialize_observer_message(
+    mut obs_message: consensus_messages_capnp::observer_message::Builder,
+    msg: &ObserverMessage,
+) -> Result<()> {
     let mut obs_message_type = obs_message.init_message_type();
 
     match msg {
@@ -296,7 +328,9 @@ fn serialize_observer_message(mut obs_message: consensus_messages_capnp::observe
     Ok(())
 }
 
-fn deserialize_observer_message(observer_msg: consensus_messages_capnp::observer_message::Reader) -> Result<ObserverMessage> {
+fn deserialize_observer_message(
+    observer_msg: consensus_messages_capnp::observer_message::Reader,
+) -> Result<ObserverMessage> {
     let message_type = observer_msg.get_message_type();
 
     let type_which = message_type

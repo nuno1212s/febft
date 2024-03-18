@@ -17,18 +17,30 @@ pub struct CSTMsg<S: MonolithicState>(PhantomData<(S)>);
 impl<S: MonolithicState> StateTransferMessage for CSTMsg<S> {
     type StateTransferMessage = CstMessage<S>;
 
-    fn verify_state_message<NI, SVH>(network_info: &Arc<NI>, header: &Header, message: Self::StateTransferMessage) -> atlas_common::error::Result<Self::StateTransferMessage>
-        where NI: NetworkInformationProvider, SVH: StateTransferVerificationHelper {
+    fn verify_state_message<NI, SVH>(
+        network_info: &Arc<NI>,
+        header: &Header,
+        message: Self::StateTransferMessage,
+    ) -> atlas_common::error::Result<Self::StateTransferMessage>
+    where
+        NI: NetworkInformationProvider,
+        SVH: StateTransferVerificationHelper,
+    {
         todo!()
     }
 
     #[cfg(feature = "serialize_capnp")]
-    fn serialize_capnp(builder: atlas_capnp::cst_messages_capnp::cst_message::Builder, msg: &Self::StateTransferMessage) -> atlas_common::error::Result<()> {
+    fn serialize_capnp(
+        builder: atlas_capnp::cst_messages_capnp::cst_message::Builder,
+        msg: &Self::StateTransferMessage,
+    ) -> atlas_common::error::Result<()> {
         todo!()
     }
 
     #[cfg(feature = "serialize_capnp")]
-    fn deserialize_capnp(reader: atlas_capnp::cst_messages_capnp::cst_message::Reader) -> atlas_common::error::Result<Self::StateTransferMessage> {
+    fn deserialize_capnp(
+        reader: atlas_capnp::cst_messages_capnp::cst_message::Reader,
+    ) -> atlas_common::error::Result<Self::StateTransferMessage> {
         todo!()
     }
 }

@@ -1,6 +1,6 @@
+use crate::bft::message::ObserveEventKind;
 use atlas_common::channel::ChannelMixedTx;
 use atlas_common::node_id::NodeId;
-use crate::bft::message::ObserveEventKind;
 
 pub type ObserverType = NodeId;
 
@@ -24,9 +24,7 @@ pub struct ObserverHandle {
 
 impl ObserverHandle {
     pub fn new(tx: ChannelMixedTx<MessageType<ObserverType>>) -> Self {
-        ObserverHandle {
-            tx
-        }
+        ObserverHandle { tx }
     }
 
     pub fn tx(&self) -> &ChannelMixedTx<MessageType<ObserverType>> {

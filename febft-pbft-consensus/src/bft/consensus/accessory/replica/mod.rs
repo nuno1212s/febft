@@ -9,33 +9,51 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerType;
 use atlas_common::threadpool;
 use atlas_communication::lookup_table::MessageModule;
-use atlas_communication::message::{Header, SerializedMessage, StoredMessage, StoredSerializedMessage, WireMessage};
+use atlas_communication::message::{
+    Header, SerializedMessage, StoredMessage, StoredSerializedMessage, WireMessage,
+};
 use atlas_communication::reconfiguration::NetworkInformationProvider;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 
-use crate::bft::{PBFT, SysMsg};
 use crate::bft::consensus::accessory::AccessoryConsensus;
 use crate::bft::log::deciding::WorkingDecisionLog;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::sync::view::ViewInfo;
+use crate::bft::{SysMsg, PBFT};
 
 pub struct ReplicaAccessory<RQ>
-    where RQ: SerType {
+where
+    RQ: SerType,
+{
     speculative_commits: Arc<Mutex<BTreeMap<NodeId, StoredSerializedMessage<SysMsg<RQ>>>>>,
 }
 
 impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
-    where RQ: SerType + 'static, {
-    fn handle_partial_pre_prepare<NT>(&mut self, deciding_log: &WorkingDecisionLog<RQ>,
-                                      view: &ViewInfo,
-                                      header: &Header, msg: &ConsensusMessage<RQ>,
-                                      node: &NT) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {}
+where
+    RQ: SerType + 'static,
+{
+    fn handle_partial_pre_prepare<NT>(
+        &mut self,
+        deciding_log: &WorkingDecisionLog<RQ>,
+        view: &ViewInfo,
+        header: &Header,
+        msg: &ConsensusMessage<RQ>,
+        node: &NT,
+    ) where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    {
+    }
 
-    fn handle_pre_prepare_phase_completed<NT>(&mut self,
-                                              deciding_log: &WorkingDecisionLog<RQ>,
-                                              view: &ViewInfo,
-                                              header: &Header, msg: &ConsensusMessage<RQ>,
-                                              node: &Arc<NT>) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static {
+    fn handle_pre_prepare_phase_completed<NT>(
+        &mut self,
+        deciding_log: &WorkingDecisionLog<RQ>,
+        view: &ViewInfo,
+        header: &Header,
+        msg: &ConsensusMessage<RQ>,
+        node: &Arc<NT>,
+    ) where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+    {
         let my_id = node.id();
         let view_seq = view.sequence_number();
         let current_digest = deciding_log.current_digest().unwrap();
@@ -76,7 +94,8 @@ impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
                     0,
                     Some(digest),
                     Some(&*key_pair),
-                ).into_inner();
+                )
+                .into_inner();
 
                 // store serialized header + message
                 let serialized = SerializedMessage::new(message.clone(), buf.clone());
@@ -91,8 +110,10 @@ impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
 
         let targets = view.quorum_members().clone();
 
-        debug!("{:?} // Broadcasting prepare messages to quorum {:?}, {:?}",
-               my_id, seq, targets);
+        debug!(
+            "{:?} // Broadcasting prepare messages to quorum {:?}, {:?}",
+            my_id, seq, targets
+        );
 
         // Vote for the received batch.
         // Leaders in this protocol must vote as they need to ack all
@@ -109,13 +130,28 @@ impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
         node.broadcast_signed(message, targets.into_iter());
     }
 
-    fn handle_preparing_no_quorum<NT>(&mut self, deciding_log: &WorkingDecisionLog<RQ>,
-                                      view: &ViewInfo,
-                                      header: &Header, msg: &ConsensusMessage<RQ>, node: &NT) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {}
+    fn handle_preparing_no_quorum<NT>(
+        &mut self,
+        deciding_log: &WorkingDecisionLog<RQ>,
+        view: &ViewInfo,
+        header: &Header,
+        msg: &ConsensusMessage<RQ>,
+        node: &NT,
+    ) where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    {
+    }
 
-    fn handle_preparing_quorum<NT>(&mut self, deciding_log: &WorkingDecisionLog<RQ>,
-                                   view: &ViewInfo,
-                                   header: &Header, msg: &ConsensusMessage<RQ>, node: &NT) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
+    fn handle_preparing_quorum<NT>(
+        &mut self,
+        deciding_log: &WorkingDecisionLog<RQ>,
+        view: &ViewInfo,
+        header: &Header,
+        msg: &ConsensusMessage<RQ>,
+        node: &NT,
+    ) where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    {
         let node_id = node.id();
 
         let seq = deciding_log.sequence_number();
@@ -137,32 +173,54 @@ impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
                 ConsensusMessageKind::Commit(current_digest.clone()),
             ));
 
-            debug!("{:?} // Broadcasting commit consensus message {:?}",
-                        node_id, message);
+            debug!(
+                "{:?} // Broadcasting commit consensus message {:?}",
+                node_id, message
+            );
 
             let targets = view.quorum_members().clone();
 
             node.broadcast_signed(message, targets.into_iter());
         }
 
-        debug!("{:?} // Broadcasted commit consensus message {:?}",
-                        node_id, deciding_log.sequence_number());
+        debug!(
+            "{:?} // Broadcasted commit consensus message {:?}",
+            node_id,
+            deciding_log.sequence_number()
+        );
 
         deciding_log.batch_meta().lock().unwrap().commit_sent_time = Utc::now();
     }
 
-    fn handle_committing_no_quorum<NT>(&mut self, deciding_log: &WorkingDecisionLog<RQ>,
-                                       view: &ViewInfo,
-                                       header: &Header, msg: &ConsensusMessage<RQ>, node: &NT) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {}
+    fn handle_committing_no_quorum<NT>(
+        &mut self,
+        deciding_log: &WorkingDecisionLog<RQ>,
+        view: &ViewInfo,
+        header: &Header,
+        msg: &ConsensusMessage<RQ>,
+        node: &NT,
+    ) where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    {
+    }
 
-    fn handle_committing_quorum<NT>(&mut self, deciding_log: &WorkingDecisionLog<RQ>,
-                                    view: &ViewInfo,
-                                    header: &Header, msg: &ConsensusMessage<RQ>,
-                                    node: &NT) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {}
+    fn handle_committing_quorum<NT>(
+        &mut self,
+        deciding_log: &WorkingDecisionLog<RQ>,
+        view: &ViewInfo,
+        header: &Header,
+        msg: &ConsensusMessage<RQ>,
+        node: &NT,
+    ) where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    {
+    }
 }
 
 impl<RQ> ReplicaAccessory<RQ>
-    where RQ: SerType, {
+where
+    RQ: SerType,
+{
     pub fn new() -> Self {
         Self {
             speculative_commits: Arc::new(Mutex::new(BTreeMap::new())),
@@ -175,7 +233,6 @@ impl<RQ> ReplicaAccessory<RQ>
     }
 }
 
-
 #[inline]
 fn valid_spec_commits<RQ>(
     speculative_commits: &BTreeMap<NodeId, StoredSerializedMessage<SysMsg<RQ>>>,
@@ -183,8 +240,8 @@ fn valid_spec_commits<RQ>(
     seq_no: SeqNo,
     view: &ViewInfo,
 ) -> bool
-    where
-        RQ: SerType,
+where
+    RQ: SerType,
 {
     let len = speculative_commits.len();
 

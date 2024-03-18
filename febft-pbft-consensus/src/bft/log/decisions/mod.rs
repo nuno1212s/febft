@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use atlas_common::crypto::hash::Digest;
-use atlas_common::Err;
 use atlas_common::error::*;
 use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_common::Err;
 use atlas_core::ordering_protocol::networking::serialize::OrderProtocolProof;
 use atlas_core::ordering_protocol::ShareableMessage;
 
@@ -52,7 +52,6 @@ pub struct Proof<O> {
     commits: Vec<StoredConsensusMessage<O>>,
 }
 
-
 /// Contains a collection of `ViewDecisionPair` values,
 /// pertaining to a particular consensus instance.
 #[cfg_attr(feature = "serialize_serde", derive(Serialize, Deserialize))]
@@ -81,14 +80,19 @@ impl PrepareSet {
     /// Iterate over this `WriteSet`.
     ///
     /// Convenience method for calling `iter()` on the inner `Vec`.
-    pub fn iter(&self) -> impl Iterator<Item=&ViewDecisionPair> {
+    pub fn iter(&self) -> impl Iterator<Item = &ViewDecisionPair> {
         self.0.iter()
     }
 }
 
 impl ProofMetadata {
     /// Create a new proof metadata
-    pub(crate) fn new(seq_no: SeqNo, digest: Digest, pre_prepare_ordering: Vec<Digest>, contained_rqs: usize) -> Self {
+    pub(crate) fn new(
+        seq_no: SeqNo,
+        digest: Digest,
+        pre_prepare_ordering: Vec<Digest>,
+        contained_rqs: usize,
+    ) -> Self {
         Self {
             seq_no,
             batch_digest: digest,
@@ -115,10 +119,12 @@ impl ProofMetadata {
 }
 
 impl<O> Proof<O> {
-    pub fn new(metadata: ProofMetadata,
-               pre_prepares: Vec<StoredConsensusMessage<O>>,
-               prepares: Vec<StoredConsensusMessage<O>>,
-               commits: Vec<StoredConsensusMessage<O>>) -> Self {
+    pub fn new(
+        metadata: ProofMetadata,
+        pre_prepares: Vec<StoredConsensusMessage<O>>,
+        prepares: Vec<StoredConsensusMessage<O>>,
+        commits: Vec<StoredConsensusMessage<O>>,
+    ) -> Self {
         Self {
             metadata,
             pre_prepares,
@@ -127,15 +133,23 @@ impl<O> Proof<O> {
         }
     }
 
-    pub fn init_from_messages(metadata: ProofMetadata, messages: Vec<StoredConsensusMessage<O>>) -> Result<Self> {
-        let mut pre_prepares: Vec<Option<StoredConsensusMessage<O>>> = iter::repeat(None).take(metadata.pre_prepare_ordering().len()).collect();
+    pub fn init_from_messages(
+        metadata: ProofMetadata,
+        messages: Vec<StoredConsensusMessage<O>>,
+    ) -> Result<Self> {
+        let mut pre_prepares: Vec<Option<StoredConsensusMessage<O>>> = iter::repeat(None)
+            .take(metadata.pre_prepare_ordering().len())
+            .collect();
         let mut prepares = Vec::new();
         let mut commits = Vec::new();
 
         for x in messages {
             match x.message().consensus().kind() {
                 ConsensusMessageKind::PrePrepare(_) => {
-                    let option = metadata.pre_prepare_ordering().iter().position(|digest| *x.header().digest() == *digest);
+                    let option = metadata
+                        .pre_prepare_ordering()
+                        .iter()
+                        .position(|digest| *x.header().digest() == *digest);
 
                     let index = option.ok_or(ProofError::PrePrepareNotContainedInMetadata)?;
 
@@ -186,7 +200,10 @@ impl<O> Proof<O> {
     /// Check if the amount of pre prepares line up with the expected amount
     fn check_pre_prepare_sizes(&self) -> Result<()> {
         if self.metadata.pre_prepare_ordering().len() != self.pre_prepares.len() {
-            return Err!(ProofError::WrongPrePrepareCount(self.metadata.pre_prepare_ordering().len(), self.pre_prepares.len()));
+            return Err!(ProofError::WrongPrePrepareCount(
+                self.metadata.pre_prepare_ordering().len(),
+                self.pre_prepares.len()
+            ));
         }
 
         Ok(())
@@ -198,7 +215,9 @@ impl<O> Proof<O> {
         self.check_pre_prepare_sizes()?;
 
         for index in 0..self.metadata.pre_prepare_ordering().len() {
-            if self.metadata.pre_prepare_ordering()[index] != *self.pre_prepares[index].header().digest() {
+            if self.metadata.pre_prepare_ordering()[index]
+                != *self.pre_prepares[index].header().digest()
+            {
                 return Ok(false);
             }
         }
@@ -217,7 +236,10 @@ impl<O> Proof<O> {
         for index in 0..pre_prepare_ordering.len() {
             let digest = pre_prepare_ordering[index];
 
-            let pre_prepare = self.pre_prepares.iter().position(|msg| *msg.header().digest() == digest);
+            let pre_prepare = self
+                .pre_prepares
+                .iter()
+                .position(|msg| *msg.header().digest() == digest);
 
             match pre_prepare {
                 Some(index) => {
@@ -237,7 +259,8 @@ impl<O> Proof<O> {
     }
 
     pub fn into_parts(self) -> (ProofMetadata, Vec<ShareableMessage<PBFTMessage<O>>>) {
-        let mut vec = Vec::with_capacity(self.pre_prepares.len() + self.prepares.len() + self.commits.len());
+        let mut vec =
+            Vec::with_capacity(self.pre_prepares.len() + self.prepares.len() + self.commits.len());
 
         for pre_prepares in self.pre_prepares {
             vec.push(pre_prepares);
@@ -270,7 +293,11 @@ impl<O> Deref for Proof<O> {
 }
 
 impl IncompleteProof {
-    pub fn new(in_exec: SeqNo, write_set: PrepareSet, quorum_prepares: Option<ViewDecisionPair>) -> Self {
+    pub fn new(
+        in_exec: SeqNo,
+        write_set: PrepareSet,
+        quorum_prepares: Option<ViewDecisionPair>,
+    ) -> Self {
         Self {
             in_exec,
             write_set,
@@ -310,7 +337,10 @@ pub struct CollectData<O> {
 
 impl<O> CollectData<O> {
     pub fn new(incomplete_proof: IncompleteProof, last_proof: Option<Proof<O>>) -> Self {
-        Self { incomplete_proof, last_proof }
+        Self {
+            incomplete_proof,
+            last_proof,
+        }
     }
 
     pub fn incomplete_proof(&self) -> &IncompleteProof {
@@ -359,13 +389,24 @@ impl<O> Clone for Proof<O> {
 
 impl<O> Debug for Proof<O> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Proof {{ Metadata: {:?}, pre_prepares: {}, prepares: {}, commits: {} }}", self.metadata, self.pre_prepares.len(), self.prepares.len(), self.commits.len())
+        write!(
+            f,
+            "Proof {{ Metadata: {:?}, pre_prepares: {}, prepares: {}, commits: {} }}",
+            self.metadata,
+            self.pre_prepares.len(),
+            self.prepares.len(),
+            self.commits.len()
+        )
     }
 }
 
 impl<O> Debug for CollectData<O> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CollectData {{ incomplete_proof: {:?}, last_proof: {:?} }}", self.incomplete_proof, self.last_proof)
+        write!(
+            f,
+            "CollectData {{ incomplete_proof: {:?}, last_proof: {:?} }}",
+            self.incomplete_proof, self.last_proof
+        )
     }
 }
 
@@ -375,7 +416,9 @@ pub enum ProofError {
     PrePrepareNotContainedInMetadata,
     #[error("Failed to create proof as pre prepare list is not complete")]
     PrePrepareListNotComplete,
-    #[error("Failed to create proof as there is a wrong pre prepare count expected {0:?} got {1:?}")]
+    #[error(
+        "Failed to create proof as there is a wrong pre prepare count expected {0:?} got {1:?}"
+    )]
     WrongPrePrepareCount(usize, usize),
     #[error("Proof's batches do not match with the digests provided.")]
     BatchDigestsDoNotMatch,

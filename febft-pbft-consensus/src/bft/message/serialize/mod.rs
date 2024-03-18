@@ -20,12 +20,17 @@ use atlas_common::serialization_helper::SerType;
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_communication::reconfiguration::NetworkInformationProvider;
 use atlas_core::ordering_protocol::loggable::PersistentOrderProtocolTypes;
-use atlas_core::ordering_protocol::networking::serialize::{OrderingProtocolMessage, OrderProtocolVerificationHelper, PermissionedOrderingProtocolMessage};
+use atlas_core::ordering_protocol::networking::serialize::{
+    OrderProtocolVerificationHelper, OrderingProtocolMessage, PermissionedOrderingProtocolMessage,
+};
 
 use crate::bft::log::decisions::{Proof, ProofMetadata};
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
-use crate::bft::sync::LeaderCollects;
+use crate::bft::message::{
+    ConsensusMessage, ConsensusMessageKind, FwdConsensusMessage, PBFTMessage, ViewChangeMessage,
+    ViewChangeMessageKind,
+};
 use crate::bft::sync::view::ViewInfo;
+use crate::bft::sync::LeaderCollects;
 
 #[cfg(feature = "serialize_capnp")]
 pub mod capnp;
@@ -37,8 +42,9 @@ pub mod serde;
 pub type Buf = Bytes;
 
 pub fn serialize_consensus<W, RQ>(w: &mut W, message: &ConsensusMessage<RQ>) -> Result<()>
-    where RQ: SerType,
-          W: Write + AsRef<[u8]> + AsMut<[u8]>,
+where
+    RQ: SerType,
+    W: Write + AsRef<[u8]> + AsMut<[u8]>,
 {
     #[cfg(feature = "serialize_capnp")]
     capnp::serialize_consensus::<W, D>(w, message)?;
@@ -50,14 +56,15 @@ pub fn serialize_consensus<W, RQ>(w: &mut W, message: &ConsensusMessage<RQ>) -> 
 }
 
 pub fn deserialize_consensus<R, RQ>(r: R) -> Result<ConsensusMessage<RQ>>
-    where RQ: SerType,
-          R: Read + AsRef<[u8]>,
+where
+    RQ: SerType,
+    R: Read + AsRef<[u8]>,
 {
     #[cfg(feature = "serialize_capnp")]
-        let result = capnp::deserialize_consensus::<R, D>(r)?;
+    let result = capnp::deserialize_consensus::<R, D>(r)?;
 
     #[cfg(feature = "serialize_serde")]
-        let result = serde::deserialize_consensus::<R, RQ>(r)?;
+    let result = serde::deserialize_consensus::<R, RQ>(r)?;
 
     Ok(result)
 }
@@ -66,14 +73,22 @@ pub fn deserialize_consensus<R, RQ>(r: R) -> Result<ConsensusMessage<RQ>>
 pub struct PBFTConsensus<RQ>(PhantomData<fn() -> RQ>);
 
 impl<RQ> OrderingProtocolMessage<RQ> for PBFTConsensus<RQ>
-    where RQ: SerType
+where
+    RQ: SerType,
 {
     type ProtocolMessage = PBFTMessage<RQ>;
     type ProofMetadata = ProofMetadata;
 
-    fn internally_verify_message<NI, OPVH>(network_info: &Arc<NI>, header: &Header, message: &Self::ProtocolMessage) -> Result<()>
-        where NI: NetworkInformationProvider,
-              OPVH: OrderProtocolVerificationHelper<RQ, Self, NI>, Self: Sized {
+    fn internally_verify_message<NI, OPVH>(
+        network_info: &Arc<NI>,
+        header: &Header,
+        message: &Self::ProtocolMessage,
+    ) -> Result<()>
+    where
+        NI: NetworkInformationProvider,
+        OPVH: OrderProtocolVerificationHelper<RQ, Self, NI>,
+        Self: Sized,
+    {
         match message {
             PBFTMessage::Consensus(consensus) => {
                 let (seq, view) = (consensus.sequence_number(), consensus.view());
@@ -85,17 +100,17 @@ impl<RQ> OrderingProtocolMessage<RQ> for PBFTConsensus<RQ>
                         for request in request_iter {
                             let (header, message) = (request.header(), request.message());
 
-                            let _ = OPVH::verify_request_message(network_info, header, message.clone())?;
+                            let _ = OPVH::verify_request_message(
+                                network_info,
+                                header,
+                                message.clone(),
+                            )?;
                         }
 
                         Ok(())
                     }
-                    ConsensusMessageKind::Prepare(digest) => {
-                        Ok(())
-                    }
-                    ConsensusMessageKind::Commit(digest) => {
-                        Ok(())
-                    }
+                    ConsensusMessageKind::Prepare(digest) => Ok(()),
+                    ConsensusMessageKind::Commit(digest) => Ok(()),
                 }
             }
             PBFTMessage::ViewChange(view_change) => {
@@ -106,89 +121,123 @@ impl<RQ> OrderingProtocolMessage<RQ> for PBFTConsensus<RQ>
                         for client_rq in timed_out_req.iter() {
                             let (header, message) = (client_rq.header(), client_rq.message());
 
-                            let _ = OPVH::verify_request_message(network_info, header, message.clone())?;
+                            let _ = OPVH::verify_request_message(
+                                network_info,
+                                header,
+                                message.clone(),
+                            )?;
                         }
 
                         Ok(())
                     }
-                    ViewChangeMessageKind::StopQuorumJoin(node) => {
-                        Ok(())
-                    }
+                    ViewChangeMessageKind::StopQuorumJoin(node) => Ok(()),
                     ViewChangeMessageKind::StopData(collect_data) => {
                         if let Some(proof) = &collect_data.last_proof {}
 
                         Ok(())
                     }
                     ViewChangeMessageKind::Sync(leader_collects) => {
-                        let (fwd, collects) = (leader_collects.proposed(), leader_collects.collects());
+                        let (fwd, collects) =
+                            (leader_collects.proposed(), leader_collects.collects());
 
                         {
                             let (header, message) = (fwd.header(), fwd.consensus_msg());
 
-                            let _ = OPVH::verify_protocol_message(network_info, &header, PBFTMessage::Consensus(message.clone()))?;
+                            let _ = OPVH::verify_protocol_message(
+                                network_info,
+                                &header,
+                                PBFTMessage::Consensus(message.clone()),
+                            )?;
                         }
 
                         for collect in collects {
                             let (header, message) = (collect.header(), collect.message());
 
-                            let _ = OPVH::verify_protocol_message(network_info, header, message.clone())?;
+                            let _ = OPVH::verify_protocol_message(
+                                network_info,
+                                header,
+                                message.clone(),
+                            )?;
                         }
 
                         Ok(())
                     }
                 }
             }
-            PBFTMessage::ObserverMessage(m) => Ok(())
+            PBFTMessage::ObserverMessage(m) => Ok(()),
         }
     }
 
     #[cfg(feature = "serialize_capnp")]
-    fn serialize_capnp(builder: atlas_capnp::consensus_messages_capnp::protocol_message::Builder, msg: &Self::ProtocolMessage) -> Result<()> {
+    fn serialize_capnp(
+        builder: atlas_capnp::consensus_messages_capnp::protocol_message::Builder,
+        msg: &Self::ProtocolMessage,
+    ) -> Result<()> {
         capnp::serialize_message::<RQ>(builder, msg)
     }
 
     #[cfg(feature = "serialize_capnp")]
-    fn deserialize_capnp(reader: atlas_capnp::consensus_messages_capnp::protocol_message::Reader) -> Result<Self::ProtocolMessage> {
+    fn deserialize_capnp(
+        reader: atlas_capnp::consensus_messages_capnp::protocol_message::Reader,
+    ) -> Result<Self::ProtocolMessage> {
         capnp::deserialize_message::<RQ>(reader)
     }
 
     #[cfg(feature = "serialize_capnp")]
-    fn serialize_view_capnp(builder: atlas_capnp::cst_messages_capnp::view_info::Builder, msg: &Self::ViewInfo) -> Result<()> {
+    fn serialize_view_capnp(
+        builder: atlas_capnp::cst_messages_capnp::view_info::Builder,
+        msg: &Self::ViewInfo,
+    ) -> Result<()> {
         todo!()
     }
 
     #[cfg(feature = "serialize_capnp")]
-    fn deserialize_view_capnp(reader: atlas_capnp::cst_messages_capnp::view_info::Reader) -> Result<Self::ViewInfo> {
+    fn deserialize_view_capnp(
+        reader: atlas_capnp::cst_messages_capnp::view_info::Reader,
+    ) -> Result<Self::ViewInfo> {
         todo!()
     }
 
     #[cfg(feature = "serialize_capnp")]
-    fn serialize_proof_capnp(builder: atlas_capnp::cst_messages_capnp::proof::Builder, msg: &Self::Proof) -> Result<()> {
+    fn serialize_proof_capnp(
+        builder: atlas_capnp::cst_messages_capnp::proof::Builder,
+        msg: &Self::Proof,
+    ) -> Result<()> {
         todo!()
     }
 
     #[cfg(feature = "serialize_capnp")]
-    fn deserialize_proof_capnp(reader: atlas_capnp::cst_messages_capnp::proof::Reader) -> Result<Self::Proof> {
+    fn deserialize_proof_capnp(
+        reader: atlas_capnp::cst_messages_capnp::proof::Reader,
+    ) -> Result<Self::Proof> {
         todo!()
     }
 }
 
-impl<RQ> PermissionedOrderingProtocolMessage for PBFTConsensus<RQ> where RQ: SerType {
+impl<RQ> PermissionedOrderingProtocolMessage for PBFTConsensus<RQ>
+where
+    RQ: SerType,
+{
     type ViewInfo = ViewInfo;
 }
 
 impl<RQ> PersistentOrderProtocolTypes<RQ, Self> for PBFTConsensus<RQ>
-    where RQ: SerType {
+where
+    RQ: SerType,
+{
     type Proof = Proof<RQ>;
 
     fn verify_proof<NI, OPVH>(network_info: &Arc<NI>, proof: Self::Proof) -> Result<Self::Proof>
-        where NI: NetworkInformationProvider,
-              OPVH: OrderProtocolVerificationHelper<RQ, Self, NI>,
-              Self: Sized {
+    where
+        NI: NetworkInformationProvider,
+        OPVH: OrderProtocolVerificationHelper<RQ, Self, NI>,
+        Self: Sized,
+    {
         let (metadata, messages) = proof.into_parts();
 
         for msg in &messages {
-            let _ = OPVH::verify_protocol_message(network_info, msg.header(), msg.message().clone())?;
+            let _ =
+                OPVH::verify_protocol_message(network_info, msg.header(), msg.message().clone())?;
         }
 
         let proof = Proof::init_from_messages(metadata, messages)?;

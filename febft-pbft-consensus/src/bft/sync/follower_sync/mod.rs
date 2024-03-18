@@ -1,7 +1,7 @@
-use std::{marker::PhantomData};
 use atlas_common::ordering::Orderable;
 use atlas_common::serialization_helper::SerType;
 use atlas_core::messages::{ClientRqInfo, SessionBased};
+use std::marker::PhantomData;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 
@@ -11,19 +11,20 @@ pub struct FollowerSynchronizer<RQ: SerType> {
 
 impl<RQ: SerType + SessionBased + 'static> FollowerSynchronizer<RQ> {
     pub fn new() -> Self {
-        Self { _phantom: Default::default() }
+        Self {
+            _phantom: Default::default(),
+        }
     }
 
     ///Watch a batch of requests received from a Pre prepare message sent by the leader
     /// In reality we won't watch, more like the contrary, since the requests were already
     /// proposed, they won't timeout
-    pub fn watch_request_batch(
-        &self,
-        pre_prepare: &ConsensusMessage<RQ>,
-    ) -> Vec<ClientRqInfo> {
+    pub fn watch_request_batch(&self, pre_prepare: &ConsensusMessage<RQ>) -> Vec<ClientRqInfo> {
         let requests = match pre_prepare.kind() {
-            ConsensusMessageKind::PrePrepare(req) => { req }
-            _ => { panic!() }
+            ConsensusMessageKind::PrePrepare(req) => req,
+            _ => {
+                panic!()
+            }
         };
 
         let mut digests = Vec::with_capacity(requests.len());

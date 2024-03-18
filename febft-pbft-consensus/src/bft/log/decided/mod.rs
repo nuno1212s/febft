@@ -6,11 +6,10 @@ use crate::bft::log::decisions::Proof;
 /// Only stores the latest performed decision
 pub struct DecisionLog<O> {
     /// The last decision that was performed by the ordering protocol
-    last_decision: Option<Proof<O>>
+    last_decision: Option<Proof<O>>,
 }
 
 impl<O> DecisionLog<O> {
-
     pub(crate) fn init(last_proof: Option<Proof<O>>) -> Self {
         DecisionLog {
             last_decision: last_proof,
@@ -23,23 +22,26 @@ impl<O> DecisionLog<O> {
     }
 
     /// Get the last decision
-    pub fn last_decision(&self) -> Option<Proof<O>>  {
+    pub fn last_decision(&self) -> Option<Proof<O>> {
         self.last_decision.clone()
     }
 
     pub fn last_execution(&self) -> Option<SeqNo> {
-        self.last_decision.as_ref().map(|decision| decision.sequence_number())
+        self.last_decision
+            .as_ref()
+            .map(|decision| decision.sequence_number())
     }
 
     pub fn append_proof(&mut self, proof: Proof<O>) {
         self.last_decision = Some(proof)
     }
-
 }
-
 
 impl<O> Orderable for DecisionLog<O> {
     fn sequence_number(&self) -> SeqNo {
-        self.last_decision.as_ref().map(|f| f.sequence_number()).unwrap_or(SeqNo::ZERO)
+        self.last_decision
+            .as_ref()
+            .map(|f| f.sequence_number())
+            .unwrap_or(SeqNo::ZERO)
     }
 }

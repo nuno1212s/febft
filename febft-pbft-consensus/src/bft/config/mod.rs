@@ -1,5 +1,5 @@
-use std::time::Duration;
 use serde::Deserialize;
+use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 pub struct PBFTConfig {
@@ -9,8 +9,7 @@ pub struct PBFTConfig {
 }
 
 impl PBFTConfig {
-    pub fn new(timeout_dur: Duration,
-               watermark: u32, proposer_config: ProposerConfig) -> Self {
+    pub fn new(timeout_dur: Duration, watermark: u32, proposer_config: ProposerConfig) -> Self {
         Self {
             timeout_dur,
             proposer_config,
@@ -28,6 +27,10 @@ pub struct ProposerConfig {
 
 impl ProposerConfig {
     pub fn new(target_batch_size: u64, max_batch_size: u64, batch_timeout: u64) -> Self {
-        Self { target_batch_size, max_batch_size, batch_timeout }
+        Self {
+            target_batch_size,
+            max_batch_size,
+            batch_timeout,
+        }
     }
 }

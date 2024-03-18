@@ -1,6 +1,6 @@
+use atlas_common::Err;
 use either::Either;
 use thiserror::Error;
-use atlas_common::Err;
 
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
@@ -20,11 +20,17 @@ pub mod decided;
 pub mod deciding;
 pub mod decisions;
 
-pub struct Log<RQ> where RQ: SerType {
+pub struct Log<RQ>
+where
+    RQ: SerType,
+{
     decided: DecisionLog<RQ>,
 }
 
-impl<RQ> Log<RQ> where RQ: SerType + SessionBased {
+impl<RQ> Log<RQ>
+where
+    RQ: SerType + SessionBased,
+{
     pub fn decision_log(&self) -> &DecisionLog<RQ> {
         &self.decided
     }
@@ -59,34 +65,39 @@ impl<RQ> Log<RQ> where RQ: SerType + SessionBased {
 
         let (metadata, messages) = proof.into_parts();
 
-        Ok(Decision::full_decision_info(sequence, metadata, messages, batch_info))
+        Ok(Decision::full_decision_info(
+            sequence, metadata, messages, batch_info,
+        ))
     }
 
-    pub fn finalize_batch(&mut self, completed: CompletedBatch<RQ>) -> Result<ProtocolConsensusDecision<RQ>> {
+    pub fn finalize_batch(
+        &mut self,
+        completed: CompletedBatch<RQ>,
+    ) -> Result<ProtocolConsensusDecision<RQ>> {
         let CompletedBatch {
-            seq, digest,
+            seq,
+            digest,
             pre_prepare_ordering,
             contained_messages,
             client_request_info,
             client_requests,
-            batch_meta
+            batch_meta,
         } = completed;
 
-        let metadata = ProofMetadata::new(seq, digest.clone(), pre_prepare_ordering,
-                                          client_requests.len());
+        let metadata = ProofMetadata::new(
+            seq,
+            digest.clone(),
+            pre_prepare_ordering,
+            client_requests.len(),
+        );
 
         let FinishedMessageLog {
             pre_prepares,
             prepares,
-            commits
+            commits,
         } = contained_messages;
 
-        let proof = Proof::new(
-            metadata,
-            pre_prepares,
-            prepares,
-            commits,
-        );
+        let proof = Proof::new(metadata, pre_prepares, prepares, commits);
 
         self.decided.append_proof(proof);
 
@@ -96,18 +107,29 @@ impl<RQ> Log<RQ> where RQ: SerType + SessionBased {
             batch.add_message(cli_rq);
         }
 
-        Ok(ProtocolConsensusDecision::new(seq, batch, client_request_info, digest))
+        Ok(ProtocolConsensusDecision::new(
+            seq,
+            batch,
+            client_request_info,
+            digest,
+        ))
     }
 }
 
-pub fn initialize_decided_log<RQ>(node_id: NodeId) -> Log<RQ> where RQ: SerType {
+pub fn initialize_decided_log<RQ>(node_id: NodeId) -> Log<RQ>
+where
+    RQ: SerType,
+{
     Log {
         decided: DecisionLog::init(None),
     }
 }
 
 #[inline]
-pub fn operation_key<O>(header: &Header, message: &O) -> u64 where O: SessionBased {
+pub fn operation_key<O>(header: &Header, message: &O) -> u64
+where
+    O: SessionBased,
+{
     operation_key_raw(header.from(), message.session_number())
 }
 
@@ -121,9 +143,13 @@ pub fn operation_key_raw(from: NodeId, session: SeqNo) -> u64 {
     client_id | (session_id << 32)
 }
 
-impl<O> From<&Proof<O>> for ProtocolConsensusDecision<O> where O: Clone + SessionBased {
+impl<O> From<&Proof<O>> for ProtocolConsensusDecision<O>
+where
+    O: Clone + SessionBased,
+{
     fn from(value: &Proof<O>) -> Self {
-        let mut decided_batch = BatchedDecision::new_with_cap(value.seq_no(), value.metadata().contained_client_rqs());
+        let mut decided_batch =
+            BatchedDecision::new_with_cap(value.seq_no(), value.metadata().contained_client_rqs());
         let mut client_rqs = Vec::with_capacity(value.metadata().contained_client_rqs());
 
         if !value.are_pre_prepares_ordered().unwrap() {
@@ -135,7 +161,7 @@ impl<O> From<&Proof<O>> for ProtocolConsensusDecision<O> where O: Clone + Sessio
             let consensus_msg = (*pre_prepare.message()).clone();
 
             let reqs = match consensus_msg.into_consensus().into_kind() {
-                ConsensusMessageKind::PrePrepare(reqs) => { reqs }
+                ConsensusMessageKind::PrePrepare(reqs) => reqs,
                 _ => {
                     unreachable!()
                 }
@@ -148,10 +174,12 @@ impl<O> From<&Proof<O>> for ProtocolConsensusDecision<O> where O: Clone + Sessio
             }
         }
 
-        ProtocolConsensusDecision::new(value.seq_no(),
-                                       decided_batch,
-                                       client_rqs,
-                                       value.metadata().batch_digest())
+        ProtocolConsensusDecision::new(
+            value.seq_no(),
+            decided_batch,
+            client_rqs,
+            value.metadata().batch_digest(),
+        )
     }
 }
 

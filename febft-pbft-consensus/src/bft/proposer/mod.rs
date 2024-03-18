@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
-use std::sync::{Arc, MutexGuard};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -20,9 +20,13 @@ use atlas_metrics::metrics::{metric_duration, metric_increment, metric_store_cou
 use crate::bft::config::ProposerConfig;
 use crate::bft::consensus::ProposerConsensusGuard;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
-use crate::bft::metric::{CLIENT_POOL_BATCH_SIZE_ID, PROPOSER_BATCHES_MADE_ID, PROPOSER_LATENCY_ID, PROPOSER_PROPOSE_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUEST_TIME_ITERATIONS_ID, PROPOSER_REQUESTS_COLLECTED_ID};
-use crate::bft::PBFT;
+use crate::bft::metric::{
+    CLIENT_POOL_BATCH_SIZE_ID, PROPOSER_BATCHES_MADE_ID, PROPOSER_LATENCY_ID,
+    PROPOSER_PROPOSE_TIME_ID, PROPOSER_REQUESTS_COLLECTED_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID,
+    PROPOSER_REQUEST_TIME_ITERATIONS_ID,
+};
 use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
+use crate::bft::PBFT;
 
 use super::sync::{AbstractSynchronizer, Synchronizer};
 
@@ -34,7 +38,9 @@ pub type BatchType<R> = Vec<StoredMessage<R>>;
 ///as well as creating new batches and delivering them to the batch_channel
 ///Another thread will then take from this channel and propose the requests
 pub struct Proposer<RQ, NT>
-    where RQ: SerType, {
+where
+    RQ: SerType,
+{
     /// Channel for the reception of batches from the pre processing module
     batch_reception: BatchOutput<RQ>,
     /// Network Node
@@ -50,20 +56,28 @@ pub struct Proposer<RQ, NT>
     //Time limit for generating a batch with target_global_batch_size size
     global_batch_time_limit: u128,
     max_batch_size: usize,
-
 }
 
 const TIMEOUT: Duration = Duration::from_micros(10);
 const PRINT_INTERVAL: usize = 10000;
 
-struct ProposeBuilder<RQ> where RQ: SerType {
+struct ProposeBuilder<RQ>
+where
+    RQ: SerType,
+{
     currently_accumulated: Vec<StoredMessage<RQ>>,
     last_proposal: Instant,
 }
 
-impl<RQ> ProposeBuilder<RQ> where RQ: SerType {
+impl<RQ> ProposeBuilder<RQ>
+where
+    RQ: SerType,
+{
     pub fn new(target_size: usize) -> Self {
-        Self { currently_accumulated: Vec::with_capacity(target_size), last_proposal: Instant::now() }
+        Self {
+            currently_accumulated: Vec::with_capacity(target_size),
+            last_proposal: Instant::now(),
+        }
     }
 }
 
@@ -71,7 +85,8 @@ impl<RQ> ProposeBuilder<RQ> where RQ: SerType {
 const BATCH_CHANNEL_SIZE: usize = 128;
 
 impl<RQ, NT> Proposer<RQ, NT>
-    where RQ: SerType + SessionBased,
+where
+    RQ: SerType + SessionBased,
 {
     pub fn new(
         node: Arc<NT>,
@@ -82,7 +97,9 @@ impl<RQ, NT> Proposer<RQ, NT>
         proposer_config: ProposerConfig,
     ) -> Arc<Self> {
         let ProposerConfig {
-            target_batch_size, max_batch_size, batch_timeout
+            target_batch_size,
+            max_batch_size,
+            batch_timeout,
         } = proposer_config;
 
         Arc::new(Self {
@@ -100,8 +117,10 @@ impl<RQ, NT> Proposer<RQ, NT>
 
     ///Start this work
     pub fn start(self: Arc<Self>) -> JoinHandle<()>
-        where RQ: 'static,
-              NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static {
+    where
+        RQ: 'static,
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+    {
         std::thread::Builder::new()
             .name(format!("Proposer thread"))
             .spawn(move || {
@@ -223,10 +242,10 @@ impl<RQ, NT> Proposer<RQ, NT>
 
     /// attempt to propose the ordered requests that we have collected
     /// Returns true if a batch was proposed
-    fn propose_ordered(&self, is_leader: bool,
-                       propose: &mut ProposeBuilder<RQ>, ) -> bool
-        where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
-
+    fn propose_ordered(&self, is_leader: bool, propose: &mut ProposeBuilder<RQ>) -> bool
+    where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    {
         //Now let's deal with ordered requests
         if is_leader {
             let current_batch_size = propose.currently_accumulated.len();
@@ -247,10 +266,11 @@ impl<RQ, NT> Proposer<RQ, NT>
                     propose.last_proposal = Instant::now();
 
                     let next_batch = if propose.currently_accumulated.len() > self.max_batch_size {
-
                         //This now contains target_global_size requests. We want this to be our next batch
                         //Currently accumulated contains the remaining messages to be sent in the next batch
-                        let mut next_batch = propose.currently_accumulated.split_off(propose.currently_accumulated.len() - self.max_batch_size);
+                        let mut next_batch = propose
+                            .currently_accumulated
+                            .split_off(propose.currently_accumulated.len() - self.max_batch_size);
 
                         //So we swap that memory with the other vector memory and we have it!
                         std::mem::swap(&mut next_batch, &mut propose.currently_accumulated);
@@ -260,8 +280,10 @@ impl<RQ, NT> Proposer<RQ, NT>
                         None
                     };
 
-                    let current_batch = std::mem::replace(&mut propose.currently_accumulated,
-                                                          next_batch.unwrap_or_else(|| Vec::new()));
+                    let current_batch = std::mem::replace(
+                        &mut propose.currently_accumulated,
+                        next_batch.unwrap_or_else(|| Vec::new()),
+                    );
 
                     self.propose(seq, &view, current_batch);
 
@@ -282,11 +304,12 @@ impl<RQ, NT> Proposer<RQ, NT>
         seq: SeqNo,
         view: &ViewInfo,
         mut currently_accumulated: Vec<StoredMessage<RQ>>,
-    ) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
+    ) where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    {
         let has_pending_messages = self.consensus_guard.has_pending_view_change_reqs();
 
         let is_view_change_empty = {
-
             // Introduce a new scope for the view change lock
             let mut view_change_msg = if has_pending_messages {
                 Some(self.consensus_guard.last_view_change().lock().unwrap())
@@ -299,7 +322,11 @@ impl<RQ, NT> Proposer<RQ, NT>
                     // if it has been proposed, then we do not want to retain it
 
                     let info1 = ClientRqInfo::from(msg);
-                    debug!("{:?} // Request {:?} has already been proposed, not retaining it", info1, self.node_ref.id());
+                    debug!(
+                        "{:?} // Request {:?} has already been proposed, not retaining it",
+                        info1,
+                        self.node_ref.id()
+                    );
                     return false;
                 }
                 true
@@ -309,14 +336,23 @@ impl<RQ, NT> Proposer<RQ, NT>
         };
 
         if is_view_change_empty {
-            info!("{:?} // View change messages have been processed, clearing them", self.node_ref.id());
+            info!(
+                "{:?} // View change messages have been processed, clearing them",
+                self.node_ref.id()
+            );
             // The messages are clear, we no longer need to keep checking them
             self.consensus_guard.sync_messages_clear();
         }
 
         let targets = view.quorum_members().clone();
 
-        info!("{:?} // Proposing new batch with {} request count {:?} to quorum: {:?}", self.node_ref.id(), currently_accumulated.len(), seq, targets);
+        info!(
+            "{:?} // Proposing new batch with {} request count {:?} to quorum: {:?}",
+            self.node_ref.id(),
+            currently_accumulated.len(),
+            seq,
+            targets
+        );
 
         let message = PBFTMessage::Consensus(ConsensusMessage::new(
             seq,
@@ -336,17 +372,22 @@ impl<RQ, NT> Proposer<RQ, NT>
     /// Check if the given request has already appeared in a view change message
     /// Returns true if it has been seen previously (should not be proposed)
     /// Returns false if not
-    fn check_if_has_been_proposed(&self, req: &StoredMessage<RQ>, mutex_guard: &mut Option<MutexGuard<Option<BTreeMap<NodeId, BTreeMap<SeqNo, SeqNo>>>>>) -> bool {
+    fn check_if_has_been_proposed(
+        &self,
+        req: &StoredMessage<RQ>,
+        mutex_guard: &mut Option<MutexGuard<Option<BTreeMap<NodeId, BTreeMap<SeqNo, SeqNo>>>>>,
+    ) -> bool {
         if let Some(mutex_guard) = mutex_guard {
             if let Some(seen_rqs) = (*mutex_guard).as_mut() {
                 let result = if seen_rqs.contains_key(&req.header().from()) {
-
                     // Check if we have the corresponding session id in the map get the corresponding seq no, and check if the req.message().sequence_number() is smaller or equal to it
                     //If so, we remove the value from the map and return true
                     let (result, should_remove) = {
                         let session_map = seen_rqs.get_mut(&req.header().from()).unwrap();
 
-                        let res = if let Some(seq_no) = session_map.get(&req.message().session_number()).cloned() {
+                        let res = if let Some(seq_no) =
+                            session_map.get(&req.message().session_number()).cloned()
+                        {
                             if req.message().sequence_number() > seq_no {
                                 // We have now seen a more recent sequence number for that session, so a previous
                                 // Operation will never be passed along again (due to the request pre processor)

@@ -4,10 +4,7 @@
 use std::fmt::{Debug, Formatter};
 use std::io::Write;
 
-use futures::io::{
-    AsyncWrite,
-    AsyncWriteExt,
-};
+use futures::io::{AsyncWrite, AsyncWriteExt};
 use getset::Getters;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
@@ -19,8 +16,8 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_communication::message::{Header, StoredMessage};
 
 use crate::bft::log::decisions::CollectData;
-use crate::bft::sync::LeaderCollects;
 use crate::bft::sync::view::ViewInfo;
+use crate::bft::sync::LeaderCollects;
 
 pub mod serialize;
 
@@ -55,15 +52,9 @@ impl<R> Debug for PBFTMessage<R> {
 impl<R> Orderable for PBFTMessage<R> {
     fn sequence_number(&self) -> SeqNo {
         match self {
-            PBFTMessage::Consensus(consensus) => {
-                consensus.sequence_number()
-            }
-            PBFTMessage::ViewChange(view) => {
-                view.sequence_number()
-            }
-            PBFTMessage::ObserverMessage(obs) => {
-                SeqNo::ZERO
-            }
+            PBFTMessage::Consensus(consensus) => consensus.sequence_number(),
+            PBFTMessage::ViewChange(view) => view.sequence_number(),
+            PBFTMessage::ObserverMessage(obs) => SeqNo::ZERO,
         }
     }
 }
@@ -153,9 +144,7 @@ impl<O> ViewChangeMessage<O> {
     pub fn take_collects(self) -> Option<LeaderCollects<O>> {
         match self.kind {
             ViewChangeMessageKind::Sync(collects) => Some(collects),
-            _ => {
-                None
-            }
+            _ => None,
         }
     }
 }
@@ -231,18 +220,17 @@ impl<O> Orderable for ConsensusMessage<O> {
     }
 }
 
-impl<O> Clone for ConsensusMessageKind<O> where O: Clone {
+impl<O> Clone for ConsensusMessageKind<O>
+where
+    O: Clone,
+{
     fn clone(&self) -> Self {
         match self {
             ConsensusMessageKind::PrePrepare(reqs) => {
                 ConsensusMessageKind::PrePrepare(reqs.clone())
             }
-            ConsensusMessageKind::Prepare(digest) => {
-                ConsensusMessageKind::Prepare(*digest)
-            }
-            ConsensusMessageKind::Commit(digest) => {
-                ConsensusMessageKind::Commit(*digest)
-            }
+            ConsensusMessageKind::Prepare(digest) => ConsensusMessageKind::Prepare(*digest),
+            ConsensusMessageKind::Commit(digest) => ConsensusMessageKind::Commit(*digest),
         }
     }
 }
@@ -284,10 +272,7 @@ impl<O> ConsensusMessage<O> {
     /// Takes the proposed client requests embedded in this consensus message,
     /// if they are available.
     pub fn take_proposed_requests(&mut self) -> Option<Vec<StoredMessage<O>>> {
-        let kind = std::mem::replace(
-            &mut self.kind,
-            ConsensusMessageKind::PrePrepare(Vec::new()),
-        );
+        let kind = std::mem::replace(&mut self.kind, ConsensusMessageKind::PrePrepare(Vec::new()));
         match kind {
             ConsensusMessageKind::PrePrepare(v) => Some(v),
             _ => {
@@ -355,13 +340,13 @@ pub enum ObserveEventKind {
     Ready(SeqNo),
     ///Report that the given replica has received a preprepare request
     ///And it's now going to enter into it's prepare phase
-    /// 
+    ///
     ///  param is the seq no of the received preprepare request, and therefore
     /// of the current consensus instance
     Prepare(SeqNo),
     ///Report that the given replica has received all required prepare messages
     ///And is now going to enter consensus phase
-    /// 
+    ///
     /// param is the seq no of the current consensus instance
     Commit(SeqNo),
     ///Report that the given replica has received all required commit messages
@@ -435,7 +420,7 @@ impl<O> Debug for ViewChangeMessageKind<O> {
             ViewChangeMessageKind::Sync(_) => {
                 write!(f, "Sync message")
             }
-            ViewChangeMessageKind::StopQuorumJoin(node ) => {
+            ViewChangeMessageKind::StopQuorumJoin(node) => {
                 write!(f, "Stop quorum join message {:?}", node)
             }
         }

@@ -5,12 +5,12 @@ use std::time::Instant;
 use thiserror::Error;
 
 use atlas_common::crypto::hash::{Context, Digest};
-use atlas_common::Err;
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_common::Err;
 use atlas_communication::message::StoredMessage;
-use atlas_core::messages::{ClientRqInfo};
+use atlas_core::messages::ClientRqInfo;
 use atlas_core::ordering_protocol::networking::serialize::NetworkView;
 use atlas_core::ordering_protocol::ShareableMessage;
 use atlas_metrics::benchmarks::BatchMeta;
@@ -107,7 +107,11 @@ impl<O> MessageLog<O> {
         }
     }
 
-    pub fn insert_pre_prepare(&mut self, index: usize, pre_prepare: ShareableMessage<PBFTMessage<O>>) {
+    pub fn insert_pre_prepare(
+        &mut self,
+        index: usize,
+        pre_prepare: ShareableMessage<PBFTMessage<O>>,
+    ) {
         let _ = self.pre_prepare.get_mut(index).unwrap().insert(pre_prepare);
     }
 
@@ -121,14 +125,21 @@ impl<O> MessageLog<O> {
 
     pub fn finalize(self) -> FinishedMessageLog<O> {
         FinishedMessageLog {
-            pre_prepares: self.pre_prepare.into_iter().map(|opt| opt.unwrap()).collect(),
+            pre_prepares: self
+                .pre_prepare
+                .into_iter()
+                .map(|opt| opt.unwrap())
+                .collect(),
             prepares: self.prepares,
             commits: self.commits,
         }
     }
 }
 
-impl<O> WorkingDecisionLog<O> where O: Clone {
+impl<O> WorkingDecisionLog<O>
+where
+    O: Clone,
+{
     pub fn new(node: NodeId, seq: SeqNo, view: &ViewInfo) -> Self {
         let leader_count = view.leader_set().len();
         Self {
@@ -153,29 +164,35 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
         self.request_space_slices = view.hash_space_division().clone();
     }
 
-    pub fn process_pre_prepare(&mut self,
-                               s_message: ShareableMessage<PBFTMessage<O>>,
-                               digest: Digest,
-                               mut batch_rq_digests: Vec<ClientRqInfo>) -> Result<Option<ProofMetadata>> {
+    pub fn process_pre_prepare(
+        &mut self,
+        s_message: ShareableMessage<PBFTMessage<O>>,
+        digest: Digest,
+        mut batch_rq_digests: Vec<ClientRqInfo>,
+    ) -> Result<Option<ProofMetadata>> {
         let (header, message) = (s_message.header(), s_message.message().consensus());
 
         let start = Instant::now();
 
         let sending_leader = header.from();
 
-        let slice = self.request_space_slices.get(&sending_leader)
-            .ok_or(DecidingLogError::FailedToGetLeadersRequestSpace(sending_leader))?;
+        let slice = self.request_space_slices.get(&sending_leader).ok_or(
+            DecidingLogError::FailedToGetLeadersRequestSpace(sending_leader),
+        )?;
 
         if sending_leader != self.node_id {
             // Only check batches from other leaders since we implicitly trust in ourselves
             for request in &batch_rq_digests {
                 if !crate::bft::sync::view::is_request_in_hash_space(&request.digest(), slice) {
-                    return Err!(DecidingLogError::BatchContainsRequestsNotInLeaderAddrSpace(sending_leader));
+                    return Err!(DecidingLogError::BatchContainsRequestsNotInLeaderAddrSpace(
+                        sending_leader
+                    ));
                 }
             }
         }
 
-        self.duplicate_detection.insert_pre_prepare_received(sending_leader)?;
+        self.duplicate_detection
+            .insert_pre_prepare_received(sending_leader)?;
 
         // Get the correct index for this batch
         let leader_index = pre_prepare_index_of(&self.leader_set, &sending_leader)?;
@@ -186,10 +203,8 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
 
         self.pre_prepare_digests[leader_index] = Some(digest);
         self.contained_requests[leader_index] = Some(match message.kind() {
-            ConsensusMessageKind::PrePrepare(requests) => {
-                requests.clone()
-            }
-            _ => unreachable!()
+            ConsensusMessageKind::PrePrepare(requests) => requests.clone(),
+            _ => unreachable!(),
         });
 
         self.current_received_pre_prepares += 1;
@@ -203,35 +218,47 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
         metric_duration(PRE_PREPARE_LOG_ANALYSIS_ID, start.elapsed());
 
         // if we have received all of the messages in the set, calculate the digest.
-        Ok(if self.current_received_pre_prepares == self.leader_set.len() {
-            // We have received all of the required batches
-            let result = self.calculate_instance_digest();
+        Ok(
+            if self.current_received_pre_prepares == self.leader_set.len() {
+                // We have received all of the required batches
+                let result = self.calculate_instance_digest();
 
-            let (digest, ordering) = result
-                .ok_or(DecidingLogError::FailedToCalculateDigest(self.seq_no))?;
+                let (digest, ordering) =
+                    result.ok_or(DecidingLogError::FailedToCalculateDigest(self.seq_no))?;
 
-            self.batch_digest = Some(digest.clone());
+                self.batch_digest = Some(digest.clone());
 
-            Some(ProofMetadata::new(self.seq_no, digest, ordering, self.current_batch_size))
-        } else {
-            None
-        })
+                Some(ProofMetadata::new(
+                    self.seq_no,
+                    digest,
+                    ordering,
+                    self.current_batch_size,
+                ))
+            } else {
+                None
+            },
+        )
     }
 
     /// Process the message received
-    pub(crate) fn process_message(&mut self, s_message: ShareableMessage<PBFTMessage<O>>) -> Result<()> {
+    pub(crate) fn process_message(
+        &mut self,
+        s_message: ShareableMessage<PBFTMessage<O>>,
+    ) -> Result<()> {
         let (header, message) = (s_message.header(), s_message.message().consensus());
 
         match message.kind() {
             ConsensusMessageKind::Prepare(_) => {
-                self.duplicate_detection.insert_prepare_received(header.from())?;
+                self.duplicate_detection
+                    .insert_prepare_received(header.from())?;
                 self.message_log.insert_prepare(s_message);
             }
             ConsensusMessageKind::Commit(_) => {
-                self.duplicate_detection.insert_commit_received(header.from())?;
+                self.duplicate_detection
+                    .insert_commit_received(header.from())?;
                 self.message_log.insert_commit(s_message);
             }
-            _ => unreachable!()
+            _ => unreachable!(),
         }
 
         Ok(())
@@ -248,7 +275,9 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
     }
 
     /// Get the current batch size in this consensus decision
-    pub fn current_batch_size(&self) -> usize { self.current_batch_size }
+    pub fn current_batch_size(&self) -> usize {
+        self.current_batch_size
+    }
 
     /// Calculate the instance of a completed consensus pre prepare phase with
     /// all the batches received
@@ -307,7 +336,10 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
                         ConsensusMessageKind::Prepare(d) => d.clone(),
                         _ => unreachable!(),
                     };
-                    break 'outer Some(ViewDecisionPair(stored.message().consensus().view(), digest));
+                    break 'outer Some(ViewDecisionPair(
+                        stored.message().consensus().view(),
+                        digest,
+                    ));
                 }
             }
 
@@ -325,7 +357,11 @@ impl<O> WorkingDecisionLog<O> where O: Clone {
 
         let current_digest = self.batch_digest?;
 
-        let pre_prepare_ordering = self.pre_prepare_digests.into_iter().map(|elem| elem.unwrap()).collect();
+        let pre_prepare_ordering = self
+            .pre_prepare_digests
+            .into_iter()
+            .map(|elem| elem.unwrap())
+            .collect();
 
         let mut requests = Vec::with_capacity(self.current_batch_size);
 
@@ -352,9 +388,15 @@ impl<O> Orderable for CompletedBatch<O> {
 }
 
 impl<O> CompletedBatch<O> {
-    pub fn new(seq: SeqNo, digest: Digest, pre_prepare_ordering: Vec<Digest>,
-               contained_messages: FinishedMessageLog<O>, client_request_info: Vec<ClientRqInfo>,
-               client_requests: Vec<StoredMessage<O>>, batch_meta: BatchMeta) -> Self {
+    pub fn new(
+        seq: SeqNo,
+        digest: Digest,
+        pre_prepare_ordering: Vec<Digest>,
+        contained_messages: FinishedMessageLog<O>,
+        client_request_info: Vec<ClientRqInfo>,
+        client_requests: Vec<StoredMessage<O>>,
+        batch_meta: BatchMeta,
+    ) -> Self {
         Self {
             seq,
             digest,
@@ -401,37 +443,56 @@ impl DuplicateReplicaEvaluator {
     }
 }
 
-
-pub fn pre_prepare_index_from_digest_opt(prepare_set: &Vec<Option<Digest>>, digest: &Digest) -> Result<usize> {
-    match prepare_set.iter().position(|pre_prepare| pre_prepare.map(|d| d == *digest).unwrap_or(false)) {
+pub fn pre_prepare_index_from_digest_opt(
+    prepare_set: &Vec<Option<Digest>>,
+    digest: &Digest,
+) -> Result<usize> {
+    match prepare_set
+        .iter()
+        .position(|pre_prepare| pre_prepare.map(|d| d == *digest).unwrap_or(false))
+    {
         None => {
-            Err!(DecidingLogError::PrePrepareNotPartOfSet(digest.clone(), prepare_set.iter().cloned().filter(Option::is_some).map(|r| r.unwrap()).collect()))
+            Err!(DecidingLogError::PrePrepareNotPartOfSet(
+                digest.clone(),
+                prepare_set
+                    .iter()
+                    .cloned()
+                    .filter(Option::is_some)
+                    .map(|r| r.unwrap())
+                    .collect()
+            ))
         }
-        Some(pos) => {
-            Ok(pos)
-        }
+        Some(pos) => Ok(pos),
     }
 }
 
-pub fn pre_prepare_index_of_from_digest(prepare_set: &Vec<Digest>, preprepare: &Digest) -> Result<usize> {
-    match prepare_set.iter().position(|pre_prepare| *pre_prepare == *preprepare) {
+pub fn pre_prepare_index_of_from_digest(
+    prepare_set: &Vec<Digest>,
+    preprepare: &Digest,
+) -> Result<usize> {
+    match prepare_set
+        .iter()
+        .position(|pre_prepare| *pre_prepare == *preprepare)
+    {
         None => {
-            Err!(DecidingLogError::PrePrepareNotPartOfSet(preprepare.clone(), prepare_set.clone()))
+            Err!(DecidingLogError::PrePrepareNotPartOfSet(
+                preprepare.clone(),
+                prepare_set.clone()
+            ))
         }
-        Some(pos) => {
-            Ok(pos)
-        }
+        Some(pos) => Ok(pos),
     }
 }
 
 pub fn pre_prepare_index_of(leader_set: &Vec<NodeId>, proposer: &NodeId) -> Result<usize> {
     match leader_set.iter().position(|node| *node == *proposer) {
         None => {
-            Err!(DecidingLogError::ProposerNotInLeaderSet(proposer.clone(), leader_set.clone()))
+            Err!(DecidingLogError::ProposerNotInLeaderSet(
+                proposer.clone(),
+                leader_set.clone()
+            ))
         }
-        Some(pos) => {
-            Ok(pos)
-        }
+        Some(pos) => Ok(pos),
     }
 }
 

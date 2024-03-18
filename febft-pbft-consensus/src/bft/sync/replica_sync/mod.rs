@@ -23,10 +23,14 @@ use atlas_metrics::metrics::{metric_duration, metric_increment};
 use crate::bft::consensus::Consensus;
 use crate::bft::log::decisions::CollectData;
 use crate::bft::log::Log;
-use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind};
-use crate::bft::metric::{SYNC_BATCH_RECEIVED_ID, SYNC_STOPPED_COUNT_ID, SYNC_STOPPED_REQUESTS_ID, SYNC_WATCH_REQUESTS_ID};
-use crate::bft::PBFT;
+use crate::bft::message::{
+    ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessage, ViewChangeMessageKind,
+};
+use crate::bft::metric::{
+    SYNC_BATCH_RECEIVED_ID, SYNC_STOPPED_COUNT_ID, SYNC_STOPPED_REQUESTS_ID, SYNC_WATCH_REQUESTS_ID,
+};
 use crate::bft::sync::view::ViewInfo;
+use crate::bft::PBFT;
 
 use super::{AbstractSynchronizer, Synchronizer, SynchronizerStatus};
 
@@ -37,7 +41,7 @@ use super::{AbstractSynchronizer, Synchronizer, SynchronizerStatus};
 
 pub struct ReplicaSynchronizer<RQ: SerType> {
     timeout_dur: Cell<Duration>,
-    _phantom: PhantomData<fn () -> RQ>,
+    _phantom: PhantomData<fn() -> RQ>,
 }
 
 impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
@@ -64,7 +68,9 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         pre_processor: &RequestPreProcessor<RQ>,
         timeouts: &Timeouts,
         node: &NT,
-    ) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>>{
+    ) where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
         // - add requests from STOP into client requests
@@ -75,7 +81,9 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         self.take_stopped_requests_and_register_them(base_sync, pre_processor, timeouts);
         self.watch_all_requests(timeouts);
 
-        let view_info = base_sync.next_view().expect("We should have a next view if we are at this point");
+        let view_info = base_sync
+            .next_view()
+            .expect("We should have a next view if we are at this point");
 
         let current_view_seq = view_info.sequence_number();
         let current_leader = view_info.leader();
@@ -86,8 +94,11 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
 
         let collect = CollectData::new(incomplete_proof, last_proof);
 
-        debug!("{:?} // Sending STOP-DATA message collect data {:?}",
-            node.id(), collect);
+        debug!(
+            "{:?} // Sending STOP-DATA message collect data {:?}",
+            node.id(),
+            collect
+        );
 
         let message = PBFTMessage::ViewChange(ViewChangeMessage::new(
             current_view_seq,
@@ -106,7 +117,9 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         timeouts: &Timeouts,
         node: &NT,
         timed_out: Option<Vec<StoredMessage<RQ>>>,
-    ) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
+    ) where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    {
         // stop all timers
         self.unwatch_all_requests(timeouts);
 
@@ -118,8 +131,12 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
 
         //TODO: Timeout this request and keep sending it until we have achieved a new regency
 
-        info!("{:?} // Beginning a view change from view {:?} to next view with stopped rqs {:?}",
-            node.id(), current_view, requests.len());
+        info!(
+            "{:?} // Beginning a view change from view {:?} to next view with stopped rqs {:?}",
+            node.id(),
+            current_view,
+            requests.len()
+        );
 
         let message = PBFTMessage::ViewChange(ViewChangeMessage::new(
             current_view.sequence_number().next(),
@@ -137,10 +154,16 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         timeouts: &Timeouts,
         node: &NT,
         join_cert: NodeId,
-    ) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
+    ) where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    {
         let current_view = base_sync.view();
 
-        info!("{:?} // Beginning a quorum view change to next view with new node: {:?}", node.id(), join_cert);
+        info!(
+            "{:?} // Beginning a quorum view change to next view with new node: {:?}",
+            node.id(),
+            join_cert
+        );
 
         let message = ViewChangeMessageKind::StopQuorumJoin(join_cert);
 
@@ -152,17 +175,10 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
     }
 
     /// Watch a vector of requests received
-    pub fn watch_received_requests(
-        &self,
-        requests: Vec<ClientRqInfo>,
-        timeouts: &Timeouts,
-    ) {
+    pub fn watch_received_requests(&self, requests: Vec<ClientRqInfo>, timeouts: &Timeouts) {
         let start_time = Instant::now();
 
-        timeouts.timeout_client_requests(
-            self.timeout_dur.get(),
-            requests,
-        );
+        timeouts.timeout_client_requests(self.timeout_dur.get(), requests);
 
         metric_duration(SYNC_WATCH_REQUESTS_ID, start_time.elapsed());
     }
@@ -179,7 +195,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         let start_time = Instant::now();
 
         let requests = match pre_prepare.kind() {
-            ConsensusMessageKind::PrePrepare(req) => { req }
+            ConsensusMessageKind::PrePrepare(req) => req,
             _ => {
                 error!("Cannot receive a request that is not a PrePrepare");
 
@@ -216,9 +232,12 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
     }
 
     /// Register all of the requests that are missing from the view change
-    fn take_stopped_requests_and_register_them(&self, base_sync: &Synchronizer<RQ>,
-                                               pre_processor: &RequestPreProcessor<RQ>,
-                                               timeouts: &Timeouts) {
+    fn take_stopped_requests_and_register_them(
+        &self,
+        base_sync: &Synchronizer<RQ>,
+        pre_processor: &RequestPreProcessor<RQ>,
+        timeouts: &Timeouts,
+    ) {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
 
@@ -226,18 +245,18 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
 
         let requests = self.drain_stopped_request(base_sync);
 
-        let rq_info = requests.iter().map(|rq| {
-            ClientRqInfo::from(rq)
-        }).collect();
+        let rq_info = requests.iter().map(|rq| ClientRqInfo::from(rq)).collect();
 
         let count = requests.len();
 
         // Register the requests with the pre-processor
-        pre_processor.send_return(PreProcessorMessage::StoppedRequests(requests)).unwrap();
+        pre_processor
+            .send_return(PreProcessorMessage::StoppedRequests(requests))
+            .unwrap();
 
         timeouts.timeout_client_requests(self.timeout_dur.get(), rq_info);
 
-        debug!("Registering {} stopped requests",count);
+        debug!("Registering {} stopped requests", count);
 
         metric_increment(SYNC_STOPPED_COUNT_ID, Some(count as u64));
         metric_duration(SYNC_STOPPED_REQUESTS_ID, start_time.elapsed());
@@ -264,7 +283,6 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         my_id: NodeId,
         timed_out_rqs: &Vec<RqTimeout>,
     ) -> SynchronizerStatus<RQ> {
-
         //// iterate over list of watched pending requests,
         //// and select the ones to be stopped or forwarded
         //// to peer nodes
@@ -279,9 +297,11 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         // - on the second timeout, we start a view change by
         //   broadcasting a STOP message
 
-        info!("{:?} // Received {} timeouts from the timeout layer",
+        info!(
+            "{:?} // Received {} timeouts from the timeout layer",
             my_id,
-            timed_out_rqs.len());
+            timed_out_rqs.len()
+        );
 
         for timed_out_rq in timed_out_rqs {
             match timed_out_rq.timeout_phase() {
@@ -289,10 +309,10 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
                     let timeout = timed_out_rq.timeout_kind();
 
                     let rq_info = match timeout {
-                        TimeoutKind::ClientRequestTimeout(rq) => {
-                            rq
-                        }
-                        _ => unreachable!("Only client requests should be timed out at the synchronizer")
+                        TimeoutKind::ClientRequestTimeout(rq) => rq,
+                        _ => unreachable!(
+                            "Only client requests should be timed out at the synchronizer"
+                        ),
                     };
 
                     if *id == 0 {
@@ -306,7 +326,10 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         }
 
         if forwarded.is_empty() && stopped.is_empty() {
-            debug!("{:?} // Forwarded and stopped requests are empty? What", my_id);
+            debug!(
+                "{:?} // Forwarded and stopped requests are empty? What",
+                my_id
+            );
             return SynchronizerStatus::Nil;
         }
 
@@ -322,7 +345,12 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
             }
         }
 
-        info!("{:?} // Replying requests time out forwarded {}, stopped {}", my_id, forwarded.len(), stopped.len());
+        info!(
+            "{:?} // Replying requests time out forwarded {}, stopped {}",
+            my_id,
+            forwarded.len(),
+            stopped.len()
+        );
 
         debug!("{:?} // Stopped requests: {:?}", my_id, stopped);
 
@@ -331,7 +359,6 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         SynchronizerStatus::RequestsTimedOut { forwarded, stopped }
     }
 
-
     /// Forward the requests that timed out, `timed_out`, to all the nodes in the
     /// current view.
     pub fn forward_requests<NT>(
@@ -339,7 +366,9 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         base_sync: &Synchronizer<RQ>,
         timed_out: Vec<StoredMessage<RQ>>,
         node: &NT,
-    ) where NT: OrderProtocolSendNode<RQ, PBFT<RQ>> {
+    ) where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    {
         let message = ForwardedRequestsMessage::new(timed_out);
         let view = base_sync.view();
 
@@ -386,7 +415,6 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         base_sync: &Synchronizer<RQ>,
         requests: Option<Vec<StoredMessage<RQ>>>,
     ) -> Vec<ClientRqInfo> {
-
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
         let mut all_reqs = collections::hash_set();
 
@@ -411,7 +439,6 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
 
     /// Drain our current received stopped messages
     fn drain_stopped_request(&self, base_sync: &Synchronizer<RQ>) -> Vec<StoredMessage<RQ>> {
-
         // Use a hashmap so we are sure we don't send any repeat requests in our stop messages
         let mut all_reqs = collections::hash_map();
 
