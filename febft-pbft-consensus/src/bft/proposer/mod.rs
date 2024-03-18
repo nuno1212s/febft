@@ -360,7 +360,7 @@ where
             ConsensusMessageKind::PrePrepare(currently_accumulated),
         ));
 
-        self.node_ref.broadcast_signed(message, targets.into_iter());
+        let _ = self.node_ref.broadcast_signed(message, targets.into_iter());
 
         metric_increment(PROPOSER_BATCHES_MADE_ID, Some(1));
     }

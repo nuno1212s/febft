@@ -2089,7 +2089,7 @@ fn quorum_highest<O>(
     let appears = normalized_collects
         .iter()
         .filter_map(Option::as_ref)
-        .position(|collect| {
+        .any(|collect| {
             collect
                 .incomplete_proof()
                 .quorum_prepares()
@@ -2097,8 +2097,7 @@ fn quorum_highest<O>(
                     *other_ts == ts && other_value == value
                 })
                 .unwrap_or(false)
-        })
-        .is_some();
+        });
 
     let count = normalized_collects
         .iter()

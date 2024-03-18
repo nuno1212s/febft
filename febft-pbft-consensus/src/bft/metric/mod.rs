@@ -57,8 +57,8 @@ pub const PRE_PREPARE_ANALYSIS_ID: usize = 115;
 pub const PRE_PREPARE_LOG_ANALYSIS: &str = "PRE_PREPARE_LOG_ANALYSIS";
 pub const PRE_PREPARE_LOG_ANALYSIS_ID: usize = 116;
 
-pub const OPERATIONS_PROCESSED: &str = "OPS_PER_SECOND";
-pub const OPERATIONS_PROCESSED_ID: usize = 117;
+pub const OPERATIONS_ORDERED: &str = "OPERATIONS_ORDERED";
+pub const OPERATIONS_ORDERED_ID: usize = 117;
 
 pub const CONSENSUS_INSTALL_STATE_TIME: &str = "CONSENSUS_INSTALL_STATE_TIME";
 pub const CONSENSUS_INSTALL_STATE_TIME_ID: usize = 118;
@@ -189,8 +189,8 @@ pub fn metrics() -> Vec<MetricRegistry> {
         )
             .into(),
         (
-            OPERATIONS_PROCESSED_ID,
-            OPERATIONS_PROCESSED.to_string(),
+            OPERATIONS_ORDERED_ID,
+            OPERATIONS_ORDERED.to_string(),
             MetricKind::Counter,
         )
             .into(),

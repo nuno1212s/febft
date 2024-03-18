@@ -160,7 +160,7 @@ impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
             speculative_commits
                 .iter()
                 .take(1)
-                .for_each(|(id, stored)| {
+                .for_each(|(_id, _stored)| {
                     debug!("{:?} // Broadcasting speculative commit message (total of {} messages) to {} targets",
                      node_id, speculative_commits.len(), view.params().n());
                 });

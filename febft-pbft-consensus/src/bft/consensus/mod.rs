@@ -30,7 +30,7 @@ use crate::bft::log::deciding::CompletedBatch;
 use crate::bft::log::decisions::{IncompleteProof, Proof, ProofMetadata};
 use crate::bft::log::Log;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
-use crate::bft::metric::OPERATIONS_PROCESSED_ID;
+use crate::bft::metric::OPERATIONS_ORDERED_ID;
 use crate::bft::sync::view::ViewInfo;
 use crate::bft::sync::Synchronizer;
 use crate::bft::{OPDecision, SysMsg, PBFT};
@@ -529,7 +529,7 @@ where
             batch.request_count()
         );
 
-        metric_increment(OPERATIONS_PROCESSED_ID, Some(batch.request_count() as u64));
+        metric_increment(OPERATIONS_ORDERED_ID, Some(batch.request_count() as u64));
 
         Ok(Some(batch))
     }
