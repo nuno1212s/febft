@@ -120,11 +120,11 @@ impl<O> TboQueue<O> {
         self.curr_seq = self.curr_seq.next();
 
         let pre_prepares = tbo_advance_message_queue_return(&mut self.pre_prepares)
-            .unwrap_or_else(VecDeque::new);
+            .unwrap_or_default();
         let prepares =
-            tbo_advance_message_queue_return(&mut self.prepares).unwrap_or_else(VecDeque::new);
+            tbo_advance_message_queue_return(&mut self.prepares).unwrap_or_default();
         let commits =
-            tbo_advance_message_queue_return(&mut self.commits).unwrap_or_else(VecDeque::new);
+            tbo_advance_message_queue_return(&mut self.commits).unwrap_or_default();
 
         MessageQueue::from_messages(pre_prepares, prepares, commits)
     }
