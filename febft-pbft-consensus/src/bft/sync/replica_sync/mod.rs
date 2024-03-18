@@ -105,7 +105,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
             ViewChangeMessageKind::StopData(collect),
         ));
 
-        node.send_signed(message, current_leader, true);
+        let _ = node.send_signed(message, current_leader, true);
     }
 
     /// Start a new view change
@@ -145,7 +145,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
 
         let targets = current_view.quorum_members().clone();
 
-        node.broadcast_signed(message, targets.into_iter());
+        let _ = node.broadcast_signed(message, targets.into_iter());
     }
 
     pub(super) fn handle_begin_quorum_view_change<NT>(
@@ -171,7 +171,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
 
         let message = PBFTMessage::ViewChange(message);
 
-        node.broadcast_signed(message, current_view.quorum_members().clone().into_iter());
+        let _ = node.broadcast_signed(message, current_view.quorum_members().clone().into_iter());
     }
 
     /// Watch a vector of requests received
@@ -374,7 +374,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
 
         let targets = view.quorum_members().clone();
 
-        node.forward_requests(message, targets.into_iter());
+        let _ = node.forward_requests(message, targets.into_iter());
     }
 
     /// Obtain the requests that we know have timed out so we can send out a stop message

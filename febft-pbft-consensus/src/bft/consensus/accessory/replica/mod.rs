@@ -22,15 +22,15 @@ use crate::bft::sync::view::ViewInfo;
 use crate::bft::{SysMsg, PBFT};
 
 pub struct ReplicaAccessory<RQ>
-where
-    RQ: SerType,
+    where
+        RQ: SerType,
 {
     speculative_commits: Arc<Mutex<BTreeMap<NodeId, StoredSerializedMessage<SysMsg<RQ>>>>>,
 }
 
 impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
-where
-    RQ: SerType + 'static,
+    where
+        RQ: SerType + 'static,
 {
     fn handle_partial_pre_prepare<NT>(
         &mut self,
@@ -41,8 +41,7 @@ where
         _node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
-    {
-    }
+    {}
 
     fn handle_pre_prepare_phase_completed<NT>(
         &mut self,
@@ -95,7 +94,7 @@ where
                     Some(digest),
                     Some(&*key_pair),
                 )
-                .into_inner();
+                    .into_inner();
 
                 // store serialized header + message
                 let serialized = SerializedMessage::new(message.clone(), buf.clone());
@@ -127,7 +126,7 @@ where
             ConsensusMessageKind::Prepare(current_digest),
         ));
 
-        node.broadcast_signed(message, targets.into_iter());
+        let _ = node.broadcast_signed(message, targets.into_iter());
     }
 
     fn handle_preparing_no_quorum<NT>(
@@ -139,8 +138,7 @@ where
         _node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
-    {
-    }
+    {}
 
     fn handle_preparing_quorum<NT>(
         &mut self,
@@ -159,13 +157,15 @@ where
         let speculative_commits = self.take_speculative_commits();
 
         if valid_spec_commits::<RQ>(&speculative_commits, node_id, seq, view) {
-            for (_, _msg) in speculative_commits.iter() {
-                debug!("{:?} // Broadcasting speculative commit message (total of {} messages) to {} targets",
+            speculative_commits
+                .iter()
+                .take(1)
+                .for_each(|(id, stored)| {
+                    debug!("{:?} // Broadcasting speculative commit message (total of {} messages) to {} targets",
                      node_id, speculative_commits.len(), view.params().n());
-                break;
-            }
+                });
 
-            node.broadcast_serialized(speculative_commits);
+            let _ = node.broadcast_serialized(speculative_commits);
         } else {
             let message = PBFTMessage::Consensus(ConsensusMessage::new(
                 seq,
@@ -180,7 +180,7 @@ where
 
             let targets = view.quorum_members().clone();
 
-            node.broadcast_signed(message, targets.into_iter());
+            let _ = node.broadcast_signed(message, targets.into_iter());
         }
 
         debug!(
@@ -201,8 +201,7 @@ where
         _node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
-    {
-    }
+    {}
 
     fn handle_committing_quorum<NT>(
         &mut self,
@@ -213,22 +212,21 @@ where
         _node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
-    {
-    }
+    {}
 }
 
 impl<RQ> Default for ReplicaAccessory<RQ>
-where
-    RQ: SerType,
- {
+    where
+        RQ: SerType,
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl<RQ> ReplicaAccessory<RQ>
-where
-    RQ: SerType,
+    where
+        RQ: SerType,
 {
     pub fn new() -> Self {
         Self {
@@ -249,8 +247,8 @@ fn valid_spec_commits<RQ>(
     seq_no: SeqNo,
     view: &ViewInfo,
 ) -> bool
-where
-    RQ: SerType,
+    where
+        RQ: SerType,
 {
     let len = speculative_commits.len();
 

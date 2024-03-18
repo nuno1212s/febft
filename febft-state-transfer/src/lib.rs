@@ -1,16 +1,16 @@
-#![feature(inherent_associated_types)]
 
-use anyhow::anyhow;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::anyhow;
 use log::{debug, error, info, warn};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use atlas_common::{collections, Err};
 use atlas_common::channel::ChannelSyncTx;
 use atlas_common::collections::HashMap;
 use atlas_common::crypto::hash::Digest;
@@ -18,28 +18,25 @@ use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_common::{collections, Err};
 use atlas_communication::message::{Header, StoredMessage};
-use atlas_core::ordering_protocol::networking::serialize::NetworkView;
 use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol};
+use atlas_core::ordering_protocol::networking::serialize::NetworkView;
 use atlas_core::persistent_log::{OperationMode, PersistableStateTransferProtocol};
 use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
 use atlas_metrics::metrics::metric_duration;
-
-
 use atlas_smr_application::state::monolithic_state::{InstallStateMessage, MonolithicState};
 use atlas_smr_core::persistent_log::MonolithicStateLog;
+use atlas_smr_core::state_transfer::{
+    Checkpoint, CstM, StateTransferProtocol, STPollResult, STResult, STTimeoutResult,
+};
 use atlas_smr_core::state_transfer::monolithic_state::{
     MonolithicStateTransfer, MonolithicStateTransferInitializer,
 };
 use atlas_smr_core::state_transfer::networking::StateTransferSendNode;
-use atlas_smr_core::state_transfer::{
-    Checkpoint, CstM, STPollResult, STResult, STTimeoutResult, StateTransferProtocol,
-};
 
 use crate::config::StateTransferConfig;
-use crate::message::serialize::CSTMsg;
 use crate::message::{CstMessage, CstMessageKind};
+use crate::message::serialize::CSTMsg;
 use crate::metrics::STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID;
 
 pub mod config;
@@ -538,7 +535,7 @@ where
             seq
         );
 
-        self.node.send_signed(reply, header.from(), true);
+        let _ = self.node.send_signed(reply, header.from(), true);
     }
 
     /// Process the entire list of pending state transfer requests
@@ -671,7 +668,7 @@ where
                             debug!("{:?} // Received state cid {:?} with digest {:?} from {:?} with seq {:?}",
                             self.node.id(), state_cid, digest, header.from(), cid);
 
-                            let received_state_cid = self
+                            let currently_active_states = self
                                 .received_state_ids
                                 .entry(*digest)
                                 .or_insert_with(|| ReceivedStateCid {
@@ -679,17 +676,29 @@ where
                                     count: 0,
                                 });
 
-                            if *cid > received_state_cid.cid {
-                                info!("{:?} // Received newer state for old cid {:?} vs new cid {:?} with digest {:?}.",
-                                    self.node.id(), received_state_cid.cid, *cid, digest);
+                            match (*cid).cmp(&currently_active_states.cid) {
+                                Ordering::Greater => {
+                                    info!("{:?} // Received newer state for old cid {:?} vs new cid {:?} with digest {:?}.",
+                                    self.node.id(), currently_active_states.cid, *cid, digest);
 
-                                received_state_cid.cid = *cid;
-                                received_state_cid.count = 1;
-                            } else if *cid == received_state_cid.cid {
-                                info!("{:?} // Received matching state for cid {:?} with digest {:?}. Count {}",
-                                self.node.id(), received_state_cid.cid, digest, received_state_cid.count + 1);
+                                    currently_active_states.cid = *cid;
+                                    currently_active_states.count = 1;
+                                }
+                                Ordering::Equal => {
+                                    info!("{:?} // Received matching state for cid {:?} with digest {:?}. Count {}",
+                                self.node.id(), currently_active_states.cid, digest, currently_active_states.count + 1);
 
-                                received_state_cid.count += 1;
+                                    currently_active_states.count += 1;
+                                }
+                                _ => {
+                                    debug!(
+                                        "{:?} // Received older state cid {:?} vs new cid {:?} with digest {:?}.",
+                                        self.node.id(),
+                                        currently_active_states.cid,
+                                        *cid,
+                                        digest
+                                    );
+                                }
                             }
                         } else {
                             debug!(
@@ -1016,7 +1025,7 @@ where
             .into_iter()
             .filter(|id| *id != self.node.id());
 
-        self.node.broadcast_signed(message, targets);
+        let _ = self.node.broadcast_signed(message, targets);
     }
 
     /// Used by a recovering node to retrieve the latest state.
@@ -1051,7 +1060,7 @@ where
             .into_iter()
             .filter(|id| *id != self.node.id());
 
-        self.node.broadcast_signed(message, targets);
+        let _ = self.node.broadcast_signed(message, targets);
     }
 }
 

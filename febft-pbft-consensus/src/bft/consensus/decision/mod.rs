@@ -375,7 +375,7 @@ where
                     message,
                     timeouts,
                     synchronizer,
-                    &mut self.working_log,
+                    &self.working_log,
                 );
 
                 let batch_metadata = self.working_log.process_pre_prepare(
@@ -661,11 +661,7 @@ where
 
     /// Check if this consensus decision can be finalized
     pub fn is_finalizeable(&self) -> bool {
-        if let DecisionPhase::Decided = &self.phase {
-            true
-        } else {
-            false
-        }
+        matches!(self.phase, DecisionPhase::Decided)
     }
 
     /// Finalize this consensus decision and return the information about the batch

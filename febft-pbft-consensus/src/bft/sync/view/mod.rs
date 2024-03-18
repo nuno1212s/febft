@@ -1,3 +1,5 @@
+#![allow(clippy::reversed_empty_ranges)]
+
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::iter;
@@ -63,6 +65,7 @@ impl NetworkView for ViewInfo {
     }
 }
 
+
 const LEADER_COUNT: usize = 1;
 
 impl ViewInfo {
@@ -78,7 +81,7 @@ impl ViewInfo {
         let destined_leader = quorum_members[(usize::from(seq)) % n];
 
         let mut leader_set = vec![destined_leader];
-
+        
         for i in 1..LEADER_COUNT {
             leader_set.push(quorum_members[(usize::from(seq) + i) % n]);
         }
@@ -203,7 +206,7 @@ impl ViewInfo {
 /// Get the division of hash spaces for a given leader_set
 /// Divides the hash space for client requests across the various leaders.
 /// Each leader should get a similar slice of the pie.
-fn calculate_hash_space_division(leader_set: &Vec<NodeId>) -> BTreeMap<NodeId, (Vec<u8>, Vec<u8>)> {
+fn calculate_hash_space_division(leader_set: &[NodeId]) -> BTreeMap<NodeId, (Vec<u8>, Vec<u8>)> {
     let slices = divide_hash_space(Digest::LENGTH, leader_set.len());
 
     let mut slice_for_leaders = BTreeMap::new();
@@ -291,7 +294,7 @@ mod view_tests {
 
         let mut rng = rand::rngs::SmallRng::seed_from_u64(812679233723);
 
-        for i in 0..TESTS {
+        for _i in 0..TESTS {
             rng.fill_bytes(&mut digest_vec);
 
             let digest = Digest::from_bytes(&digest_vec).unwrap();

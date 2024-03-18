@@ -93,9 +93,9 @@ pub type OPDecisionInfo<O> = DecisionInfo<ProofMetadata, PBFTMessage<O>, O>;
 
 /// a PBFT based ordering protocol
 pub struct PBFTOrderProtocol<RQ, NT>
-where
-    RQ: SerType,
-    NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+    where
+        RQ: SerType,
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
 {
     // What phase of the consensus algorithm are we currently executing
     phase: ConsensusPhase,
@@ -123,9 +123,9 @@ where
 }
 
 impl<RQ, NT> Orderable for PBFTOrderProtocol<RQ, NT>
-where
-    RQ: SerType,
-    NT: 'static + OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    where
+        RQ: SerType,
+        NT: 'static + OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
     fn sequence_number(&self) -> SeqNo {
         self.consensus.sequence_number()
@@ -133,9 +133,9 @@ where
 }
 
 impl<RQ, NT> OrderProtocolTolerance for PBFTOrderProtocol<RQ, NT>
-where
-    RQ: SerType,
-    NT: 'static + OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    where
+        RQ: SerType,
+        NT: 'static + OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
     fn get_n_for_f(f: usize) -> usize {
         3 * f + 1
@@ -153,25 +153,25 @@ where
 }
 
 impl<RQ, NT> NetworkedOrderProtocolInitializer<RQ, NT> for PBFTOrderProtocol<RQ, NT>
-where
-    RQ: SerType + SessionBased + 'static,
-    NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+    where
+        RQ: SerType + SessionBased + 'static,
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
 {
     fn initialize(
         config: Self::Config,
         ordering_protocol_args: OrderingProtocolArgs<RQ, NT>,
     ) -> Result<Self>
-    where
-        Self: Sized,
+        where
+            Self: Sized,
     {
         Self::initialize_protocol(config, ordering_protocol_args, None)
     }
 }
 
 impl<RQ, NT> OrderingProtocol<RQ> for PBFTOrderProtocol<RQ, NT>
-where
-    RQ: SerType + SessionBased + 'static,
-    NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+    where
+        RQ: SerType + SessionBased + 'static,
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
 {
     type Serialization = PBFTConsensus<RQ>;
     type Config = PBFTConfig;
@@ -265,39 +265,35 @@ where
             .synchronizer
             .client_requests_timed_out(self.node.id(), &timeout);
 
-        match status {
-            SynchronizerStatus::RequestsTimedOut { forwarded, stopped } => {
-                if !forwarded.is_empty() {
-                    let requests = self.pre_processor.clone_pending_rqs(forwarded);
+        if let SynchronizerStatus::RequestsTimedOut { forwarded, stopped } = status {
+            if !forwarded.is_empty() {
+                let requests = self.pre_processor.clone_pending_rqs(forwarded);
 
-                    self.synchronizer.forward_requests(requests, &*self.node);
-                }
-
-                if !stopped.is_empty() {
-                    let stopped = self.pre_processor.clone_pending_rqs(stopped);
-
-                    self.switch_phase(ConsensusPhase::SyncPhase);
-
-                    self.synchronizer.begin_view_change(
-                        Some(stopped),
-                        &*self.node,
-                        &self.timeouts,
-                        &self.message_log,
-                    );
-                }
+                self.synchronizer.forward_requests(requests, &*self.node);
             }
-            // nothing to do
-            _ => (),
-        }
+
+            if !stopped.is_empty() {
+                let stopped = self.pre_processor.clone_pending_rqs(stopped);
+
+                self.switch_phase(ConsensusPhase::SyncPhase);
+
+                self.synchronizer.begin_view_change(
+                    Some(stopped),
+                    &*self.node,
+                    &self.timeouts,
+                    &self.message_log,
+                );
+            }
+        };
 
         Ok(OPExecResult::MessageProcessedNoUpdate)
     }
 }
 
 impl<RQ, NT> PermissionedOrderingProtocol for PBFTOrderProtocol<RQ, NT>
-where
-    RQ: SerType + SessionBased + 'static,
-    NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+    where
+        RQ: SerType + SessionBased + 'static,
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
 {
     type PermissionedSerialization = PBFTConsensus<RQ>;
 
@@ -325,9 +321,9 @@ where
 }
 
 impl<RQ, NT> PBFTOrderProtocol<RQ, NT>
-where
-    RQ: SerType + SessionBased + 'static,
-    NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+    where
+        RQ: SerType + SessionBased + 'static,
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
 {
     fn initialize_protocol(
         config: PBFTConfig,
@@ -854,9 +850,9 @@ where
 }
 
 impl<RQ, NT> PBFTOrderProtocol<RQ, NT>
-where
-    RQ: SerType + SessionBased + 'static,
-    NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+    where
+        RQ: SerType + SessionBased + 'static,
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
 {
     pub(crate) fn switch_phase(&mut self, new_phase: ConsensusPhase) {
         info!(
@@ -922,10 +918,10 @@ const CF_PREPARES: &str = "PREPARES";
 const CF_COMMIT: &str = "COMMITS";
 
 impl<RQ, NT> OrderProtocolPersistenceHelper<RQ, PBFTConsensus<RQ>, PBFTConsensus<RQ>>
-    for PBFTOrderProtocol<RQ, NT>
-where
-    RQ: SerType + SessionBased,
-    NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+for PBFTOrderProtocol<RQ, NT>
+    where
+        RQ: SerType + SessionBased,
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
     fn message_types() -> Vec<&'static str> {
         vec![CF_PRE_PREPARES, CF_PREPARES, CF_COMMIT]
@@ -995,18 +991,18 @@ where
 }
 
 impl<RQ, NT> LoggableOrderProtocol<RQ> for PBFTOrderProtocol<RQ, NT>
-where
-    RQ: SerType + SessionBased + 'static,
-    NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    where
+        RQ: SerType + SessionBased + 'static,
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
     type PersistableTypes = PBFTConsensus<RQ>;
 }
 
 impl<RQ, NT, RP> ReconfigurableOrderProtocol<RP> for PBFTOrderProtocol<RQ, NT>
-where
-    RQ: SerType + SessionBased + 'static,
-    RP: ReconfigurationProtocolMessage + 'static,
-    NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+    where
+        RQ: SerType + SessionBased + 'static,
+        RP: ReconfigurationProtocolMessage + 'static,
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
 {
     fn attempt_quorum_node_join(
         &mut self,

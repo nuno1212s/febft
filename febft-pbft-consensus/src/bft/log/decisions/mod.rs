@@ -233,13 +233,11 @@ impl<O> Proof<O> {
 
         let mut ordered_pre_prepares = Vec::with_capacity(pre_prepare_ordering.len());
 
-        for index in 0..pre_prepare_ordering.len() {
-            let digest = pre_prepare_ordering[index];
-
+        for digest in pre_prepare_ordering {
             let pre_prepare = self
                 .pre_prepares
                 .iter()
-                .position(|msg| *msg.header().digest() == digest);
+                .position(|msg| *msg.header().digest() == *digest);
 
             match pre_prepare {
                 Some(index) => {

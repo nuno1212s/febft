@@ -318,7 +318,7 @@ where
             set
         });
 
-        let quorum_prepares = 'outer: loop {
+        let quorum_prepares = 'outer: {
             let quorum = f << 1;
             let mut last_view = None;
             let mut count = 0;
@@ -444,7 +444,7 @@ impl DuplicateReplicaEvaluator {
 }
 
 pub fn pre_prepare_index_from_digest_opt(
-    prepare_set: &Vec<Option<Digest>>,
+    prepare_set: &[Option<Digest>],
     digest: &Digest,
 ) -> Result<usize> {
     match prepare_set
@@ -466,29 +466,29 @@ pub fn pre_prepare_index_from_digest_opt(
 }
 
 pub fn pre_prepare_index_of_from_digest(
-    prepare_set: &Vec<Digest>,
-    preprepare: &Digest,
+    prepare_set: &[Digest],
+    pre_prepare: &Digest,
 ) -> Result<usize> {
     match prepare_set
         .iter()
-        .position(|pre_prepare| *pre_prepare == *preprepare)
+        .position(|pre_prepare| *pre_prepare == *pre_prepare)
     {
         None => {
             Err!(DecidingLogError::PrePrepareNotPartOfSet(
-                *preprepare,
-                prepare_set.clone()
+                *pre_prepare,
+                prepare_set.to_owned()
             ))
         }
         Some(pos) => Ok(pos),
     }
 }
 
-pub fn pre_prepare_index_of(leader_set: &Vec<NodeId>, proposer: &NodeId) -> Result<usize> {
+pub fn pre_prepare_index_of(leader_set: &[NodeId], proposer: &NodeId) -> Result<usize> {
     match leader_set.iter().position(|node| *node == *proposer) {
         None => {
             Err!(DecidingLogError::ProposerNotInLeaderSet(
                 *proposer,
-                leader_set.clone()
+                leader_set.to_owned()
             ))
         }
         Some(pos) => Ok(pos),
