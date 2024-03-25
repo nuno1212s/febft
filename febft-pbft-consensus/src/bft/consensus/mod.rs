@@ -359,7 +359,7 @@ where
                     _ => {}
                 }
             } else {
-                error!(
+                debug!(
                     "Cannot possibly poll sequence number that is in the past {:?} vs current {:?}",
                     seq_no, self.seq_no
                 )
