@@ -14,7 +14,7 @@ use atlas_communication::message::StoredMessage;
 use atlas_core::messages::{ClientRqInfo, SessionBased};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::request_pre_processing::{BatchOutput, PreProcessorOutputMessage};
-use atlas_core::timeouts::Timeouts;
+use atlas_core::timeouts::timeout::TimeoutModHandle;
 use atlas_metrics::metrics::{metric_duration, metric_increment, metric_store_count};
 
 use crate::bft::config::ProposerConfig;
@@ -46,7 +46,7 @@ where
     /// Network Node
     node_ref: Arc<NT>,
     synchronizer: Arc<Synchronizer<RQ>>,
-    timeouts: Timeouts,
+    timeouts: TimeoutModHandle,
     consensus_guard: Arc<ProposerConsensusGuard>,
     // Should we shut down?
     cancelled: AtomicBool,
@@ -92,7 +92,7 @@ where
         node: Arc<NT>,
         batch_input: BatchOutput<RQ>,
         sync: Arc<Synchronizer<RQ>>,
-        timeouts: Timeouts,
+        timeouts: TimeoutModHandle,
         consensus_guard: Arc<ProposerConsensusGuard>,
         proposer_config: ProposerConfig,
     ) -> Arc<Self> {

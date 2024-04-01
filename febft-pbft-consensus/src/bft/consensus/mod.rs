@@ -20,7 +20,7 @@ use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::{ClientRqInfo, SessionBased};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::{Decision, ShareableMessage};
-use atlas_core::timeouts::Timeouts;
+use atlas_core::timeouts::timeout::TimeoutModHandle;
 use atlas_metrics::metrics::metric_increment;
 
 use crate::bft::consensus::decision::{
@@ -119,12 +119,10 @@ impl<O> TboQueue<O> {
     fn advance_queue(&mut self) -> MessageQueue<O> {
         self.curr_seq = self.curr_seq.next();
 
-        let pre_prepares = tbo_advance_message_queue_return(&mut self.pre_prepares)
-            .unwrap_or_default();
-        let prepares =
-            tbo_advance_message_queue_return(&mut self.prepares).unwrap_or_default();
-        let commits =
-            tbo_advance_message_queue_return(&mut self.commits).unwrap_or_default();
+        let pre_prepares =
+            tbo_advance_message_queue_return(&mut self.pre_prepares).unwrap_or_default();
+        let prepares = tbo_advance_message_queue_return(&mut self.prepares).unwrap_or_default();
+        let commits = tbo_advance_message_queue_return(&mut self.commits).unwrap_or_default();
 
         MessageQueue::from_messages(pre_prepares, prepares, commits)
     }
@@ -226,7 +224,7 @@ where
     /// for each consensus instance
     consensus_guard: Arc<ProposerConsensusGuard>,
     /// A reference to the timeouts
-    timeouts: Timeouts,
+    timeouts: TimeoutModHandle,
     /// Check if we are currently recovering from a fault, meaning we should ignore timeouts
     is_recovering: bool,
 }
@@ -241,7 +239,7 @@ where
         seq_no: SeqNo,
         watermark: u32,
         consensus_guard: Arc<ProposerConsensusGuard>,
-        timeouts: Timeouts,
+        timeouts: TimeoutModHandle,
     ) -> Self {
         let mut curr_seq = seq_no;
 
@@ -382,7 +380,7 @@ where
         &mut self,
         s_message: ShareableMessage<PBFTMessage<RQ>>,
         synchronizer: &Synchronizer<RQ>,
-        timeouts: &Timeouts,
+        timeouts: &TimeoutModHandle,
         node: &Arc<NT>,
     ) -> Result<ConsensusStatus<RQ>>
     where
@@ -550,7 +548,7 @@ where
             self.is_recovering = false;
 
             // This means the queue is empty.
-            self.timeouts.cancel_client_rq_timeouts(None);
+            let _ = self.timeouts.cancel_all_timeouts();
         }
 
         let new_seq_no = self
@@ -837,7 +835,7 @@ where
         (header, message): (Header, ConsensusMessage<RQ>),
         new_view: &ViewInfo,
         synchronizer: &Synchronizer<RQ>,
-        timeouts: &Timeouts,
+        timeouts: &TimeoutModHandle,
         _log: &mut Log<RQ>,
         node: &Arc<NT>,
     ) -> Result<ConsensusStatus<RQ>>

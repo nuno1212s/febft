@@ -16,7 +16,7 @@ use atlas_communication::message::Header;
 use atlas_core::messages::{ClientRqInfo, SessionBased};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::ShareableMessage;
-use atlas_core::timeouts::Timeouts;
+use atlas_core::timeouts::timeout::TimeoutModHandle;
 use atlas_metrics::metrics::metric_duration;
 
 use crate::bft::consensus::accessory::replica::ReplicaAccessory;
@@ -275,7 +275,7 @@ where
         &mut self,
         s_message: ShareableMessage<PBFTMessage<RQ>>,
         synchronizer: &Synchronizer<RQ>,
-        timeouts: &Timeouts,
+        timeouts: &TimeoutModHandle,
         node: &Arc<NT>,
     ) -> Result<DecisionStatus<RQ>>
     where
@@ -703,7 +703,7 @@ where
 fn request_batch_received<RQ>(
     header: &Header,
     pre_prepare: &ConsensusMessage<RQ>,
-    timeouts: &Timeouts,
+    timeouts: &TimeoutModHandle,
     synchronizer: &Synchronizer<RQ>,
     log: &WorkingDecisionLog<RQ>,
 ) -> Vec<ClientRqInfo>

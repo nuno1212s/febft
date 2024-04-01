@@ -23,69 +23,34 @@ serialize_capnp = ["atlas-capnp"]
 bincode = "2.0.0-rc.3"
 num_cpus = "1"
 mimalloc = { version = "*", default-features = false }
-rand = {version = "0.8.5", features = ["small_rng"] }
+rand = { version = "0.8.5", features = ["small_rng"] }
+rand_core = "0"
 
 [dependencies]
 anyhow = "1.0"
 thiserror = "1.0"
+chrono = "0"
 getset = "0.1.2"
+lazy_static = "1"
 
 atlas-common = { path = "../../Atlas/Atlas-Common", default-features = true }
 atlas-communication = { path = "../../Atlas/Atlas-Communication" }
 atlas-core = { path = "../../Atlas/Atlas-Core" }
 atlas-capnp = { path = "../../Atlas/Atlas-capnp", optional = true }
-atlas-metrics = {path = "../../Atlas/Atlas-Metrics"}
+atlas-metrics = { path = "../../Atlas/Atlas-Metrics" }
 
-capnp = { version = "0.16" }
-fastrand = "1.7.0"
-bytes = "1.4.0"
-chrono = "0.4"
-intmap = "2.0.0"
+intmap = "2"
 either = "1"
-oneshot = "0.1"
-futures = "0.3.21"
-futures-timer = "3"
-async-tls = "0.12.0"
-rustls = "0.20.6"
-webpki = "0.22.0"
-parking_lot = "0.12.1"
-dashmap = "5.1.0"
-thread_local = "1.1.4"
-num_cpus = "1"
-socket2 = "0.4"
-event-listener = "2.5.2"
-linked-hash-map = "0.5"
-rand_core = { version = "0.6", features = ["getrandom"] }
-smallvec = { version = "1", features = ["union", "write", "const_generics"] }
-async-std = { version = "1", optional = true }
-tokio = { version = "1.25.0", features = ["full"], optional = true }
-tokio-util = { version = "0.7.1", features = ["compat"], optional = true }
-tokio-metrics = { version = "0.1.0", optional = true }
-ring = { version = "0.17.8", optional = true }
-threadpool-crossbeam-channel = { version = "1.8.0", optional = true }
 #async-semaphore = { version = "1", optional = true }
 
-serde = { version = "*", features = ["derive", "rc"]}
+serde = { version = "*", features = ["derive", "rc"] }
+serde_bytes = { version = "0", optional = true }
 bincode = { version = "2.0.0-rc.3", features = ["serde"], optional = true }
 
-flume = { version = "0.10", optional = true }
-async-channel = { version = "1", optional = true }
-twox-hash = { version = "1", optional = true }
-serde_bytes = { version = "0.11", optional = true }
-fxhash = { version = "0.2", optional = true }
-dsrust = { version = "0.1.9", git = "https://github.com/nuno1212s/DSRust", optional = true }
-#dsrust = { path = "/home/nunogneto/Documents/Development/Rust/dsrust" }
-crossbeam-channel = { version = "0.5.2", optional = true }
-crossbeam-skiplist = "0.1.1"
-rocksdb = { version = "0.20.1", optional = true }
-
-log = "0.4.17"
-env_logger = "0.10.0"
-log4rs = { version = "1.1.1", features = ["file_appender"] }
+log = "0"
 #tracing = "0.1.32"
 #tracing-subscriber = { version = "0.3.11", features = ["fmt"] }
 
-num-bigint = "0.4.3"
-num-traits = "0.2.15"
-
-
+num-bigint = "*"
+num-traits = "*"
+event-listener = "*"

@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-
+use std::time::SystemTime;
 use chrono::Utc;
+
 use log::debug;
 
 use atlas_common::node_id::NodeId;
@@ -22,15 +23,15 @@ use crate::bft::sync::view::ViewInfo;
 use crate::bft::{SysMsg, PBFT};
 
 pub struct ReplicaAccessory<RQ>
-    where
-        RQ: SerType,
+where
+    RQ: SerType,
 {
     speculative_commits: Arc<Mutex<BTreeMap<NodeId, StoredSerializedMessage<SysMsg<RQ>>>>>,
 }
 
 impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
-    where
-        RQ: SerType + 'static,
+where
+    RQ: SerType + 'static,
 {
     fn handle_partial_pre_prepare<NT>(
         &mut self,
@@ -41,7 +42,8 @@ impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
         _node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
-    {}
+    {
+    }
 
     fn handle_pre_prepare_phase_completed<NT>(
         &mut self,
@@ -94,7 +96,7 @@ impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
                     Some(digest),
                     Some(&*key_pair),
                 )
-                    .into_inner();
+                .into_inner();
 
                 // store serialized header + message
                 let serialized = SerializedMessage::new(message.clone(), buf.clone());
@@ -138,7 +140,8 @@ impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
         _node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
-    {}
+    {
+    }
 
     fn handle_preparing_quorum<NT>(
         &mut self,
@@ -201,7 +204,8 @@ impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
         _node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
-    {}
+    {
+    }
 
     fn handle_committing_quorum<NT>(
         &mut self,
@@ -212,12 +216,13 @@ impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
         _node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
-    {}
+    {
+    }
 }
 
 impl<RQ> Default for ReplicaAccessory<RQ>
-    where
-        RQ: SerType,
+where
+    RQ: SerType,
 {
     fn default() -> Self {
         Self::new()
@@ -225,8 +230,8 @@ impl<RQ> Default for ReplicaAccessory<RQ>
 }
 
 impl<RQ> ReplicaAccessory<RQ>
-    where
-        RQ: SerType,
+where
+    RQ: SerType,
 {
     pub fn new() -> Self {
         Self {
@@ -247,8 +252,8 @@ fn valid_spec_commits<RQ>(
     seq_no: SeqNo,
     view: &ViewInfo,
 ) -> bool
-    where
-        RQ: SerType,
+where
+    RQ: SerType,
 {
     let len = speculative_commits.len();
 

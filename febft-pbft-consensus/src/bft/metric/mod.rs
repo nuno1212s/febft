@@ -1,6 +1,4 @@
-use atlas_metrics::metrics::{
-    metric_duration, metric_store_count, MetricKind,
-};
+use atlas_metrics::metrics::{metric_duration, metric_store_count, MetricKind};
 use atlas_metrics::{MetricLevel, MetricRegistry};
 use std::time::Instant;
 

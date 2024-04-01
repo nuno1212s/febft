@@ -10,13 +10,10 @@ use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-
-use bytes::Bytes;
-
 use atlas_common::error::*;
 use atlas_common::ordering::Orderable;
 use atlas_common::serialization_helper::SerType;
-use atlas_communication::message::{Header};
+use atlas_communication::message::Header;
 use atlas_communication::reconfiguration::NetworkInformationProvider;
 use atlas_core::ordering_protocol::loggable::PersistentOrderProtocolTypes;
 use atlas_core::ordering_protocol::networking::serialize::{
@@ -25,20 +22,15 @@ use atlas_core::ordering_protocol::networking::serialize::{
 
 use crate::bft::log::decisions::{Proof, ProofMetadata};
 use crate::bft::message::{
-    ConsensusMessage, ConsensusMessageKind, PBFTMessage,
-    ViewChangeMessageKind,
+    ConsensusMessage, ConsensusMessageKind, PBFTMessage, ViewChangeMessageKind,
 };
 use crate::bft::sync::view::ViewInfo;
-
 
 #[cfg(feature = "serialize_capnp")]
 pub mod capnp;
 
 #[cfg(feature = "serialize_serde")]
 pub mod serde;
-
-/// The buffer type used to serialize messages into.
-pub type Buf = Bytes;
 
 pub fn serialize_consensus<W, RQ>(w: &mut W, message: &ConsensusMessage<RQ>) -> Result<()>
 where

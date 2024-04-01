@@ -454,11 +454,7 @@ pub fn pre_prepare_index_from_digest_opt(
         None => {
             Err!(DecidingLogError::PrePrepareNotPartOfSet(
                 *digest,
-                prepare_set
-                    .iter()
-                    .cloned()
-                    .flatten()
-                    .collect()
+                prepare_set.iter().cloned().flatten().collect()
             ))
         }
         Some(pos) => Ok(pos),

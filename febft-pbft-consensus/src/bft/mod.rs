@@ -11,6 +11,7 @@ use std::sync::Arc;
 use ::log::{debug, error, info, trace, warn};
 use anyhow::anyhow;
 use either::Either;
+use lazy_static::lazy_static;
 
 use crate::bft::config::PBFTConfig;
 use crate::bft::consensus::{
@@ -53,7 +54,7 @@ use atlas_core::ordering_protocol::{
 use atlas_core::reconfiguration_protocol::ReconfigurationProtocol;
 use atlas_core::request_pre_processing::RequestPreProcessor;
 use atlas_core::serialize::ReconfigurationProtocolMessage;
-use atlas_core::timeouts::{RqTimeout, Timeouts};
+use atlas_core::timeouts::timeout::{ModTimeout, TimeoutModHandle, TimeoutableMod};
 
 pub mod config;
 pub mod consensus;
@@ -68,6 +69,12 @@ pub mod sync;
 pub type PBFT<RQ> = PBFTConsensus<RQ>;
 // The message type for this consensus protocol
 pub type SysMsg<RQ> = <PBFTConsensus<RQ> as OrderingProtocolMessage<RQ>>::ProtocolMessage;
+
+lazy_static! {
+    
+    static ref MOD_NAME: Arc<str> = Arc::from("FEBFT");
+    
+}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 /// Which phase of the consensus algorithm are we currently executing
@@ -106,7 +113,7 @@ pub struct PBFTOrderProtocol<RQ, NT>
     /// The request pre processor
     pre_processor: RequestPreProcessor<RQ>,
     // A reference to the timeouts layer
-    timeouts: Timeouts,
+    timeouts: TimeoutModHandle,
     //The proposer guard
     consensus_guard: Arc<ProposerConsensusGuard>,
     // Check if unordered requests can be proposed.
@@ -165,6 +172,58 @@ impl<RQ, NT> NetworkedOrderProtocolInitializer<RQ, NT> for PBFTOrderProtocol<RQ,
             Self: Sized,
     {
         Self::initialize_protocol(config, ordering_protocol_args, None)
+    }
+}
+
+impl<RQ, NT> TimeoutableMod<OPExecResult<ProofMetadata, PBFTMessage<RQ>, RQ>>
+for PBFTOrderProtocol<RQ, NT>
+    where
+        RQ: SerType + SessionBased + 'static,
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+{
+    fn mod_name() -> Arc<str> {
+        MOD_NAME.clone()
+    }
+
+    fn handle_timeout(
+        &mut self,
+        timeout: Vec<ModTimeout>,
+    ) -> Result<OPExecResult<ProofMetadata, PBFTMessage<RQ>, RQ>> {
+        if self.consensus.is_catching_up() {
+            warn!(
+                "{:?} // Ignoring timeouts while catching up",
+                self.node.id()
+            );
+
+            return Ok(OPExecResult::MessageDropped);
+        }
+
+        let status = self
+            .synchronizer
+            .client_requests_timed_out(self.node.id(), &timeout);
+
+        if let SynchronizerStatus::RequestsTimedOut { forwarded, stopped } = status {
+            if !forwarded.is_empty() {
+                let requests = self.pre_processor.clone_pending_rqs(forwarded);
+
+                self.synchronizer.forward_requests(requests, &*self.node);
+            }
+
+            if !stopped.is_empty() {
+                let stopped = self.pre_processor.clone_pending_rqs(stopped);
+
+                self.switch_phase(ConsensusPhase::SyncPhase);
+
+                self.synchronizer.begin_view_change(
+                    Some(stopped),
+                    &*self.node,
+                    &self.timeouts,
+                    &self.message_log,
+                );
+            }
+        };
+
+        Ok(OPExecResult::MessageProcessedNoUpdate)
     }
 }
 
@@ -246,47 +305,6 @@ impl<RQ, NT> OrderingProtocol<RQ> for PBFTOrderProtocol<RQ, NT>
             .install_sequence_number(seq_no, &self.synchronizer.view());
 
         Ok(())
-    }
-
-    fn handle_timeout(
-        &mut self,
-        timeout: Vec<RqTimeout>,
-    ) -> Result<OPExecResult<ProofMetadata, PBFTMessage<RQ>, RQ>> {
-        if self.consensus.is_catching_up() {
-            warn!(
-                "{:?} // Ignoring timeouts while catching up",
-                self.node.id()
-            );
-
-            return Ok(OPExecResult::MessageDropped);
-        }
-
-        let status = self
-            .synchronizer
-            .client_requests_timed_out(self.node.id(), &timeout);
-
-        if let SynchronizerStatus::RequestsTimedOut { forwarded, stopped } = status {
-            if !forwarded.is_empty() {
-                let requests = self.pre_processor.clone_pending_rqs(forwarded);
-
-                self.synchronizer.forward_requests(requests, &*self.node);
-            }
-
-            if !stopped.is_empty() {
-                let stopped = self.pre_processor.clone_pending_rqs(stopped);
-
-                self.switch_phase(ConsensusPhase::SyncPhase);
-
-                self.synchronizer.begin_view_change(
-                    Some(stopped),
-                    &*self.node,
-                    &self.timeouts,
-                    &self.message_log,
-                );
-            }
-        };
-
-        Ok(OPExecResult::MessageProcessedNoUpdate)
     }
 }
 

@@ -17,7 +17,8 @@ use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, SessionBased};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
-use atlas_core::timeouts::{RqTimeout, TimeoutKind, TimeoutPhase, Timeouts};
+use atlas_core::timeouts::timeout::{ModTimeout, TimeoutModHandle};
+use atlas_core::timeouts::{TimeOutable, TimeoutID};
 use atlas_metrics::metrics::{metric_duration, metric_increment};
 
 use crate::bft::consensus::Consensus;
@@ -66,7 +67,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         consensus: &Consensus<RQ>,
         log: &Log<RQ>,
         pre_processor: &RequestPreProcessor<RQ>,
-        timeouts: &Timeouts,
+        timeouts: &TimeoutModHandle,
         node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
@@ -114,7 +115,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
     pub(super) fn handle_begin_view_change<NT>(
         &self,
         base_sync: &Synchronizer<RQ>,
-        timeouts: &Timeouts,
+        timeouts: &TimeoutModHandle,
         node: &NT,
         timed_out: Option<Vec<StoredMessage<RQ>>>,
     ) where
@@ -151,7 +152,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
     pub(super) fn handle_begin_quorum_view_change<NT>(
         &self,
         base_sync: &Synchronizer<RQ>,
-        _timeouts: &Timeouts,
+        _timeouts: &TimeoutModHandle,
         node: &NT,
         join_cert: NodeId,
     ) where
@@ -175,10 +176,19 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
     }
 
     /// Watch a vector of requests received
-    pub fn watch_received_requests(&self, requests: Vec<ClientRqInfo>, timeouts: &Timeouts) {
+    pub fn watch_received_requests(
+        &self,
+        requests: Vec<ClientRqInfo>,
+        timeouts: &TimeoutModHandle,
+    ) {
         let start_time = Instant::now();
 
-        timeouts.timeout_client_requests(self.timeout_dur.get(), requests);
+        let _ = timeouts.request_timeouts(
+            transform_client_rq_to_timeouts(requests),
+            self.timeout_dur.get(),
+            1,
+            true,
+        );
 
         metric_duration(SYNC_WATCH_REQUESTS_ID, start_time.elapsed());
     }
@@ -190,7 +200,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         &self,
         header: &Header,
         pre_prepare: &ConsensusMessage<RQ>,
-        timeouts: &Timeouts,
+        timeouts: &TimeoutModHandle,
     ) -> Vec<ClientRqInfo> {
         let start_time = Instant::now();
 
@@ -224,7 +234,8 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
 
         //Notify the timeouts that we have received the following requests
         //TODO: Should this only be done after the commit phase?
-        timeouts.received_pre_prepare(sending_node, timeout_info);
+
+        let _ = timeouts.acks_received(transform_client_rq_to_timeouts_ack(timeout_info, sending_node));
 
         metric_duration(SYNC_BATCH_RECEIVED_ID, start_time.elapsed());
 
@@ -236,7 +247,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         &self,
         base_sync: &Synchronizer<RQ>,
         pre_processor: &RequestPreProcessor<RQ>,
-        timeouts: &Timeouts,
+        timeouts: &TimeoutModHandle,
     ) {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
@@ -245,7 +256,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
 
         let requests = self.drain_stopped_request(base_sync);
 
-        let rq_info = requests.iter().map(ClientRqInfo::from).collect();
+        let rq_info = requests.iter().map(ClientRqInfo::from).collect::<Vec<_>>();
 
         let count = requests.len();
 
@@ -254,7 +265,12 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
             .send_return(PreProcessorMessage::StoppedRequests(requests))
             .unwrap();
 
-        timeouts.timeout_client_requests(self.timeout_dur.get(), rq_info);
+        let _ = timeouts.request_timeouts(
+            transform_client_rq_to_timeouts(rq_info),
+            self.timeout_dur.get(),
+            1,
+            true,
+        );
 
         debug!("Registering {} stopped requests", count);
 
@@ -263,15 +279,15 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
     }
 
     /// Stop watching all pending client requests.
-    pub fn unwatch_all_requests(&self, timeouts: &Timeouts) {
-        timeouts.cancel_client_rq_timeouts(None);
+    pub fn unwatch_all_requests(&self, timeouts: &TimeoutModHandle) {
+        let _ = timeouts.cancel_all_timeouts();
     }
 
     /// Restart watching all pending client requests.
     /// This happens when a new leader has been elected and
     /// We must now give him some time to propose all of the requests
-    pub fn watch_all_requests(&self, timeouts: &Timeouts) {
-        timeouts.reset_all_client_rq_timeouts(self.timeout_dur.get());
+    pub fn watch_all_requests(&self, timeouts: &TimeoutModHandle) {
+        let _ = timeouts.reset_all_timeouts();
     }
 
     /// Handle a timeout received from the timeouts layer.
@@ -281,7 +297,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         &self,
         base_sync: &Synchronizer<RQ>,
         my_id: NodeId,
-        timed_out_rqs: &Vec<RqTimeout>,
+        timed_out_rqs: &Vec<ModTimeout>,
     ) -> SynchronizerStatus<RQ> {
         //// iterate over list of watched pending requests,
         //// and select the ones to be stopped or forwarded
@@ -304,24 +320,28 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         );
 
         for timed_out_rq in timed_out_rqs {
-            match timed_out_rq.timeout_phase() {
-                TimeoutPhase::TimedOut(id, _time) => {
-                    let timeout = timed_out_rq.timeout_kind();
+            if timed_out_rq.extra_info().is_none() {
+                continue;
+            }
 
-                    let rq_info = match timeout {
-                        TimeoutKind::ClientRequestTimeout(rq) => rq,
-                        _ => unreachable!(
-                            "Only client requests should be timed out at the synchronizer"
-                        ),
-                    };
+            let cli_rq = timed_out_rq
+                .extra_info()
+                .unwrap()
+                .as_any()
+                .downcast_ref::<ClientRqInfo>();
 
-                    if *id == 0 {
-                        forwarded.push(rq_info.clone());
-                    } else if *id >= 1 {
-                        // The second timeout generates a stopped request
-                        stopped.push(rq_info.clone());
-                    }
+            if cli_rq.is_none() {
+                continue;
+            }
+
+            match timed_out_rq.timeout_count() {
+                1 => {
+                    forwarded.push(cli_rq.cloned().unwrap());
                 }
+                2.. => {
+                    stopped.push(cli_rq.cloned().unwrap());
+                }
+                _ => {}
             }
         }
 
@@ -457,10 +477,47 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
     }
 }
 
-///Justification/Sort of correction proof:
+/// # Safety
 ///In general, all fields and methods will be accessed by the replica thread, never by the client rq thread.
 /// Therefore, we only have to protect the fields that will be accessed by both clients and replicas.
 /// So we protect collects, watching and tbo as those are the fields that are going to be
 /// accessed by both those threads.
 /// Since the other fields are going to be accessed by just 1 thread, we just need them to be Send, which they are
 unsafe impl<RQ: SerType> Sync for ReplicaSynchronizer<RQ> {}
+
+fn transform_client_rq_to_timeouts(
+    client_rq: impl IntoIterator<Item=ClientRqInfo>,
+) -> Vec<(TimeoutID, Option<Box<dyn TimeOutable>>)> {
+    client_rq
+        .into_iter()
+        .map(|rq| {
+            (
+                TimeoutID::SessionBased {
+                    session: rq.session(),
+                    seq_no: rq.sequence_number(),
+                    from: rq.sender(),
+                },
+                Some(Box::new(rq) as Box<dyn TimeOutable>),
+            )
+        })
+        .collect()
+}
+
+fn transform_client_rq_to_timeouts_ack(
+    client_rq: impl IntoIterator<Item=ClientRqInfo>,
+    from: NodeId,
+) -> Vec<(TimeoutID, NodeId)> {
+    client_rq
+        .into_iter()
+        .map(|rq| {
+            (
+                TimeoutID::SessionBased {
+                    session: rq.session(),
+                    seq_no: rq.sequence_number(),
+                    from: rq.sender(),
+                },
+                from,
+            )
+        })
+        .collect()
+}

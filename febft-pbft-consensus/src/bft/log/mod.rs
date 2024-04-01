@@ -84,12 +84,7 @@ where
             batch_meta: _,
         } = completed;
 
-        let metadata = ProofMetadata::new(
-            seq,
-            digest,
-            pre_prepare_ordering,
-            client_requests.len(),
-        );
+        let metadata = ProofMetadata::new(seq, digest, pre_prepare_ordering, client_requests.len());
 
         let FinishedMessageLog {
             pre_prepares,

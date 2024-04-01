@@ -13,10 +13,10 @@ use atlas_common::Err;
 use atlas_core::ordering_protocol::networking::serialize::NetworkView;
 use num_bigint::BigUint;
 use num_bigint::ToBigUint;
-use num_traits::identities::Zero;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, Div};
+use num_traits::Zero;
 use thiserror::Error;
 
 /// This struct contains information related with an
@@ -65,7 +65,6 @@ impl NetworkView for ViewInfo {
     }
 }
 
-
 const LEADER_COUNT: usize = 1;
 
 impl ViewInfo {
@@ -81,7 +80,7 @@ impl ViewInfo {
         let destined_leader = quorum_members[(usize::from(seq)) % n];
 
         let mut leader_set = vec![destined_leader];
-        
+
         for i in 1..LEADER_COUNT {
             leader_set.push(quorum_members[(usize::from(seq) + i) % n]);
         }

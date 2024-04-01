@@ -4,7 +4,6 @@
 use std::fmt::{Debug, Formatter};
 use std::io::Write;
 
-
 use getset::Getters;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};

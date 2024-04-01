@@ -33,7 +33,7 @@ use atlas_core::ordering_protocol::reconfigurable_order_protocol::Reconfiguratio
 use atlas_core::ordering_protocol::{unwrap_shareable_message, ShareableMessage};
 
 use atlas_core::request_pre_processing::RequestPreProcessor;
-use atlas_core::timeouts::{RqTimeout, Timeouts};
+use atlas_core::timeouts::timeout::{ModTimeout, TimeoutModHandle};
 
 use crate::bft::consensus::{Consensus, ConsensusStatus};
 use crate::bft::log::decisions::{CollectData, Proof, ViewDecisionPair};
@@ -290,7 +290,8 @@ impl<O> TboQueue<O> {
     /// Verifies if we have new `STOP` messages to be processed for
     /// the current view.
     pub fn can_process_stops(&self) -> bool {
-        self.stop.front()
+        self.stop
+            .front()
             .map(|deque| !deque.is_empty())
             .unwrap_or(false)
     }
@@ -298,7 +299,8 @@ impl<O> TboQueue<O> {
     /// Verifies if we have new `STOP` messages to be processed for
     /// the current view.
     pub fn can_process_stop_data(&self) -> bool {
-        self.stop_data.front()
+        self.stop_data
+            .front()
             .map(|deque| !deque.is_empty())
             .unwrap_or(false)
     }
@@ -306,7 +308,8 @@ impl<O> TboQueue<O> {
     /// Verifies if we have new `STOP` messages to be processed for
     /// the current view.
     pub fn can_process_sync(&self) -> bool {
-        self.sync.front()
+        self.sync
+            .front()
             .map(|deque| !deque.is_empty())
             .unwrap_or(false)
     }
@@ -434,8 +437,8 @@ pub enum SyncReconfigurationResult {
 
 ///A trait describing some of the necessary methods for the synchronizer
 pub trait AbstractSynchronizer<RQ>
-    where
-        RQ: SerType,
+where
+    RQ: SerType,
 {
     /// Returns information regarding the current view, such as
     /// the number of faulty replicas the system can tolerate.
@@ -486,8 +489,8 @@ pub struct Synchronizer<RQ: SerType> {
 unsafe impl<RQ: SerType> Sync for Synchronizer<RQ> {}
 
 impl<RQ> AbstractSynchronizer<RQ> for Synchronizer<RQ>
-    where
-        RQ: SerType + SessionBased + 'static,
+where
+    RQ: SerType + SessionBased + 'static,
 {
     /// Returns some information regarding the current view, such as
     /// the number of faulty replicas the system can tolerate.
@@ -506,7 +509,9 @@ impl<RQ> AbstractSynchronizer<RQ> for Synchronizer<RQ>
         let current_view = self.view();
 
         if let Some(previous_view) = view.previous_view() {
-            if current_view.sequence_number() != previous_view.sequence_number() && !self.tbo.lock().unwrap().install_view(previous_view) {
+            if current_view.sequence_number() != previous_view.sequence_number()
+                && !self.tbo.lock().unwrap().install_view(previous_view)
+            {
                 // If we don't install a new view, then we don't want to forget our current state now do we?
 
                 debug!("Replacing our phase with Init");
@@ -554,8 +559,8 @@ impl<RQ> AbstractSynchronizer<RQ> for Synchronizer<RQ>
 }
 
 impl<RQ> Synchronizer<RQ>
-    where
-        RQ: SerType + SessionBased + 'static,
+where
+    RQ: SerType + SessionBased + 'static,
 {
     pub fn new_follower(node_id: NodeId, view: ViewInfo) -> Arc<Self> {
         Arc::new(Self {
@@ -718,14 +723,14 @@ impl<RQ> Synchronizer<RQ>
     pub fn process_message<NT>(
         &self,
         s_message: ShareableMessage<PBFTMessage<RQ>>,
-        timeouts: &Timeouts,
+        timeouts: &TimeoutModHandle,
         log: &mut Log<RQ>,
         rq_pre_processor: &RequestPreProcessor<RQ>,
         consensus: &mut Consensus<RQ>,
         node: &Arc<NT>,
     ) -> SynchronizerStatus<RQ>
-        where
-            NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+    where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
     {
         debug!(
             "{:?} // Processing view change message {:?} in phase {:?} from {:?}",
@@ -792,28 +797,28 @@ impl<RQ> Synchronizer<RQ>
 
                 let i = match message.kind() {
                     ViewChangeMessageKind::Stop(_) | ViewChangeMessageKind::StopQuorumJoin(_)
-                    if msg_seq != next_seq =>
-                        {
-                            debug!("{:?} // Received stop message {:?} that does not match up to our local view {:?}", node.id(), message, current_view);
+                        if msg_seq != next_seq =>
+                    {
+                        debug!("{:?} // Received stop message {:?} that does not match up to our local view {:?}", node.id(), message, current_view);
 
-                            let mut guard = self.tbo.lock().unwrap();
+                        let mut guard = self.tbo.lock().unwrap();
 
-                            guard.queue_stop(s_message);
+                        guard.queue_stop(s_message);
 
-                            return stop_status!(i, &current_view);
-                        }
+                        return stop_status!(i, &current_view);
+                    }
                     ViewChangeMessageKind::Stop(_)
-                    if self.stopped.borrow().contains_key(header.from().into()) =>
-                        {
-                            warn!(
+                        if self.stopped.borrow().contains_key(header.from().into()) =>
+                    {
+                        warn!(
                             "{:?} // Received double stop message from node {:?}",
                             node.id(),
                             header.from()
                         );
 
-                            // drop attempts to vote twice
-                            return stop_status!(i, &current_view);
-                        }
+                        // drop attempts to vote twice
+                        return stop_status!(i, &current_view);
+                    }
                     ViewChangeMessageKind::StopQuorumJoin(_) => {
                         warn!("{:?} // Received stop quorum join message while in stopping state. Ignoring", node.id());
 
@@ -938,16 +943,16 @@ impl<RQ> Synchronizer<RQ>
 
                 let (received, node_id) = match message.kind() {
                     ViewChangeMessageKind::Stop(_) | ViewChangeMessageKind::StopQuorumJoin(_)
-                    if msg_seq != next_seq =>
-                        {
-                            debug!("{:?} // Received stop message {:?} that does not match up to our local view {:?}", node.id(), message, current_view);
+                        if msg_seq != next_seq =>
+                    {
+                        debug!("{:?} // Received stop message {:?} that does not match up to our local view {:?}", node.id(), message, current_view);
 
-                            let mut guard = self.tbo.lock().unwrap();
+                        let mut guard = self.tbo.lock().unwrap();
 
-                            guard.queue_stop(s_message);
+                        guard.queue_stop(s_message);
 
-                            return stop_status!(received, &current_view);
-                        }
+                        return stop_status!(received, &current_view);
+                    }
                     ViewChangeMessageKind::Stop(_requests) => {
                         let mut guard = self.tbo.lock().unwrap();
 
@@ -1136,21 +1141,21 @@ impl<RQ> Synchronizer<RQ>
                                 return SynchronizerStatus::Running;
                             }
                             ViewChangeMessageKind::StopData(_)
-                            if next_view.leader() != node.id() =>
-                                {
-                                    warn!("{:?} // Received stop data message but we are not the leader of the current view",
+                                if next_view.leader() != node.id() =>
+                            {
+                                warn!("{:?} // Received stop data message but we are not the leader of the current view",
                                       node.id());
-                                    //If we are not the leader, ignore
-                                    return SynchronizerStatus::Running;
-                                }
+                                //If we are not the leader, ignore
+                                return SynchronizerStatus::Running;
+                            }
                             ViewChangeMessageKind::StopData(_)
-                            if collects_guard.contains_key(header.from().into()) =>
-                                {
-                                    warn!("{:?} // Received stop data message but we have already received one from this node",
+                                if collects_guard.contains_key(header.from().into()) =>
+                            {
+                                warn!("{:?} // Received stop data message but we have already received one from this node",
                                       node.id());
-                                    // drop attempts to vote twice
-                                    return SynchronizerStatus::Running;
-                                }
+                                // drop attempts to vote twice
+                                return SynchronizerStatus::Running;
+                            }
                             ViewChangeMessageKind::StopData(_) => {
                                 // The message is related to the view we are awaiting
                                 // In order to reach this point, we must be the leader of the current view,
@@ -1265,7 +1270,7 @@ impl<RQ> Synchronizer<RQ>
                                     Some(digest),
                                     Some(&*node_sign),
                                 )
-                                    .into_inner();
+                                .into_inner();
 
                                 (h, message)
                             };
@@ -1376,11 +1381,11 @@ impl<RQ> Synchronizer<RQ>
                         return SynchronizerStatus::Running;
                     }
                     ViewChangeMessageKind::Sync(_)
-                    if s_message.header().from() != next_view.leader() =>
-                        {
-                            //You're not the leader, what are you saying
-                            return SynchronizerStatus::Running;
-                        }
+                        if s_message.header().from() != next_view.leader() =>
+                    {
+                        //You're not the leader, what are you saying
+                        return SynchronizerStatus::Running;
+                    }
                     ViewChangeMessageKind::Sync(_) => {
                         let stored_message = unwrap_shareable_message(s_message);
 
@@ -1452,12 +1457,12 @@ impl<RQ> Synchronizer<RQ>
     pub fn resume_view_change<NT>(
         &self,
         log: &mut Log<RQ>,
-        timeouts: &Timeouts,
+        timeouts: &TimeoutModHandle,
         consensus: &mut Consensus<RQ>,
         node: &Arc<NT>,
     ) -> Option<SynchronizerStatus<RQ>>
-        where
-            NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+    where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
     {
         let state = self.finalize_state.borrow_mut().take()?;
 
@@ -1482,11 +1487,11 @@ impl<RQ> Synchronizer<RQ>
         &self,
         joining_node: NodeId,
         node: &NT,
-        timeouts: &Timeouts,
+        timeouts: &TimeoutModHandle,
         log: &Log<RQ>,
     ) -> SyncReconfigurationResult
-        where
-            NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
     {
         let current_view = self.view();
 
@@ -1544,10 +1549,10 @@ impl<RQ> Synchronizer<RQ>
     pub fn attempt_join_quorum<NT>(
         &self,
         node: &NT,
-        _timeouts: &Timeouts,
+        _timeouts: &TimeoutModHandle,
     ) -> ReconfigurationAttemptResult
-        where
-            NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
     {
         let current_view = self.view();
 
@@ -1595,7 +1600,7 @@ impl<RQ> Synchronizer<RQ>
         &self,
         join_cert: Option<NodeId>,
         node: &NT,
-        timeouts: &Timeouts,
+        timeouts: &TimeoutModHandle,
         _log: &Log<RQ>,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
@@ -1657,7 +1662,7 @@ impl<RQ> Synchronizer<RQ>
         &self,
         timed_out: Option<Vec<StoredMessage<RQ>>>,
         node: &NT,
-        timeouts: &Timeouts,
+        timeouts: &TimeoutModHandle,
         _log: &Log<RQ>,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
@@ -1764,12 +1769,12 @@ impl<RQ> Synchronizer<RQ>
         &self,
         state: FinalizeState<RQ>,
         log: &mut Log<RQ>,
-        timeouts: &Timeouts,
+        timeouts: &TimeoutModHandle,
         consensus: &mut Consensus<RQ>,
         node: &Arc<NT>,
     ) -> SynchronizerStatus<RQ>
-        where
-            NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+    where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
     {
         let FinalizeState {
             curr_cid,
@@ -1808,7 +1813,6 @@ impl<RQ> Synchronizer<RQ>
 
             // We are missing the last decision, which should be included in the collect data
             // sent by the leader in the SYNC message
-
 
             if let Some(last_proof) = last_proof {
                 let quorum_result = consensus
@@ -1853,7 +1857,7 @@ impl<RQ> Synchronizer<RQ>
         &self,
         header: &Header,
         pre_prepare: &ConsensusMessage<RQ>,
-        timeouts: &Timeouts,
+        timeouts: &TimeoutModHandle,
     ) -> Vec<ClientRqInfo> {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
@@ -1865,7 +1869,7 @@ impl<RQ> Synchronizer<RQ>
 
     /// Watch requests that have been received from other replicas
     ///
-    pub fn watch_received_requests(&self, digest: Vec<ClientRqInfo>, timeouts: &Timeouts) {
+    pub fn watch_received_requests(&self, digest: Vec<ClientRqInfo>, timeouts: &TimeoutModHandle) {
         match &self.accessory {
             SynchronizerAccessory::Replica(rep) => {
                 rep.watch_received_requests(digest, timeouts);
@@ -1878,8 +1882,8 @@ impl<RQ> Synchronizer<RQ>
     /// So that everyone knows about (including a leader that could still be correct, but
     /// Has not received the requests from the client)
     pub fn forward_requests<NT>(&self, timed_out: Vec<StoredMessage<RQ>>, node: &NT)
-        where
-            NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
     {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => {}
@@ -1894,7 +1898,7 @@ impl<RQ> Synchronizer<RQ>
     pub fn client_requests_timed_out(
         &self,
         my_id: NodeId,
-        seq: &Vec<RqTimeout>,
+        seq: &Vec<ModTimeout>,
     ) -> SynchronizerStatus<RQ> {
         match &self.accessory {
             SynchronizerAccessory::Follower(_) => SynchronizerStatus::Nil,
@@ -1910,7 +1914,7 @@ impl<RQ> Synchronizer<RQ>
     fn normalized_collects(
         collects: &IntMap<StoredMessage<PBFTMessage<RQ>>>,
         in_exec: SeqNo,
-    ) -> impl Iterator<Item=Option<&'_ CollectData<RQ>>> {
+    ) -> impl Iterator<Item = Option<&'_ CollectData<RQ>>> {
         let values = collects.values();
 
         let collects = normalized_collects(in_exec, collect_data(values));
@@ -1925,8 +1929,8 @@ impl<RQ> Synchronizer<RQ>
         view: &ViewInfo,
         node: &NT,
     ) -> Option<&'a Proof<RQ>>
-        where
-            NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+    where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
     {
         highest_proof::<RQ, _, _>(view, node, guard.values())
     }
@@ -2152,8 +2156,8 @@ fn certified_value<O>(
 }
 
 fn collect_data<'a, O: 'a>(
-    collects: impl Iterator<Item=&'a StoredMessage<PBFTMessage<O>>>,
-) -> impl Iterator<Item=&'a CollectData<O>> {
+    collects: impl Iterator<Item = &'a StoredMessage<PBFTMessage<O>>>,
+) -> impl Iterator<Item = &'a CollectData<O>> {
     collects.filter_map(|stored| match stored.message().view_change().kind() {
         ViewChangeMessageKind::StopData(collects) => Some(collects),
         _ => None,
@@ -2162,8 +2166,8 @@ fn collect_data<'a, O: 'a>(
 
 fn normalized_collects<'a, O: 'a>(
     in_exec: SeqNo,
-    collects: impl Iterator<Item=&'a CollectData<O>>,
-) -> impl Iterator<Item=Option<&'a CollectData<O>>> {
+    collects: impl Iterator<Item = &'a CollectData<O>>,
+) -> impl Iterator<Item = Option<&'a CollectData<O>>> {
     collects.map(move |collect| {
         if collect.incomplete_proof().executing() == in_exec {
             Some(collect)
@@ -2177,9 +2181,9 @@ fn signed_collects<RQ, NT>(
     node: &NT,
     collects: Vec<StoredMessage<PBFTMessage<RQ>>>,
 ) -> Vec<StoredMessage<PBFTMessage<RQ>>>
-    where
-        RQ: SerType,
-        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+where
+    RQ: SerType,
+    NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
     collects
         .into_iter()
@@ -2188,9 +2192,9 @@ fn signed_collects<RQ, NT>(
 }
 
 fn validate_signature<'a, RQ, M, NT>(node: &'a NT, stored: &'a StoredMessage<M>) -> bool
-    where
-        RQ: SerType,
-        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+where
+    RQ: SerType,
+    NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
     //TODO: Fix this as I believe it will always be false
     let wm = match WireMessage::from_header(*stored.header(), MessageModule::Protocol) {
@@ -2224,10 +2228,10 @@ fn validate_signature<'a, RQ, M, NT>(node: &'a NT, stored: &'a StoredMessage<M>)
 }
 
 fn highest_proof<'a, RQ, I, NT>(view: &ViewInfo, node: &NT, collects: I) -> Option<&'a Proof<RQ>>
-    where
-        RQ: SerType,
-        I: Iterator<Item=&'a StoredMessage<PBFTMessage<RQ>>>,
-        NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+where
+    RQ: SerType,
+    I: Iterator<Item = &'a StoredMessage<PBFTMessage<RQ>>>,
+    NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
     collect_data(collects)
         // fetch proofs

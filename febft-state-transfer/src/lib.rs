@@ -1,4 +1,3 @@
-
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -10,7 +9,6 @@ use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use atlas_common::{collections, Err};
 use atlas_common::channel::ChannelSyncTx;
 use atlas_common::collections::HashMap;
 use atlas_common::crypto::hash::Digest;
@@ -18,25 +16,27 @@ use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_common::{collections, Err};
 use atlas_communication::message::{Header, StoredMessage};
-use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol};
 use atlas_core::ordering_protocol::networking::serialize::NetworkView;
+use atlas_core::ordering_protocol::{ExecutionResult, OrderingProtocol};
 use atlas_core::persistent_log::{OperationMode, PersistableStateTransferProtocol};
-use atlas_core::timeouts::{RqTimeout, TimeoutKind, Timeouts};
+use atlas_core::timeouts::timeout::{ModTimeout, TimeoutModHandle, TimeoutableMod};
+use atlas_core::timeouts::{TimeoutID, TimeoutsHandle};
 use atlas_metrics::metrics::metric_duration;
 use atlas_smr_application::state::monolithic_state::{InstallStateMessage, MonolithicState};
 use atlas_smr_core::persistent_log::MonolithicStateLog;
-use atlas_smr_core::state_transfer::{
-    Checkpoint, CstM, StateTransferProtocol, STPollResult, STResult, STTimeoutResult,
-};
 use atlas_smr_core::state_transfer::monolithic_state::{
     MonolithicStateTransfer, MonolithicStateTransferInitializer,
 };
 use atlas_smr_core::state_transfer::networking::StateTransferSendNode;
+use atlas_smr_core::state_transfer::{
+    Checkpoint, CstM, STPollResult, STResult, STTimeoutResult, StateTransferProtocol,
+};
 
 use crate::config::StateTransferConfig;
-use crate::message::{CstMessage, CstMessageKind};
 use crate::message::serialize::CSTMsg;
+use crate::message::{CstMessage, CstMessageKind};
 use crate::metrics::STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID;
 
 pub mod config;
@@ -138,7 +138,7 @@ where
     current_checkpoint_state: CheckpointState<S>,
     base_timeout: Duration,
     curr_timeout: Duration,
-    timeouts: Timeouts,
+    timeouts: TimeoutModHandle,
     // NOTE: remembers whose replies we have
     // received already, to avoid replays
     //voted: HashSet<NodeId>,
@@ -226,6 +226,29 @@ macro_rules! getmessage {
             _ => return CstStatus::Nil,
         }
     }};
+}
+
+impl<S, NT, PL> TimeoutableMod<STTimeoutResult> for CollabStateTransfer<S, NT, PL>
+where
+    S: MonolithicState + 'static,
+    PL: MonolithicStateLog<S> + 'static,
+    NT: StateTransferSendNode<CSTMsg<S>> + 'static,
+{
+    fn mod_name() -> Arc<str> {
+        todo!()
+    }
+
+    fn handle_timeout(&mut self, timeout: Vec<ModTimeout>) -> Result<STTimeoutResult> {
+        for cst_seq in timeout {
+            if let TimeoutID::SeqNoBased(seq_no) = cst_seq.id() {
+                /*if self.cst_request_timed_out(*seq_no, ) {
+                    return Ok(STTimeoutResult::RunCst);
+                }*/
+            }
+        }
+
+        Ok(STTimeoutResult::CstNotNeeded)
+    }
 }
 
 impl<S, NT, PL> StateTransferProtocol<S> for CollabStateTransfer<S, NT, PL>
@@ -330,8 +353,10 @@ where
         }
 
         // Notify timeouts that we have received this message
-        self.timeouts
-            .received_cst_request(header.from(), message.sequence_number());
+        self.timeouts.ack_received(
+            TimeoutID::SeqNoBased(message.sequence_number()),
+            header.from(),
+        )?;
 
         let status = self.process_message(view.clone(), CstProgress::Message(header, message));
 
@@ -405,21 +430,6 @@ where
 
         Ok(ExecutionResult::BeginCheckpoint)
     }
-
-    fn handle_timeout<V>(&mut self, view: V, timeout: Vec<RqTimeout>) -> Result<STTimeoutResult>
-    where
-        V: NetworkView,
-    {
-        for cst_seq in timeout {
-            if let TimeoutKind::Cst(cst_seq) = cst_seq.timeout_kind() {
-                if self.cst_request_timed_out(*cst_seq, view.clone()) {
-                    return Ok(STTimeoutResult::RunCst);
-                }
-            }
-        }
-
-        Ok(STTimeoutResult::CstNotNeeded)
-    }
 }
 
 impl<S, NT, PL> MonolithicStateTransfer<S> for CollabStateTransfer<S, NT, PL>
@@ -452,7 +462,7 @@ where
 {
     fn initialize(
         config: Self::Config,
-        timeouts: Timeouts,
+        timeouts: TimeoutModHandle,
         node: Arc<NT>,
         log: PL,
         executor_handle: ChannelSyncTx<InstallStateMessage<S>>,
@@ -487,7 +497,7 @@ where
     pub fn new(
         node: Arc<NT>,
         base_timeout: Duration,
-        timeouts: Timeouts,
+        timeouts: TimeoutModHandle,
         persistent_log: PL,
         install_channel: ChannelSyncTx<InstallStateMessage<S>>,
     ) -> Self {
@@ -548,7 +558,9 @@ where
 
             for request in reqs {
                 // We only want to reply to the most recent requests from each of the nodes
-                if let std::collections::hash_map::Entry::Vacant(e) = map.entry(request.header().from()) {
+                if let std::collections::hash_map::Entry::Vacant(e) =
+                    map.entry(request.header().from())
+                {
                     e.insert(request);
                 } else {
                     map.entry(request.header().from()).and_modify(|x| {
@@ -800,7 +812,9 @@ where
                     self.received_states.contains_key(&state_digest)
                 );
 
-                if let std::collections::hash_map::Entry::Vacant(e) = self.received_states.entry(state_digest) {
+                if let std::collections::hash_map::Entry::Vacant(e) =
+                    self.received_states.entry(state_digest)
+                {
                     e.insert(ReceivedState { count: 1, state });
                 } else {
                     let current_state = self.received_states.get_mut(&state_digest).unwrap();
@@ -1012,8 +1026,13 @@ where
             cst_seq
         );
 
-        self.timeouts
-            .timeout_cst_request(self.curr_timeout, view.quorum() as u32, cst_seq);
+        let _ = self.timeouts.request_timeout(
+            TimeoutID::SeqNoBased(cst_seq),
+            None,
+            self.curr_timeout,
+            view.quorum(),
+            false,
+        );
 
         self.phase = ProtoPhase::ReceivingCid(0);
 
@@ -1046,8 +1065,13 @@ where
             cst_seq
         );
 
-        self.timeouts
-            .timeout_cst_request(self.curr_timeout, view.quorum() as u32, cst_seq);
+        let _ = self.timeouts.request_timeout(
+            TimeoutID::SeqNoBased(cst_seq),
+            None,
+            self.curr_timeout,
+            view.quorum(),
+            false,
+        );
 
         self.phase = ProtoPhase::ReceivingState(0);
 
