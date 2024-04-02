@@ -7,7 +7,7 @@ use std::cell::Cell;
 use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 
-use log::{debug, error, info};
+use tracing::{debug, error, info};
 
 use atlas_common::collections;
 use atlas_common::node_id::NodeId;

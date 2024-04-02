@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use either::Either;
-use event_listener::Event;
-use log::{debug, error, info, trace, warn};
+use event_listener::{Event, Listener};
+use tracing::{debug, error, info, trace, warn};
 
 use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;

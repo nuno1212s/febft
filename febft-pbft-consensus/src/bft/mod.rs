@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use ::log::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 use anyhow::anyhow;
 use either::Either;
 use lazy_static::lazy_static;

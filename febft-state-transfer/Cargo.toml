@@ -18,7 +18,7 @@ anyhow = "1.0"
 thiserror = "1.0"
 serde = { version = "*", optional = true }
 capnp = { version = "0.16.1", optional = true }
-log = "0.4.17"
+tracing = "*"
 
 atlas-common = { path = "../../Atlas/Atlas-Common" }
 atlas-communication = { path = "../../Atlas/Atlas-Communication" }

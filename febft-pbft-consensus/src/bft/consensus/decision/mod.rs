@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use atlas_common::Err;
 use chrono::Utc;
-use log::{debug, info, warn};
+use tracing::{debug, info, warn};
 use thiserror::Error;
 
 use atlas_common::error::*;

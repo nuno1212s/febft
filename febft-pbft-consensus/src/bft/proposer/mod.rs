@@ -4,7 +4,7 @@ use std::sync::{Arc, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use log::{debug, error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use atlas_common::channel::TryRecvError;
 use atlas_common::node_id::NodeId;

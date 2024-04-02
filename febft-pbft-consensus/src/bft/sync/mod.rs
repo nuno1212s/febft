@@ -12,7 +12,7 @@ use std::{
 use either::Either;
 use getset::Getters;
 use intmap::IntMap;
-use log::{debug, error, info, warn};
+use tracing::{debug, error, info, warn};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 

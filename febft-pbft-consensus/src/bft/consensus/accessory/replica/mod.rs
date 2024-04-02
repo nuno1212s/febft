@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use chrono::Utc;
 
-use log::debug;
+use tracing::debug;
 
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
