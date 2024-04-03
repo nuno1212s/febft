@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
+use lazy_static::lazy_static;
 use tracing::{debug, error, info, warn};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,10 @@ use crate::metrics::STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID;
 pub mod config;
 pub mod message;
 pub mod metrics;
+
+lazy_static!(
+    static ref MOD_NAME: Arc<str> = Arc::from("ST_TRANSFER");
+);
 
 /// The state of the checkpoint
 pub enum CheckpointState<D> {
@@ -235,7 +240,7 @@ where
     NT: StateTransferSendNode<CSTMsg<S>> + 'static,
 {
     fn mod_name() -> Arc<str> {
-        todo!()
+        MOD_NAME.clone()
     }
 
     fn handle_timeout(&mut self, timeout: Vec<ModTimeout>) -> Result<STTimeoutResult> {

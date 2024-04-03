@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use atlas_common::Err;
 use chrono::Utc;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 use thiserror::Error;
 
 use atlas_common::error::*;
@@ -223,6 +223,7 @@ where
         }
     }
 
+    #[instrument(skip(self), level = "debug")]
     pub fn poll(&mut self) -> DecisionPollStatus<RQ> {
         match self.phase {
             DecisionPhase::Initialize => {
@@ -271,6 +272,7 @@ where
     }
 
     /// Process a message relating to this consensus instance
+    #[instrument(skip(self, synchronizer, timeouts, node), level = "debug")]
     pub fn process_message<NT>(
         &mut self,
         s_message: ShareableMessage<PBFTMessage<RQ>>,
@@ -665,6 +667,7 @@ where
     }
 
     /// Finalize this consensus decision and return the information about the batch
+    #[instrument(skip(self), level = "debug")]
     pub fn finalize(self) -> Result<CompletedBatch<RQ>> {
         if let DecisionPhase::Decided = self.phase {
             let seq = self.sequence_number();
