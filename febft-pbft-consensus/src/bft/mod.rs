@@ -52,7 +52,7 @@ use atlas_core::ordering_protocol::{
     ProtocolConsensusDecision, ShareableConsensusMessage, ShareableMessage,
 };
 use atlas_core::reconfiguration_protocol::ReconfigurationProtocol;
-use atlas_core::request_pre_processing::RequestPreProcessor;
+use atlas_core::request_pre_processing::{RequestPProcessorSync, RequestPreProcessing};
 use atlas_core::serialize::ReconfigurationProtocolMessage;
 use atlas_core::timeouts::timeout::{ModTimeout, TimeoutModHandle, TimeoutableMod};
 
@@ -99,7 +99,7 @@ pub type OPDecision<O> = Decision<ProofMetadata, PBFTMessage<O>, O>;
 pub type OPDecisionInfo<O> = DecisionInfo<ProofMetadata, PBFTMessage<O>, O>;
 
 /// a PBFT based ordering protocol
-pub struct PBFTOrderProtocol<RQ, NT>
+pub struct PBFTOrderProtocol<RQ, RP, NT>
     where
         RQ: SerType,
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
@@ -111,7 +111,7 @@ pub struct PBFTOrderProtocol<RQ, NT>
     /// The synchronizer state machine
     synchronizer: Arc<Synchronizer<RQ>>,
     /// The request pre processor
-    pre_processor: RequestPreProcessor<RQ>,
+    pre_processor: RP,
     // A reference to the timeouts layer
     timeouts: TimeoutModHandle,
     //The proposer guard
@@ -129,7 +129,7 @@ pub struct PBFTOrderProtocol<RQ, NT>
     node: Arc<NT>,
 }
 
-impl<RQ, NT> Orderable for PBFTOrderProtocol<RQ, NT>
+impl<RQ, RP, NT> Orderable for PBFTOrderProtocol<RQ, RP, NT>
     where
         RQ: SerType,
         NT: 'static + OrderProtocolSendNode<RQ, PBFT<RQ>>,
@@ -139,7 +139,7 @@ impl<RQ, NT> Orderable for PBFTOrderProtocol<RQ, NT>
     }
 }
 
-impl<RQ, NT> OrderProtocolTolerance for PBFTOrderProtocol<RQ, NT>
+impl<RQ, RP, NT> OrderProtocolTolerance for PBFTOrderProtocol<RQ, RP, NT>
     where
         RQ: SerType,
         NT: 'static + OrderProtocolSendNode<RQ, PBFT<RQ>>,
@@ -159,14 +159,15 @@ impl<RQ, NT> OrderProtocolTolerance for PBFTOrderProtocol<RQ, NT>
     }
 }
 
-impl<RQ, NT> NetworkedOrderProtocolInitializer<RQ, NT> for PBFTOrderProtocol<RQ, NT>
+impl<RQ, RP, NT> NetworkedOrderProtocolInitializer<RQ, RP, NT> for PBFTOrderProtocol<RQ, RP, NT>
     where
         RQ: SerType + SessionBased + 'static,
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+        RP: RequestPProcessorSync<RQ> + RequestPreProcessing<RQ>,
 {
     fn initialize(
         config: Self::Config,
-        ordering_protocol_args: OrderingProtocolArgs<RQ, NT>,
+        ordering_protocol_args: OrderingProtocolArgs<RQ, RP, NT>,
     ) -> Result<Self>
         where
             Self: Sized,
@@ -175,11 +176,12 @@ impl<RQ, NT> NetworkedOrderProtocolInitializer<RQ, NT> for PBFTOrderProtocol<RQ,
     }
 }
 
-impl<RQ, NT> TimeoutableMod<OPExecResult<ProofMetadata, PBFTMessage<RQ>, RQ>>
-for PBFTOrderProtocol<RQ, NT>
+impl<RQ, RP, NT> TimeoutableMod<OPExecResult<ProofMetadata, PBFTMessage<RQ>, RQ>>
+for PBFTOrderProtocol<RQ, RP, NT>
     where
         RQ: SerType + SessionBased + 'static,
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+        RP: RequestPProcessorSync<RQ>
 {
     fn mod_name() -> Arc<str> {
         MOD_NAME.clone()
@@ -227,10 +229,11 @@ for PBFTOrderProtocol<RQ, NT>
     }
 }
 
-impl<RQ, NT> OrderingProtocol<RQ> for PBFTOrderProtocol<RQ, NT>
+impl<RQ, RP, NT> OrderingProtocol<RQ> for PBFTOrderProtocol<RQ, RP, NT>
     where
         RQ: SerType + SessionBased + 'static,
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+        RP: RequestPProcessorSync<RQ> + RequestPreProcessing<RQ>,
 {
     type Serialization = PBFTConsensus<RQ>;
     type Config = PBFTConfig;
@@ -308,7 +311,7 @@ impl<RQ, NT> OrderingProtocol<RQ> for PBFTOrderProtocol<RQ, NT>
     }
 }
 
-impl<RQ, NT> PermissionedOrderingProtocol for PBFTOrderProtocol<RQ, NT>
+impl<RQ, RP, NT> PermissionedOrderingProtocol for PBFTOrderProtocol<RQ, RP, NT>
     where
         RQ: SerType + SessionBased + 'static,
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
@@ -338,14 +341,15 @@ impl<RQ, NT> PermissionedOrderingProtocol for PBFTOrderProtocol<RQ, NT>
     }
 }
 
-impl<RQ, NT> PBFTOrderProtocol<RQ, NT>
+impl<RQ, RP, NT> PBFTOrderProtocol<RQ, RP, NT>
     where
         RQ: SerType + SessionBased + 'static,
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+        RP: RequestPreProcessing<RQ> + RequestPProcessorSync<RQ>,
 {
     fn initialize_protocol(
         config: PBFTConfig,
-        args: OrderingProtocolArgs<RQ, NT>,
+        args: OrderingProtocolArgs<RQ, RP, NT>,
         _initial_state: Option<DecisionLog<RQ>>,
     ) -> Result<Self> {
         let PBFTConfig {
@@ -867,7 +871,7 @@ impl<RQ, NT> PBFTOrderProtocol<RQ, NT>
     }
 }
 
-impl<RQ, NT> PBFTOrderProtocol<RQ, NT>
+impl<RQ, RP, NT> PBFTOrderProtocol<RQ, RP, NT>
     where
         RQ: SerType + SessionBased + 'static,
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
@@ -935,10 +939,11 @@ const CF_PRE_PREPARES: &str = "PRE_PREPARES";
 const CF_PREPARES: &str = "PREPARES";
 const CF_COMMIT: &str = "COMMITS";
 
-impl<RQ, NT> OrderProtocolPersistenceHelper<RQ, PBFTConsensus<RQ>, PBFTConsensus<RQ>>
-for PBFTOrderProtocol<RQ, NT>
+impl<RQ, RP, NT> OrderProtocolPersistenceHelper<RQ, PBFTConsensus<RQ>, PBFTConsensus<RQ>>
+for PBFTOrderProtocol<RQ, RP, NT>
     where
         RQ: SerType + SessionBased,
+        RP: Send,
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
     fn message_types() -> Vec<&'static str> {
@@ -1008,15 +1013,16 @@ for PBFTOrderProtocol<RQ, NT>
     }
 }
 
-impl<RQ, NT> LoggableOrderProtocol<RQ> for PBFTOrderProtocol<RQ, NT>
+impl<RQ, RP, NT> LoggableOrderProtocol<RQ> for PBFTOrderProtocol<RQ, RP, NT>
     where
         RQ: SerType + SessionBased + 'static,
+        RP: RequestPProcessorSync<RQ> + RequestPreProcessing<RQ> + Send,
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
     type PersistableTypes = PBFTConsensus<RQ>;
 }
 
-impl<RQ, NT, RP> ReconfigurableOrderProtocol<RP> for PBFTOrderProtocol<RQ, NT>
+impl<RQ, NT, RPP, RP> ReconfigurableOrderProtocol<RP> for PBFTOrderProtocol<RQ, RPP, NT>
     where
         RQ: SerType + SessionBased + 'static,
         RP: ReconfigurationProtocolMessage + 'static,

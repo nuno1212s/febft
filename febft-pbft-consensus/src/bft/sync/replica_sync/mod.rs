@@ -16,7 +16,8 @@ use atlas_common::serialization_helper::SerType;
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, SessionBased};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_core::request_pre_processing::{PreProcessorMessage, RequestPreProcessor};
+use atlas_core::request_pre_processing::network::RequestPreProcessingHandle;
+use atlas_core::request_pre_processing::RequestPreProcessing;
 use atlas_core::timeouts::timeout::{ModTimeout, TimeoutModHandle};
 use atlas_core::timeouts::{TimeOutable, TimeoutID};
 use atlas_metrics::metrics::{metric_duration, metric_increment};
@@ -60,17 +61,18 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
     ///
     /// Therefore, we start by clearing our stopped requests and treating them as
     /// newly proposed requests (by resetting their timer)
-    pub(super) fn handle_stopping_quorum<NT>(
+    pub(super) fn handle_stopping_quorum<NT, RP>(
         &self,
         base_sync: &Synchronizer<RQ>,
         previous_view: ViewInfo,
         consensus: &Consensus<RQ>,
         log: &Log<RQ>,
-        pre_processor: &RequestPreProcessor<RQ>,
+        pre_processor: &RP,
         timeouts: &TimeoutModHandle,
         node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+        RP: RequestPreProcessing<RQ>
     {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
@@ -243,12 +245,13 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
     }
 
     /// Register all of the requests that are missing from the view change
-    fn take_stopped_requests_and_register_them(
+    fn take_stopped_requests_and_register_them<RP>(
         &self,
         base_sync: &Synchronizer<RQ>,
-        pre_processor: &RequestPreProcessor<RQ>,
+        pre_processor: &RP,
         timeouts: &TimeoutModHandle,
-    ) {
+    )
+        where RP: RequestPreProcessing<RQ> {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
 
@@ -262,7 +265,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
 
         // Register the requests with the pre-processor
         pre_processor
-            .send_return(PreProcessorMessage::StoppedRequests(requests))
+            .process_stopped_requests(requests)
             .unwrap();
 
         let _ = timeouts.request_timeouts(
