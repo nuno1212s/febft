@@ -24,6 +24,8 @@ use atlas_common::ordering::{
 };
 use atlas_common::serialization_helper::SerType;
 use atlas_common::{collections, prng};
+use atlas_common::quiet_unwrap;
+
 use atlas_communication::lookup_table::MessageModule;
 use atlas_communication::message::{Header, StoredMessage, WireMessage};
 use atlas_communication::reconfiguration::NetworkInformationProvider;
@@ -1243,7 +1245,7 @@ impl<RQ> Synchronizer<RQ>
                                 */
                             }
 
-                            let p = rq_pre_processor.collect_pending_rqs();
+                            let p = quiet_unwrap!(rq_pre_processor.collect_pending_rqs(), SynchronizerStatus::Running);
                             let node_sign = node.network_info_provider().get_key_pair().clone();
 
                             //We create the pre-prepare here as we are the new leader,

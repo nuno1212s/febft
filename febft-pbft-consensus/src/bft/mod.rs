@@ -206,13 +206,13 @@ for PBFTOrderProtocol<RQ, RP, NT>
 
         if let SynchronizerStatus::RequestsTimedOut { forwarded, stopped } = status {
             if !forwarded.is_empty() {
-                let requests = self.pre_processor.clone_pending_rqs(forwarded);
+                let requests = self.pre_processor.clone_pending_rqs(forwarded)?;
 
                 self.synchronizer.forward_requests(requests, &*self.node);
             }
 
             if !stopped.is_empty() {
-                let stopped = self.pre_processor.clone_pending_rqs(stopped);
+                let stopped = self.pre_processor.clone_pending_rqs(stopped)?;
 
                 self.switch_phase(ConsensusPhase::SyncPhase);
 
