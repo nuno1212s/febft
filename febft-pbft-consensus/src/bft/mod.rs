@@ -254,6 +254,7 @@ impl<RQ, RP, NT> OrderingProtocol<RQ> for PBFTOrderProtocol<RQ, RP, NT>
                     self.node.id(),
                     view_change
                 );
+                
                 self.synchronizer.queue(message);
 
                 self.synchronizer.signal();
