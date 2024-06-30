@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 use anyhow::anyhow;
 use either::Either;
 use lazy_static::lazy_static;
@@ -348,6 +348,7 @@ impl<RQ, RP, NT> PBFTOrderProtocol<RQ, RP, NT>
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
         RP: RequestPreProcessing<RQ> + RequestPProcessorSync<RQ>,
 {
+    #[instrument(skip_all)]
     fn initialize_protocol(
         config: PBFTConfig,
         args: OrderingProtocolArgs<RQ, RP, NT>,
@@ -362,6 +363,8 @@ impl<RQ, RP, NT> PBFTOrderProtocol<RQ, RP, NT>
         let OrderingProtocolArgs(node_id, timeouts, pre_processor, batch_input, node, quorum) =
             args;
 
+        debug!("Initializing the synchronizer");
+        
         let sync = Synchronizer::initialize_with_quorum(
             node_id,
             SeqNo::ZERO,
@@ -371,6 +374,8 @@ impl<RQ, RP, NT> PBFTOrderProtocol<RQ, RP, NT>
 
         let consensus_guard = ProposerConsensusGuard::new(sync.view(), watermark);
 
+        debug!("Initializing the consensus protocol");
+        
         let consensus = Consensus::<RQ>::new_replica(
             node_id,
             &sync.view(),
@@ -380,6 +385,8 @@ impl<RQ, RP, NT> PBFTOrderProtocol<RQ, RP, NT>
             timeouts.clone(),
         );
 
+        debug!("Initializing the decided log.");
+        
         let dec_log = initialize_decided_log::<RQ>(node_id);
 
         let proposer = Proposer::<RQ, NT>::new(
