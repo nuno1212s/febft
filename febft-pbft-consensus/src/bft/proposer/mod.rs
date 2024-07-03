@@ -4,7 +4,7 @@ use std::sync::{Arc, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, warn, trace};
 
 use atlas_common::channel::TryRecvError;
 use atlas_common::node_id::NodeId;
@@ -130,6 +130,7 @@ where
 
                 loop {
                     if self.cancelled.load(Ordering::Relaxed) {
+                        warn!("Cancelling proposer thread");
                         break;
                     }
 
@@ -169,7 +170,6 @@ where
                         }
                     };
 
-                    //TODO: Maybe not use this as it can spam the lock on synchronizer?
                     let info = self.synchronizer.view();
 
                     let is_leader = info.leader_set().contains(&self.node_ref.id());
@@ -179,9 +179,7 @@ where
                     let our_slice = info.hash_space_division()
                         .get(&self.node_ref.id()).cloned().clone();
 
-                    let discovered_requests;
-
-                    if let Some(messages) = opt_msgs {
+                    let discovered_requests = if let Some(messages) = opt_msgs {
                         metric_increment(PROPOSER_REQUESTS_COLLECTED_ID, Some(messages.len() as u64));
                         metric_store_count(CLIENT_POOL_BATCH_SIZE_ID, messages.len());
 
@@ -219,10 +217,10 @@ where
                             metric_increment(PROPOSER_REQUEST_TIME_ITERATIONS_ID, Some(1));
                         }
 
-                        discovered_requests = true;
+                        true
                     } else {
-                        discovered_requests = false;
-                    }
+                        false
+                    };
 
                     let start = Instant::now();
 
@@ -233,11 +231,10 @@ where
                     }
 
                     if !discovered_requests {
-                        //Yield to prevent active waiting
-                        std::thread::yield_now();
+                        self.sleep_for_appropriate_amount_of_time(&ordered_propose);
                     }
                 }
-            }).unwrap()
+            }).expect("Failed to launch proposer thread.")
     }
 
     /// attempt to propose the ordered requests that we have collected
@@ -322,7 +319,7 @@ where
                     // if it has been proposed, then we do not want to retain it
 
                     let info1 = ClientRqInfo::from(msg);
-                    debug!(
+                    trace!(
                         "{:?} // Request {:?} has already been proposed, not retaining it",
                         info1,
                         self.node_ref.id()
@@ -420,5 +417,13 @@ where
         }
 
         false
+    }
+
+    /// Sleep for a given small amount of time, relative to how long we still
+    /// have until the next planned batch response
+    fn sleep_for_appropriate_amount_of_time(&self, last_proposed: &ProposeBuilder<RQ>) {
+        let time_until_next_proposal = self.global_batch_time_limit - last_proposed.last_proposal.elapsed().as_micros();
+
+        std::thread::sleep(Duration::from_micros((time_until_next_proposal / 2) as u64));
     }
 }

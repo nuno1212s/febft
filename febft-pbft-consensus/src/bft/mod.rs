@@ -364,7 +364,7 @@ impl<RQ, RP, NT> PBFTOrderProtocol<RQ, RP, NT>
             args;
 
         debug!("Initializing the synchronizer");
-        
+
         let sync = Synchronizer::initialize_with_quorum(
             node_id,
             SeqNo::ZERO,
@@ -375,7 +375,7 @@ impl<RQ, RP, NT> PBFTOrderProtocol<RQ, RP, NT>
         let consensus_guard = ProposerConsensusGuard::new(sync.view(), watermark);
 
         debug!("Initializing the consensus protocol");
-        
+
         let consensus = Consensus::<RQ>::new_replica(
             node_id,
             &sync.view(),
@@ -386,7 +386,7 @@ impl<RQ, RP, NT> PBFTOrderProtocol<RQ, RP, NT>
         );
 
         debug!("Initializing the decided log.");
-        
+
         let dec_log = initialize_decided_log::<RQ>(node_id);
 
         let proposer = Proposer::<RQ, NT>::new(
