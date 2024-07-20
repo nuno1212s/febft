@@ -1,32 +1,30 @@
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use tracing::{debug, error, info, warn, trace};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use atlas_common::channel::TryRecvError;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerType;
 use atlas_communication::message::StoredMessage;
-use atlas_core::messages::{ClientRqInfo, SessionBased};
+use atlas_core::messages::{ClientRqInfo, create_rq_correlation_id, SessionBased};
+use atlas_core::metric::{RQ_BATCH_TRACKING_ID, RQ_CLIENT_TRACKING_ID};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::request_pre_processing::{BatchOutput, PreProcessorOutputMessage};
 use atlas_core::timeouts::timeout::TimeoutModHandle;
-use atlas_metrics::metrics::{metric_duration, metric_increment, metric_store_count};
+use atlas_metrics::metrics::{metric_correlation_id_passed, metric_duration, metric_increment, metric_initialize_correlation_id, metric_store_count};
 
 use crate::bft::config::ProposerConfig;
 use crate::bft::consensus::ProposerConsensusGuard;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
-use crate::bft::metric::{
-    CLIENT_POOL_BATCH_SIZE_ID, PROPOSER_BATCHES_MADE_ID, PROPOSER_LATENCY_ID,
-    PROPOSER_PROPOSE_TIME_ID, PROPOSER_REQUESTS_COLLECTED_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID,
-    PROPOSER_REQUEST_TIME_ITERATIONS_ID,
-};
-use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
+use crate::bft::metric::{CLIENT_POOL_BATCH_SIZE_ID, ENTERED_PRE_PROPOSER, PROPOSER_BATCHES_MADE_ID, PROPOSER_LATENCY_ID, PROPOSER_PROPOSE_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUEST_TIME_ITERATIONS_ID, PROPOSER_REQUESTS_COLLECTED_ID};
 use crate::bft::PBFT;
+use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
 
 use super::sync::{AbstractSynchronizer, Synchronizer};
 
@@ -57,9 +55,6 @@ where
     global_batch_time_limit: u128,
     max_batch_size: usize,
 }
-
-const TIMEOUT: Duration = Duration::from_micros(10);
-const PRINT_INTERVAL: usize = 10000;
 
 struct ProposeBuilder<RQ>
 where
@@ -191,6 +186,10 @@ where
                         for message in messages {
                             let digest = message.header().unique_digest();
 
+                            metric_correlation_id_passed(RQ_CLIENT_TRACKING_ID, 
+                                                         create_rq_correlation_id(message.header().from(), message.message()),
+                                                         ENTERED_PRE_PROPOSER.clone());
+                            
                             if is_leader {
                                 if leader_set_size > 1 {
                                     if is_request_in_hash_space(&digest, our_slice.as_ref().unwrap()) {
@@ -239,6 +238,7 @@ where
 
     /// attempt to propose the ordered requests that we have collected
     /// Returns true if a batch was proposed
+    #[instrument(skip(self), level = "DEBUG")]
     fn propose_ordered(&self, is_leader: bool, propose: &mut ProposeBuilder<RQ>) -> bool
     where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
@@ -296,6 +296,7 @@ where
 
     /// Proposes a new batch.
     /// (Basically broadcasts it to all of the members)
+    #[instrument(skip(self, currently_accumulated), level = "DEBUG")]
     fn propose(
         &self,
         seq: SeqNo,
@@ -350,7 +351,7 @@ where
             seq,
             targets
         );
-
+        
         let message = PBFTMessage::Consensus(ConsensusMessage::new(
             seq,
             view.sequence_number(),
@@ -358,6 +359,8 @@ where
         ));
 
         let _ = self.node_ref.broadcast_signed(message, targets.into_iter());
+        
+        metric_initialize_correlation_id(RQ_BATCH_TRACKING_ID, seq.into_u32().to_string().as_str(), ENTERED_PRE_PROPOSER.clone());
 
         metric_increment(PROPOSER_BATCHES_MADE_ID, Some(1));
     }
@@ -369,6 +372,7 @@ where
     /// Check if the given request has already appeared in a view change message
     /// Returns true if it has been seen previously (should not be proposed)
     /// Returns false if not
+    #[instrument(skip_all, level = "DEBUG")]
     fn check_if_has_been_proposed(
         &self,
         req: &StoredMessage<RQ>,
@@ -422,8 +426,22 @@ where
     /// Sleep for a given small amount of time, relative to how long we still
     /// have until the next planned batch response
     fn sleep_for_appropriate_amount_of_time(&self, last_proposed: &ProposeBuilder<RQ>) {
-        let time_until_next_proposal = self.global_batch_time_limit - last_proposed.last_proposal.elapsed().as_micros();
+        let time_until_next_proposal = std::cmp::min(self.global_batch_time_limit / 2, self.global_batch_time_limit - last_proposed.last_proposal.elapsed().as_micros());
 
-        std::thread::sleep(Duration::from_micros((time_until_next_proposal / 2) as u64));
+        let sleep_duration = Duration::from_micros((time_until_next_proposal / 2) as u64);
+        
+        std::thread::sleep(sleep_duration);
+    }
+}
+
+impl<RQ> Debug for ProposeBuilder<RQ>
+where
+    RQ: SerType,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f
+            .debug_struct("ProposeBuilder")
+            .field("last_proposal", &self.last_proposal)
+            .finish()
     }
 }

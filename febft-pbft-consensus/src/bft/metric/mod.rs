@@ -1,6 +1,8 @@
+use std::sync::Arc;
 use atlas_metrics::metrics::{metric_duration, metric_store_count, MetricKind};
 use atlas_metrics::{MetricLevel, MetricRegistry};
 use std::time::Instant;
+use lazy_static::lazy_static;
 
 /// Consensus will take the ID range 1XX, for now
 ///
@@ -82,6 +84,8 @@ pub const SYNC_FORWARDED_REQUESTS_ID: usize = 124;
 
 pub const SYNC_FORWARDED_COUNT: &str = "SYNC_FORWARDED_COUNT";
 pub const SYNC_FORWARDED_COUNT_ID: usize = 125;
+
+
 
 pub fn metrics() -> Vec<MetricRegistry> {
     vec![
@@ -327,3 +331,11 @@ impl ConsensusMetrics {
         )
     }
 }
+
+lazy_static!(
+    pub static ref ENTERED_PRE_PROPOSER: Arc<str> = Arc::from("ENTERED_PRE_PROPOSER");
+    pub static ref BATCH_CREATED: Arc<str> = Arc::from("CREATED_BATCH");
+    pub static ref BATCH_PRE_PREPARE_DONE: Arc<str> = Arc::from("BATCH_PRE_PREPARE_DONE");
+    pub static ref BATCH_PREPARE_DONE: Arc<str> = Arc::from("BATCH_PREPARE_DONE");
+    pub static ref BATCH_COMMIT_DONE: Arc<str> = Arc::from("BATCH_COMMIT_DONE");
+);
