@@ -4,7 +4,8 @@ use std::sync::{Arc, MutexGuard};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-
+use rayon::{ThreadPool, ThreadPoolBuilder};
+use rayon::prelude::*;
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use atlas_common::channel::TryRecvError;
@@ -49,6 +50,8 @@ where
     // Should we shut down?
     cancelled: AtomicBool,
 
+    thread_pool: ThreadPool,
+
     //The target
     target_global_batch_size: usize,
     //Time limit for generating a batch with target_global_batch_size size
@@ -76,9 +79,6 @@ where
     }
 }
 
-///The size of the batch channel
-const BATCH_CHANNEL_SIZE: usize = 128;
-
 impl<RQ, NT> Proposer<RQ, NT>
 where
     RQ: SerType + SessionBased,
@@ -95,7 +95,10 @@ where
             target_batch_size,
             max_batch_size,
             batch_timeout,
+            processing_threads
         } = proposer_config;
+
+        let thread_pool = ThreadPoolBuilder::default().num_threads(processing_threads as usize).build().expect("Failed to build proposer thread pool");
 
         Arc::new(Self {
             batch_reception: batch_input,
@@ -107,7 +110,76 @@ where
             target_global_batch_size: target_batch_size as usize,
             global_batch_time_limit: batch_timeout as u128,
             max_batch_size: max_batch_size as usize,
+            thread_pool,
         })
+    }
+
+    fn process_request_message_leader(&self, message: StoredMessage<RQ>, leader_set_size: usize, our_slice: Option<&(Vec<u8>, Vec<u8>)>) -> Option<StoredMessage<RQ>> {
+        let digest = message.header().unique_digest();
+
+        /*metric_correlation_id_passed(RQ_CLIENT_TRACKING_ID,
+                                     create_rq_correlation_id(message.header().from(), message.message()),
+                                     ENTERED_PRE_PROPOSER.clone());*/
+
+        if leader_set_size > 1 {
+            if is_request_in_hash_space(&digest, our_slice.as_ref().unwrap()) {
+                // we know that these operations will always be proposed since we are a
+                // Correct replica. We can therefore just add them to the latest op log
+                Some(message)
+            } else {
+                None
+            }
+        } else {
+            // we know that these operations will always be proposed since we are a
+            // Correct replica. We can therefore just add them to the latest op log
+            Some(message)
+        }
+    }
+
+    fn process_request_message_non_leader(&self, message: StoredMessage<RQ>) -> ClientRqInfo {
+        let digest = message.header().unique_digest();
+
+        /*metric_correlation_id_passed(RQ_CLIENT_TRACKING_ID,
+                                     create_rq_correlation_id(message.header().from(), message.message()),
+                                     ENTERED_PRE_PROPOSER.clone());*/
+
+        ClientRqInfo::new(digest, message.header().from(), message.message().sequence_number(), message.message().session_number())
+    }
+
+    fn process_received_messages(&self, view_info: ViewInfo, messages: Vec<StoredMessage<RQ>>, propose_builder: &mut ProposeBuilder<RQ>)
+    where
+        NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
+    {
+        let is_leader = view_info.leader_set().contains(&self.node_ref.id());
+
+        let leader_set_size = view_info.leader_set().len();
+
+        let our_slice = view_info.hash_space_division()
+            .get(&self.node_ref.id()).cloned().clone();
+
+        if is_leader {
+            let mut messages = self.thread_pool.install(|| {
+                messages
+                    .into_par_iter()
+                    .filter_map(|message| {
+                        self.process_request_message_leader(message, leader_set_size, our_slice.as_ref())
+                    }).collect()
+            });
+
+            propose_builder.currently_accumulated.append(&mut messages);
+        } else {
+            let digest_vec = self.thread_pool.install(|| {
+                messages
+                    .into_par_iter()
+                    .map(|message| {
+                        self.process_request_message_non_leader(message)
+                    }).collect::<Vec<_>>()
+            });
+
+            if !digest_vec.is_empty() {
+                self.synchronizer.watch_received_requests(digest_vec, &self.timeouts);
+            }
+        }
     }
 
     ///Start this work
@@ -150,66 +222,38 @@ where
                     //We don't need to do this for non leader replicas, as that would cause unnecessary strain as the
                     //Thread is in an infinite loop
                     // Receive the requests from the clients and process them
-                    let opt_msgs: Option<PreProcessorOutputMessage<RQ>> = match self.batch_reception.try_recv() {
-                        Ok(res) => { Some(res) }
-                        Err(err) => {
-                            match err {
-                                TryRecvError::ChannelDc => {
-                                    error!("{:?} // Failed to receive requests from pre processing module because {:?}", self.node_ref.id(), err);
-                                    break;
-                                }
-                                _ => {
-                                    None
-                                }
-                            }
-                        }
-                    };
+                    let mut collected_requests: Option<PreProcessorOutputMessage<RQ>> = None;
 
                     let info = self.synchronizer.view();
 
                     let is_leader = info.leader_set().contains(&self.node_ref.id());
 
-                    let leader_set_size = info.leader_set().len();
+                    while let Ok(mut message_batch) = self.batch_reception.try_recv() {
+                        metric_store_count(CLIENT_POOL_BATCH_SIZE_ID, message_batch.len());
 
-                    let our_slice = info.hash_space_division()
-                        .get(&self.node_ref.id()).cloned().clone();
+                        if let Some(ref mut requests) = &mut collected_requests {
+                            requests.append(&mut message_batch);
+                        } else {
+                            collected_requests = Some(message_batch);
+                        }
 
-                    let discovered_requests = if let Some(messages) = opt_msgs {
+                        let collected_request_count = collected_requests.as_ref().map(|requests| requests.len()).unwrap_or(0);
+
+                        let micros_since_last_batch = ordered_propose.last_proposal.elapsed().as_micros();
+
+                        if is_leader && (collected_request_count >= self.target_global_batch_size || micros_since_last_batch >= self.global_batch_time_limit) {
+                            break;
+                        }
+                    }
+
+                    let discovered_requests = if let Some(messages) = collected_requests {
                         metric_increment(PROPOSER_REQUESTS_COLLECTED_ID, Some(messages.len() as u64));
-                        metric_store_count(CLIENT_POOL_BATCH_SIZE_ID, messages.len());
 
                         let start_time = Instant::now();
 
-                        let mut digest_vec = Vec::with_capacity(messages.len());
                         let counter = messages.len();
 
-                        for message in messages {
-                            let digest = message.header().unique_digest();
-
-                            metric_correlation_id_passed(RQ_CLIENT_TRACKING_ID, 
-                                                         create_rq_correlation_id(message.header().from(), message.message()),
-                                                         ENTERED_PRE_PROPOSER.clone());
-                            
-                            if is_leader {
-                                if leader_set_size > 1 {
-                                    if is_request_in_hash_space(&digest, our_slice.as_ref().unwrap()) {
-                                        // we know that these operations will always be proposed since we are a
-                                        // Correct replica. We can therefore just add them to the latest op log
-                                        ordered_propose.currently_accumulated.push(message);
-                                    }
-                                } else {
-                                    // we know that these operations will always be proposed since we are a
-                                    // Correct replica. We can therefore just add them to the latest op log
-                                    ordered_propose.currently_accumulated.push(message);
-                                }
-                            } else {
-                                digest_vec.push(ClientRqInfo::new(digest, message.header().from(), message.message().sequence_number(), message.message().session_number()));
-                            }
-                        }
-
-                        if !digest_vec.is_empty() {
-                            self.synchronizer.watch_received_requests(digest_vec, &self.timeouts);
-                        }
+                        self.process_received_messages(info.clone(), messages.into(), &mut ordered_propose);
 
                         if counter > 0 {
                             metric_duration(PROPOSER_REQUEST_PROCESSING_TIME_ID, start_time.elapsed());
@@ -351,7 +395,7 @@ where
             seq,
             targets
         );
-        
+
         let message = PBFTMessage::Consensus(ConsensusMessage::new(
             seq,
             view.sequence_number(),
@@ -359,7 +403,7 @@ where
         ));
 
         let _ = self.node_ref.broadcast_signed(message, targets.into_iter());
-        
+
         metric_initialize_correlation_id(RQ_BATCH_TRACKING_ID, seq.into_u32().to_string().as_str(), ENTERED_PRE_PROPOSER.clone());
 
         metric_increment(PROPOSER_BATCHES_MADE_ID, Some(1));
@@ -429,7 +473,7 @@ where
         let time_until_next_proposal = std::cmp::min(self.global_batch_time_limit / 2, self.global_batch_time_limit - last_proposed.last_proposal.elapsed().as_micros());
 
         let sleep_duration = Duration::from_micros((time_until_next_proposal / 2) as u64);
-        
+
         std::thread::sleep(sleep_duration);
     }
 }
