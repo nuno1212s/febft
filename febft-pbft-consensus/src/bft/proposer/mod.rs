@@ -1,11 +1,11 @@
+use rayon::prelude::*;
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, MutexGuard};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use rayon::{ThreadPool, ThreadPoolBuilder};
-use rayon::prelude::*;
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use atlas_common::channel::TryRecvError;
@@ -13,7 +13,7 @@ use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerType;
 use atlas_communication::message::StoredMessage;
-use atlas_core::messages::{ClientRqInfo, create_rq_correlation_id, SessionBased};
+use atlas_core::messages::{create_rq_correlation_id, ClientRqInfo, SessionBased};
 use atlas_core::metric::{RQ_BATCH_TRACKING_ID, RQ_CLIENT_TRACKING_ID};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::request_pre_processing::{BatchOutput, PreProcessorOutputMessage};
@@ -23,9 +23,9 @@ use atlas_metrics::metrics::{metric_correlation_id_passed, metric_duration, metr
 use crate::bft::config::ProposerConfig;
 use crate::bft::consensus::ProposerConsensusGuard;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
-use crate::bft::metric::{CLIENT_POOL_BATCH_SIZE_ID, ENTERED_PRE_PROPOSER, PROPOSER_BATCHES_MADE_ID, PROPOSER_LATENCY_ID, PROPOSER_PROPOSE_TIME_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUEST_TIME_ITERATIONS_ID, PROPOSER_REQUESTS_COLLECTED_ID};
-use crate::bft::PBFT;
+use crate::bft::metric::{CLIENT_POOL_BATCH_SIZE_ID, ENTERED_PRE_PROPOSER, PROPOSER_BATCHES_MADE_ID, PROPOSER_LATENCY_ID, PROPOSER_PROPOSE_TIME_ID, PROPOSER_REQUESTS_COLLECTED_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUEST_TIME_ITERATIONS_ID};
 use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
+use crate::bft::PBFT;
 
 use super::sync::{AbstractSynchronizer, Synchronizer};
 
@@ -50,7 +50,7 @@ where
     // Should we shut down?
     cancelled: AtomicBool,
 
-    thread_pool: ThreadPool,
+    thread_pool: Option<ThreadPool>,
 
     //The target
     target_global_batch_size: usize,
@@ -98,7 +98,11 @@ where
             processing_threads
         } = proposer_config;
 
-        let thread_pool = ThreadPoolBuilder::default().num_threads(processing_threads as usize).build().expect("Failed to build proposer thread pool");
+        let thread_pool = if processing_threads > 1 {
+            Some(ThreadPoolBuilder::default().num_threads(processing_threads as usize).build().expect("Failed to build proposer thread pool"))
+        } else {
+            None
+        };
 
         Arc::new(Self {
             batch_reception: batch_input,
@@ -158,24 +162,40 @@ where
             .get(&self.node_ref.id()).cloned().clone();
 
         if is_leader {
-            let mut messages = self.thread_pool.install(|| {
+            let mut messages = if let Some(thread_pool) = self.thread_pool.as_ref() {
+                thread_pool.install(|| {
+                    messages
+                        .into_par_iter()
+                        .filter_map(|message| {
+                            self.process_request_message_leader(message, leader_set_size, our_slice.as_ref())
+                        }).collect()
+                })
+            } else {
                 messages
                     .into_par_iter()
                     .filter_map(|message| {
                         self.process_request_message_leader(message, leader_set_size, our_slice.as_ref())
                     }).collect()
-            });
+            };
 
             propose_builder.currently_accumulated.append(&mut messages);
         } else {
-            let digest_vec = self.thread_pool.install(|| {
+            let digest_vec = if let Some(thread_pool) = self.thread_pool.as_ref() {
+                thread_pool.install(|| {
+                    messages
+                        .into_par_iter()
+                        .map(|message| {
+                            self.process_request_message_non_leader(message)
+                        }).collect::<Vec<_>>()
+                })
+            } else {
                 messages
                     .into_par_iter()
                     .map(|message| {
                         self.process_request_message_non_leader(message)
                     }).collect::<Vec<_>>()
-            });
-
+            };
+            
             if !digest_vec.is_empty() {
                 self.synchronizer.watch_received_requests(digest_vec, &self.timeouts);
             }

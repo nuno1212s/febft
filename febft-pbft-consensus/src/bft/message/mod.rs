@@ -169,6 +169,7 @@ pub enum ViewChangeMessageKind<O> {
 pub struct ConsensusMessage<O> {
     seq: SeqNo,
     view: SeqNo,
+    nonce: u16,
     kind: ConsensusMessageKind<O>,
 }
 
@@ -238,7 +239,9 @@ impl<O> ConsensusMessage<O> {
     /// Creates a new `ConsensusMessage` with sequence number `seq`,
     /// and of the kind `kind`.
     pub fn new(seq: SeqNo, view: SeqNo, kind: ConsensusMessageKind<O>) -> Self {
-        Self { seq, view, kind }
+        let nonce = fastrand::u16(0..u16::MAX);
+        
+        Self { seq, view, kind, nonce }
     }
 
     /// Returns a reference to the consensus message kind.

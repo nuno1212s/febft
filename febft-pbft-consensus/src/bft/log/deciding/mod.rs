@@ -201,7 +201,7 @@ where
             return Err!(DecidingLogError::LeaderNotInLeaderSet(sending_leader));
         }
 
-        self.pre_prepare_digests[leader_index] = Some(digest);
+        self.pre_prepare_digests[leader_index] = Some(*s_message.header().digest());
         self.contained_requests[leader_index] = Some(match message.kind() {
             ConsensusMessageKind::PrePrepare(requests) => requests.clone(),
             _ => unreachable!(),
