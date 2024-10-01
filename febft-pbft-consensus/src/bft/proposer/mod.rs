@@ -103,6 +103,14 @@ where
         } else {
             None
         };
+        
+        info!(
+            "Proposer configuration: target_batch_size: {}, max_batch_size: {}, batch_timeout: {}, processing_threads: {}",
+            target_batch_size,
+            max_batch_size,
+            batch_timeout,
+            processing_threads
+        );
 
         Arc::new(Self {
             batch_reception: batch_input,
@@ -172,7 +180,7 @@ where
                 })
             } else {
                 messages
-                    .into_par_iter()
+                    .into_iter()
                     .filter_map(|message| {
                         self.process_request_message_leader(message, leader_set_size, our_slice.as_ref())
                     }).collect()
@@ -190,7 +198,7 @@ where
                 })
             } else {
                 messages
-                    .into_par_iter()
+                    .into_iter()
                     .map(|message| {
                         self.process_request_message_non_leader(message)
                     }).collect::<Vec<_>>()
@@ -248,24 +256,19 @@ where
 
                     let is_leader = info.leader_set().contains(&self.node_ref.id());
 
-                    while let Ok(mut message_batch) = self.batch_reception.try_recv() {
-                        metric_store_count(CLIENT_POOL_BATCH_SIZE_ID, message_batch.len());
 
-                        if let Some(ref mut requests) = &mut collected_requests {
-                            requests.append(&mut message_batch);
-                        } else {
-                            collected_requests = Some(message_batch);
+                    if is_leader {
+                        let time_until_next_propose = Duration::from_micros(self.get_time_until_next_propose(&ordered_propose) as u64);
+
+                        while let Ok(mut message_batch) = self.batch_reception.recv_timeout(time_until_next_propose) {
+                            if self.handle_received_message(&mut ordered_propose, &mut collected_requests, is_leader, message_batch) { break; }
                         }
-
-                        let collected_request_count = collected_requests.as_ref().map(|requests| requests.len()).unwrap_or(0);
-
-                        let micros_since_last_batch = ordered_propose.last_proposal.elapsed().as_micros();
-
-                        if is_leader && (collected_request_count >= self.target_global_batch_size || micros_since_last_batch >= self.global_batch_time_limit) {
-                            break;
+                    } else {
+                        while let Ok(mut message_batch) = self.batch_reception.recv() {
+                            if self.handle_received_message(&mut ordered_propose, &mut collected_requests, is_leader, message_batch) { break; }
                         }
                     }
-
+                    
                     let discovered_requests = if let Some(messages) = collected_requests {
                         metric_increment(PROPOSER_REQUESTS_COLLECTED_ID, Some(messages.len() as u64));
 
@@ -298,6 +301,32 @@ where
                     }
                 }
             }).expect("Failed to launch proposer thread.")
+    }
+
+    fn handle_received_message(&self, mut ordered_propose: &mut ProposeBuilder<RQ>, mut collected_requests: &mut Option<PreProcessorOutputMessage<RQ>>, is_leader: bool, mut message_batch: PreProcessorOutputMessage<RQ>) -> bool {
+        metric_store_count(CLIENT_POOL_BATCH_SIZE_ID, message_batch.len());
+
+        if let Some(ref mut requests) = &mut collected_requests {
+            requests.append(&mut message_batch);
+        } else {
+            *collected_requests = Some(message_batch);
+        }
+
+        let collected_request_count = collected_requests.as_ref().map(|requests| requests.len()).unwrap_or(0);
+
+        let micros_since_last_batch = ordered_propose.last_proposal.elapsed().as_micros();
+
+        if is_leader && (collected_request_count >= self.target_global_batch_size || micros_since_last_batch >= self.global_batch_time_limit) {
+            return true;
+        }
+        
+        false
+    }
+
+    fn get_time_until_next_propose(&self, propose: &ProposeBuilder<RQ>) -> u128 {
+        let time_until_next_proposal = std::cmp::min(self.global_batch_time_limit / 2, self.global_batch_time_limit - propose.last_proposal.elapsed().as_micros());
+
+        time_until_next_proposal
     }
 
     /// attempt to propose the ordered requests that we have collected
