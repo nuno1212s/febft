@@ -10,7 +10,7 @@ use tracing::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use atlas_common::channel::ChannelSyncTx;
+use atlas_common::channel::sync::ChannelSyncTx;
 use atlas_common::collections::HashMap;
 use atlas_common::crypto::hash::Digest;
 use atlas_common::error::*;
@@ -371,7 +371,7 @@ where
                 let start = Instant::now();
 
                 self.install_channel
-                    .send_return(InstallStateMessage::new(state.checkpoint.state().clone()))
+                    .send(InstallStateMessage::new(state.checkpoint.state().clone()))
                     .unwrap();
 
                 metric_duration(STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID, start.elapsed());

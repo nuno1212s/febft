@@ -1,5 +1,5 @@
 use crate::bft::message::ObserveEventKind;
-use atlas_common::channel::ChannelMixedTx;
+use atlas_common::channel::mixed::ChannelMixedTx;
 use atlas_common::node_id::NodeId;
 
 pub type ObserverType = NodeId;
