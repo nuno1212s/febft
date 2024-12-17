@@ -453,7 +453,7 @@ pub trait AbstractSynchronizer<RQ>
     fn queue(&self, message: ShareableMessage<PBFTMessage<RQ>>);
 }
 
-type CollectsType<RQ> = IntMap<StoredMessage<PBFTMessage<RQ>>>;
+type CollectsType<RQ> = IntMap<u64, StoredMessage<PBFTMessage<RQ>>>;
 
 ///The synchronizer for the SMR protocol
 /// This part of the protocol is responsible for handling the changing of views and
@@ -465,7 +465,7 @@ pub struct Synchronizer<RQ: SerType> {
     //Tbo queue, keeps track of the current view and keeps messages arriving in order
     tbo: Mutex<TboQueue<RQ>>,
     //Stores currently received requests from other nodes
-    stopped: RefCell<IntMap<Vec<StoredMessage<RQ>>>>,
+    stopped: RefCell<IntMap<u64, Vec<StoredMessage<RQ>>>>,
     //Stores currently received requests from other nodes
     currently_adding_node: Cell<Option<NodeId>>,
     //Stores which nodes are currently being added to the quorum, along with the number of votes
@@ -1915,7 +1915,7 @@ impl<RQ> Synchronizer<RQ>
     // may be executing the same CID when there is a leader change
     #[inline]
     fn normalized_collects(
-        collects: &IntMap<StoredMessage<PBFTMessage<RQ>>>,
+        collects: &IntMap<u64, StoredMessage<PBFTMessage<RQ>>>,
         in_exec: SeqNo,
     ) -> impl Iterator<Item=Option<&'_ CollectData<RQ>>> {
         let values = collects.values();
@@ -1928,7 +1928,7 @@ impl<RQ> Synchronizer<RQ>
     // TODO: quorum sizes may differ when we implement reconfiguration
     #[inline]
     fn highest_proof<'a, NT>(
-        guard: &'a IntMap<StoredMessage<PBFTMessage<RQ>>>,
+        guard: &'a IntMap<u64, StoredMessage<PBFTMessage<RQ>>>,
         view: &ViewInfo,
         node: &NT,
     ) -> Option<&'a Proof<RQ>>
