@@ -990,6 +990,7 @@ where
 
     fn init_proof_from_scm(
         metadata: DecisionMetadata<RQ, PBFTConsensus<RQ>>,
+        additional_data: Vec<()>,
         messages: Vec<ShareableConsensusMessage<RQ, PBFTConsensus<RQ>>>,
     ) -> Result<PProof<RQ, PBFTConsensus<RQ>, PBFTConsensus<RQ>>> {
         Proof::init_from_messages(metadata, messages)
