@@ -2,16 +2,16 @@ use std::fmt::{Debug, Formatter};
 use std::iter;
 use std::ops::Deref;
 
-#[cfg(feature = "serialize_serde")]
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
-use tracing::{debug, info};
 use atlas_common::crypto::hash::Digest;
 use atlas_common::error::*;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::Err;
 use atlas_core::ordering_protocol::networking::serialize::OrderProtocolProof;
 use atlas_core::ordering_protocol::ShareableMessage;
+#[cfg(feature = "serialize_serde")]
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use tracing::{debug, info};
 
 use crate::bft::message::{ConsensusMessageKind, PBFTMessage};
 

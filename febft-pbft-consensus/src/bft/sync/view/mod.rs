@@ -13,10 +13,10 @@ use atlas_common::Err;
 use atlas_core::ordering_protocol::networking::serialize::NetworkView;
 use num_bigint::BigUint;
 use num_bigint::ToBigUint;
+use num_traits::Zero;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, Div};
-use num_traits::Zero;
 use thiserror::Error;
 
 /// This struct contains information related with an

@@ -18,12 +18,19 @@ use atlas_core::metric::{RQ_BATCH_TRACKING_ID, RQ_CLIENT_TRACKING_ID};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::request_pre_processing::{BatchOutput, PreProcessorOutputMessage};
 use atlas_core::timeouts::timeout::TimeoutModHandle;
-use atlas_metrics::metrics::{metric_correlation_id_passed, metric_duration, metric_increment, metric_initialize_correlation_id, metric_store_count};
+use atlas_metrics::metrics::{
+    metric_correlation_id_passed, metric_duration, metric_increment,
+    metric_initialize_correlation_id, metric_store_count,
+};
 
 use crate::bft::config::ProposerConfig;
 use crate::bft::consensus::ProposerConsensusGuard;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
-use crate::bft::metric::{CLIENT_POOL_BATCH_SIZE_ID, ENTERED_PRE_PROPOSER, PROPOSER_BATCHES_MADE_ID, PROPOSER_LATENCY_ID, PROPOSER_PROPOSE_TIME_ID, PROPOSER_REQUESTS_COLLECTED_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID, PROPOSER_REQUEST_TIME_ITERATIONS_ID};
+use crate::bft::metric::{
+    CLIENT_POOL_BATCH_SIZE_ID, ENTERED_PRE_PROPOSER, PROPOSER_BATCHES_MADE_ID, PROPOSER_LATENCY_ID,
+    PROPOSER_PROPOSE_TIME_ID, PROPOSER_REQUESTS_COLLECTED_ID, PROPOSER_REQUEST_PROCESSING_TIME_ID,
+    PROPOSER_REQUEST_TIME_ITERATIONS_ID,
+};
 use crate::bft::sync::view::{is_request_in_hash_space, ViewInfo};
 use crate::bft::PBFT;
 
@@ -95,15 +102,20 @@ where
             target_batch_size,
             max_batch_size,
             batch_timeout,
-            processing_threads
+            processing_threads,
         } = proposer_config;
 
         let thread_pool = if processing_threads > 1 {
-            Some(ThreadPoolBuilder::default().num_threads(processing_threads as usize).build().expect("Failed to build proposer thread pool"))
+            Some(
+                ThreadPoolBuilder::default()
+                    .num_threads(processing_threads as usize)
+                    .build()
+                    .expect("Failed to build proposer thread pool"),
+            )
         } else {
             None
         };
-        
+
         info!(
             "Proposer configuration: target_batch_size: {}, max_batch_size: {}, batch_timeout: {}, processing_threads: {}",
             target_batch_size,
@@ -126,12 +138,17 @@ where
         })
     }
 
-    fn process_request_message_leader(&self, message: StoredMessage<RQ>, leader_set_size: usize, our_slice: Option<&(Vec<u8>, Vec<u8>)>) -> Option<StoredMessage<RQ>> {
+    fn process_request_message_leader(
+        &self,
+        message: StoredMessage<RQ>,
+        leader_set_size: usize,
+        our_slice: Option<&(Vec<u8>, Vec<u8>)>,
+    ) -> Option<StoredMessage<RQ>> {
         let digest = message.header().unique_digest();
 
         /*metric_correlation_id_passed(RQ_CLIENT_TRACKING_ID,
-                                     create_rq_correlation_id(message.header().from(), message.message()),
-                                     ENTERED_PRE_PROPOSER.clone());*/
+        create_rq_correlation_id(message.header().from(), message.message()),
+        ENTERED_PRE_PROPOSER.clone());*/
 
         if leader_set_size > 1 {
             if is_request_in_hash_space(&digest, our_slice.as_ref().unwrap()) {
@@ -152,22 +169,34 @@ where
         let digest = message.header().unique_digest();
 
         /*metric_correlation_id_passed(RQ_CLIENT_TRACKING_ID,
-                                     create_rq_correlation_id(message.header().from(), message.message()),
-                                     ENTERED_PRE_PROPOSER.clone());*/
+        create_rq_correlation_id(message.header().from(), message.message()),
+        ENTERED_PRE_PROPOSER.clone());*/
 
-        ClientRqInfo::new(digest, message.header().from(), message.message().sequence_number(), message.message().session_number())
+        ClientRqInfo::new(
+            digest,
+            message.header().from(),
+            message.message().sequence_number(),
+            message.message().session_number(),
+        )
     }
 
-    fn process_received_messages(&self, view_info: ViewInfo, messages: Vec<StoredMessage<RQ>>, propose_builder: &mut ProposeBuilder<RQ>)
-    where
+    fn process_received_messages(
+        &self,
+        view_info: ViewInfo,
+        messages: Vec<StoredMessage<RQ>>,
+        propose_builder: &mut ProposeBuilder<RQ>,
+    ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
     {
         let is_leader = view_info.leader_set().contains(&self.node_ref.id());
 
         let leader_set_size = view_info.leader_set().len();
 
-        let our_slice = view_info.hash_space_division()
-            .get(&self.node_ref.id()).cloned().clone();
+        let our_slice = view_info
+            .hash_space_division()
+            .get(&self.node_ref.id())
+            .cloned()
+            .clone();
 
         if is_leader {
             let mut messages = if let Some(thread_pool) = self.thread_pool.as_ref() {
@@ -175,15 +204,25 @@ where
                     messages
                         .into_par_iter()
                         .filter_map(|message| {
-                            self.process_request_message_leader(message, leader_set_size, our_slice.as_ref())
-                        }).collect()
+                            self.process_request_message_leader(
+                                message,
+                                leader_set_size,
+                                our_slice.as_ref(),
+                            )
+                        })
+                        .collect()
                 })
             } else {
                 messages
                     .into_iter()
                     .filter_map(|message| {
-                        self.process_request_message_leader(message, leader_set_size, our_slice.as_ref())
-                    }).collect()
+                        self.process_request_message_leader(
+                            message,
+                            leader_set_size,
+                            our_slice.as_ref(),
+                        )
+                    })
+                    .collect()
             };
 
             propose_builder.currently_accumulated.append(&mut messages);
@@ -192,20 +231,19 @@ where
                 thread_pool.install(|| {
                     messages
                         .into_par_iter()
-                        .map(|message| {
-                            self.process_request_message_non_leader(message)
-                        }).collect::<Vec<_>>()
+                        .map(|message| self.process_request_message_non_leader(message))
+                        .collect::<Vec<_>>()
                 })
             } else {
                 messages
                     .into_iter()
-                    .map(|message| {
-                        self.process_request_message_non_leader(message)
-                    }).collect::<Vec<_>>()
+                    .map(|message| self.process_request_message_non_leader(message))
+                    .collect::<Vec<_>>()
             };
-            
+
             if !digest_vec.is_empty() {
-                self.synchronizer.watch_received_requests(digest_vec, &self.timeouts);
+                self.synchronizer
+                    .watch_received_requests(digest_vec, &self.timeouts);
             }
         }
     }
@@ -303,7 +341,13 @@ where
             }).expect("Failed to launch proposer thread.")
     }
 
-    fn handle_received_message(&self, mut ordered_propose: &mut ProposeBuilder<RQ>, mut collected_requests: &mut Option<PreProcessorOutputMessage<RQ>>, is_leader: bool, mut message_batch: PreProcessorOutputMessage<RQ>) -> bool {
+    fn handle_received_message(
+        &self,
+        mut ordered_propose: &mut ProposeBuilder<RQ>,
+        mut collected_requests: &mut Option<PreProcessorOutputMessage<RQ>>,
+        is_leader: bool,
+        mut message_batch: PreProcessorOutputMessage<RQ>,
+    ) -> bool {
         metric_store_count(CLIENT_POOL_BATCH_SIZE_ID, message_batch.len());
 
         if let Some(ref mut requests) = &mut collected_requests {
@@ -312,19 +356,28 @@ where
             *collected_requests = Some(message_batch);
         }
 
-        let collected_request_count = collected_requests.as_ref().map(|requests| requests.len()).unwrap_or(0);
+        let collected_request_count = collected_requests
+            .as_ref()
+            .map(|requests| requests.len())
+            .unwrap_or(0);
 
         let micros_since_last_batch = ordered_propose.last_proposal.elapsed().as_micros();
 
-        if is_leader && (collected_request_count >= self.target_global_batch_size || micros_since_last_batch >= self.global_batch_time_limit) {
+        if is_leader
+            && (collected_request_count >= self.target_global_batch_size
+                || micros_since_last_batch >= self.global_batch_time_limit)
+        {
             return true;
         }
-        
+
         false
     }
 
     fn get_time_until_next_propose(&self, propose: &ProposeBuilder<RQ>) -> u128 {
-        let time_until_next_proposal = std::cmp::min(self.global_batch_time_limit / 2, self.global_batch_time_limit - propose.last_proposal.elapsed().as_micros());
+        let time_until_next_proposal = std::cmp::min(
+            self.global_batch_time_limit / 2,
+            self.global_batch_time_limit - propose.last_proposal.elapsed().as_micros(),
+        );
 
         time_until_next_proposal
     }
@@ -453,7 +506,11 @@ where
 
         let _ = self.node_ref.broadcast_signed(message, targets.into_iter());
 
-        metric_initialize_correlation_id(RQ_BATCH_TRACKING_ID, seq.into_u32().to_string().as_str(), ENTERED_PRE_PROPOSER.clone());
+        metric_initialize_correlation_id(
+            RQ_BATCH_TRACKING_ID,
+            seq.into_u32().to_string().as_str(),
+            ENTERED_PRE_PROPOSER.clone(),
+        );
 
         metric_increment(PROPOSER_BATCHES_MADE_ID, Some(1));
     }
@@ -519,7 +576,10 @@ where
     /// Sleep for a given small amount of time, relative to how long we still
     /// have until the next planned batch response
     fn sleep_for_appropriate_amount_of_time(&self, last_proposed: &ProposeBuilder<RQ>) {
-        let time_until_next_proposal = std::cmp::min(self.global_batch_time_limit / 2, self.global_batch_time_limit - last_proposed.last_proposal.elapsed().as_micros());
+        let time_until_next_proposal = std::cmp::min(
+            self.global_batch_time_limit / 2,
+            self.global_batch_time_limit - last_proposed.last_proposal.elapsed().as_micros(),
+        );
 
         let sleep_duration = Duration::from_micros((time_until_next_proposal / 2) as u64);
 
@@ -532,8 +592,7 @@ where
     RQ: SerType,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f
-            .debug_struct("ProposeBuilder")
+        f.debug_struct("ProposeBuilder")
             .field("last_proposal", &self.last_proposal)
             .finish()
     }

@@ -72,7 +72,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         node: &NT,
     ) where
         NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
-        RP: RequestPreProcessing<RQ>
+        RP: RequestPreProcessing<RQ>,
     {
         // NOTE:
         // - install new view (i.e. update view seq no) (Done in the synchronizer)
@@ -237,7 +237,10 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         //Notify the timeouts that we have received the following requests
         //TODO: Should this only be done after the commit phase?
 
-        let _ = timeouts.acks_received(transform_client_rq_to_timeouts_ack(timeout_info, sending_node));
+        let _ = timeouts.acks_received(transform_client_rq_to_timeouts_ack(
+            timeout_info,
+            sending_node,
+        ));
 
         metric_duration(SYNC_BATCH_RECEIVED_ID, start_time.elapsed());
 
@@ -250,8 +253,9 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         base_sync: &Synchronizer<RQ>,
         pre_processor: &RP,
         timeouts: &TimeoutModHandle,
-    )
-        where RP: RequestPreProcessing<RQ> {
+    ) where
+        RP: RequestPreProcessing<RQ>,
+    {
         // TODO: maybe optimize this `stopped_requests` call, to avoid
         // a heap allocation of a `Vec`?
 
@@ -264,9 +268,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
         let count = requests.len();
 
         // Register the requests with the pre-processor
-        pre_processor
-            .process_stopped_requests(requests)
-            .unwrap();
+        pre_processor.process_stopped_requests(requests).unwrap();
 
         let _ = timeouts.request_timeouts(
             transform_client_rq_to_timeouts(rq_info),
@@ -489,7 +491,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
 unsafe impl<RQ: SerType> Sync for ReplicaSynchronizer<RQ> {}
 
 fn transform_client_rq_to_timeouts(
-    client_rq: impl IntoIterator<Item=ClientRqInfo>,
+    client_rq: impl IntoIterator<Item = ClientRqInfo>,
 ) -> Vec<(TimeoutID, Option<Box<dyn TimeOutable>>)> {
     client_rq
         .into_iter()
@@ -507,7 +509,7 @@ fn transform_client_rq_to_timeouts(
 }
 
 fn transform_client_rq_to_timeouts_ack(
-    client_rq: impl IntoIterator<Item=ClientRqInfo>,
+    client_rq: impl IntoIterator<Item = ClientRqInfo>,
     from: NodeId,
 ) -> Vec<(TimeoutID, NodeId)> {
     client_rq

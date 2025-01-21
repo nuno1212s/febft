@@ -1,12 +1,12 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
+use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::fmt::{Debug, Formatter};
 
 use either::Either;
 use event_listener::{Event, Listener};
-use tracing::{debug, error, info, trace, warn, instrument};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use atlas_common::error::*;
 use atlas_common::globals::ReadOnly;
@@ -34,7 +34,7 @@ use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::metric::OPERATIONS_ORDERED_ID;
 use crate::bft::sync::view::ViewInfo;
 use crate::bft::sync::Synchronizer;
-use crate::bft::{OPDecision, SysMsg, PBFT};
+use crate::bft::{FeDecision, SysMsg, PBFT};
 
 pub mod accessory;
 pub mod decision;
@@ -50,14 +50,14 @@ pub enum ConsensusStatus<O> {
     MessageQueued,
     /// A `febft` quorum still hasn't made a decision
     /// on a client request to be executed.
-    Deciding(MaybeVec<OPDecision<O>>),
+    Deciding(MaybeVec<FeDecision<O>>),
     /// A `febft` quorum decided on the execution of
     /// the batch of requests with the given digests.
     /// The first digest is the digest of the Prepare message
     /// And therefore the entire batch digest
     /// THe second Vec<Digest> is a vec with digests of the requests contained in the batch
     /// The third is the messages that should be persisted for this batch to be considered persisted
-    Decided(MaybeVec<OPDecision<O>>),
+    Decided(MaybeVec<FeDecision<O>>),
 }
 
 /// Represents the status of calling `poll()` on a `Consensus`.
@@ -69,7 +69,7 @@ pub enum ConsensusPollStatus<O> {
     NextMessage(ShareableMessage<PBFTMessage<O>>),
     /// The first consensus instance of the consensus queue is ready to be finalized
     /// as it has already been decided
-    Decided(MaybeVec<Decision<ProofMetadata, PBFTMessage<O>, O>>),
+    Decided(MaybeVec<FeDecision<O>>),
 }
 
 /// Represents a queue of messages to be ordered in a consensus instance.
@@ -324,7 +324,7 @@ where
             self.signalled.push_signalled(message_seq);
         }
     }
-    
+
     /// Poll the given consensus
     #[instrument(skip_all, level = "debug", ret)]
     pub fn poll(&mut self) -> ConsensusPollStatus<RQ> {
@@ -467,6 +467,7 @@ where
                         Decision::decision_info_from_metadata_and_messages(
                             decision_seq,
                             metadata,
+                            MaybeVec::None,
                             MaybeVec::from_one(message),
                         ),
                     ))
@@ -729,7 +730,7 @@ where
         view: &ViewInfo,
         proof: Proof<RQ>,
         log: &mut Log<RQ>,
-    ) -> Result<OPDecision<RQ>> {
+    ) -> Result<FeDecision<RQ>> {
         // If this is successful, it means that we are all caught up and can now start executing the
         // batch
         let to_execute = log.install_proof(proof)?;
@@ -873,10 +874,10 @@ where
         // So the proposer won't try to propose anything to this decision
         self.decisions[0].skip_init_phase();
 
-        let shareable_message = Arc::new(ReadOnly::new(StoredMessage::new(
+        let shareable_message = Arc::new(StoredMessage::new(
             header,
             PBFTMessage::Consensus(message),
-        )));
+        ));
 
         let result = self.process_message(shareable_message, synchronizer, timeouts, node)?;
 

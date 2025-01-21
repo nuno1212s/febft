@@ -1,8 +1,8 @@
-use std::sync::Arc;
 use atlas_metrics::metrics::{metric_duration, metric_store_count, MetricKind};
 use atlas_metrics::{MetricLevel, MetricRegistry};
-use std::time::Instant;
 use lazy_static::lazy_static;
+use std::sync::Arc;
+use std::time::Instant;
 
 /// Consensus will take the ID range 1XX, for now
 ///
@@ -167,7 +167,8 @@ pub fn metrics() -> Vec<MetricRegistry> {
             CONSENSUS_PRE_PREPARE_TO_PREPARE_LATENCY_ID,
             CONSENSUS_PRE_PREPARE_TO_PREPARE_LATENCY.to_string(),
             MetricKind::Duration,
-        ).into(),
+        )
+            .into(),
         (
             CONSENSUS_PREPARE_LATENCY_ID,
             CONSENSUS_PREPARE_LATENCY.to_string(),
@@ -178,7 +179,8 @@ pub fn metrics() -> Vec<MetricRegistry> {
             CONSENSUS_PREPARE_TO_COMMIT_LATENCY_ID,
             CONSENSUS_PREPARE_TO_COMMIT_LATENCY.to_string(),
             MetricKind::Duration,
-        ).into(),
+        )
+            .into(),
         (
             CONSENSUS_COMMIT_LATENCY_ID,
             CONSENSUS_COMMIT_LATENCY.to_string(),
@@ -350,10 +352,10 @@ impl ConsensusMetrics {
     }
 }
 
-lazy_static!(
+lazy_static! {
     pub static ref ENTERED_PRE_PROPOSER: Arc<str> = Arc::from("ENTERED_PRE_PROPOSER");
     pub static ref BATCH_CREATED: Arc<str> = Arc::from("CREATED_BATCH");
     pub static ref BATCH_PRE_PREPARE_DONE: Arc<str> = Arc::from("BATCH_PRE_PREPARE_DONE");
     pub static ref BATCH_PREPARE_DONE: Arc<str> = Arc::from("BATCH_PREPARE_DONE");
     pub static ref BATCH_COMMIT_DONE: Arc<str> = Arc::from("BATCH_COMMIT_DONE");
-);
+}

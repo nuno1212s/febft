@@ -5,8 +5,8 @@ use std::time::Instant;
 
 use atlas_common::Err;
 use chrono::Utc;
-use tracing::{debug, info, instrument, warn};
 use thiserror::Error;
+use tracing::{debug, info, instrument, warn};
 
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
@@ -25,7 +25,10 @@ use crate::bft::consensus::accessory::{AccessoryConsensus, ConsensusDecisionAcce
 use crate::bft::log::deciding::{CompletedBatch, WorkingDecisionLog};
 use crate::bft::log::decisions::{IncompleteProof, ProofMetadata};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
-use crate::bft::metric::{BATCH_COMMIT_DONE, BATCH_PRE_PREPARE_DONE, BATCH_PREPARE_DONE, ConsensusMetrics, PRE_PREPARE_ANALYSIS_ID};
+use crate::bft::metric::{
+    ConsensusMetrics, BATCH_COMMIT_DONE, BATCH_PREPARE_DONE, BATCH_PRE_PREPARE_DONE,
+    PRE_PREPARE_ANALYSIS_ID,
+};
 use crate::bft::sync::view::ViewInfo;
 use crate::bft::sync::{AbstractSynchronizer, Synchronizer};
 use crate::bft::PBFT;
@@ -304,10 +307,10 @@ where
             DecisionPhase::PrePreparing(received) => {
                 let received = match message.kind() {
                     ConsensusMessageKind::PrePrepare(_)
-                    if message.view() != view.sequence_number() =>
-                        {
-                            // drop proposed value in a different view (from different leader)
-                            debug!(
+                        if message.view() != view.sequence_number() =>
+                    {
+                        // drop proposed value in a different view (from different leader)
+                        debug!(
                             "{:?} // Dropped {:?} because of view {:?} vs {:?} (ours) header {:?}",
                             self.node_id,
                             message,
@@ -316,26 +319,26 @@ where
                             header
                         );
 
-                            return Ok(DecisionStatus::MessageIgnored);
-                        }
+                        return Ok(DecisionStatus::MessageIgnored);
+                    }
                     ConsensusMessageKind::PrePrepare(_)
-                    if !view.leader_set().contains(&header.from()) =>
-                        {
-                            // Drop proposed value since sender is not leader
-                            debug!("{:?} // Dropped {:?} because the sender was not the leader {:?} vs {:?} (ours)",
+                        if !view.leader_set().contains(&header.from()) =>
+                    {
+                        // Drop proposed value since sender is not leader
+                        debug!("{:?} // Dropped {:?} because the sender was not the leader {:?} vs {:?} (ours)",
                         self.node_id,message, header.from(), view.leader());
 
-                            return Ok(DecisionStatus::MessageIgnored);
-                        }
+                        return Ok(DecisionStatus::MessageIgnored);
+                    }
                     ConsensusMessageKind::PrePrepare(_)
-                    if message.sequence_number() != self.seq =>
-                        {
-                            //Drop proposed value since it is not for this consensus instance
-                            warn!("{:?} // Dropped {:?} because the sequence number was not the same {:?} vs {:?} (ours)",
+                        if message.sequence_number() != self.seq =>
+                    {
+                        //Drop proposed value since it is not for this consensus instance
+                        warn!("{:?} // Dropped {:?} because the sequence number was not the same {:?} vs {:?} (ours)",
                             self.node_id, message, message.sequence_number(), self.seq);
 
-                            return Ok(DecisionStatus::MessageIgnored);
-                        }
+                        return Ok(DecisionStatus::MessageIgnored);
+                    }
                     ConsensusMessageKind::Prepare(_d) => {
                         debug!(
                             "{:?} // Received {:?} from {:?} while in prepreparing ",
@@ -420,9 +423,11 @@ where
 
                     self.message_queue.signal();
 
-                    metric_correlation_id_passed(RQ_BATCH_TRACKING_ID,
-                                                 self.sequence_number().into_u32().to_string(),
-                                                 BATCH_PRE_PREPARE_DONE.clone());
+                    metric_correlation_id_passed(
+                        RQ_BATCH_TRACKING_ID,
+                        self.sequence_number().into_u32().to_string(),
+                        BATCH_PRE_PREPARE_DONE.clone(),
+                    );
 
                     // Mark that we have transitioned to the next phase
                     result = DecisionStatus::Transitioned(Some(batch_metadata), s_message);
@@ -471,18 +476,18 @@ where
                         return Ok(DecisionStatus::MessageQueued);
                     }
                     ConsensusMessageKind::Prepare(_)
-                    if message.view() != view.sequence_number() =>
-                        {
-                            // drop proposed value in a different view (from different leader)
-                            warn!(
+                        if message.view() != view.sequence_number() =>
+                    {
+                        // drop proposed value in a different view (from different leader)
+                        warn!(
                             "{:?} // Dropped prepare message because of view {:?} vs {:?} (ours)",
                             self.node_id,
                             message.view(),
                             view.sequence_number()
                         );
 
-                            return Ok(DecisionStatus::MessageIgnored);
-                        }
+                        return Ok(DecisionStatus::MessageIgnored);
+                    }
                     ConsensusMessageKind::Prepare(_) if message.sequence_number() != self.seq => {
                         // drop proposed value in a different view (from different leader)
                         warn!(
@@ -495,14 +500,14 @@ where
                         return Ok(DecisionStatus::MessageIgnored);
                     }
                     ConsensusMessageKind::Prepare(d)
-                    if *d != self.working_log.current_digest().unwrap() =>
-                        {
-                            // drop msg with different digest from proposed value
-                            warn!("{:?} // Dropped prepare message {:?} from {:?} because of digest {:?} vs {:?} (ours)",
+                        if *d != self.working_log.current_digest().unwrap() =>
+                    {
+                        // drop msg with different digest from proposed value
+                        warn!("{:?} // Dropped prepare message {:?} from {:?} because of digest {:?} vs {:?} (ours)",
                             self.node_id, message.sequence_number(), header.from(), d, self.working_log.current_digest());
 
-                            return Ok(DecisionStatus::MessageIgnored);
-                        }
+                        return Ok(DecisionStatus::MessageIgnored);
+                    }
                     ConsensusMessageKind::Prepare(_) => {
                         // Everything checks out, we can now process the message
                         received + 1
@@ -540,10 +545,12 @@ where
 
                     self.message_queue.signal();
 
-                    metric_correlation_id_passed(RQ_BATCH_TRACKING_ID,
-                                                 self.sequence_number().into_u32().to_string(),
-                                                 BATCH_PREPARE_DONE.clone());
-                    
+                    metric_correlation_id_passed(
+                        RQ_BATCH_TRACKING_ID,
+                        self.sequence_number().into_u32().to_string(),
+                        BATCH_PREPARE_DONE.clone(),
+                    );
+
                     result = DecisionStatus::Transitioned(None, s_message);
 
                     DecisionPhase::Committing(0)
@@ -596,14 +603,14 @@ where
                         return Ok(DecisionStatus::MessageIgnored);
                     }
                     ConsensusMessageKind::Commit(d)
-                    if *d != self.working_log.current_digest().unwrap() =>
-                        {
-                            // drop msg with different digest from proposed value
-                            warn!("{:?} // Dropped commit message {:?} from {:?} because of digest {:?} vs {:?} (ours)",
+                        if *d != self.working_log.current_digest().unwrap() =>
+                    {
+                        // drop msg with different digest from proposed value
+                        warn!("{:?} // Dropped commit message {:?} from {:?} because of digest {:?} vs {:?} (ours)",
                             self.node_id, message.sequence_number(), header.from(), d, self.working_log.current_digest());
 
-                            return Ok(DecisionStatus::MessageIgnored);
-                        }
+                        return Ok(DecisionStatus::MessageIgnored);
+                    }
                     ConsensusMessageKind::Commit(_) => received + 1,
                     _ => {
                         // Any message relating to any other phase other than commit is not accepted
@@ -639,10 +646,12 @@ where
                         message,
                         &**node,
                     );
-                    
-                    metric_correlation_id_passed(RQ_BATCH_TRACKING_ID,
-                                                 self.sequence_number().into_u32().to_string(),
-                                                 BATCH_COMMIT_DONE.clone());
+
+                    metric_correlation_id_passed(
+                        RQ_BATCH_TRACKING_ID,
+                        self.sequence_number().into_u32().to_string(),
+                        BATCH_COMMIT_DONE.clone(),
+                    );
 
                     Ok(DecisionStatus::Decided(s_message))
                 } else {

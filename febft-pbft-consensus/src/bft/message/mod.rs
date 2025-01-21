@@ -240,8 +240,13 @@ impl<O> ConsensusMessage<O> {
     /// and of the kind `kind`.
     pub fn new(seq: SeqNo, view: SeqNo, kind: ConsensusMessageKind<O>) -> Self {
         let nonce = fastrand::u16(0..u16::MAX);
-        
-        Self { seq, view, kind, nonce }
+
+        Self {
+            seq,
+            view,
+            kind,
+            nonce,
+        }
     }
 
     /// Returns a reference to the consensus message kind.

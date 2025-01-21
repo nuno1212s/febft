@@ -3,6 +3,7 @@ use either::Either;
 use thiserror::Error;
 
 use atlas_common::error::*;
+use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerType;
@@ -14,7 +15,7 @@ use crate::bft::log::decided::DecisionLog;
 use crate::bft::log::deciding::{CompletedBatch, FinishedMessageLog};
 use crate::bft::log::decisions::{Proof, ProofMetadata};
 use crate::bft::message::ConsensusMessageKind;
-use crate::bft::OPDecision;
+use crate::bft::FeDecision;
 
 pub mod decided;
 pub mod deciding;
@@ -39,7 +40,7 @@ where
         self.decided.last_decision()
     }
 
-    pub fn install_proof(&mut self, proof: Proof<RQ>) -> Result<OPDecision<RQ>> {
+    pub fn install_proof(&mut self, proof: Proof<RQ>) -> Result<FeDecision<RQ>> {
         if let Some(decision) = self.decision_log().last_execution() {
             match proof.seq_no().index(decision) {
                 Either::Left(_) | Either::Right(0) => {
@@ -66,7 +67,7 @@ where
         let (metadata, messages) = proof.into_parts();
 
         Ok(Decision::full_decision_info(
-            sequence, metadata, messages, batch_info,
+            sequence, metadata, MaybeVec::None, MaybeVec::from_many(messages), batch_info,
         ))
     }
 

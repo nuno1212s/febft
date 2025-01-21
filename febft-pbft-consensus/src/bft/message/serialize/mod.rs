@@ -38,7 +38,7 @@ where
     W: Write + AsRef<[u8]> + AsMut<[u8]>,
 {
     #[cfg(feature = "serialize_capnp")]
-    capnp::serialize_consensus::<W, D>(w, message)?;
+    capnp::serialize_consensus::<W, RQ>(w, message)?;
 
     #[cfg(feature = "serialize_serde")]
     serde::serialize_consensus::<W, RQ>(message, w)?;
@@ -52,7 +52,7 @@ where
     R: Read + AsRef<[u8]>,
 {
     #[cfg(feature = "serialize_capnp")]
-    let result = capnp::deserialize_consensus::<R, D>(r)?;
+    let result = capnp::deserialize_consensus::<R, RQ>(r)?;
 
     #[cfg(feature = "serialize_serde")]
     let result = serde::deserialize_consensus::<R, RQ>(r)?;
@@ -68,7 +68,9 @@ where
     RQ: SerType,
 {
     type ProtocolMessage = PBFTMessage<RQ>;
-    type ProofMetadata = ProofMetadata;
+    type DecisionMetadata = ProofMetadata;
+
+    type DecisionAdditionalInfo = ();
 
     fn internally_verify_message<NI, OPVH>(
         network_info: &Arc<NI>,
