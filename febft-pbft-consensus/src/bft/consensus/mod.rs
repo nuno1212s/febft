@@ -16,7 +16,7 @@ use atlas_common::ordering::{
     tbo_advance_message_queue, tbo_advance_message_queue_return, tbo_queue_message_arc, Orderable,
     SeqNo,
 };
-use atlas_common::serialization_helper::SerType;
+use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::{ClientRqInfo, SessionBased};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
@@ -198,7 +198,7 @@ pub struct Signals {
 /// of missing messages
 pub struct Consensus<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     node_id: NodeId,
     /// How many consensus instances can we overlap at the same time.
@@ -231,7 +231,7 @@ where
 
 impl<RQ> Consensus<RQ>
 where
-    RQ: SerType + SessionBased + 'static,
+    RQ: SerMsg + SessionBased + 'static,
 {
     pub fn new_replica(
         node_id: NodeId,
@@ -920,7 +920,7 @@ where
 
 impl<RQ> Orderable for Consensus<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     fn sequence_number(&self) -> SeqNo {
         self.seq_no

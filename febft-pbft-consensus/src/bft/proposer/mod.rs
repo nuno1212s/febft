@@ -11,7 +11,7 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use atlas_common::channel::TryRecvError;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_common::serialization_helper::SerType;
+use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::StoredMessage;
 use atlas_core::messages::{create_rq_correlation_id, ClientRqInfo, SessionBased};
 use atlas_core::metric::{RQ_BATCH_TRACKING_ID, RQ_CLIENT_TRACKING_ID};
@@ -45,7 +45,7 @@ pub type BatchType<R> = Vec<StoredMessage<R>>;
 ///Another thread will then take from this channel and propose the requests
 pub struct Proposer<RQ, NT>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     /// Channel for the reception of batches from the pre processing module
     batch_reception: BatchOutput<RQ>,
@@ -68,7 +68,7 @@ where
 
 struct ProposeBuilder<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     currently_accumulated: Vec<StoredMessage<RQ>>,
     last_proposal: Instant,
@@ -76,7 +76,7 @@ where
 
 impl<RQ> ProposeBuilder<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     pub fn new(target_size: usize) -> Self {
         Self {
@@ -88,7 +88,7 @@ where
 
 impl<RQ, NT> Proposer<RQ, NT>
 where
-    RQ: SerType + SessionBased,
+    RQ: SerMsg + SessionBased,
 {
     pub fn new(
         node: Arc<NT>,
@@ -589,7 +589,7 @@ where
 
 impl<RQ> Debug for ProposeBuilder<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProposeBuilder")

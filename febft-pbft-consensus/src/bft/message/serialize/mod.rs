@@ -12,10 +12,10 @@ use std::sync::Arc;
 
 use atlas_common::error::*;
 use atlas_common::ordering::Orderable;
-use atlas_common::serialization_helper::SerType;
+use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::Header;
 use atlas_communication::reconfiguration::NetworkInformationProvider;
-use atlas_core::ordering_protocol::loggable::PersistentOrderProtocolTypes;
+use atlas_core::ordering_protocol::loggable::message::PersistentOrderProtocolTypes;
 use atlas_core::ordering_protocol::networking::serialize::{
     OrderProtocolVerificationHelper, OrderingProtocolMessage, PermissionedOrderingProtocolMessage,
 };
@@ -34,7 +34,7 @@ pub mod serde;
 
 pub fn serialize_consensus<W, RQ>(w: &mut W, message: &ConsensusMessage<RQ>) -> Result<()>
 where
-    RQ: SerType,
+    RQ: SerMsg,
     W: Write + AsRef<[u8]> + AsMut<[u8]>,
 {
     #[cfg(feature = "serialize_capnp")]
@@ -48,7 +48,7 @@ where
 
 pub fn deserialize_consensus<R, RQ>(r: R) -> Result<ConsensusMessage<RQ>>
 where
-    RQ: SerType,
+    RQ: SerMsg,
     R: Read + AsRef<[u8]>,
 {
     #[cfg(feature = "serialize_capnp")]
@@ -65,7 +65,7 @@ pub struct PBFTConsensus<RQ>(PhantomData<fn() -> RQ>);
 
 impl<RQ> OrderingProtocolMessage<RQ> for PBFTConsensus<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     type ProtocolMessage = PBFTMessage<RQ>;
     type DecisionMetadata = ProofMetadata;
@@ -209,14 +209,14 @@ where
 
 impl<RQ> PermissionedOrderingProtocolMessage for PBFTConsensus<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     type ViewInfo = ViewInfo;
 }
 
 impl<RQ> PersistentOrderProtocolTypes<RQ, Self> for PBFTConsensus<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     type Proof = Proof<RQ>;
 

@@ -23,7 +23,7 @@ use atlas_common::ordering::{
     tbo_advance_message_queue, tbo_pop_message, tbo_queue_message_arc, Orderable, SeqNo,
 };
 use atlas_common::quiet_unwrap;
-use atlas_common::serialization_helper::SerType;
+use atlas_common::serialization_helper::SerMsg;
 use atlas_common::{collections, prng};
 
 use atlas_communication::lookup_table::MessageModule;
@@ -440,7 +440,7 @@ pub enum SyncReconfigurationResult {
 ///A trait describing some of the necessary methods for the synchronizer
 pub trait AbstractSynchronizer<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     /// Returns information regarding the current view, such as
     /// the number of faulty replicas the system can tolerate.
@@ -458,7 +458,7 @@ type CollectsType<RQ> = IntMap<u64, StoredMessage<PBFTMessage<RQ>>>;
 ///The synchronizer for the SMR protocol
 /// This part of the protocol is responsible for handling the changing of views and
 /// for keeping track of any timed out client requests
-pub struct Synchronizer<RQ: SerType> {
+pub struct Synchronizer<RQ: SerMsg> {
     node_id: NodeId,
 
     phase: Cell<ProtoPhase>,
@@ -488,11 +488,11 @@ pub struct Synchronizer<RQ: SerType> {
 /// So we protect collects, watching and tbo as those are the fields that are going to be
 /// accessed by both those threads.
 /// Since the other fields are going to be accessed by just 1 thread, we just need them to be Send, which they are
-unsafe impl<RQ: SerType> Sync for Synchronizer<RQ> {}
+unsafe impl<RQ: SerMsg> Sync for Synchronizer<RQ> {}
 
 impl<RQ> AbstractSynchronizer<RQ> for Synchronizer<RQ>
 where
-    RQ: SerType + SessionBased + 'static,
+    RQ: SerMsg + SessionBased + 'static,
 {
     /// Returns some information regarding the current view, such as
     /// the number of faulty replicas the system can tolerate.
@@ -562,7 +562,7 @@ where
 
 impl<RQ> Synchronizer<RQ>
 where
-    RQ: SerType + SessionBased + 'static,
+    RQ: SerMsg + SessionBased + 'static,
 {
     pub fn new_follower(node_id: NodeId, view: ViewInfo) -> Arc<Self> {
         Arc::new(Self {
@@ -1944,7 +1944,7 @@ where
 
 ///The accessory services that complement the base follower state machine
 /// This allows us to maximize code re usage and therefore reduce the amount of failure places
-pub enum SynchronizerAccessory<RQ: SerType> {
+pub enum SynchronizerAccessory<RQ: SerMsg> {
     Follower(FollowerSynchronizer<RQ>),
     Replica(ReplicaSynchronizer<RQ>),
 }
@@ -2188,7 +2188,7 @@ fn signed_collects<RQ, NT>(
     collects: Vec<StoredMessage<PBFTMessage<RQ>>>,
 ) -> Vec<StoredMessage<PBFTMessage<RQ>>>
 where
-    RQ: SerType,
+    RQ: SerMsg,
     NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
     collects
@@ -2199,7 +2199,7 @@ where
 
 fn validate_signature<'a, RQ, M, NT>(node: &'a NT, stored: &'a StoredMessage<M>) -> bool
 where
-    RQ: SerType,
+    RQ: SerMsg,
     NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
     //TODO: Fix this as I believe it will always be false
@@ -2235,7 +2235,7 @@ where
 
 fn highest_proof<'a, RQ, I, NT>(view: &ViewInfo, node: &NT, collects: I) -> Option<&'a Proof<RQ>>
 where
-    RQ: SerType,
+    RQ: SerMsg,
     I: Iterator<Item = &'a StoredMessage<PBFTMessage<RQ>>>,
     NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {

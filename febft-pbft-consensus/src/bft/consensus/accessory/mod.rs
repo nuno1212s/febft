@@ -1,4 +1,4 @@
-use atlas_common::serialization_helper::SerType;
+use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::Header;
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ pub mod replica;
 
 pub enum ConsensusDecisionAccessory<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     Follower,
     Replica(ReplicaAccessory<RQ>),
@@ -22,7 +22,7 @@ where
 
 pub trait AccessoryConsensus<RQ>
 where
-    RQ: SerType + 'static,
+    RQ: SerMsg + 'static,
 {
     /// Handle the reception of a pre-prepare message without having completed the pre prepare phase
     fn handle_partial_pre_prepare<NT>(
@@ -96,7 +96,7 @@ where
 
 impl<RQ> AccessoryConsensus<RQ> for ConsensusDecisionAccessory<RQ>
 where
-    RQ: SerType + 'static,
+    RQ: SerMsg + 'static,
 {
     fn handle_partial_pre_prepare<NT>(
         &mut self,

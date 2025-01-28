@@ -6,7 +6,7 @@ use atlas_common::error::*;
 use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_common::serialization_helper::SerType;
+use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::Header;
 use atlas_core::messages::{ClientRqInfo, SessionBased};
 use atlas_core::ordering_protocol::{BatchedDecision, Decision, ProtocolConsensusDecision};
@@ -23,14 +23,14 @@ pub mod decisions;
 
 pub struct Log<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     decided: DecisionLog<RQ>,
 }
 
 impl<RQ> Log<RQ>
 where
-    RQ: SerType + SessionBased,
+    RQ: SerMsg + SessionBased,
 {
     pub fn decision_log(&self) -> &DecisionLog<RQ> {
         &self.decided
@@ -114,7 +114,7 @@ where
 
 pub fn initialize_decided_log<RQ>(_node_id: NodeId) -> Log<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     Log {
         decided: DecisionLog::init(None),

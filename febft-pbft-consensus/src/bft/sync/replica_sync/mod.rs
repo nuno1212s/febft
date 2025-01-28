@@ -12,7 +12,7 @@ use tracing::{debug, error, info};
 use atlas_common::collections;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::Orderable;
-use atlas_common::serialization_helper::SerType;
+use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, SessionBased};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
@@ -41,12 +41,12 @@ use super::{AbstractSynchronizer, Synchronizer, SynchronizerStatus};
 // - TboQueue for sync phase messages
 // This synchronizer will only move forward on replica messages
 
-pub struct ReplicaSynchronizer<RQ: SerType> {
+pub struct ReplicaSynchronizer<RQ: SerMsg> {
     timeout_dur: Cell<Duration>,
     _phantom: PhantomData<fn() -> RQ>,
 }
 
-impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
+impl<RQ: SerMsg + SessionBased + 'static> ReplicaSynchronizer<RQ> {
     pub fn new(timeout_dur: Duration) -> Self {
         Self {
             timeout_dur: Cell::new(timeout_dur),
@@ -488,7 +488,7 @@ impl<RQ: SerType + SessionBased + 'static> ReplicaSynchronizer<RQ> {
 /// So we protect collects, watching and tbo as those are the fields that are going to be
 /// accessed by both those threads.
 /// Since the other fields are going to be accessed by just 1 thread, we just need them to be Send, which they are
-unsafe impl<RQ: SerType> Sync for ReplicaSynchronizer<RQ> {}
+unsafe impl<RQ: SerMsg> Sync for ReplicaSynchronizer<RQ> {}
 
 fn transform_client_rq_to_timeouts(
     client_rq: impl IntoIterator<Item = ClientRqInfo>,

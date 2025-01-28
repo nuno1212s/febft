@@ -7,7 +7,7 @@ use tracing::debug;
 
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_common::serialization_helper::SerType;
+use atlas_common::serialization_helper::SerMsg;
 use atlas_common::threadpool;
 use atlas_communication::lookup_table::MessageModule;
 use atlas_communication::message::{
@@ -24,14 +24,14 @@ use crate::bft::{SysMsg, PBFT};
 
 pub struct ReplicaAccessory<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     speculative_commits: Arc<Mutex<BTreeMap<NodeId, StoredSerializedMessage<SysMsg<RQ>>>>>,
 }
 
 impl<RQ> AccessoryConsensus<RQ> for ReplicaAccessory<RQ>
 where
-    RQ: SerType + 'static,
+    RQ: SerMsg + 'static,
 {
     fn handle_partial_pre_prepare<NT>(
         &mut self,
@@ -222,7 +222,7 @@ where
 
 impl<RQ> Default for ReplicaAccessory<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     fn default() -> Self {
         Self::new()
@@ -231,7 +231,7 @@ where
 
 impl<RQ> ReplicaAccessory<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     pub fn new() -> Self {
         Self {
@@ -253,7 +253,7 @@ fn valid_spec_commits<RQ>(
     view: &ViewInfo,
 ) -> bool
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     let len = speculative_commits.len();
 

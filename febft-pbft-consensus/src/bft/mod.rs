@@ -33,7 +33,7 @@ use atlas_common::globals::ReadOnly;
 use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_common::serialization_helper::SerType;
+use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::StoredMessage;
 use atlas_core::messages::SessionBased;
 use atlas_core::ordering_protocol::loggable::{
@@ -102,7 +102,7 @@ pub type FePollResult<O> = OPPollResult<ProofMetadata, (), PBFTMessage<O>, O>;
 /// a PBFT based ordering protocol
 pub struct PBFTOrderProtocol<RQ, RP, NT>
 where
-    RQ: SerType,
+    RQ: SerMsg,
     NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
 {
     // What phase of the consensus algorithm are we currently executing
@@ -132,7 +132,7 @@ where
 
 impl<RQ, RP, NT> Orderable for PBFTOrderProtocol<RQ, RP, NT>
 where
-    RQ: SerType,
+    RQ: SerMsg,
     NT: 'static + OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
     fn sequence_number(&self) -> SeqNo {
@@ -142,7 +142,7 @@ where
 
 impl<RQ, RP, NT> OrderProtocolTolerance for PBFTOrderProtocol<RQ, RP, NT>
 where
-    RQ: SerType,
+    RQ: SerMsg,
     NT: 'static + OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
     fn get_n_for_f(f: usize) -> usize {
@@ -162,7 +162,7 @@ where
 
 impl<RQ, RP, NT> NetworkedOrderProtocolInitializer<RQ, RP, NT> for PBFTOrderProtocol<RQ, RP, NT>
 where
-    RQ: SerType + SessionBased + 'static,
+    RQ: SerMsg + SessionBased + 'static,
     NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
     RP: RequestPProcessorSync<RQ> + RequestPreProcessing<RQ>,
 {
@@ -180,7 +180,7 @@ where
 impl<RQ, RP, NT> TimeoutableMod<FeExecutionResult<RQ>>
     for PBFTOrderProtocol<RQ, RP, NT>
 where
-    RQ: SerType + SessionBased + 'static,
+    RQ: SerMsg + SessionBased + 'static,
     NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
     RP: RequestPProcessorSync<RQ>,
 {
@@ -232,7 +232,7 @@ where
 
 impl<RQ, RP, NT> OrderingProtocol<RQ> for PBFTOrderProtocol<RQ, RP, NT>
 where
-    RQ: SerType + SessionBased + 'static,
+    RQ: SerMsg + SessionBased + 'static,
     NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
     RP: RequestPProcessorSync<RQ> + RequestPreProcessing<RQ>,
 {
@@ -315,7 +315,7 @@ where
 
 impl<RQ, RP, NT> PermissionedOrderingProtocol for PBFTOrderProtocol<RQ, RP, NT>
 where
-    RQ: SerType + SessionBased + 'static,
+    RQ: SerMsg + SessionBased + 'static,
     NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
 {
     type PermissionedSerialization = PBFTConsensus<RQ>;
@@ -345,7 +345,7 @@ where
 
 impl<RQ, RP, NT> PBFTOrderProtocol<RQ, RP, NT>
 where
-    RQ: SerType + SessionBased + 'static,
+    RQ: SerMsg + SessionBased + 'static,
     NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
     RP: RequestPreProcessing<RQ> + RequestPProcessorSync<RQ>,
 {
@@ -882,7 +882,7 @@ where
 
 impl<RQ, RP, NT> PBFTOrderProtocol<RQ, RP, NT>
 where
-    RQ: SerType + SessionBased + 'static,
+    RQ: SerMsg + SessionBased + 'static,
     NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
 {
     pub(crate) fn switch_phase(&mut self, new_phase: ConsensusPhase) {
@@ -948,13 +948,14 @@ const CF_PRE_PREPARES: &str = "PRE_PREPARES";
 const CF_PREPARES: &str = "PREPARES";
 const CF_COMMIT: &str = "COMMITS";
 
-impl<RQ, RP, NT> OrderProtocolPersistenceHelper<RQ, PBFTConsensus<RQ>, PBFTConsensus<RQ>>
-    for PBFTOrderProtocol<RQ, RP, NT>
+impl<RQ, RP, NT> LoggableOrderProtocol<RQ> for PBFTOrderProtocol<RQ, RP, NT>
 where
-    RQ: SerType + SessionBased,
-    RP: Send,
+    RQ: SerMsg + SessionBased + 'static,
+    RP: RequestPProcessorSync<RQ> + RequestPreProcessing<RQ> + Send,
     NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
+    type PersistableTypes = PBFTConsensus<RQ>;
+
     fn message_types() -> Vec<&'static str> {
         vec![CF_PRE_PREPARES, CF_PREPARES, CF_COMMIT]
     }
@@ -1023,18 +1024,9 @@ where
     }
 }
 
-impl<RQ, RP, NT> LoggableOrderProtocol<RQ> for PBFTOrderProtocol<RQ, RP, NT>
-where
-    RQ: SerType + SessionBased + 'static,
-    RP: RequestPProcessorSync<RQ> + RequestPreProcessing<RQ> + Send,
-    NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
-{
-    type PersistableTypes = PBFTConsensus<RQ>;
-}
-
 impl<RQ, NT, RPP, RP> ReconfigurableOrderProtocol<RP> for PBFTOrderProtocol<RQ, RPP, NT>
 where
-    RQ: SerType + SessionBased + 'static,
+    RQ: SerMsg + SessionBased + 'static,
     RP: ReconfigurationProtocolMessage + 'static,
     NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
 {

@@ -11,7 +11,7 @@ use tracing::{debug, info, instrument, warn};
 use atlas_common::error::*;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
-use atlas_common::serialization_helper::SerType;
+use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::Header;
 use atlas_core::messages::{ClientRqInfo, SessionBased};
 use atlas_core::metric::RQ_BATCH_TRACKING_ID;
@@ -109,7 +109,7 @@ pub struct MessageQueue<O> {
 /// The information needed to make a decision on a batch of requests.
 pub struct ConsensusDecision<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     node_id: NodeId,
     /// The sequence number of this consensus decision
@@ -182,7 +182,7 @@ impl<O> MessageQueue<O> {
 
 impl<RQ> ConsensusDecision<RQ>
 where
-    RQ: SerType + SessionBased + 'static,
+    RQ: SerMsg + SessionBased + 'static,
 {
     pub fn init_decision(node_id: NodeId, seq_no: SeqNo, view: &ViewInfo) -> Self {
         Self {
@@ -717,7 +717,7 @@ where
 
 impl<RQ> Orderable for ConsensusDecision<RQ>
 where
-    RQ: SerType,
+    RQ: SerMsg,
 {
     fn sequence_number(&self) -> SeqNo {
         self.seq
@@ -733,7 +733,7 @@ fn request_batch_received<RQ>(
     log: &WorkingDecisionLog<RQ>,
 ) -> Vec<ClientRqInfo>
 where
-    RQ: SerType + SessionBased + 'static,
+    RQ: SerMsg + SessionBased + 'static,
 {
     let start = Instant::now();
 

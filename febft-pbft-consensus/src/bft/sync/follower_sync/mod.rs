@@ -1,21 +1,21 @@
 use atlas_common::ordering::Orderable;
-use atlas_common::serialization_helper::SerType;
+use atlas_common::serialization_helper::SerMsg;
 use atlas_core::messages::{ClientRqInfo, SessionBased};
 use std::marker::PhantomData;
 
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind};
 
-pub struct FollowerSynchronizer<RQ: SerType> {
+pub struct FollowerSynchronizer<RQ: SerMsg> {
     _phantom: PhantomData<fn() -> RQ>,
 }
 
-impl<RQ: SerType + SessionBased + 'static> Default for FollowerSynchronizer<RQ> {
+impl<RQ: SerMsg + SessionBased + 'static> Default for FollowerSynchronizer<RQ> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<RQ: SerType + SessionBased + 'static> FollowerSynchronizer<RQ> {
+impl<RQ: SerMsg + SessionBased + 'static> FollowerSynchronizer<RQ> {
     pub fn new() -> Self {
         Self {
             _phantom: Default::default(),
