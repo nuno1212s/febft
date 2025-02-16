@@ -29,16 +29,13 @@ use crate::bft::sync::{
     SynchronizerStatus,
 };
 use atlas_common::error::*;
-use atlas_common::globals::ReadOnly;
 use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::StoredMessage;
 use atlas_core::messages::SessionBased;
-use atlas_core::ordering_protocol::loggable::{
-    LoggableOrderProtocol, OrderProtocolPersistenceHelper, PProof,
-};
+use atlas_core::ordering_protocol::loggable::{DecomposedProof, LoggableOrderProtocol, OrderProtocolLogHelper, PProof};
 use atlas_core::ordering_protocol::networking::serialize::{NetworkView, OrderingProtocolMessage};
 use atlas_core::ordering_protocol::networking::{
     NetworkedOrderProtocolInitializer, OrderProtocolSendNode,
@@ -46,11 +43,7 @@ use atlas_core::ordering_protocol::networking::{
 use atlas_core::ordering_protocol::reconfigurable_order_protocol::{
     ReconfigurableOrderProtocol, ReconfigurationAttemptResult,
 };
-use atlas_core::ordering_protocol::{
-    Decision, DecisionInfo, DecisionMetadata, DecisionsAhead, JoinInfo, OPExecResult, OPPollResult,
-    OrderProtocolTolerance, OrderingProtocol, OrderingProtocolArgs, PermissionedOrderingProtocol,
-    ProtocolConsensusDecision, ShareableConsensusMessage, ShareableMessage,
-};
+use atlas_core::ordering_protocol::{Decision, DecisionAD, DecisionInfo, DecisionMetadata, DecisionsAhead, JoinInfo, OPExResult, OPExecResult, OPPollResult, OrderProtocolTolerance, OrderingProtocol, OrderingProtocolArgs, PermissionedOrderingProtocol, ProtocolConsensusDecision, ProtocolMessage, ShareableConsensusMessage, ShareableMessage};
 use atlas_core::reconfiguration_protocol::ReconfigurationProtocol;
 use atlas_core::request_pre_processing::{RequestPProcessorSync, RequestPreProcessing};
 use atlas_core::serialize::ReconfigurationProtocolMessage;
@@ -948,13 +941,12 @@ const CF_PRE_PREPARES: &str = "PRE_PREPARES";
 const CF_PREPARES: &str = "PREPARES";
 const CF_COMMIT: &str = "COMMITS";
 
-impl<RQ, RP, NT> LoggableOrderProtocol<RQ> for PBFTOrderProtocol<RQ, RP, NT>
+impl<RQ, RP, NT> OrderProtocolLogHelper<RQ, PBFT<RQ>, PBFT<RQ>> for PBFTOrderProtocol<RQ, RP, NT>
 where
     RQ: SerMsg + SessionBased + 'static,
-    RP: RequestPProcessorSync<RQ> + RequestPreProcessing<RQ> + Send,
+    RP: RequestPProcessorSync<RQ> + RequestPreProcessing<RQ> + Send + 'static,
     NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
-    type PersistableTypes = PBFTConsensus<RQ>;
 
     fn message_types() -> Vec<&'static str> {
         vec![CF_PRE_PREPARES, CF_PREPARES, CF_COMMIT]
@@ -978,6 +970,7 @@ where
 
     fn init_proof_from(
         metadata: ProofMetadata,
+        _additional_data: Vec<DecisionAD<RQ, PBFT<RQ>>>,
         messages: Vec<StoredMessage<PBFTMessage<RQ>>>,
     ) -> Result<Proof<RQ>> {
         let mut messages_f = Vec::with_capacity(messages.len());
@@ -999,7 +992,7 @@ where
 
     fn decompose_proof(
         proof: &Proof<RQ>,
-    ) -> (&ProofMetadata, Vec<&StoredMessage<PBFTMessage<RQ>>>) {
+    ) -> (&ProofMetadata, Vec<&DecisionAD<RQ, PBFT<RQ>>>, Vec<&StoredMessage<PBFTMessage<RQ>>>) {
         let mut messages = Vec::new();
 
         for message in proof.pre_prepares() {
@@ -1014,7 +1007,7 @@ where
             messages.push(&**message);
         }
 
-        (proof.metadata(), messages)
+        (proof.metadata(), Vec::new(), messages)
     }
 
     fn get_requests_in_proof(
@@ -1023,6 +1016,16 @@ where
         Ok(ProtocolConsensusDecision::from(proof))
     }
 }
+
+impl<RQ, RP, NT> LoggableOrderProtocol<RQ> for PBFTOrderProtocol<RQ, RP, NT>
+where
+    RQ: SerMsg + SessionBased + 'static,
+    RP: RequestPProcessorSync<RQ> + RequestPreProcessing<RQ> + Send + 'static,
+    NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
+{
+    type PersistableTypes = PBFTConsensus<RQ>;
+}
+
 
 impl<RQ, NT, RPP, RP> ReconfigurableOrderProtocol<RP> for PBFTOrderProtocol<RQ, RPP, NT>
 where
