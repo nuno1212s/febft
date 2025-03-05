@@ -636,8 +636,8 @@ where
                     }
                 }
 
-                /// Get the next few already populated message queues from the tbo queue.
-                /// This will also adjust the tbo queue sequence number to the correct one
+                // Get the next few already populated message queues from the tbo queue.
+                // This will also adjust the tbo queue sequence number to the correct one
                 while self.tbo_queue.sequence_number() < novel_seq_no
                     && self.decisions.len() < self.watermark as usize
                 {
