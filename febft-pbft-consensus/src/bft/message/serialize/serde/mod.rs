@@ -1,5 +1,5 @@
 use crate::bft::message::ConsensusMessage;
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use atlas_common::error::*;
 use atlas_common::serialization_helper::SerMsg;
 use std::io::{Read, Write};
@@ -22,8 +22,9 @@ where
     RQ: SerMsg,
     R: Read + AsRef<[u8]>,
 {
-    let msg = bincode::serde::decode_borrowed_from_slice(r.as_ref(), bincode::config::standard())
-        .context("Failed to deserialize message")?;
+    let (msg, _read_bytes) = bincode::serde::decode_from_slice(r.as_ref(), bincode::config::standard())
+        .context("Failed to deserialize message")
+        .map_err(|_| anyhow!(""))?;
 
     Ok(msg)
 }
