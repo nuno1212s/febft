@@ -260,15 +260,15 @@ where
     }
 
     fn handle_execution_changed(&mut self, is_executing: bool) -> Result<()> {
-        if !is_executing {
-            self.consensus_guard.lock_consensus();
-        } else {
+        if is_executing {
             match self.phase {
                 ConsensusPhase::NormalPhase => {
                     self.consensus_guard.unlock_consensus();
                 }
                 ConsensusPhase::SyncPhase => {}
             }
+        } else {
+            self.consensus_guard.lock_consensus();
         }
 
         info!(
