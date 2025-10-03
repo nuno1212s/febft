@@ -16,7 +16,6 @@ use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::{ClientRqInfo, ForwardedRequestsMessage, SessionBased};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_core::request_pre_processing::network::RequestPreProcessingHandle;
 use atlas_core::request_pre_processing::RequestPreProcessing;
 use atlas_core::timeouts::timeout::{ModTimeout, TimeoutModHandle};
 use atlas_core::timeouts::{TimeOutable, TimeoutID};
@@ -61,6 +60,7 @@ impl<RQ: SerMsg + SessionBased + 'static> ReplicaSynchronizer<RQ> {
     ///
     /// Therefore, we start by clearing our stopped requests and treating them as
     /// newly proposed requests (by resetting their timer)
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn handle_stopping_quorum<NT, RP>(
         &self,
         base_sync: &Synchronizer<RQ>,

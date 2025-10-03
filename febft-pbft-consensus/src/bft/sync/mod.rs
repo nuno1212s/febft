@@ -160,7 +160,6 @@ pub(super) enum FinalizeStatus<O> {
     Commit(FinalizeState<O>),
 }
 
-///
 #[derive(Clone, Debug)]
 enum Sound {
     Unbound(bool),
@@ -168,6 +167,7 @@ enum Sound {
 }
 
 impl Sound {
+    #[allow(dead_code)]
     fn value(&self) -> Option<&Digest> {
         match self {
             Sound::Bound(d) => Some(d),
@@ -629,6 +629,7 @@ where
     }
 
     /// The previous view that was processed
+    #[allow(dead_code)]
     fn previous_view(&self) -> Option<ViewInfo> {
         self.tbo.lock().unwrap().previous_view().clone()
     }
@@ -747,7 +748,7 @@ where
             ProtoPhase::Init => {
                 let (_header, message) = (s_message.header(), s_message.message().view_change());
 
-                return match message.kind() {
+                match message.kind() {
                     ViewChangeMessageKind::Stop(_) | ViewChangeMessageKind::StopQuorumJoin(_) => {
                         let mut guard = self.tbo.lock().unwrap();
 
@@ -789,7 +790,7 @@ where
 
                         SynchronizerStatus::Nil
                     }
-                };
+                }
             }
             ProtoPhase::Stopping(i) | ProtoPhase::Stopping2(i) => {
                 let (header, message) = (s_message.header(), s_message.message().view_change());

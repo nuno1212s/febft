@@ -1,14 +1,13 @@
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use lazy_static::lazy_static;
-use tracing::{debug, error, info, warn};
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::{debug, error, info, warn};
 
 use atlas_common::channel::sync::ChannelSyncTx;
 use atlas_common::collections::HashMap;
@@ -20,10 +19,10 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::{collections, Err};
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::ordering_protocol::networking::serialize::NetworkView;
-use atlas_core::ordering_protocol::{ExecutionResult};
+use atlas_core::ordering_protocol::ExecutionResult;
 use atlas_core::persistent_log::{OperationMode, PersistableStateTransferProtocol};
 use atlas_core::timeouts::timeout::{ModTimeout, TimeoutModHandle, TimeoutableMod};
-use atlas_core::timeouts::{TimeoutID};
+use atlas_core::timeouts::TimeoutID;
 use atlas_metrics::metrics::metric_duration;
 use atlas_smr_application::state::monolithic_state::{InstallStateMessage, MonolithicState};
 use atlas_smr_core::persistent_log::MonolithicStateLog;
@@ -44,9 +43,7 @@ pub mod config;
 pub mod message;
 pub mod metrics;
 
-lazy_static!(
-    static ref MOD_NAME: Arc<str> = Arc::from("ST_TRANSFER");
-);
+static MOD_NAME: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("ST_TRANSFER"));
 
 /// The state of the checkpoint
 pub enum CheckpointState<D> {
@@ -85,10 +82,10 @@ impl<S> Debug for ProtoPhase<S> {
                 write!(f, "Waiting for checkpoint {}", header.len())
             }
             ProtoPhase::ReceivingCid(size) => {
-                write!(f, "Receiving CID phase {} responses", size)
+                write!(f, "Receiving CID phase {size} responses")
             }
             ProtoPhase::ReceivingState(size) => {
-                write!(f, "Receiving state phase {} responses", size)
+                write!(f, "Receiving state phase {size} responses")
             }
         }
     }
@@ -194,7 +191,7 @@ impl<S> Debug for CstStatus<S> {
                 write!(f, "Request latest state")
             }
             CstStatus::SeqNo(seq) => {
-                write!(f, "Received seq no {:?}", seq)
+                write!(f, "Received seq no {seq:?}")
             }
             CstStatus::State(_) => {
                 write!(f, "Received state")
@@ -245,7 +242,8 @@ where
 
     fn handle_timeout(&mut self, timeout: Vec<ModTimeout>) -> Result<STTimeoutResult> {
         for cst_seq in timeout {
-            if let TimeoutID::SeqNoBased(seq_no) = cst_seq.id() {
+            if let TimeoutID::SeqNoBased(_seq_no) = cst_seq.id() {
+                //TODO: How do we get the view from this position?
                 /*if self.cst_request_timed_out(*seq_no, ) {
                     return Ok(STTimeoutResult::RunCst);
                 }*/
@@ -316,8 +314,7 @@ where
             // should not happen...
             _ => {
                 return Err(anyhow!(format!(
-                    "Invalid state reached while state transfer processing message! {:?}",
-                    status
+                    "Invalid state reached while state transfer processing message! {status:?}"
                 )));
             }
         }
@@ -488,8 +485,6 @@ where
         ))
     }
 }
-
-type Ser<ST, S> = <ST as StateTransferProtocol<S>>::Serialization;
 
 // TODO: request timeouts
 impl<S, NT, PL> CollabStateTransfer<S, NT, PL>

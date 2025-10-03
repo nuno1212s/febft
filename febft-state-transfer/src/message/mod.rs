@@ -33,7 +33,7 @@ impl<S> Debug for CstMessage<S> {
             }
             CstMessageKind::ReplyStateCid(opt) => {
                 if let Some((seq, digest)) = opt {
-                    write!(f, "Reply with state cid message {:?} {:?}", seq, digest)
+                    write!(f, "Reply with state cid message {seq:?} {digest:?}")
                 } else {
                     write!(f, "Reply with state cid message None")
                 }

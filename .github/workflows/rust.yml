@@ -1,24 +1,72 @@
-name: Rust
-
+name: Lint code
 on:
-  push:
-    branches: [ "master" ]
   pull_request:
-    branches: [ "master" ]
-
-env:
-  CARGO_TERM_COLOR: always
+  push:
+    # Sequence of patterns matched against refs/heads
+    branches:
+      - 'main'
 
 jobs:
-  build:
-
+  lint:
+    timeout-minutes: 60
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v3
-    - name: Install capnproto
-      run: sudo apt install capnproto
-    - name: Build
-      run: cargo build --verbose --release
-    - name: Automatic Releases
-      uses: marvinpinto/action-automatic-releases@v1.2.1
+      - name: Checkout Atlas
+        uses: actions/checkout@v4
+        with:
+          repository: nuno1212s/Atlas
+          path: Atlas
+      - uses: actions/checkout@v3
+        with:
+          path: febft
+      - uses: Swatinem/rust-cache@v2
+      - name: Install capnproto
+        run: sudo apt-get update && sudo apt-get install -y capnproto
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly-2025-06-09
+          components: rustfmt, clippy
+      - name: Check versions
+        run: |
+          rustup --version
+          rustup show
+          cargo --version
+          cargo fmt --version
+          cargo clippy --version
+      - name: Lint formatting
+        run: cargo fmt --all -- --check
+        working-directory: febft
+      - name: Lint code
+        run: cargo clippy --all-targets --no-deps -- -D warnings
+        working-directory: febft
+
+  unit-tests:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    env:
+      # Shrink artifact size by not including debug info. Makes build faster and shrinks cache.
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout Atlas
+        uses: actions/checkout@v4
+        with:
+          repository: nuno1212s/Atlas
+          path: Atlas
+      - uses: actions/checkout@v3
+        with:
+          path: febft
+      - uses: Swatinem/rust-cache@v2
+      - name: Install capnproto
+        run: sudo apt-get update && sudo apt-get install -y capnproto
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly-2025-06-09
+      - uses: taiki-e/install-action@nextest
+      - run: cargo build --tests
+        working-directory: febft
+      - run: cargo nextest run --no-tests pass
+        working-directory: febft

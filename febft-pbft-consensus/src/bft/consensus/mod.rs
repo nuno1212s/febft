@@ -9,7 +9,6 @@ use event_listener::{Event, Listener};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use atlas_common::error::*;
-use atlas_common::globals::ReadOnly;
 use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{
@@ -28,7 +27,7 @@ use crate::bft::consensus::decision::{
     ConsensusDecision, DecisionPollStatus, DecisionStatus, MessageQueue,
 };
 use crate::bft::log::deciding::CompletedBatch;
-use crate::bft::log::decisions::{IncompleteProof, Proof, ProofMetadata};
+use crate::bft::log::decisions::{IncompleteProof, Proof};
 use crate::bft::log::Log;
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::metric::OPERATIONS_ORDERED_ID;
@@ -61,6 +60,7 @@ pub enum ConsensusStatus<O> {
 }
 
 /// Represents the status of calling `poll()` on a `Consensus`.
+#[allow(clippy::large_enum_variant)]
 pub enum ConsensusPollStatus<O> {
     /// The `Replica` associated with this `Consensus` should
     /// poll its main channel for more messages.
@@ -874,10 +874,8 @@ where
         // So the proposer won't try to propose anything to this decision
         self.decisions[0].skip_init_phase();
 
-        let shareable_message = Arc::new(StoredMessage::new(
-            header,
-            PBFTMessage::Consensus(message),
-        ));
+        let shareable_message =
+            Arc::new(StoredMessage::new(header, PBFTMessage::Consensus(message)));
 
         let result = self.process_message(shareable_message, synchronizer, timeouts, node)?;
 
@@ -927,6 +925,8 @@ where
     }
 }
 
+pub type ViewChangeMap = BTreeMap<NodeId, BTreeMap<SeqNo, SeqNo>>;
+
 /// The consensus guard for handling when the proposer should propose and to which consensus instance
 pub struct ProposerConsensusGuard {
     /// Can I propose batches at this time
@@ -942,7 +942,7 @@ pub struct ProposerConsensusGuard {
     /// These requests should not be repeated.
     /// We must store them due to the way the request pre processor
     /// sends requests to the proposer
-    last_view_change: Mutex<Option<BTreeMap<NodeId, BTreeMap<SeqNo, SeqNo>>>>,
+    last_view_change: Mutex<Option<ViewChangeMap>>,
 }
 
 impl ProposerConsensusGuard {

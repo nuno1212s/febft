@@ -50,6 +50,7 @@ pub struct CompletedBatch<O> {
     pub(super) client_requests: Vec<StoredMessage<O>>,
 
     // The metadata for the batch
+    #[allow(dead_code)]
     pub(super) batch_meta: BatchMeta,
 }
 
@@ -89,6 +90,7 @@ pub struct WorkingDecisionLog<O> {
 #[derive(Default)]
 pub struct DuplicateReplicaEvaluator {
     // The set of leaders that is currently in vigour for this consensus decision
+    #[allow(dead_code)]
     leader_set: Vec<NodeId>,
     // The set of leaders that have already sent a pre prepare message
     received_pre_prepare_messages: BTreeSet<NodeId>,
@@ -101,7 +103,7 @@ pub struct DuplicateReplicaEvaluator {
 impl<O> MessageLog<O> {
     pub fn with_leader_count(leaders: usize, quorum: usize) -> Self {
         Self {
-            pre_prepare: iter::repeat(None).take(leaders).collect(),
+            pre_prepare: iter::repeat_n(None, leaders).collect(),
             prepares: Vec::with_capacity(quorum),
             commits: Vec::with_capacity(quorum),
         }
@@ -147,7 +149,7 @@ where
             seq_no: seq,
             duplicate_detection: Default::default(),
             batch_digest: None,
-            pre_prepare_digests: iter::repeat(None).take(leader_count).collect(),
+            pre_prepare_digests: iter::repeat_n(None, leader_count).collect(),
             current_received_pre_prepares: 0,
             current_batch_size: 0,
             client_rqs: vec![],
@@ -155,7 +157,7 @@ where
             request_space_slices: view.hash_space_division().clone(),
             message_log: MessageLog::with_leader_count(view.leader_set().len(), view.quorum()),
             batch_meta: Arc::new(Mutex::new(BatchMeta::new())),
-            contained_requests: iter::repeat(None).take(leader_count).collect(),
+            contained_requests: iter::repeat_n(None, leader_count).collect(),
         }
     }
 
@@ -167,7 +169,7 @@ where
     pub fn process_pre_prepare(
         &mut self,
         s_message: ShareableMessage<PBFTMessage<O>>,
-        digest: Digest,
+        _digest: Digest,
         mut batch_rq_digests: Vec<ClientRqInfo>,
     ) -> Result<Option<ProofMetadata>> {
         let (header, message) = (s_message.header(), s_message.message().consensus());
