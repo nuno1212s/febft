@@ -157,7 +157,7 @@ where
             request_space_slices: view.hash_space_division().clone(),
             message_log: MessageLog::with_leader_count(view.leader_set().len(), view.quorum()),
             batch_meta: Arc::new(Mutex::new(BatchMeta::new())),
-            contained_requests: iter::repeat_n(None ,leader_count).collect(),
+            contained_requests: iter::repeat_n(None, leader_count).collect(),
         }
     }
 

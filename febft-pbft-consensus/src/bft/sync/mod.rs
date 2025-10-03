@@ -167,7 +167,6 @@ enum Sound {
 }
 
 impl Sound {
-
     #[allow(dead_code)]
     fn value(&self) -> Option<&Digest> {
         match self {

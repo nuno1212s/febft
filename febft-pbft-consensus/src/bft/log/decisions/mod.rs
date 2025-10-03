@@ -136,8 +136,8 @@ impl<O> Proof<O> {
         metadata: ProofMetadata,
         messages: Vec<StoredConsensusMessage<O>>,
     ) -> Result<Self> {
-        let mut pre_prepares: Vec<Option<StoredConsensusMessage<O>>> = iter::repeat_n(None, metadata.pre_prepare_ordering().len())
-            .collect();
+        let mut pre_prepares: Vec<Option<StoredConsensusMessage<O>>> =
+            iter::repeat_n(None, metadata.pre_prepare_ordering().len()).collect();
         let mut prepares = Vec::new();
         let mut commits = Vec::new();
 
