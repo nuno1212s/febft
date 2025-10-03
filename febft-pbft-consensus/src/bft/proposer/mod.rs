@@ -1,30 +1,26 @@
 use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
-use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{info, instrument, trace, warn};
 
-use atlas_common::channel::TryRecvError;
-use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::StoredMessage;
-use atlas_core::messages::{create_rq_correlation_id, ClientRqInfo, SessionBased};
-use atlas_core::metric::{RQ_BATCH_TRACKING_ID, RQ_CLIENT_TRACKING_ID};
+use atlas_core::messages::{ClientRqInfo, SessionBased};
+use atlas_core::metric::RQ_BATCH_TRACKING_ID;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::request_pre_processing::{BatchOutput, PreProcessorOutputMessage};
 use atlas_core::timeouts::timeout::TimeoutModHandle;
 use atlas_metrics::metrics::{
-    metric_correlation_id_passed, metric_duration, metric_increment,
-    metric_initialize_correlation_id, metric_store_count,
+    metric_duration, metric_increment, metric_initialize_correlation_id, metric_store_count,
 };
 
 use crate::bft::config::ProposerConfig;
-use crate::bft::consensus::ProposerConsensusGuard;
+use crate::bft::consensus::{ProposerConsensusGuard, ViewChangeMap};
 use crate::bft::message::{ConsensusMessage, ConsensusMessageKind, PBFTMessage};
 use crate::bft::metric::{
     CLIENT_POOL_BATCH_SIZE_ID, ENTERED_PRE_PROPOSER, PROPOSER_BATCHES_MADE_ID, PROPOSER_LATENCY_ID,
@@ -298,15 +294,14 @@ where
                     if is_leader {
                         let time_until_next_propose = Duration::from_micros(self.get_time_until_next_propose(&ordered_propose) as u64);
 
-                        while let Ok(mut message_batch) = self.batch_reception.recv_timeout(time_until_next_propose) {
+                        while let Ok(message_batch) = self.batch_reception.recv_timeout(time_until_next_propose) {
                             if self.handle_received_message(&mut ordered_propose, &mut collected_requests, is_leader, message_batch) { break; }
                         }
                     } else {
-                        while let Ok(mut message_batch) = self.batch_reception.recv() {
+                        while let Ok(message_batch) = self.batch_reception.recv() {
                             if self.handle_received_message(&mut ordered_propose, &mut collected_requests, is_leader, message_batch) { break; }
                         }
                     }
-                    
                     let discovered_requests = if let Some(messages) = collected_requests {
                         metric_increment(PROPOSER_REQUESTS_COLLECTED_ID, Some(messages.len() as u64));
 
@@ -343,7 +338,7 @@ where
 
     fn handle_received_message(
         &self,
-        mut ordered_propose: &mut ProposeBuilder<RQ>,
+        ordered_propose: &mut ProposeBuilder<RQ>,
         mut collected_requests: &mut Option<PreProcessorOutputMessage<RQ>>,
         is_leader: bool,
         mut message_batch: PreProcessorOutputMessage<RQ>,
@@ -374,12 +369,10 @@ where
     }
 
     fn get_time_until_next_propose(&self, propose: &ProposeBuilder<RQ>) -> u128 {
-        let time_until_next_proposal = std::cmp::min(
+        std::cmp::min(
             self.global_batch_time_limit / 2,
             self.global_batch_time_limit - propose.last_proposal.elapsed().as_micros(),
-        );
-
-        time_until_next_proposal
+        )
     }
 
     /// attempt to propose the ordered requests that we have collected
@@ -526,7 +519,7 @@ where
     fn check_if_has_been_proposed(
         &self,
         req: &StoredMessage<RQ>,
-        mutex_guard: &mut Option<MutexGuard<Option<BTreeMap<NodeId, BTreeMap<SeqNo, SeqNo>>>>>,
+        mutex_guard: &mut Option<MutexGuard<Option<ViewChangeMap>>>,
     ) -> bool {
         if let Some(mutex_guard) = mutex_guard {
             if let Some(seen_rqs) = (*mutex_guard).as_mut() {

@@ -1,4 +1,3 @@
-use atlas_common::ordering::Orderable;
 use atlas_common::serialization_helper::SerMsg;
 use atlas_core::messages::{ClientRqInfo, SessionBased};
 use std::marker::PhantomData;

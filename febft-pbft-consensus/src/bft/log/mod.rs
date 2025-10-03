@@ -67,7 +67,11 @@ where
         let (metadata, messages) = proof.into_parts();
 
         Ok(Decision::full_decision_info(
-            sequence, metadata, MaybeVec::None, MaybeVec::from_many(messages), batch_info,
+            sequence,
+            metadata,
+            MaybeVec::None,
+            MaybeVec::from_many(messages),
+            batch_info,
         ))
     }
 

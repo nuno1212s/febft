@@ -11,7 +11,6 @@ use atlas_core::ordering_protocol::ShareableMessage;
 #[cfg(feature = "serialize_serde")]
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{debug, info};
 
 use crate::bft::message::{ConsensusMessageKind, PBFTMessage};
 
@@ -137,8 +136,7 @@ impl<O> Proof<O> {
         metadata: ProofMetadata,
         messages: Vec<StoredConsensusMessage<O>>,
     ) -> Result<Self> {
-        let mut pre_prepares: Vec<Option<StoredConsensusMessage<O>>> = iter::repeat(None)
-            .take(metadata.pre_prepare_ordering().len())
+        let mut pre_prepares: Vec<Option<StoredConsensusMessage<O>>> = iter::repeat_n(None, metadata.pre_prepare_ordering().len())
             .collect();
         let mut prepares = Vec::new();
         let mut commits = Vec::new();

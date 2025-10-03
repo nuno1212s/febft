@@ -5,7 +5,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -35,16 +34,22 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::StoredMessage;
 use atlas_core::messages::SessionBased;
-use atlas_core::ordering_protocol::loggable::{DecomposedProof, LoggableOrderProtocol, OrderProtocolLogHelper, PProof};
-use atlas_core::ordering_protocol::networking::serialize::{NetworkView, OrderingProtocolMessage};
+use atlas_core::ordering_protocol::loggable::{
+    LoggableOrderProtocol, OrderProtocolLogHelper, PProof,
+};
+use atlas_core::ordering_protocol::networking::serialize::OrderingProtocolMessage;
 use atlas_core::ordering_protocol::networking::{
     NetworkedOrderProtocolInitializer, OrderProtocolSendNode,
 };
 use atlas_core::ordering_protocol::reconfigurable_order_protocol::{
     ReconfigurableOrderProtocol, ReconfigurationAttemptResult,
 };
-use atlas_core::ordering_protocol::{Decision, DecisionAD, DecisionInfo, DecisionMetadata, DecisionsAhead, JoinInfo, OPExResult, OPExecResult, OPPollResult, OrderProtocolTolerance, OrderingProtocol, OrderingProtocolArgs, PermissionedOrderingProtocol, ProtocolConsensusDecision, ProtocolMessage, ShareableConsensusMessage, ShareableMessage};
-use atlas_core::reconfiguration_protocol::ReconfigurationProtocol;
+use atlas_core::ordering_protocol::{
+    Decision, DecisionAD, DecisionInfo, DecisionMetadata, DecisionsAhead, JoinInfo, OPExecResult,
+    OPPollResult, OrderProtocolTolerance, OrderingProtocol, OrderingProtocolArgs,
+    PermissionedOrderingProtocol, ProtocolConsensusDecision, ShareableConsensusMessage,
+    ShareableMessage,
+};
 use atlas_core::request_pre_processing::{RequestPProcessorSync, RequestPreProcessing};
 use atlas_core::serialize::ReconfigurationProtocolMessage;
 use atlas_core::timeouts::timeout::{ModTimeout, TimeoutModHandle, TimeoutableMod};
@@ -110,9 +115,6 @@ where
     timeouts: TimeoutModHandle,
     //The proposer guard
     consensus_guard: Arc<ProposerConsensusGuard>,
-    // Check if unordered requests can be proposed.
-    // This can only occur when we are in the normal phase of the state machine
-    unordered_rq_guard: Arc<AtomicBool>,
     // The log of the decided consensus messages
     // This is completely owned by the server thread and therefore does not
     // Require any synchronization
@@ -170,8 +172,7 @@ where
     }
 }
 
-impl<RQ, RP, NT> TimeoutableMod<FeExecutionResult<RQ>>
-    for PBFTOrderProtocol<RQ, RP, NT>
+impl<RQ, RP, NT> TimeoutableMod<FeExecutionResult<RQ>> for PBFTOrderProtocol<RQ, RP, NT>
 where
     RQ: SerMsg + SessionBased + 'static,
     NT: OrderProtocolSendNode<RQ, PBFT<RQ>> + 'static,
@@ -399,7 +400,6 @@ where
             pre_processor,
             timeouts,
             consensus_guard,
-            unordered_rq_guard: Arc::new(Default::default()),
             message_log: dec_log,
             proposer,
             node,
@@ -513,7 +513,9 @@ where
         }
     }
 
-    fn poll_normal_phase(&mut self) -> Result<OPPollResult<ProofMetadata, (), PBFTMessage<RQ>, RQ>> {
+    fn poll_normal_phase(
+        &mut self,
+    ) -> Result<OPPollResult<ProofMetadata, (), PBFTMessage<RQ>, RQ>> {
         // check if we have STOP messages to be processed,
         // and update our phase when we start installing
         // the new view
@@ -947,7 +949,6 @@ where
     RP: RequestPProcessorSync<RQ> + RequestPreProcessing<RQ> + Send + 'static,
     NT: OrderProtocolSendNode<RQ, PBFT<RQ>>,
 {
-
     fn message_types() -> Vec<&'static str> {
         vec![CF_PRE_PREPARES, CF_PREPARES, CF_COMMIT]
     }
@@ -984,7 +985,7 @@ where
 
     fn init_proof_from_scm(
         metadata: DecisionMetadata<RQ, PBFTConsensus<RQ>>,
-        additional_data: Vec<()>,
+        _additional_data: Vec<()>,
         messages: Vec<ShareableConsensusMessage<RQ, PBFTConsensus<RQ>>>,
     ) -> Result<PProof<RQ, PBFTConsensus<RQ>, PBFTConsensus<RQ>>> {
         Proof::init_from_messages(metadata, messages)
@@ -992,7 +993,11 @@ where
 
     fn decompose_proof(
         proof: &Proof<RQ>,
-    ) -> (&ProofMetadata, Vec<&DecisionAD<RQ, PBFT<RQ>>>, Vec<&StoredMessage<PBFTMessage<RQ>>>) {
+    ) -> (
+        &ProofMetadata,
+        Vec<&DecisionAD<RQ, PBFT<RQ>>>,
+        Vec<&StoredMessage<PBFTMessage<RQ>>>,
+    ) {
         let mut messages = Vec::new();
 
         for message in proof.pre_prepares() {
@@ -1026,7 +1031,6 @@ where
     type PersistableTypes = PBFTConsensus<RQ>;
 }
 
-
 impl<RQ, NT, RPP, RP> ReconfigurableOrderProtocol<RP> for PBFTOrderProtocol<RQ, RPP, NT>
 where
     RQ: SerMsg + SessionBased + 'static,
@@ -1044,7 +1048,7 @@ where
             &self.message_log,
         );
 
-        return match result {
+        match result {
             SyncReconfigurationResult::Failed => {
                 warn!(
                     "Failed to start quorum view change to integrate node {:?}",
@@ -1076,7 +1080,7 @@ where
             SyncReconfigurationResult::Completed => Ok(ReconfigurationAttemptResult::Successful(
                 self.synchronizer.view().quorum_members().clone(),
             )),
-        };
+        }
     }
 
     fn joining_quorum(&mut self) -> Result<ReconfigurationAttemptResult> {

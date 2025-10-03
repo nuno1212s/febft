@@ -291,7 +291,7 @@ where
         let header = s_message.header();
         let message = s_message.message().consensus();
 
-        return match self.phase {
+        match self.phase {
             DecisionPhase::Initialize => {
                 // The initialize phase will only be skipped by polling
                 // This consensus instance.
@@ -302,7 +302,7 @@ where
 
                 self.queue(s_message);
 
-                return Ok(DecisionStatus::MessageQueued);
+                Ok(DecisionStatus::MessageQueued)
             }
             DecisionPhase::PrePreparing(received) => {
                 let received = match message.kind() {
@@ -625,7 +625,7 @@ where
 
                 self.working_log.process_message(s_message.clone())?;
 
-                return if received == view.params().quorum() {
+                if received == view.params().quorum() {
                     info!("{:?} // Completed commit phase with all commits Seq {:?} with commit from {:?}", node.id(), self.sequence_number(),
                     header.from());
 
@@ -674,13 +674,13 @@ where
                     );
 
                     Ok(DecisionStatus::Deciding(s_message))
-                };
+                }
             }
             DecisionPhase::Decided => {
                 //Drop unneeded messages
                 Ok(DecisionStatus::DecidedIgnored)
             }
-        };
+        }
     }
 
     /// Check if this consensus decision can be finalized

@@ -2,7 +2,6 @@
 //! between the system processes.
 
 use std::fmt::{Debug, Formatter};
-use std::io::Write;
 
 use getset::Getters;
 #[cfg(feature = "serialize_serde")]
@@ -182,10 +181,10 @@ impl<O> Debug for ConsensusMessage<O> {
                 write!(f, "Pre prepare message with {} rqs", d.len())
             }
             ConsensusMessageKind::Prepare(d) => {
-                write!(f, "Prepare message {:?}", d)
+                write!(f, "Prepare message {d:?}")
             }
             ConsensusMessageKind::Commit(d) => {
-                write!(f, "Commit message {:?}", d)
+                write!(f, "Commit message {d:?}")
             }
         }
     }
@@ -406,10 +405,10 @@ impl Debug for ObserveEventKind {
                 write!(f, "Commit state entered")
             }
             ObserveEventKind::Ready(seq) => {
-                write!(f, "Ready to receive next consensus {:?}", seq)
+                write!(f, "Ready to receive next consensus {seq:?}")
             }
             ObserveEventKind::Executed(seq) => {
-                write!(f, "Executed the consensus instance {:?}", seq)
+                write!(f, "Executed the consensus instance {seq:?}")
             }
         }
     }
@@ -428,7 +427,7 @@ impl<O> Debug for ViewChangeMessageKind<O> {
                 write!(f, "Sync message")
             }
             ViewChangeMessageKind::StopQuorumJoin(node) => {
-                write!(f, "Stop quorum join message {:?}", node)
+                write!(f, "Stop quorum join message {node:?}")
             }
         }
     }

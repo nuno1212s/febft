@@ -34,8 +34,8 @@ pub const PROPOSER_PROPOSE_TIME_ID: usize = 107;
 
 pub const PROPOSER_REQUEST_TIME_ITERATIONS: &str = "PROPOSER_REQUEST_TIME_ITERATIONS";
 pub const PROPOSER_REQUEST_TIME_ITERATIONS_ID: usize = 108;
-/// 110-119: Consensus
 
+/// 110-119: Consensus
 pub const PROPOSE_LATENCY: &str = "PROPOSE_LATENCY";
 pub const PROPOSE_LATENCY_ID: usize = 110;
 
