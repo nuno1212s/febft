@@ -11,6 +11,7 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::Err;
 use atlas_communication::message::StoredMessage;
 use atlas_core::messages::ClientRqInfo;
+use atlas_core::ordering_protocol::decision::{DecisionRequestBatch, DecisionRequests};
 use atlas_core::ordering_protocol::networking::serialize::NetworkView;
 use atlas_core::ordering_protocol::ShareableMessage;
 use atlas_metrics::benchmarks::BatchMeta;
@@ -19,6 +20,7 @@ use atlas_metrics::metrics::metric_duration;
 use crate::bft::log::decisions::{IncompleteProof, PrepareSet, ProofMetadata, ViewDecisionPair};
 use crate::bft::message::{ConsensusMessageKind, PBFTMessage};
 use crate::bft::metric::PRE_PREPARE_LOG_ANALYSIS_ID;
+use crate::bft::sync::view;
 use crate::bft::sync::view::ViewInfo;
 
 /// The log of messages for a given batch
@@ -26,78 +28,6 @@ pub struct MessageLog<O> {
     pre_prepare: Vec<Option<ShareableMessage<PBFTMessage<O>>>>,
     prepares: Vec<ShareableMessage<PBFTMessage<O>>>,
     commits: Vec<ShareableMessage<PBFTMessage<O>>>,
-}
-
-pub struct FinishedMessageLog<O> {
-    pub(super) pre_prepares: Vec<ShareableMessage<PBFTMessage<O>>>,
-    pub(super) prepares: Vec<ShareableMessage<PBFTMessage<O>>>,
-    pub(super) commits: Vec<ShareableMessage<PBFTMessage<O>>>,
-}
-
-/// Information about the completed batch, the contained requests and
-/// other relevant information
-pub struct CompletedBatch<O> {
-    pub(super) seq: SeqNo,
-    // The overall digest of the entire batch
-    pub(super) digest: Digest,
-    // The ordering of the pre prepare requests
-    pub(super) pre_prepare_ordering: Vec<Digest>,
-    // The messages that are a part of this decision
-    pub(super) contained_messages: FinishedMessageLog<O>,
-    // The information of the client requests that are contained in this batch
-    pub(super) client_request_info: Vec<ClientRqInfo>,
-    // The client requests contained in this batch
-    pub(super) client_requests: Vec<StoredMessage<O>>,
-
-    // The metadata for the batch
-    #[allow(dead_code)]
-    pub(super) batch_meta: BatchMeta,
-}
-
-pub struct WorkingDecisionLog<O> {
-    node_id: NodeId,
-    seq_no: SeqNo,
-
-    duplicate_detection: DuplicateReplicaEvaluator,
-    //The digest of the entire batch that is currently being processed
-    // This will only be calculated when we receive all of the requests necessary
-    // As this digest requires the knowledge of all of them
-    batch_digest: Option<Digest>,
-    // The digests of all received pre prepares
-    // We store a vec of options because we want to store the digests in the correct ordering
-    pre_prepare_digests: Vec<Option<Digest>>,
-    // How many pre prepares have we received
-    current_received_pre_prepares: usize,
-    //The size of batch that is currently being processed. Increases as we receive more pre prepares
-    current_batch_size: usize,
-    //The client requests that are currently being processed
-    //Does not have to follow the correct order, only has to contain the requests
-    client_rqs: Vec<ClientRqInfo>,
-    // The set of leaders that is currently in vigour for this consensus decision
-    leader_set: Vec<NodeId>,
-    // Which hash space should each leader be responsible for
-    request_space_slices: BTreeMap<NodeId, (Vec<u8>, Vec<u8>)>,
-    // The log of messages of the currently working decision
-    message_log: MessageLog<O>,
-    // Some logging information about metadata
-    batch_meta: Arc<Mutex<BatchMeta>>,
-    // The contained requests per each of the received pre prepares
-    contained_requests: Vec<Option<Vec<StoredMessage<O>>>>,
-}
-
-/// Checks to make sure replicas aren't providing more than one vote for the
-/// Same consensus decision
-#[derive(Default)]
-pub struct DuplicateReplicaEvaluator {
-    // The set of leaders that is currently in vigour for this consensus decision
-    #[allow(dead_code)]
-    leader_set: Vec<NodeId>,
-    // The set of leaders that have already sent a pre prepare message
-    received_pre_prepare_messages: BTreeSet<NodeId>,
-    // The set of leaders that have already sent a prepare message
-    received_prepare_messages: BTreeSet<NodeId>,
-    // The set of leaders that have already sent a commit message
-    received_commit_messages: BTreeSet<NodeId>,
 }
 
 impl<O> MessageLog<O> {
@@ -138,108 +68,160 @@ impl<O> MessageLog<O> {
     }
 }
 
+pub struct FinishedMessageLog<O> {
+    pub(super) pre_prepares: Vec<ShareableMessage<PBFTMessage<O>>>,
+    pub(super) prepares: Vec<ShareableMessage<PBFTMessage<O>>>,
+    pub(super) commits: Vec<ShareableMessage<PBFTMessage<O>>>,
+}
+
+/// Information about the completed batch, the contained requests and
+/// other relevant information
+pub struct CompletedBatch<O> {
+    pub(super) seq: SeqNo,
+    pub(super) proof_metadata: ProofMetadata,
+    // The messages that are a part of this decision
+    pub(super) contained_messages: FinishedMessageLog<O>,
+    // The metadata for the batch
+    #[allow(dead_code)]
+    pub(super) batch_meta: BatchMeta,
+}
+
+impl<O> Orderable for CompletedBatch<O> {
+    fn sequence_number(&self) -> SeqNo {
+        self.seq
+    }
+}
+
+impl<O> CompletedBatch<O> {
+    pub fn new(
+        seq: SeqNo,
+        proof_metadata: ProofMetadata,
+        contained_messages: FinishedMessageLog<O>,
+        batch_meta: BatchMeta,
+    ) -> Self {
+        Self {
+            seq,
+            proof_metadata,
+            contained_messages,
+            batch_meta,
+        }
+    }
+
+    pub fn request_count(&self) -> usize {
+        self.proof_metadata.contained_client_rqs()
+    }
+}
+
+enum PrePrepareLogState<O> {
+    InProgress(PrePrepareLog<O>),
+    PrePrepareReceived(ProofMetadata),
+}
+
+pub struct WorkingDecisionLog<O> {
+    node_id: NodeId,
+    seq_no: SeqNo,
+    pre_prepare_log: PrePrepareLogState<O>,
+    duplicate_detection: DuplicateReplicaEvaluator,
+    // The log of messages of the currently working decision
+    message_log: MessageLog<O>,
+    // Some logging information about metadata
+    batch_meta: Arc<Mutex<BatchMeta>>,
+}
 impl<O> WorkingDecisionLog<O>
 where
     O: Clone,
 {
     pub fn new(node: NodeId, seq: SeqNo, view: &ViewInfo) -> Self {
-        let leader_count = view.leader_set().len();
         Self {
             node_id: node,
             seq_no: seq,
+            pre_prepare_log: PrePrepareLogState::InProgress(PrePrepareLog::new(seq, view)),
             duplicate_detection: Default::default(),
-            batch_digest: None,
-            pre_prepare_digests: iter::repeat_n(None, leader_count).collect(),
-            current_received_pre_prepares: 0,
-            current_batch_size: 0,
-            client_rqs: vec![],
-            leader_set: view.leader_set().clone(),
-            request_space_slices: view.hash_space_division().clone(),
             message_log: MessageLog::with_leader_count(view.leader_set().len(), view.quorum()),
             batch_meta: Arc::new(Mutex::new(BatchMeta::new())),
-            contained_requests: iter::repeat_n(None, leader_count).collect(),
+        }
+    }
+
+    pub fn current_digest(&self) -> Option<Digest> {
+        match &self.pre_prepare_log {
+            PrePrepareLogState::InProgress(log) => log.current_digest(),
+            PrePrepareLogState::PrePrepareReceived(metadata) => Some(metadata.batch_digest()),
+        }
+    }
+
+    pub fn current_batch_size(&self) -> usize {
+        match &self.pre_prepare_log {
+            PrePrepareLogState::InProgress(log) => log.current_batch_size(),
+            PrePrepareLogState::PrePrepareReceived(metadata) => metadata.contained_client_rqs(),
         }
     }
 
     pub fn update_current_view(&mut self, view: &ViewInfo) {
-        self.leader_set = view.leader_set().clone();
-        self.request_space_slices = view.hash_space_division().clone();
+        match &mut self.pre_prepare_log {
+            PrePrepareLogState::InProgress(log) => log.update_current_view(view),
+            PrePrepareLogState::PrePrepareReceived(_) => {
+                // No need to update anything as we have already received all pre prepares
+            }
+        }
     }
 
     pub fn process_pre_prepare(
         &mut self,
         s_message: ShareableMessage<PBFTMessage<O>>,
-        _digest: Digest,
-        mut batch_rq_digests: Vec<ClientRqInfo>,
-    ) -> Result<Option<ProofMetadata>> {
-        let (header, message) = (s_message.header(), s_message.message().consensus());
+        digest: Digest,
+        batch_rq_digests: Vec<ClientRqInfo>,
+    ) -> Result<Option<(ProofMetadata, DecisionRequests<O>)>> {
+        let pre_prepare_log = match &mut self.pre_prepare_log {
+            PrePrepareLogState::InProgress(log) => log,
+            PrePrepareLogState::PrePrepareReceived(_) => {
+                // We have already received all pre prepares and returned the information
+                return Ok(None);
+            }
+        };
 
         let start = Instant::now();
 
-        let sending_leader = header.from();
-
-        let slice = self.request_space_slices.get(&sending_leader).ok_or(
-            DecidingLogError::FailedToGetLeadersRequestSpace(sending_leader),
-        )?;
+        let sending_leader = s_message.header().from();
 
         if sending_leader != self.node_id {
-            // Only check batches from other leaders since we implicitly trust in ourselves
-            for request in &batch_rq_digests {
-                if !crate::bft::sync::view::is_request_in_hash_space(&request.digest(), slice) {
-                    return Err!(DecidingLogError::BatchContainsRequestsNotInLeaderAddrSpace(
-                        sending_leader
-                    ));
-                }
+            // Implicit trust on self messages and skip the check
+            if !pre_prepare_log.are_requests_in_leader_space(sending_leader, &batch_rq_digests)? {
+                return Err!(DecidingLogError::BatchContainsRequestsNotInLeaderAddrSpace(
+                    sending_leader
+                ));
             }
         }
 
         self.duplicate_detection
             .insert_pre_prepare_received(sending_leader)?;
 
-        // Get the correct index for this batch
-        let leader_index = pre_prepare_index_of(&self.leader_set, &sending_leader)?;
+        let leader_index = pre_prepare_log.leader_index_for(sending_leader)?;
 
-        if leader_index >= self.pre_prepare_digests.len() {
-            return Err!(DecidingLogError::LeaderNotInLeaderSet(sending_leader));
+        self.message_log
+            .insert_pre_prepare(leader_index, s_message.clone());
+
+        let result = pre_prepare_log.process_pre_prepare(s_message, digest, batch_rq_digests)?;
+
+        if let Some(proof_metadata) = result {
+            let preprepare_log = std::mem::replace(
+                &mut self.pre_prepare_log,
+                PrePrepareLogState::PrePrepareReceived(proof_metadata.clone()),
+            );
+
+            let PrePrepareLogState::InProgress(log) = preprepare_log else {
+                unreachable!("Pre prepare log not in progress state");
+            };
+
+            let decision_requests = log.finalize_pre_prepare(self.seq_no)?;
+
+            metric_duration(PRE_PREPARE_LOG_ANALYSIS_ID, start.elapsed());
+
+            Ok(Some((proof_metadata, decision_requests)))
+        } else {
+            metric_duration(PRE_PREPARE_LOG_ANALYSIS_ID, start.elapsed());
+
+            Ok(None)
         }
-
-        self.pre_prepare_digests[leader_index] = Some(*s_message.header().digest());
-        self.contained_requests[leader_index] = Some(match message.kind() {
-            ConsensusMessageKind::PrePrepare(requests) => requests.clone(),
-            _ => unreachable!(),
-        });
-
-        self.current_received_pre_prepares += 1;
-
-        self.current_batch_size += batch_rq_digests.len();
-
-        self.client_rqs.append(&mut batch_rq_digests);
-
-        self.message_log.insert_pre_prepare(leader_index, s_message);
-
-        metric_duration(PRE_PREPARE_LOG_ANALYSIS_ID, start.elapsed());
-
-        // if we have received all of the messages in the set, calculate the digest.
-        Ok(
-            if self.current_received_pre_prepares == self.leader_set.len() {
-                // We have received all of the required batches
-                let result = self.calculate_instance_digest();
-
-                let (digest, ordering) =
-                    result.ok_or(DecidingLogError::FailedToCalculateDigest(self.seq_no))?;
-
-                self.batch_digest = Some(digest);
-
-                Some(ProofMetadata::new(
-                    self.seq_no,
-                    digest,
-                    ordering,
-                    self.current_batch_size,
-                ))
-            } else {
-                None
-            },
-        )
     }
 
     /// Process the message received
@@ -269,35 +251,6 @@ where
     /// Getter for batch_meta
     pub fn batch_meta(&self) -> &Arc<Mutex<BatchMeta>> {
         &self.batch_meta
-    }
-
-    /// Getter for the current digest
-    pub fn current_digest(&self) -> Option<Digest> {
-        self.batch_digest
-    }
-
-    /// Get the current batch size in this consensus decision
-    pub fn current_batch_size(&self) -> usize {
-        self.current_batch_size
-    }
-
-    /// Calculate the instance of a completed consensus pre prepare phase with
-    /// all the batches received
-    fn calculate_instance_digest(&self) -> Option<(Digest, Vec<Digest>)> {
-        let mut ctx = Context::new();
-
-        let mut batch_ordered_digests = Vec::with_capacity(self.pre_prepare_digests.len());
-
-        for order_digest in &self.pre_prepare_digests {
-            if let Some(digest) = *order_digest {
-                ctx.update(digest.as_ref());
-                batch_ordered_digests.push(digest);
-            } else {
-                return None;
-            }
-        }
-
-        Some((ctx.finish(), batch_ordered_digests))
     }
 
     /// Get the current decision
@@ -357,13 +310,182 @@ where
         let new_meta = BatchMeta::new();
         let batch_meta = std::mem::replace(&mut *self.batch_meta().lock().unwrap(), new_meta);
 
-        let current_digest = self.batch_digest?;
+        let proof_metadata = match self.pre_prepare_log {
+            PrePrepareLogState::PrePrepareReceived(metadata) => metadata,
+            _ => unreachable!("Pre prepare log not in finished state"),
+        };
 
-        let pre_prepare_ordering = self
-            .pre_prepare_digests
-            .into_iter()
-            .map(|elem| elem.unwrap())
-            .collect();
+        Some(CompletedBatch {
+            seq: self.seq_no,
+            proof_metadata,
+            contained_messages: self.message_log.finalize(),
+            batch_meta,
+        })
+    }
+}
+
+struct PrePrepareLog<O> {
+    seq_no: SeqNo,
+    //The digest of the entire batch that is currently being processed
+    // This will only be calculated when we receive all of the requests necessary
+    // As this digest requires the knowledge of all of them
+    batch_digest: Option<Digest>,
+    // The digests of all received pre prepares
+    // We store a vec of options because we want to store the digests in the correct ordering
+    pre_prepare_digests: Vec<Option<Digest>>,
+    // How many pre prepares have we received
+    current_received_pre_prepares: usize,
+    //The size of batch that is currently being processed. Increases as we receive more pre prepares
+    current_batch_size: usize,
+    //The client requests that are currently being processed
+    //Does not have to follow the correct order, only has to contain the requests
+    client_rqs: Vec<ClientRqInfo>,
+    // The set of leaders that is currently in vigour for this consensus decision
+    leader_set: Vec<NodeId>,
+    // Which hash space should each leader be responsible for (multiple leader optimization)
+    request_space_slices: BTreeMap<NodeId, (Vec<u8>, Vec<u8>)>,
+    // The contained requests per each of the received pre prepares
+    contained_requests: Vec<Option<Vec<StoredMessage<O>>>>,
+}
+
+impl<O> PrePrepareLog<O>
+where
+    O: Clone,
+{
+    pub fn new(seq_no: SeqNo, view: &ViewInfo) -> Self {
+        let leader_count = view.leader_set().len();
+
+        Self {
+            seq_no,
+            batch_digest: None,
+            pre_prepare_digests: iter::repeat_n(None, leader_count).collect(),
+            current_received_pre_prepares: 0,
+            current_batch_size: 0,
+            client_rqs: vec![],
+            leader_set: view.leader_set().clone(),
+            request_space_slices: view.hash_space_division().clone(),
+            contained_requests: iter::repeat_n(None, leader_count).collect(),
+        }
+    }
+
+    fn update_current_view(&mut self, view: &ViewInfo) {
+        self.leader_set = view.leader_set().clone();
+        self.request_space_slices = view.hash_space_division().clone();
+    }
+
+    fn leader_index_for(&self, leader: NodeId) -> Result<usize> {
+        let leader_index = pre_prepare_index_of(&self.leader_set, &leader)?;
+
+        if leader_index >= self.pre_prepare_digests.len() {
+            return Err!(DecidingLogError::LeaderNotInLeaderSet(leader));
+        }
+
+        Ok(leader_index)
+    }
+
+    /// Getter for the current digest
+    pub fn current_digest(&self) -> Option<Digest> {
+        self.batch_digest
+    }
+
+    /// Get the current batch size in this consensus decision
+    pub fn current_batch_size(&self) -> usize {
+        self.current_batch_size
+    }
+
+    /// Checks whether all the requests in the batch are in the
+    /// address space of the given leader
+    fn are_requests_in_leader_space(
+        &self,
+        leader: NodeId,
+        request_digest: &[ClientRqInfo],
+    ) -> Result<bool> {
+        let slice = self
+            .request_space_slices
+            .get(&leader)
+            .ok_or(DecidingLogError::FailedToGetLeadersRequestSpace(leader))?;
+
+        for request_digest in request_digest {
+            if !view::is_request_in_hash_space(request_digest.digest(), slice) {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
+    fn process_pre_prepare(
+        &mut self,
+        s_message: ShareableMessage<PBFTMessage<O>>,
+        _digest: Digest,
+        mut batch_rq_digests: Vec<ClientRqInfo>,
+    ) -> Result<Option<ProofMetadata>> {
+        let (header, message) = (s_message.header(), s_message.message().consensus());
+
+        let sending_leader = header.from();
+        let leader_index = self.leader_index_for(sending_leader)?;
+
+        self.pre_prepare_digests[leader_index] = Some(*s_message.header().digest());
+        self.contained_requests[leader_index] = Some(match message.kind() {
+            ConsensusMessageKind::PrePrepare(requests) => requests.clone(),
+            _ => unreachable!(),
+        });
+
+        self.current_received_pre_prepares += 1;
+
+        self.current_batch_size += batch_rq_digests.len();
+
+        self.client_rqs.append(&mut batch_rq_digests);
+
+        // if we have received all the messages in the set, calculate the digest.
+
+        if self.current_received_pre_prepares == self.leader_set.len() {
+            // We have received all the required batches
+            let result = self.calculate_instance_digest();
+
+            let (digest, ordering) =
+                result.ok_or(DecidingLogError::FailedToCalculateDigest(self.seq_no))?;
+
+            self.batch_digest = Some(digest);
+
+            Ok(Some(ProofMetadata::new(
+                self.seq_no,
+                digest,
+                ordering,
+                self.current_batch_size,
+            )))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn can_be_finalized(&self) -> bool {
+        self.current_received_pre_prepares == self.leader_set.len()
+    }
+
+    /// Calculate the instance of a completed consensus pre prepare phase with
+    /// all the batches received
+    fn calculate_instance_digest(&self) -> Option<(Digest, Vec<Digest>)> {
+        let mut ctx = Context::new();
+
+        let mut batch_ordered_digests = Vec::with_capacity(self.pre_prepare_digests.len());
+
+        for order_digest in &self.pre_prepare_digests {
+            if let Some(digest) = *order_digest {
+                ctx.update(digest.as_ref());
+                batch_ordered_digests.push(digest);
+            } else {
+                return None;
+            }
+        }
+
+        Some((ctx.finish(), batch_ordered_digests))
+    }
+
+    fn finalize_pre_prepare(self, seq_no: SeqNo) -> Result<DecisionRequests<O>> {
+        if !self.can_be_finalized() {
+            return Err!(DecidingLogError::PrePrepareLogCannotBeFinalizedYet);
+        }
 
         let mut requests = Vec::with_capacity(self.current_batch_size);
 
@@ -371,49 +493,32 @@ where
             requests.append(&mut pre_prepare_request.unwrap());
         }
 
-        Some(CompletedBatch {
-            seq: self.seq_no,
-            digest: current_digest,
-            pre_prepare_ordering,
-            contained_messages: self.message_log.finalize(),
-            client_request_info: self.client_rqs,
-            batch_meta,
-            client_requests: requests,
-        })
+        let request_batch = DecisionRequestBatch::new(seq_no, requests, None);
+
+        Ok(DecisionRequests::new(
+            seq_no,
+            request_batch,
+            self.client_rqs.clone(),
+            self.batch_digest.unwrap(),
+        ))
     }
 }
 
-impl<O> Orderable for CompletedBatch<O> {
-    fn sequence_number(&self) -> SeqNo {
-        self.seq
-    }
+/// Checks to make sure replicas aren't providing more than one vote for the
+/// Same consensus decision
+#[derive(Default)]
+pub struct DuplicateReplicaEvaluator {
+    // The set of leaders that is currently in vigour for this consensus decision
+    #[allow(dead_code)]
+    leader_set: Vec<NodeId>,
+    // The set of leaders that have already sent a pre prepare message
+    received_pre_prepare_messages: BTreeSet<NodeId>,
+    // The set of leaders that have already sent a prepare message
+    received_prepare_messages: BTreeSet<NodeId>,
+    // The set of leaders that have already sent a commit message
+    received_commit_messages: BTreeSet<NodeId>,
 }
 
-impl<O> CompletedBatch<O> {
-    pub fn new(
-        seq: SeqNo,
-        digest: Digest,
-        pre_prepare_ordering: Vec<Digest>,
-        contained_messages: FinishedMessageLog<O>,
-        client_request_info: Vec<ClientRqInfo>,
-        client_requests: Vec<StoredMessage<O>>,
-        batch_meta: BatchMeta,
-    ) -> Self {
-        Self {
-            seq,
-            digest,
-            pre_prepare_ordering,
-            contained_messages,
-            client_request_info,
-            client_requests,
-            batch_meta,
-        }
-    }
-
-    pub fn request_count(&self) -> usize {
-        self.client_requests.len()
-    }
-}
 
 impl<O> Orderable for WorkingDecisionLog<O> {
     fn sequence_number(&self) -> SeqNo {
@@ -509,4 +614,6 @@ pub enum DecidingLogError {
     BatchContainsRequestsNotInLeaderAddrSpace(NodeId),
     #[error("Failed to get leader's request space {0:?}")]
     FailedToGetLeadersRequestSpace(NodeId),
+    #[error("Pre prepare log cannot be finalized yet")]
+    PrePrepareLogCannotBeFinalizedYet,
 }

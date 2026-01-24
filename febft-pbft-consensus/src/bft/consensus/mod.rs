@@ -3,7 +3,6 @@ use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-
 use either::Either;
 use event_listener::{Event, Listener};
 use tracing::{debug, error, info, instrument, trace, warn};
@@ -19,7 +18,8 @@ use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::{ClientRqInfo, SessionBased};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_core::ordering_protocol::{Decision, ShareableMessage};
+use atlas_core::ordering_protocol::{ShareableMessage};
+use atlas_core::ordering_protocol::decision::Decision;
 use atlas_core::timeouts::timeout::TimeoutModHandle;
 use atlas_metrics::metrics::metric_increment;
 
@@ -448,7 +448,7 @@ where
         Ok(match status {
             DecisionStatus::VotedTwice(node) => ConsensusStatus::VotedTwice(node),
             DecisionStatus::Deciding(message) => ConsensusStatus::Deciding(MaybeVec::from_one(
-                Decision::decision_info_from_message(decision_seq, message),
+                Decision::decision_from_message(decision_seq, message),
             )),
             DecisionStatus::MessageQueued => {
                 //When we transition phases, we may discover new messages
@@ -457,28 +457,32 @@ where
 
                 ConsensusStatus::MessageQueued
             }
-            DecisionStatus::Transitioned(metadata, message) => {
+            DecisionStatus::RequestsAvailable(metadata, requests, message) => {
                 //When we transition phases, we may discover new messages
                 // That were in the queue, so we must be signalled again
                 self.signalled.push_signalled(decision_seq);
 
-                if let Some(metadata) = metadata {
-                    ConsensusStatus::Deciding(MaybeVec::from_one(
-                        Decision::decision_info_from_metadata_and_messages(
-                            decision_seq,
-                            metadata,
-                            MaybeVec::None,
-                            MaybeVec::from_one(message),
-                        ),
-                    ))
-                } else {
-                    ConsensusStatus::Deciding(MaybeVec::from_one(
-                        Decision::decision_info_from_message(decision_seq, message),
-                    ))
-                }
+                ConsensusStatus::Deciding(MaybeVec::from_one(
+                    Decision::decision_from_metadata_and_requests(
+                        decision_seq,
+                        metadata,
+                        MaybeVec::None,
+                        MaybeVec::from_one(message),
+                        requests
+                    ),
+                ))
+            }
+            DecisionStatus::Transitioned(message) => {
+                //When we transition phases, we may discover new messages
+                // That were in the queue, so we must be signalled again
+                self.signalled.push_signalled(decision_seq);
+
+                ConsensusStatus::Deciding(MaybeVec::from_one(
+                    Decision::decision_from_message(decision_seq, message),
+                ))
             }
             DecisionStatus::Decided(message) => ConsensusStatus::Decided(MaybeVec::from_one(
-                Decision::decision_info_from_message(decision_seq, message),
+                Decision::decision_from_message(decision_seq, message),
             )),
             DecisionStatus::DecidedIgnored => ConsensusStatus::Decided(MaybeVec::None),
             DecisionStatus::MessageIgnored => ConsensusStatus::MessageIgnored,
