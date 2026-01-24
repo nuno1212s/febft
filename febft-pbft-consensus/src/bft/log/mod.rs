@@ -7,7 +7,7 @@ use crate::bft::log::deciding::{CompletedBatch, FinishedMessageLog};
 use crate::bft::log::decisions::Proof;
 use crate::bft::message::ConsensusMessageKind;
 use crate::bft::FeDecision;
-use atlas_common::error::*;
+use atlas_common::error::Result;
 use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
@@ -142,12 +142,9 @@ where
         for pre_prepare in value.pre_prepares() {
             let consensus_msg = (*pre_prepare.message()).clone();
 
-            let reqs = match consensus_msg.into_consensus().into_kind() {
-                ConsensusMessageKind::PrePrepare(reqs) => reqs,
-                _ => {
-                    unreachable!()
-                }
-            };
+            let ConsensusMessageKind::PrePrepare(reqs) = consensus_msg.into_consensus().into_kind() else {
+                    unreachable!("Expected PrePrepare message in proof");
+                };
 
             for request in reqs {
                 client_rqs.push(ClientRqInfo::from(&request));
