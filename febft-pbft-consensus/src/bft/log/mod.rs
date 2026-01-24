@@ -2,6 +2,11 @@ use atlas_common::Err;
 use either::Either;
 use thiserror::Error;
 
+use crate::bft::log::decided::DecisionLog;
+use crate::bft::log::deciding::{CompletedBatch, FinishedMessageLog};
+use crate::bft::log::decisions::Proof;
+use crate::bft::message::ConsensusMessageKind;
+use crate::bft::FeDecision;
 use atlas_common::error::*;
 use atlas_common::maybe_vec::MaybeVec;
 use atlas_common::node_id::NodeId;
@@ -10,11 +15,6 @@ use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::Header;
 use atlas_core::messages::{ClientRqInfo, SessionBased};
 use atlas_core::ordering_protocol::decision::{Decision, DecisionRequestBatch, DecisionRequests};
-use crate::bft::log::decided::DecisionLog;
-use crate::bft::log::deciding::{CompletedBatch, FinishedMessageLog};
-use crate::bft::log::decisions::{Proof};
-use crate::bft::message::ConsensusMessageKind;
-use crate::bft::FeDecision;
 
 pub mod decided;
 pub mod deciding;
@@ -74,10 +74,7 @@ where
         ))
     }
 
-    pub fn finalize_batch(
-        &mut self,
-        completed: CompletedBatch<RQ>,
-    ) -> Result<()> {
+    pub fn finalize_batch(&mut self, completed: CompletedBatch<RQ>) -> Result<()> {
         let CompletedBatch {
             seq: _,
             proof_metadata,
@@ -131,8 +128,10 @@ where
     O: Clone + SessionBased,
 {
     fn from(value: &Proof<O>) -> Self {
-        let mut decided_batch =
-            DecisionRequestBatch::new_with_cap(value.seq_no(), value.metadata().contained_client_rqs());
+        let mut decided_batch = DecisionRequestBatch::new_with_cap(
+            value.seq_no(),
+            value.metadata().contained_client_rqs(),
+        );
         let mut client_rqs = Vec::with_capacity(value.metadata().contained_client_rqs());
 
         if !value.are_pre_prepares_ordered().unwrap() {

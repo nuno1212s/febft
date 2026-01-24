@@ -165,23 +165,30 @@ where
         }
     }
 
+    /// Process a pre prepare message received
+    /// Returns Some(...) if we have received all pre prepares and
+    /// can proceed to the next phase of the consensus
+    ///
+    /// # Errors
+    /// Returns an error if the batch contains requests not in the leader's address space
+    /// and other errors related to processing the pre prepare
     pub fn process_pre_prepare(
         &mut self,
         s_message: ShareableMessage<PBFTMessage<O>>,
         digest: Digest,
         batch_rq_digests: Vec<ClientRqInfo>,
     ) -> Result<Option<(ProofMetadata, DecisionRequests<O>)>> {
+        let start = Instant::now();
+
+        let sending_leader = s_message.header().from();
+
         let pre_prepare_log = match &mut self.pre_prepare_log {
             PrePrepareLogState::InProgress(log) => log,
             PrePrepareLogState::PrePrepareReceived(_) => {
                 // We have already received all pre prepares and returned the information
-                return Ok(None);
+                unreachable!();
             }
         };
-
-        let start = Instant::now();
-
-        let sending_leader = s_message.header().from();
 
         if sending_leader != self.node_id {
             // Implicit trust on self messages and skip the check
@@ -310,9 +317,8 @@ where
         let new_meta = BatchMeta::new();
         let batch_meta = std::mem::replace(&mut *self.batch_meta().lock().unwrap(), new_meta);
 
-        let proof_metadata = match self.pre_prepare_log {
-            PrePrepareLogState::PrePrepareReceived(metadata) => metadata,
-            _ => unreachable!("Pre prepare log not in finished state"),
+        let PrePrepareLogState::PrePrepareReceived(proof_metadata) = self.pre_prepare_log else {
+            unreachable!("Pre prepare log not in finished state")
         };
 
         Some(CompletedBatch {
@@ -518,7 +524,6 @@ pub struct DuplicateReplicaEvaluator {
     // The set of leaders that have already sent a commit message
     received_commit_messages: BTreeSet<NodeId>,
 }
-
 
 impl<O> Orderable for WorkingDecisionLog<O> {
     fn sequence_number(&self) -> SeqNo {

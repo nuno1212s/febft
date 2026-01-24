@@ -34,6 +34,10 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::StoredMessage;
 use atlas_core::messages::SessionBased;
+use atlas_core::ordering_protocol::decision::{Decision, DecisionPart, DecisionRequests};
+use atlas_core::ordering_protocol::loggable::{
+    OrderProtocolLogHelper, PProof, TLoggableOrderProtocol,
+};
 use atlas_core::ordering_protocol::networking::serialize::OrderingProtocolMessage;
 use atlas_core::ordering_protocol::networking::{
     NetworkedOrderProtocolInitializer, OrderProtocolSendNode,
@@ -42,13 +46,10 @@ use atlas_core::ordering_protocol::reconfigurable_order_protocol::{
     ReconfigurableOrderProtocol, ReconfigurationAttemptResult,
 };
 use atlas_core::ordering_protocol::{
-    DecisionAD, DecisionMetadata, DecisionsAhead, JoinInfo, OPExecResult,
-    OPPollResult, OrderProtocolTolerance, OrderingProtocol, OrderingProtocolArgs,
-    PermissionedOrderingProtocol, ShareableConsensusMessage,
-    ShareableMessage,
+    DecisionAD, DecisionMetadata, DecisionsAhead, JoinInfo, OPExecResult, OPPollResult,
+    OrderProtocolTolerance, OrderingProtocol, OrderingProtocolArgs, PermissionedOrderingProtocol,
+    ShareableConsensusMessage, ShareableMessage,
 };
-use atlas_core::ordering_protocol::decision::{Decision, DecisionPart, DecisionRequests};
-use atlas_core::ordering_protocol::loggable::{OrderProtocolLogHelper, PProof, TLoggableOrderProtocol};
 use atlas_core::request_pre_processing::{RequestPProcessorSync, RequestPreProcessing};
 use atlas_core::serialize::ReconfigurationProtocolMessage;
 use atlas_core::timeouts::timeout::{ModTimeout, TimeoutModHandle, TimeoutableMod};
@@ -720,7 +721,7 @@ where
             let completed_batch = self.consensus.finalize(&view)?.unwrap();
 
             let seq = completed_batch.sequence_number();
-            
+
             self.message_log.finalize_batch(completed_batch)?;
 
             finalized_decisions.push(seq);
@@ -794,10 +795,7 @@ where
             if let Some(member) = map.get_mut(&decision) {
                 member.append_decision_info(DecisionPart::DecisionDone);
             } else {
-                map.insert(
-                    decision,
-                    Decision::decision_done(decision),
-                );
+                map.insert(decision, Decision::decision_done(decision));
             }
         }
 
@@ -833,10 +831,7 @@ where
                     if let Some(member) = map.get_mut(&decision) {
                         member.append_decision_info(DecisionPart::DecisionDone);
                     } else {
-                        map.insert(
-                            decision,
-                            Decision::decision_done(decision),
-                        );
+                        map.insert(decision, Decision::decision_done(decision));
                     }
                 }
             }

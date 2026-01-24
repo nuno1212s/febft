@@ -89,7 +89,11 @@ pub enum DecisionStatus<O> {
     Deciding(ShareableMessage<PBFTMessage<O>>),
     /// The pre prepare phase has been completed and the requests
     /// are now available
-    RequestsAvailable(ProofMetadata, DecisionRequests<O>, ShareableMessage<PBFTMessage<O>>),
+    RequestsAvailable(
+        ProofMetadata,
+        DecisionRequests<O>,
+        ShareableMessage<PBFTMessage<O>>,
+    ),
     /// Transitioned to another next phase of the consensus decision due to
     /// the message we received
     Transitioned(ShareableMessage<PBFTMessage<O>>),

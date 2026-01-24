@@ -1,10 +1,10 @@
+use either::Either;
+use event_listener::{Event, Listener};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use either::Either;
-use event_listener::{Event, Listener};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use atlas_common::error::*;
@@ -17,9 +17,9 @@ use atlas_common::ordering::{
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::{ClientRqInfo, SessionBased};
-use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_core::ordering_protocol::{ShareableMessage};
 use atlas_core::ordering_protocol::decision::Decision;
+use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
+use atlas_core::ordering_protocol::ShareableMessage;
 use atlas_core::timeouts::timeout::TimeoutModHandle;
 use atlas_metrics::metrics::metric_increment;
 
@@ -468,7 +468,7 @@ where
                         metadata,
                         MaybeVec::None,
                         MaybeVec::from_one(message),
-                        requests
+                        requests,
                     ),
                 ))
             }
@@ -477,9 +477,10 @@ where
                 // That were in the queue, so we must be signalled again
                 self.signalled.push_signalled(decision_seq);
 
-                ConsensusStatus::Deciding(MaybeVec::from_one(
-                    Decision::decision_from_message(decision_seq, message),
-                ))
+                ConsensusStatus::Deciding(MaybeVec::from_one(Decision::decision_from_message(
+                    decision_seq,
+                    message,
+                )))
             }
             DecisionStatus::Decided(message) => ConsensusStatus::Decided(MaybeVec::from_one(
                 Decision::decision_from_message(decision_seq, message),
