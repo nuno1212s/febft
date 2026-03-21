@@ -31,6 +31,7 @@ pub struct MessageLog<O> {
 }
 
 impl<O> MessageLog<O> {
+    #[must_use]
     pub fn with_leader_count(leaders: usize, quorum: usize) -> Self {
         Self {
             pre_prepare: iter::repeat_n(None, leaders).collect(),
@@ -44,7 +45,7 @@ impl<O> MessageLog<O> {
         index: usize,
         pre_prepare: ShareableMessage<PBFTMessage<O>>,
     ) {
-        let _ = self.pre_prepare.get_mut(index).unwrap().insert(pre_prepare);
+        let _ = self.pre_prepare[index].insert(pre_prepare);
     }
 
     pub fn insert_prepare(&mut self, prepare: ShareableMessage<PBFTMessage<O>>) {
@@ -60,7 +61,7 @@ impl<O> MessageLog<O> {
             pre_prepares: self
                 .pre_prepare
                 .into_iter()
-                .map(|opt| opt.unwrap())
+                .filter_map(|opt| opt)
                 .collect(),
             prepares: self.prepares,
             commits: self.commits,
@@ -93,6 +94,7 @@ impl<O> Orderable for CompletedBatch<O> {
 }
 
 impl<O> CompletedBatch<O> {
+    #[must_use]
     pub fn new(
         seq: SeqNo,
         proof_metadata: ProofMetadata,
@@ -204,18 +206,18 @@ where
 
         let leader_index = pre_prepare_log.leader_index_for(sending_leader)?;
 
-        self.message_log
-            .insert_pre_prepare(leader_index, s_message.clone());
+        let result = pre_prepare_log.process_pre_prepare(&s_message, digest, batch_rq_digests)?;
 
-        let result = pre_prepare_log.process_pre_prepare(s_message, digest, batch_rq_digests)?;
+        self.message_log
+            .insert_pre_prepare(leader_index, s_message);
 
         if let Some(proof_metadata) = result {
-            let preprepare_log = std::mem::replace(
+            let log_state = std::mem::replace(
                 &mut self.pre_prepare_log,
                 PrePrepareLogState::PrePrepareReceived(proof_metadata.clone()),
             );
 
-            let PrePrepareLogState::InProgress(log) = preprepare_log else {
+            let PrePrepareLogState::InProgress(log) = log_state else {
                 unreachable!("Pre prepare log not in progress state");
             };
 
@@ -375,7 +377,7 @@ where
     }
 
     fn update_current_view(&mut self, view: &ViewInfo) {
-        self.leader_set = view.leader_set().clone();
+        self.leader_set.clone_from(view.leader_set());
         self.request_space_slices = view.hash_space_division().clone();
     }
 
@@ -422,7 +424,7 @@ where
 
     fn process_pre_prepare(
         &mut self,
-        s_message: ShareableMessage<PBFTMessage<O>>,
+        s_message: &ShareableMessage<PBFTMessage<O>>,
         _digest: Digest,
         mut batch_rq_digests: Vec<ClientRqInfo>,
     ) -> Result<Option<ProofMetadata>> {
@@ -566,7 +568,7 @@ pub fn pre_prepare_index_from_digest_opt(
         None => {
             Err!(DecidingLogError::PrePrepareNotPartOfSet(
                 *digest,
-                prepare_set.iter().cloned().flatten().collect()
+                prepare_set.iter().copied().flatten().collect()
             ))
         }
         Some(pos) => Ok(pos),
