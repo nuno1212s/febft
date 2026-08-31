@@ -501,7 +501,12 @@ where
             requests.append(&mut pre_prepare_request.unwrap());
         }
 
-        let request_batch = DecisionRequestBatch::new(seq_no, requests, None);
+        let mut request_batch = DecisionRequestBatch::new(seq_no, requests, None);
+
+        // The batch's requests are known as of now (pre-prepare complete), which is strictly
+        // earlier than the commit that finalizes the decision. Stamping here is what lets the
+        // executor measure how long the batch subsequently waited on consensus.
+        request_batch.mark_decision_requests_ready();
 
         Ok(DecisionRequests::new(
             seq_no,
