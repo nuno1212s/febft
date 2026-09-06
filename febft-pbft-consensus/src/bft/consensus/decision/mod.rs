@@ -15,6 +15,7 @@ use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::Header;
 use atlas_core::messages::{ClientRqInfo, SessionBased};
 use atlas_core::metric::RQ_BATCH_TRACKING_ID;
+use atlas_core::ordering_protocol::decision::DecisionRequests;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::ShareableMessage;
 use atlas_core::timeouts::timeout::TimeoutModHandle;
@@ -86,14 +87,18 @@ pub enum DecisionStatus<O> {
     /// A `febft` quorum still hasn't made a decision
     /// on a client request to be executed.
     Deciding(ShareableMessage<PBFTMessage<O>>),
-    /// Transitioned to another next phase of the consensus decision
-    Transitioned(Option<ProofMetadata>, ShareableMessage<PBFTMessage<O>>),
+    /// The pre prepare phase has been completed and the requests
+    /// are now available
+    RequestsAvailable(
+        ProofMetadata,
+        DecisionRequests<O>,
+        ShareableMessage<PBFTMessage<O>>,
+    ),
+    /// Transitioned to another next phase of the consensus decision due to
+    /// the message we received
+    Transitioned(ShareableMessage<PBFTMessage<O>>),
     /// A `febft` quorum decided on the execution of
-    /// the batch of requests with the given digests.
-    /// The first digest is the digest of the Prepare message
-    /// And therefore the entire batch digest
-    /// THe second Vec<Digest> is a vec with digests of the requests contained in the batch
-    /// The third is the messages that should be persisted for this batch to be considered persisted
+    /// the batch of requests and it is ready to be passed along to the next layer.
     Decided(ShareableMessage<PBFTMessage<O>>),
     DecidedIgnored,
 }
@@ -393,7 +398,7 @@ where
                 let result;
 
                 self.phase = if received == view.leader_set().len() {
-                    let batch_metadata = batch_metadata.unwrap();
+                    let (batch_metadata, requests) = batch_metadata.unwrap();
 
                     info!("{:?} // Completed pre prepare phase with all pre prepares Seq {:?} with pre prepare from {:?}. Batch size {:?}",
                         node.id(), self.sequence_number(), header.from(), self.working_log.current_batch_size());
@@ -430,7 +435,7 @@ where
                     );
 
                     // Mark that we have transitioned to the next phase
-                    result = DecisionStatus::Transitioned(Some(batch_metadata), s_message);
+                    result = DecisionStatus::RequestsAvailable(batch_metadata, requests, s_message);
 
                     // We no longer start the count at 1 since all leaders must also send the prepare
                     // message with the digest of the entire batch
@@ -551,7 +556,7 @@ where
                         BATCH_PREPARE_DONE.clone(),
                     );
 
-                    result = DecisionStatus::Transitioned(None, s_message);
+                    result = DecisionStatus::Transitioned(s_message);
 
                     DecisionPhase::Committing(0)
                 } else {

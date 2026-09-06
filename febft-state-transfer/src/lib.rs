@@ -368,8 +368,7 @@ where
                 let start = Instant::now();
 
                 self.install_channel
-                    .send(InstallStateMessage::new(state.checkpoint.state().clone()))
-                    .unwrap();
+                    .send(InstallStateMessage::new(state.checkpoint().sequence_number(), state.checkpoint.state().clone()))?;
 
                 metric_duration(STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID, start.elapsed());
 
