@@ -58,11 +58,7 @@ impl<O> MessageLog<O> {
 
     pub fn finalize(self) -> FinishedMessageLog<O> {
         FinishedMessageLog {
-            pre_prepares: self
-                .pre_prepare
-                .into_iter()
-                .filter_map(|opt| opt)
-                .collect(),
+            pre_prepares: self.pre_prepare.into_iter().flatten().collect(),
             prepares: self.prepares,
             commits: self.commits,
         }
@@ -208,8 +204,7 @@ where
 
         let result = pre_prepare_log.process_pre_prepare(&s_message, digest, batch_rq_digests)?;
 
-        self.message_log
-            .insert_pre_prepare(leader_index, s_message);
+        self.message_log.insert_pre_prepare(leader_index, s_message);
 
         if let Some(proof_metadata) = result {
             let log_state = std::mem::replace(

@@ -142,9 +142,10 @@ where
         for pre_prepare in value.pre_prepares() {
             let consensus_msg = (*pre_prepare.message()).clone();
 
-            let ConsensusMessageKind::PrePrepare(reqs) = consensus_msg.into_consensus().into_kind() else {
-                    unreachable!("Expected PrePrepare message in proof");
-                };
+            let ConsensusMessageKind::PrePrepare(reqs) = consensus_msg.into_consensus().into_kind()
+            else {
+                unreachable!("Expected PrePrepare message in proof");
+            };
 
             for request in reqs {
                 client_rqs.push(ClientRqInfo::from(&request));
