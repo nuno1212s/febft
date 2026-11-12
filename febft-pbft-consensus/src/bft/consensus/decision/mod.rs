@@ -75,7 +75,9 @@ pub enum DecisionPollStatus<O> {
     Decided,
 }
 
+// RequestsAvailable is rare (once per decision); boxing it would touch every match site.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum DecisionStatus<O> {
     /// A particular node tried voting twice.
     VotedTwice(NodeId),

@@ -929,8 +929,7 @@ where
             CheckpointState::Complete(_) => {
                 Err!(StateTransferError::CheckpointAlreadyFinalized)
             }
-            CheckpointState::Partial { seq: _ }
-            | CheckpointState::PartialWithEarlier { seq: _, .. } => {
+            CheckpointState::Partial { seq: _ } | CheckpointState::PartialWithEarlier { .. } => {
                 let checkpoint_state = CheckpointState::Complete(checkpoint.clone());
 
                 self.current_checkpoint_state = checkpoint_state;

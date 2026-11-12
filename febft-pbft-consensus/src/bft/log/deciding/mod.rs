@@ -474,12 +474,10 @@ where
         let mut batch_ordered_digests = Vec::with_capacity(self.pre_prepare_digests.len());
 
         for order_digest in &self.pre_prepare_digests {
-            if let Some(digest) = *order_digest {
-                ctx.update(digest.as_ref());
-                batch_ordered_digests.push(digest);
-            } else {
-                return None;
-            }
+            let digest = (*order_digest)?;
+
+            ctx.update(digest.as_ref());
+            batch_ordered_digests.push(digest);
         }
 
         Some((ctx.finish(), batch_ordered_digests))
