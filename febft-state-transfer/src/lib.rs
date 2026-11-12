@@ -367,9 +367,10 @@ where
             CstStatus::State(state) => {
                 let start = Instant::now();
 
-                self.install_channel
-                    .send(InstallStateMessage::new(state.checkpoint.state().clone()))
-                    .unwrap();
+                self.install_channel.send(InstallStateMessage::new(
+                    state.checkpoint().sequence_number(),
+                    state.checkpoint.state().clone(),
+                ))?;
 
                 metric_duration(STATE_TRANSFER_STATE_INSTALL_CLONE_TIME_ID, start.elapsed());
 
@@ -928,8 +929,7 @@ where
             CheckpointState::Complete(_) => {
                 Err!(StateTransferError::CheckpointAlreadyFinalized)
             }
-            CheckpointState::Partial { seq: _ }
-            | CheckpointState::PartialWithEarlier { seq: _, .. } => {
+            CheckpointState::Partial { seq: _ } | CheckpointState::PartialWithEarlier { .. } => {
                 let checkpoint_state = CheckpointState::Complete(checkpoint.clone());
 
                 self.current_checkpoint_state = checkpoint_state;

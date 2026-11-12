@@ -34,8 +34,9 @@ use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::StoredMessage;
 use atlas_core::messages::SessionBased;
+use atlas_core::ordering_protocol::decision::{Decision, DecisionPart, DecisionRequests};
 use atlas_core::ordering_protocol::loggable::{
-    LoggableOrderProtocol, OrderProtocolLogHelper, PProof,
+    OrderProtocolLogHelper, PProof, TLoggableOrderProtocol,
 };
 use atlas_core::ordering_protocol::networking::serialize::OrderingProtocolMessage;
 use atlas_core::ordering_protocol::networking::{
@@ -45,10 +46,9 @@ use atlas_core::ordering_protocol::reconfigurable_order_protocol::{
     ReconfigurableOrderProtocol, ReconfigurationAttemptResult,
 };
 use atlas_core::ordering_protocol::{
-    Decision, DecisionAD, DecisionInfo, DecisionMetadata, DecisionsAhead, JoinInfo, OPExecResult,
-    OPPollResult, OrderProtocolTolerance, OrderingProtocol, OrderingProtocolArgs,
-    PermissionedOrderingProtocol, ProtocolConsensusDecision, ShareableConsensusMessage,
-    ShareableMessage,
+    DecisionAD, DecisionMetadata, DecisionsAhead, JoinInfo, OPExecResult, OPPollResult,
+    OrderProtocolTolerance, OrderingProtocol, OrderingProtocolArgs, PermissionedOrderingProtocol,
+    ShareableConsensusMessage, ShareableMessage,
 };
 use atlas_core::request_pre_processing::{RequestPProcessorSync, RequestPreProcessing};
 use atlas_core::serialize::ReconfigurationProtocolMessage;
@@ -92,7 +92,7 @@ pub enum SyncPhaseRes<O> {
 }
 
 pub type FeDecision<O> = Decision<ProofMetadata, (), PBFTMessage<O>, O>;
-pub type FeDecisionInfo<O> = DecisionInfo<ProofMetadata, (), PBFTMessage<O>, O>;
+pub type FeDecisionInfo<O> = DecisionPart<ProofMetadata, (), PBFTMessage<O>, O>;
 
 pub type FeExecutionResult<O> = OPExecResult<ProofMetadata, (), PBFTMessage<O>, O>;
 pub type FePollResult<O> = OPPollResult<ProofMetadata, (), PBFTMessage<O>, O>;
@@ -711,7 +711,7 @@ where
     }
 
     /// Finalize all possible consensus instances
-    fn finalize_all_possible(&mut self) -> Result<Vec<ProtocolConsensusDecision<RQ>>> {
+    fn finalize_all_possible(&mut self) -> Result<Vec<SeqNo>> {
         let view = self.synchronizer.view();
 
         let mut finalized_decisions = Vec::with_capacity(self.consensus.finalizeable_count());
@@ -720,10 +720,11 @@ where
             // This will automatically move the consensus machine to the next consensus instance
             let completed_batch = self.consensus.finalize(&view)?.unwrap();
 
-            //Should the execution be scheduled here or will it be scheduled by the persistent log?
-            let exec_info = self.message_log.finalize_batch(completed_batch)?;
+            let seq = completed_batch.sequence_number();
 
-            finalized_decisions.push(exec_info);
+            self.message_log.finalize_batch(completed_batch)?;
+
+            finalized_decisions.push(seq);
         }
 
         Ok(finalized_decisions)
@@ -784,20 +785,17 @@ where
     fn merge_decisions(
         &mut self,
         status: MaybeVec<FeDecision<RQ>>,
-        finalized_decisions: Vec<ProtocolConsensusDecision<RQ>>,
+        finalized_decisions: Vec<SeqNo>,
     ) -> Result<MaybeVec<FeDecision<RQ>>> {
         let mut map = BTreeMap::new();
 
         Self::merge_decision_vec(&mut map, status)?;
 
         for decision in finalized_decisions {
-            if let Some(member) = map.get_mut(&decision.sequence_number()) {
-                member.append_decision_info(DecisionInfo::DecisionDone(decision));
+            if let Some(member) = map.get_mut(&decision) {
+                member.append_decision_info(DecisionPart::DecisionDone);
             } else {
-                map.insert(
-                    decision.sequence_number(),
-                    Decision::completed_decision(decision.sequence_number(), decision),
-                );
+                map.insert(decision, Decision::decision_done(decision));
             }
         }
 
@@ -830,13 +828,10 @@ where
                 let finalized = self.finalize_all_possible()?;
 
                 for decision in finalized {
-                    if let Some(member) = map.get_mut(&decision.sequence_number()) {
-                        member.append_decision_info(DecisionInfo::DecisionDone(decision));
+                    if let Some(member) = map.get_mut(&decision) {
+                        member.append_decision_info(DecisionPart::DecisionDone);
                     } else {
-                        map.insert(
-                            decision.sequence_number(),
-                            Decision::completed_decision(decision.sequence_number(), decision),
-                        );
+                        map.insert(decision, Decision::decision_done(decision));
                     }
                 }
             }
@@ -1017,12 +1012,12 @@ where
 
     fn get_requests_in_proof(
         proof: &PProof<RQ, PBFTConsensus<RQ>, PBFTConsensus<RQ>>,
-    ) -> Result<ProtocolConsensusDecision<RQ>> {
-        Ok(ProtocolConsensusDecision::from(proof))
+    ) -> Result<DecisionRequests<RQ>> {
+        Ok(DecisionRequests::from(proof))
     }
 }
 
-impl<RQ, RP, NT> LoggableOrderProtocol<RQ> for PBFTOrderProtocol<RQ, RP, NT>
+impl<RQ, RP, NT> TLoggableOrderProtocol<RQ> for PBFTOrderProtocol<RQ, RP, NT>
 where
     RQ: SerMsg + SessionBased + 'static,
     RP: RequestPProcessorSync<RQ> + RequestPreProcessing<RQ> + Send + 'static,

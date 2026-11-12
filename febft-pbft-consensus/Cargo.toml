@@ -33,7 +33,7 @@ chrono = "0"
 getset = "0"
 lazy_static = "1"
 
-atlas-common = { path = "../../Atlas/Atlas-Common", default-features = true }
+atlas-common = { path = "../../Atlas/Atlas-Common" }
 atlas-communication = { path = "../../Atlas/Atlas-Communication" }
 atlas-core = { path = "../../Atlas/Atlas-Core" }
 atlas-capnp = { path = "../../Atlas/Atlas-capnp", optional = true }

@@ -302,6 +302,11 @@ where
                             if self.handle_received_message(&mut ordered_propose, &mut collected_requests, is_leader, message_batch) { break; }
                         }
                     }
+                    // The wait can span a view change, so decide leadership from the current view.
+                    let info = self.synchronizer.view();
+
+                    let is_leader = info.leader_set().contains(&self.node_ref.id());
+
                     let discovered_requests = if let Some(messages) = collected_requests {
                         metric_increment(PROPOSER_REQUESTS_COLLECTED_ID, Some(messages.len() as u64));
 
@@ -351,21 +356,19 @@ where
             *collected_requests = Some(message_batch);
         }
 
-        let collected_request_count = collected_requests
-            .as_ref()
-            .map(|requests| requests.len())
-            .unwrap_or(0);
-
-        let micros_since_last_batch = ordered_propose.last_proposal.elapsed().as_micros();
-
-        if is_leader
-            && (collected_request_count >= self.target_global_batch_size
-                || micros_since_last_batch >= self.global_batch_time_limit)
-        {
+        // Non-leaders only watch the requests, so hand each one over as it arrives.
+        if !is_leader {
             return true;
         }
 
-        false
+        let collected_request_count = collected_requests
+            .as_ref()
+            .map_or(0, |requests| requests.len());
+
+        let micros_since_last_batch = ordered_propose.last_proposal.elapsed().as_micros();
+
+        collected_request_count >= self.target_global_batch_size
+            || micros_since_last_batch >= self.global_batch_time_limit
     }
 
     fn get_time_until_next_propose(&self, propose: &ProposeBuilder<RQ>) -> u128 {

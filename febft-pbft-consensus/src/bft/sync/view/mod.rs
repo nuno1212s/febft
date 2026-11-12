@@ -274,6 +274,26 @@ fn divide_hash_space(size_bytes: usize, count: usize) -> Vec<(Vec<u8>, Vec<u8>)>
     slices
 }
 
+impl Debug for ViewInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Seq: {:?}, quorum: {:?}, primary: {:?}, leader_set: {:?}, params: {:?}",
+            self.seq,
+            self.quorum_members,
+            self.leader(),
+            self.leader_set,
+            self.params
+        )
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum ViewError {
+    #[error("Leader is not contained in the quorum participants. Leader {0:?}, quorum {1:?}")]
+    LeaderNotInQuorum(NodeId, Vec<NodeId>),
+}
+
 #[cfg(test)]
 mod view_tests {
     use rand::RngCore;
@@ -312,24 +332,4 @@ mod view_tests {
             );
         }
     }
-}
-
-impl Debug for ViewInfo {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Seq: {:?}, quorum: {:?}, primary: {:?}, leader_set: {:?}, params: {:?}",
-            self.seq,
-            self.quorum_members,
-            self.leader(),
-            self.leader_set,
-            self.params
-        )
-    }
-}
-
-#[derive(Error, Debug)]
-pub enum ViewError {
-    #[error("Leader is not contained in the quorum participants. Leader {0:?}, quorum {1:?}")]
-    LeaderNotInQuorum(NodeId, Vec<NodeId>),
 }
