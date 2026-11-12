@@ -368,7 +368,7 @@ where
         let micros_since_last_batch = ordered_propose.last_proposal.elapsed().as_micros();
 
         if collected_request_count >= self.target_global_batch_size
-                || micros_since_last_batch >= self.global_batch_time_limit
+            || micros_since_last_batch >= self.global_batch_time_limit
         {
             return true;
         }
