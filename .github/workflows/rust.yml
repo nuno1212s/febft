@@ -16,6 +16,7 @@ jobs:
         with:
           repository: nuno1212s/Atlas
           path: Atlas
+          submodules: true
       - uses: actions/checkout@v3
         with:
           path: febft
@@ -55,6 +56,7 @@ jobs:
         with:
           repository: nuno1212s/Atlas
           path: Atlas
+          submodules: true
       - uses: actions/checkout@v3
         with:
           path: febft
